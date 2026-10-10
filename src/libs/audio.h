@@ -47,6 +47,10 @@ namespace std {
 
 namespace fs = std::filesystem;
 
+namespace song_loudness {
+    class Scanner;
+}
+
 enum class VolumePreset {
     NONE,
     SOUND,
@@ -81,6 +85,8 @@ struct sound {
     float frame_frac = 0.0f;        // Fractional part of playback position (for pitch != 1.0)
     bool loop = false;              // Whether to loop the sound
 
+    float normalization_gain = 1.0f;
+
     float volume = 1.0f; // Volume multiplier (0.0 to 1.0+)
     float playback_gain = 1.0f;
     float pan = 0.5f;   // Stereo pan (0.0 = left, 0.5 = center, 1.0 = right)
@@ -104,6 +110,8 @@ struct music {
     bool is_playing = false;              // Whether the music is currently playing
     unsigned long long current_frame = 0; // Current playback position in frames
     bool loop = false;                    // Whether to loop the music
+
+    float normalization_gain = 1.0f;
 
     float volume = 1.0f; // Volume multiplier (0.0 to 1.0+)
     float pan = 0.5f;    // Stereo pan (0.0 = left, 0.5 = center, 1.0 = right)
@@ -135,6 +143,8 @@ public:
                            const VolumeConfig& volume_presets);
     void close_audio_device();
     bool is_audio_device_ready() const;
+
+    void queue_song_loudness(const fs::path& file_path, bool priority = false);
 
     void load_screen_sounds(const std::string& screen_name);
 
@@ -190,6 +200,8 @@ public:
     void seek_music_stream(const std::string& name, float position);
 
 private:
+    std::unique_ptr<song_loudness::Scanner> loudness_scanner;
+
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
                                        const std::string& name);
     static void stop_decode_job(sound& snd);
@@ -220,6 +232,8 @@ private:
     std::unordered_map<std::string, music> music_streams;
 
     std::string path_to_string(const fs::path& path) const;
+    float loaded_sound_gain(const fs::path& file_path, const std::string& name);
+    float loaded_song_gain(const fs::path& file_path);
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
     bool init_rtaudio_device(RtAudio::Api api, const char* label);
