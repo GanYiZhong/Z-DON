@@ -8,6 +8,7 @@
 
 #include "audio.h"
 #include "global_data.h"
+#include "readahead.h"
 #include "texture.h"
 
 inline int virtual_to_screen_x(float virtual_x) {
@@ -134,6 +135,7 @@ protected:
             try {
                 on_screen_start();
                 spdlog::info("{} initialized", screen_name);
+                readahead::after_screen(screen_name);
             } catch (const std::exception& e) {
                 spdlog::critical("{} failed to initialize: {}", screen_name, e.what());
                 screen_init = false;
