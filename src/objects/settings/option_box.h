@@ -23,6 +23,8 @@ protected:
     TextureObject* t_button_off = nullptr;
 
     void draw_base() const;
+    void draw_centered(OutlinedText& text, int index) const;
+    void draw_value_box(OutlinedText& text, const FadeAnimation& flicker) const;
 
 public:
     virtual ~BaseOptionBox() = default;

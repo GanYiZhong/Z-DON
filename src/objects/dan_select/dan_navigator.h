@@ -63,10 +63,8 @@ public:
 
     void begin_init(const std::vector<fs::path>& song_paths);
     bool poll_init();
-    bool init_running() const { return scan_thread.joinable() && !scan_done.load(); }
     void abort_init();
     ~DanNavigator();
-    int scan_root(const fs::path& root_path);
     void move_left();
     void move_right();
     void skip(int delta);
@@ -91,6 +89,7 @@ private:
     RibbonLayout ribbon_layout() const { return ribbon; }
 
     void set_positions(bool init, float duration);
+    void step(int delta, bool init, float duration);
 
     int total_notes_for(const std::vector<DanSongEntry>& songs);
 
@@ -116,10 +115,8 @@ private:
                                                 std::pair<std::string, std::string>* titles_out = nullptr);
 
     std::optional<DanBoxData> load_dan_box_data(const fs::path& json_path);
-    std::unique_ptr<DanBox> load_dan_box(const fs::path& json_path);
     static std::unique_ptr<DanBox> make_box(const DanBoxData& d);
     std::vector<DanBoxData> scan_all_data(const std::vector<fs::path>& song_paths);
-    int scan_root_data(const fs::path& root_path, std::vector<DanBoxData>& out);
     void publish(std::vector<DanBoxData>&& data);
 
     std::thread scan_thread;

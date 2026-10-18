@@ -50,6 +50,35 @@ void BaseOptionBox::draw_base() const {
                     desc_font_size, 1, ray::BLACK);
 }
 
+void BaseOptionBox::draw_centered(OutlinedText& text, int index) const {
+    float tx = t_button_on->x[index] + (t_button_on->x2[index] / 2.0f) - (text.width / 2.0f);
+    float ty = t_button_on->y[index] + (t_button_on->y2[index] / 2.0f) - (text.height / 2.0f);
+    text.draw({.x = tx, .y = ty});
+}
+
+void BaseOptionBox::draw_value_box(OutlinedText& text, const FadeAnimation& flicker) const {
+    tex.draw_texture(t_button_off, {.index = 2});
+    if (is_highlighted) {
+        tex.draw_texture(t_button_on, {.fade = flicker.attribute, .index = 2});
+    }
+    draw_centered(text, 2);
+}
+
+static std::vector<int> load_key_binding(const ConfigRef& ref) {
+    if (ref.is_int()) {
+        return {ref.get_int()};
+    }
+    return ref.get_vec();
+}
+
+static void save_key_binding(ConfigRef& ref, const std::vector<int>& value) {
+    if (ref.is_int()) {
+        ref.set_int(value.empty() ? 0 : value[0]);
+    } else {
+        ref.set_vec(value);
+    }
+}
+
 BoolOptionBox::BoolOptionBox(const std::string& name, const std::string& description, const std::string& path,
                              const std::string& true_label, const std::string& false_label)
     : BaseOptionBox(name, description, path), value(config_ref.get_bool()),
@@ -75,18 +104,14 @@ void BoolOptionBox::draw() {
     } else {
         tex.draw_texture(t_button_off, {.index = 0});
     }
-    float ox = t_button_on->x[0] + (t_button_on->x2[0] / 2.0f) - (off_text->width / 2.0f);
-    float oy = t_button_on->y[0] + (t_button_on->y2[0] / 2.0f) - (off_text->height / 2.0f);
-    off_text->draw({.x = ox, .y = oy});
+    draw_centered(*off_text, 0);
 
     if (value) {
         tex.draw_texture(t_button_on, {.index = 1});
     } else {
         tex.draw_texture(t_button_off, {.index = 1});
     }
-    float nx = t_button_on->x[1] + (t_button_on->x2[1] / 2.0f) - (on_text->width / 2.0f);
-    float ny = t_button_on->y[1] + (t_button_on->y2[1] / 2.0f) - (on_text->height / 2.0f);
-    on_text->draw({.x = nx, .y = ny});
+    draw_centered(*on_text, 1);
 }
 
 static std::string int_display(int v) {
@@ -118,20 +143,12 @@ IntOptionBox::IntOptionBox(const std::string& name, const std::string& descripti
                 }
             }
             if (!matched) {
-
                 value_index = 0;
                 value = value_list[0].first;
             }
-            value_text = std::make_unique<OutlinedText>(value_list[value_index].second, option_font_size(), ray::WHITE,
-                                                        ray::BLACK, false, 4, -4);
-        } else {
-            value_text = std::make_unique<OutlinedText>(int_display(value), option_font_size(), ray::WHITE, ray::BLACK,
-                                                        false, 4, -4);
         }
-    } else {
-        value_text = std::make_unique<OutlinedText>(int_display(value), option_font_size(), ray::WHITE, ray::BLACK,
-                                                    false, 4, -4);
     }
+    rebuild_text();
 }
 
 void IntOptionBox::rebuild_text() {
@@ -170,13 +187,7 @@ void IntOptionBox::move_right() {
 void IntOptionBox::draw() {
     draw_base();
 
-    tex.draw_texture(t_button_off, {.index = 2});
-    if (is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
-    }
-    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_text->width / 2.0f);
-    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
-    value_text->draw({.x = tx, .y = ty});
+    draw_value_box(*value_text, *flicker_fade);
 }
 
 StrOptionBox::StrOptionBox(const std::string& name, const std::string& description, const std::string& path,
@@ -199,11 +210,8 @@ StrOptionBox::StrOptionBox(const std::string& name, const std::string& descripti
             value_index = 0;
             value = value_list[0].first;
         }
-        value_text = std::make_unique<OutlinedText>(value_list[value_index].second, option_font_size(), ray::WHITE,
-                                                    ray::BLACK, false, 4, -4);
-    } else {
-        value_text = std::make_unique<OutlinedText>(value, option_font_size(), ray::WHITE, ray::BLACK, false, 4, -4);
     }
+    rebuild_text();
 }
 
 void StrOptionBox::rebuild_text() {
@@ -260,22 +268,12 @@ void StrOptionBox::move_right() {
 void StrOptionBox::draw() {
     draw_base();
 
-    tex.draw_texture(t_button_off, {.index = 2});
-    if (is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
-    }
-    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_text->width / 2.0f);
-    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
-    value_text->draw({.x = tx, .y = ty});
+    draw_value_box(*value_text, *flicker_fade);
 }
 
 KeybindOptionBox::KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path)
     : BaseOptionBox(name, description, path), value_text(nullptr), flicker_fade(make_flicker()) {
-    if (config_ref.is_int()) {
-        value = {config_ref.get_int()};
-    } else {
-        value = config_ref.get_vec();
-    }
+    value = load_key_binding(config_ref);
     rebuild_text();
 }
 
@@ -296,11 +294,7 @@ void KeybindOptionBox::rebuild_text() {
 }
 
 void KeybindOptionBox::confirm() {
-    if (config_ref.is_int()) {
-        config_ref.set_int(value.empty() ? 0 : value[0]);
-    } else {
-        config_ref.set_vec(value);
-    }
+    save_key_binding(config_ref, value);
 }
 
 void KeybindOptionBox::update(double current_time) {
@@ -320,23 +314,13 @@ void KeybindOptionBox::update(double current_time) {
 void KeybindOptionBox::draw() {
     draw_base();
 
-    tex.draw_texture(t_button_off, {.index = 2});
-    if (is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
-    }
-    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_text->width / 2.0f);
-    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
-    value_text->draw({.x = tx, .y = ty});
+    draw_value_box(*value_text, *flicker_fade);
 }
 
 KeyBindControllerOptionBox::KeyBindControllerOptionBox(const std::string& name, const std::string& description,
                                                        const std::string& path)
     : BaseOptionBox(name, description, path), value_text(nullptr), flicker_fade(make_flicker()) {
-    if (config_ref.is_int()) {
-        value = {config_ref.get_int()};
-    } else {
-        value = config_ref.get_vec();
-    }
+    value = load_key_binding(config_ref);
     rebuild_text();
 }
 
@@ -353,11 +337,7 @@ void KeyBindControllerOptionBox::rebuild_text() {
 }
 
 void KeyBindControllerOptionBox::confirm() {
-    if (config_ref.is_int()) {
-        config_ref.set_int(value.empty() ? 0 : value[0]);
-    } else {
-        config_ref.set_vec(value);
-    }
+    save_key_binding(config_ref, value);
 }
 
 void KeyBindControllerOptionBox::update(double current_time) {
@@ -394,13 +374,7 @@ void KeyBindControllerOptionBox::update(double current_time) {
 void KeyBindControllerOptionBox::draw() {
     draw_base();
 
-    tex.draw_texture(t_button_off, {.index = 2});
-    if (is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
-    }
-    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_text->width / 2.0f);
-    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
-    value_text->draw({.x = tx, .y = ty});
+    draw_value_box(*value_text, *flicker_fade);
 }
 
 FloatOptionBox::FloatOptionBox(const std::string& name, const std::string& description, const std::string& path)
@@ -435,13 +409,7 @@ void FloatOptionBox::move_right() {
 void FloatOptionBox::draw() {
     draw_base();
 
-    tex.draw_texture(t_button_off, {.index = 2});
-    if (is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
-    }
-    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_text->width / 2.0f);
-    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
-    value_text->draw({.x = tx, .y = ty});
+    draw_value_box(*value_text, *flicker_fade);
 }
 
 AudioOffsetOptionBox::AudioOffsetOptionBox(const std::string& name, const std::string& description,
@@ -499,11 +467,7 @@ void AudioOffsetOptionBox::draw() {
     } else {
         tex.draw_texture(t_button_off, {.index = 0});
     }
-    {
-        float tx = t_button_on->x[0] + (t_button_on->x2[0] / 2.0f) - (value_text->width / 2.0f);
-        float ty = t_button_on->y[0] + (t_button_on->y2[0] / 2.0f) - (value_text->height / 2.0f);
-        value_text->draw({.x = tx, .y = ty});
-    }
+    draw_centered(*value_text, 0);
 
     // Calibrate button (index 1)
     if (!offset_highlighted && is_highlighted) {
@@ -511,9 +475,5 @@ void AudioOffsetOptionBox::draw() {
     } else {
         tex.draw_texture(t_button_off, {.index = 1});
     }
-    {
-        float tx = t_button_on->x[1] + (t_button_on->x2[1] / 2.0f) - (calibrate_text->width / 2.0f);
-        float ty = t_button_on->y[1] + (t_button_on->y2[1] / 2.0f) - (calibrate_text->height / 2.0f);
-        calibrate_text->draw({.x = tx, .y = ty});
-    }
+    draw_centered(*calibrate_text, 1);
 }

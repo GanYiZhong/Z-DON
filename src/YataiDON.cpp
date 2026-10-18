@@ -56,14 +56,13 @@
 #include "scenes/title.h"
 
 void draw_outer_border(int screen_width, int screen_height, ray::Color last_color) {
-    DrawRectangle(-screen_width, 0, screen_width, screen_height, last_color);
-    DrawRectangle(screen_width, 0, screen_width, screen_height, last_color);
-    DrawRectangle(0, -screen_height, screen_width, screen_height, last_color);
-    DrawRectangle(0, screen_height, screen_width, screen_height, last_color);
-    DrawRectangle(-screen_width, -screen_height, screen_width, screen_height, last_color);
-    DrawRectangle(screen_width, -screen_height, screen_width, screen_height, last_color);
-    DrawRectangle(-screen_width, screen_height, screen_width, screen_height, last_color);
-    DrawRectangle(screen_width, screen_height, screen_width, screen_height, last_color);
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx != 0 || dy != 0) {
+                DrawRectangle(dx * screen_width, dy * screen_height, screen_width, screen_height, last_color);
+            }
+        }
+    }
 }
 
 static void draw_skin_update_status() {
@@ -244,9 +243,7 @@ Screens check_args(int argc, char* argv[]) {
         if (tja.metadata.course_data.empty()) {
             selected_difficulty = static_cast<int>(Difficulty::EASY);
         } else {
-            selected_difficulty = std::max_element(tja.metadata.course_data.begin(), tja.metadata.course_data.end(),
-                                                   [](const auto& a, const auto& b) { return a.first < b.first; })
-                                      ->first;
+            selected_difficulty = tja.metadata.course_data.rbegin()->first;
         }
     }
 
@@ -289,10 +286,7 @@ static bool screen_fade_applies(Screens from, Screens to) {
     if (from == Screens::LOADING) {
         return false;
     }
-    if (from == Screens::SONG_SELECT && to == Screens::DAN_SELECT) {
-        return false;
-    }
-    if (from == Screens::ENTRY && to == Screens::DAN_SELECT) {
+    if (to == Screens::DAN_SELECT && (from == Screens::SONG_SELECT || from == Screens::ENTRY)) {
         return false;
     }
     return true;
@@ -301,65 +295,35 @@ static bool screen_fade_applies(Screens from, Screens to) {
 static LoopState* g_loop = nullptr;
 double g_frame_ms = 0.0;
 
+template<typename T>
+static void put_screen(std::unordered_map<Screens, std::unique_ptr<Screen>>& screens, std::optional<Screens> except,
+                       Screens id) {
+    if (except != id) {
+        screens[id] = std::make_unique<T>();
+    }
+}
+
 static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>>& screens,
                              std::optional<Screens> except = std::nullopt) {
-    if (except != Screens::ENTRY) {
-        screens[Screens::ENTRY] = std::make_unique<EntryScreen>();
-    }
-    if (except != Screens::TITLE) {
-        screens[Screens::TITLE] = std::make_unique<TitleScreen>();
-    }
-    if (except != Screens::SONG_SELECT) {
-        screens[Screens::SONG_SELECT] = std::make_unique<SongSelectScreen>();
-    }
-    if (except != Screens::SONG_SELECT_2P) {
-        screens[Screens::SONG_SELECT_2P] = std::make_unique<SongSelect2PScreen>();
-    }
-    if (except != Screens::LOADING) {
-        screens[Screens::LOADING] = std::make_unique<LoadingScreen>();
-    }
-    if (except != Screens::GAME) {
-        screens[Screens::GAME] = std::make_unique<GameScreen>();
-    }
-    if (except != Screens::GAME_2P) {
-        screens[Screens::GAME_2P] = std::make_unique<Game2PScreen>();
-    }
-    if (except != Screens::GAME_PRACTICE) {
-        screens[Screens::GAME_PRACTICE] = std::make_unique<PracticeGameScreen>();
-    }
-    if (except != Screens::PRACTICE_SELECT) {
-        screens[Screens::PRACTICE_SELECT] = std::make_unique<PracticeSongSelectScreen>();
-    }
-    if (except != Screens::RESULT) {
-        screens[Screens::RESULT] = std::make_unique<ResultScreen>();
-    }
-    if (except != Screens::RESULT_2P) {
-        screens[Screens::RESULT_2P] = std::make_unique<Result2PScreen>();
-    }
-    if (except != Screens::DAN_SELECT) {
-        screens[Screens::DAN_SELECT] = std::make_unique<DanSelectScreen>();
-    }
-    if (except != Screens::GAME_DAN) {
-        screens[Screens::GAME_DAN] = std::make_unique<DanGameScreen>();
-    }
-    if (except != Screens::DAN_RESULT) {
-        screens[Screens::DAN_RESULT] = std::make_unique<DanResultScreen>();
-    }
-    if (except != Screens::SETTINGS) {
-        screens[Screens::SETTINGS] = std::make_unique<SettingsScreen>();
-    }
-    if (except != Screens::INPUT_CALI) {
-        screens[Screens::INPUT_CALI] = std::make_unique<InputCaliScreen>();
-    }
-    if (except != Screens::GAME_OVER) {
-        screens[Screens::GAME_OVER] = std::make_unique<GameOverScreen>();
-    }
-    if (except != Screens::INPUT_TEST) {
-        screens[Screens::INPUT_TEST] = std::make_unique<InputTestScreen>();
-    }
-    if (except != Screens::RETRY_GAME) {
-        screens[Screens::RETRY_GAME] = std::make_unique<RetryGameScreen>();
-    }
+    put_screen<EntryScreen>(screens, except, Screens::ENTRY);
+    put_screen<TitleScreen>(screens, except, Screens::TITLE);
+    put_screen<SongSelectScreen>(screens, except, Screens::SONG_SELECT);
+    put_screen<SongSelect2PScreen>(screens, except, Screens::SONG_SELECT_2P);
+    put_screen<LoadingScreen>(screens, except, Screens::LOADING);
+    put_screen<GameScreen>(screens, except, Screens::GAME);
+    put_screen<Game2PScreen>(screens, except, Screens::GAME_2P);
+    put_screen<PracticeGameScreen>(screens, except, Screens::GAME_PRACTICE);
+    put_screen<PracticeSongSelectScreen>(screens, except, Screens::PRACTICE_SELECT);
+    put_screen<ResultScreen>(screens, except, Screens::RESULT);
+    put_screen<Result2PScreen>(screens, except, Screens::RESULT_2P);
+    put_screen<DanSelectScreen>(screens, except, Screens::DAN_SELECT);
+    put_screen<DanGameScreen>(screens, except, Screens::GAME_DAN);
+    put_screen<DanResultScreen>(screens, except, Screens::DAN_RESULT);
+    put_screen<SettingsScreen>(screens, except, Screens::SETTINGS);
+    put_screen<InputCaliScreen>(screens, except, Screens::INPUT_CALI);
+    put_screen<GameOverScreen>(screens, except, Screens::GAME_OVER);
+    put_screen<InputTestScreen>(screens, except, Screens::INPUT_TEST);
+    put_screen<RetryGameScreen>(screens, except, Screens::RETRY_GAME);
 }
 
 void drop_other_screens_for_skin_reload() {

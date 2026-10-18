@@ -22,6 +22,8 @@ private:
     bool moving_down;
 
     sol::protected_function fn_draw;
+    void apply_x_extents();
+    void start_move_if_idle();
 
 public:
     float width;

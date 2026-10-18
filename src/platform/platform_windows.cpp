@@ -229,12 +229,8 @@ bool win32_is_key_down_native(int raylib_key) {
 
     int vk_code = 0;
 
-    // Handle letters (A-Z)
-    if (raylib_key >= 65 && raylib_key <= 90) {
-        vk_code = raylib_key;
-    }
-    // Handle numbers (0-9)
-    else if (raylib_key >= 48 && raylib_key <= 57) {
+    // Letters (A-Z) and numbers (0-9) map straight to their VK codes
+    if ((raylib_key >= 65 && raylib_key <= 90) || (raylib_key >= 48 && raylib_key <= 57)) {
         vk_code = raylib_key;
     }
     // Handle special keys
@@ -587,23 +583,24 @@ int pa_stream_callback(const void* /*inputBuffer*/, void* outputBuffer, unsigned
     return paContinue;
 }
 
-bool win32_init_portaudio_wdmks(double target_sample_rate, unsigned long buffer_size, const std::string& device_name) {
+static bool init_portaudio_host(PaHostApiTypeId api, const char* label, double target_sample_rate,
+                                unsigned long buffer_size, const std::string& device_name) {
     PaError err = Pa_Initialize();
     if (err != paNoError) {
         spdlog::error("Failed to initialize PortAudio: {}", Pa_GetErrorText(err));
         return false;
     }
 
-    PaHostApiIndex host_index = Pa_HostApiTypeIdToHostApiIndex(paWDMKS);
+    PaHostApiIndex host_index = Pa_HostApiTypeIdToHostApiIndex(api);
     if (host_index < 0) {
-        spdlog::error("PortAudio WDM-KS host API not available");
+        spdlog::error("PortAudio {} host API not available", label);
         Pa_Terminate();
         return false;
     }
 
     const PaHostApiInfo* host_info = Pa_GetHostApiInfo(host_index);
     if (!host_info || host_info->defaultOutputDevice == paNoDevice) {
-        spdlog::error("No output device found for PortAudio WDM-KS");
+        spdlog::error("No output device found for PortAudio {}", label);
         Pa_Terminate();
         return false;
     }
@@ -628,14 +625,14 @@ bool win32_init_portaudio_wdmks(double target_sample_rate, unsigned long buffer_
     err = Pa_OpenStream(&g_pa_stream, nullptr, &out_params, target_sample_rate, buffer_size, paNoFlag,
                         &pa_stream_callback, nullptr);
     if (err != paNoError) {
-        spdlog::error("Failed to open WDM-KS stream: {}", Pa_GetErrorText(err));
+        spdlog::error("Failed to open {} stream: {}", label, Pa_GetErrorText(err));
         Pa_Terminate();
         return false;
     }
 
     err = Pa_StartStream(g_pa_stream);
     if (err != paNoError) {
-        spdlog::error("Failed to start WDM-KS stream: {}", Pa_GetErrorText(err));
+        spdlog::error("Failed to start {} stream: {}", label, Pa_GetErrorText(err));
         Pa_CloseStream(g_pa_stream);
         g_pa_stream = nullptr;
         Pa_Terminate();
@@ -644,7 +641,7 @@ bool win32_init_portaudio_wdmks(double target_sample_rate, unsigned long buffer_
 
     const PaDeviceInfo* dev_info = Pa_GetDeviceInfo(out_params.device);
     spdlog::info("Audio Device initialized successfully");
-    spdlog::info("    > Backend:       PortAudio | WDM-KS");
+    spdlog::info("    > Backend:       PortAudio | {}", label);
     spdlog::info("    > Device:        {}", dev_info ? dev_info->name : "unknown");
     spdlog::info("    > Format:        Float32");
     spdlog::info("    > Channels:      2");
@@ -653,70 +650,12 @@ bool win32_init_portaudio_wdmks(double target_sample_rate, unsigned long buffer_
     return true;
 }
 
+bool win32_init_portaudio_wdmks(double target_sample_rate, unsigned long buffer_size, const std::string& device_name) {
+    return init_portaudio_host(paWDMKS, "WDM-KS", target_sample_rate, buffer_size, device_name);
+}
+
 bool win32_init_portaudio_mme(double target_sample_rate, unsigned long buffer_size, const std::string& device_name) {
-    PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        spdlog::error("Failed to initialize PortAudio: {}", Pa_GetErrorText(err));
-        return false;
-    }
-
-    PaHostApiIndex host_index = Pa_HostApiTypeIdToHostApiIndex(paMME);
-    if (host_index < 0) {
-        spdlog::error("PortAudio MME host API not available");
-        Pa_Terminate();
-        return false;
-    }
-
-    const PaHostApiInfo* host_info = Pa_GetHostApiInfo(host_index);
-    if (!host_info || host_info->defaultOutputDevice == paNoDevice) {
-        spdlog::error("No output device found for PortAudio MME");
-        Pa_Terminate();
-        return false;
-    }
-
-    PaDeviceIndex device = host_info->defaultOutputDevice;
-    if (!device_name.empty()) {
-        PaDeviceIndex matched = find_pa_device_by_name(host_index, device_name);
-        if (matched != paNoDevice) {
-            device = matched;
-        } else {
-            spdlog::warn("Requested audio device '{}' not found; using default", device_name);
-        }
-    }
-
-    PaStreamParameters out_params{};
-    out_params.device = device;
-    out_params.channelCount = 2;
-    out_params.sampleFormat = paFloat32;
-    out_params.suggestedLatency = Pa_GetDeviceInfo(out_params.device)->defaultLowOutputLatency;
-    out_params.hostApiSpecificStreamInfo = nullptr;
-
-    err = Pa_OpenStream(&g_pa_stream, nullptr, &out_params, target_sample_rate, buffer_size, paNoFlag,
-                        &pa_stream_callback, nullptr);
-    if (err != paNoError) {
-        spdlog::error("Failed to open MME stream: {}", Pa_GetErrorText(err));
-        Pa_Terminate();
-        return false;
-    }
-
-    err = Pa_StartStream(g_pa_stream);
-    if (err != paNoError) {
-        spdlog::error("Failed to start MME stream: {}", Pa_GetErrorText(err));
-        Pa_CloseStream(g_pa_stream);
-        g_pa_stream = nullptr;
-        Pa_Terminate();
-        return false;
-    }
-
-    const PaDeviceInfo* dev_info = Pa_GetDeviceInfo(out_params.device);
-    spdlog::info("Audio Device initialized successfully");
-    spdlog::info("    > Backend:       PortAudio | MME");
-    spdlog::info("    > Device:        {}", dev_info ? dev_info->name : "unknown");
-    spdlog::info("    > Format:        Float32");
-    spdlog::info("    > Channels:      2");
-    spdlog::info("    > Sample rate:   {} Hz", target_sample_rate);
-    spdlog::info("    > Buffer size:   {} frames (requested)", buffer_size);
-    return true;
+    return init_portaudio_host(paMME, "MME", target_sample_rate, buffer_size, device_name);
 }
 
 void win32_close_portaudio() {
@@ -726,13 +665,4 @@ void win32_close_portaudio() {
         g_pa_stream = nullptr;
         Pa_Terminate();
     }
-}
-
-PaStream* win32_get_pa_stream() {
-    return g_pa_stream;
-}
-
-void win32_set_pa_stream_userdata(void* userdata) {
-    // This is a workaround since the callback is static
-    // The actual userdata is passed during Pa_OpenStream
 }

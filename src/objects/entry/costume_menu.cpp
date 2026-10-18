@@ -266,25 +266,26 @@ void CostumeMenu::handle_input() {
         }
 
         if (is_l_don_pressed(player_num) || is_r_don_pressed(player_num)) {
+            auto open_icon_select = [&](CostumePickStage stage, const char* subdir, const char* key,
+                                        const char* empty_msg) {
+                pick_stage = stage;
+                if (stage == CostumePickStage::HEAD) {
+                    picked_head_id = -1;
+                }
+                load_costume_icons(subdir, key);
+                if (costume_icons.empty()) {
+                    spdlog::warn("{}", empty_msg);
+                    return;
+                }
+                costume_select_mode = true;
+                audio.play_sound("don", VolumePreset::SOUND);
+            };
             if (std::string(ITEMS[selected_index]) == "costume_select/costume") {
-                pick_stage = CostumePickStage::NONE;
-                load_costume_icons("costume_icon", "costume");
-                if (costume_icons.empty()) {
-                    spdlog::warn("CostumeMenu: no costume icons found, staying in menu");
-                    return;
-                }
-                costume_select_mode = true;
-                audio.play_sound("don", VolumePreset::SOUND);
+                open_icon_select(CostumePickStage::NONE, "costume_icon", "costume",
+                                 "CostumeMenu: no costume icons found, staying in menu");
             } else if (std::string(ITEMS[selected_index]) == "costume_select/head_body") {
-                pick_stage = CostumePickStage::HEAD;
-                picked_head_id = -1;
-                load_costume_icons("costume_head_icon", "head");
-                if (costume_icons.empty()) {
-                    spdlog::warn("CostumeMenu: no head icons found, staying in menu");
-                    return;
-                }
-                costume_select_mode = true;
-                audio.play_sound("don", VolumePreset::SOUND);
+                open_icon_select(CostumePickStage::HEAD, "costume_head_icon", "head",
+                                 "CostumeMenu: no head icons found, staying in menu");
             } else if (is_preset_item(ITEMS[selected_index])) {
                 if (!preset_cos_id) {
                     apply_preset(ITEMS[selected_index]);

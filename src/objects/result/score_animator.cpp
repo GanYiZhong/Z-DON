@@ -9,14 +9,18 @@ ScoreAnimator::ScoreAnimator(int target) {
     is_finished = false;
 }
 
+std::string ScoreAnimator::digits() const {
+    std::string out;
+    for (auto& item : current_score_list) {
+        out += std::to_string(item.first);
+    }
+    return out;
+}
+
 std::string ScoreAnimator::next_score() {
     if (digit_index == -1) {
         is_finished = true;
-        std::string result;
-        for (auto& item : current_score_list) {
-            result += std::to_string(item.first);
-        }
-        return std::to_string(std::stoi(result));
+        return std::to_string(std::stoi(digits()));
     }
 
     while (digit_index != -1) {
@@ -30,10 +34,7 @@ std::string ScoreAnimator::next_score() {
         digit_index--;
     }
 
-    std::string ret_val;
-    for (auto& item : current_score_list) {
-        ret_val += std::to_string(item.first);
-    }
+    std::string ret_val = digits();
 
     if (std::stoi(ret_val) == 0) {
         int active_digits = target_score.size() - digit_index;

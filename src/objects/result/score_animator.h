@@ -10,6 +10,8 @@ private:
     std::vector<std::pair<int, int>> current_score_list;
     int digit_index;
 
+    std::string digits() const;
+
 public:
     ScoreAnimator(int target);
 

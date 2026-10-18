@@ -1,5 +1,7 @@
 #include "settings_box_manager.h"
 
+#include <algorithm>
+
 static constexpr int INITIAL_SELECTED = 3;
 // Same 1280x720-canvas base values as SettingsBox; scale with the skin.
 static constexpr float BOX_STEP_BASE = 100.0f;
@@ -47,6 +49,10 @@ SettingsBoxManager::SettingsBoxManager(const rapidjson::Document& tmpl)
 
 SettingsBoxManager::~SettingsBoxManager() = default;
 
+bool SettingsBoxManager::all_idle() const {
+    return std::all_of(boxes.begin(), boxes.end(), [](const auto& b) { return b->can_move(); });
+}
+
 void SettingsBoxManager::move_left() {
     if (box_selected) {
         box_selected = boxes[selected_box_index]->move_option_left();
@@ -54,10 +60,8 @@ void SettingsBoxManager::move_left() {
         // All-or-nothing: only start moving the carousel once every box is
         // idle, so a box still animating from a previous move can't leave
         // the others (and the selection index) out of sync.
-        for (auto& b : boxes) {
-            if (!b->can_move()) {
-                return;
-            }
+        if (!all_idle()) {
+            return;
         }
         for (auto& b : boxes) {
             b->move_left();
@@ -71,10 +75,8 @@ void SettingsBoxManager::move_right() {
     if (box_selected) {
         boxes[selected_box_index]->move_option_right();
     } else {
-        for (auto& b : boxes) {
-            if (!b->can_move()) {
-                return;
-            }
+        if (!all_idle()) {
+            return;
         }
         for (auto& b : boxes) {
             b->move_right();

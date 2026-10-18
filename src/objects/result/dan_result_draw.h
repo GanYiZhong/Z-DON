@@ -50,4 +50,5 @@ public:
 
 private:
     sol::table state_table(const FrameState& s);
+    bool read_xy_scale(sol::protected_function& fn, const char* context, float& x, float& y, float& scale);
 };

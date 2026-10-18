@@ -46,11 +46,7 @@ Box::Box(const std::string& text_str, int font_size, Screens location) : locatio
     moving_down = false;
     y_pos = 0;
     static_y = 0;
-    static_x = x;
-    left_x = x;
-    static_left = left_x;
-    right_x = left_x + tex.textures["mode_select/box"]->width - tex.textures["mode_select/box_highlight_right"]->width;
-    static_right = right_x;
+    apply_x_extents();
     if (!load("EntryBox", "box", text_str, font_size, std::string(mode_key(location)))) {
         spdlog::error("Box: failed to load EntryBox/box script; draw() will be a no-op");
         return;
@@ -58,13 +54,23 @@ Box::Box(const std::string& text_str, int font_size, Screens location) : locatio
     fn_draw = lua_object["draw"];
 }
 
-void Box::set_positions(float x, float y) {
-    this->x = x;
-    static_x = this->x;
-    left_x = this->x;
+void Box::apply_x_extents() {
+    static_x = x;
+    left_x = x;
     static_left = left_x;
     right_x = left_x + tex.textures["mode_select/box"]->width - tex.textures["mode_select/box_highlight_right"]->width;
     static_right = right_x;
+}
+
+void Box::start_move_if_idle() {
+    if (!move->is_started || move->is_finished) {
+        move->start();
+    }
+}
+
+void Box::set_positions(float x, float y) {
+    this->x = x;
+    apply_x_extents();
     this->y_pos = y;
     this->static_y = y;
     moving_left = moving_right = moving_up = moving_down = false;
@@ -105,33 +111,25 @@ void Box::update(double current_ms, bool is_selected) {
 }
 
 void Box::move_left() {
-    if (!move->is_started || move->is_finished) {
-        move->start();
-    }
+    start_move_if_idle();
     moving_right = moving_up = moving_down = false;
     moving_left = true;
 }
 
 void Box::move_right() {
-    if (!move->is_started || move->is_finished) {
-        move->start();
-    }
+    start_move_if_idle();
     moving_left = moving_up = moving_down = false;
     moving_right = true;
 }
 
 void Box::move_up() {
-    if (!move->is_started || move->is_finished) {
-        move->start();
-    }
+    start_move_if_idle();
     moving_left = moving_right = moving_down = false;
     moving_up = true;
 }
 
 void Box::move_down() {
-    if (!move->is_started || move->is_finished) {
-        move->start();
-    }
+    start_move_if_idle();
     moving_left = moving_right = moving_up = false;
     moving_down = true;
 }

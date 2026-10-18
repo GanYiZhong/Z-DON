@@ -10,7 +10,6 @@
 #endif
 #include <algorithm>
 #include <chrono>
-#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -56,17 +55,18 @@ int DanNavigator::song_note_count(const fs::path& path, int difficulty) {
     try {
         SongParser sp(path);
         auto [notes, bm, be, bn] = sp.notes_to_position(difficulty);
-        for (const Note& n : notes.notes) {
-            if (n.type >= NoteType::DON && n.type <= NoteType::KAT_L) {
-                total++;
-            }
-        }
-        for (auto& sec : bm) {
-            for (const Note& n : sec.notes) {
-                if (n.type >= NoteType::DON && n.type <= NoteType::KAT_L) {
-                    total++;
+        auto count = [](const auto& list) {
+            int n = 0;
+            for (const Note& note : list) {
+                if (note.type >= NoteType::DON && note.type <= NoteType::KAT_L) {
+                    n++;
                 }
             }
+            return n;
+        };
+        total = count(notes.notes);
+        for (auto& sec : bm) {
+            total += count(sec.notes);
         }
     } catch (const std::exception& e) {
         spdlog::warn("DanNavigator::total_notes_for: failed to parse '{}': {}", path.string(), e.what());
@@ -359,14 +359,6 @@ std::unique_ptr<DanBox> DanNavigator::make_box(const DanBoxData& d) {
     return box;
 }
 
-std::unique_ptr<DanBox> DanNavigator::load_dan_box(const fs::path& json_path) {
-    auto d = load_dan_box_data(json_path);
-    if (!d) {
-        return nullptr;
-    }
-    return make_box(*d);
-}
-
 void DanNavigator::collect_dan_jsons(const fs::path& root_path, std::vector<fs::path>& out) {
     if (root_path.empty()) {
         spdlog::warn("DanNavigator: skipping an empty dan root path");
@@ -489,24 +481,6 @@ std::vector<DanBoxData> DanNavigator::scan_roots(const std::vector<fs::path>& ro
     std::lock_guard<std::mutex> lock(cache_mutex);
     cache[roots] = Cached{std::move(signature), library_size, language, data};
     return data;
-}
-
-int DanNavigator::scan_root_data(const fs::path& root_path, std::vector<DanBoxData>& out) {
-    std::vector<DanBoxData> data = scan_roots({root_path});
-    int added = (int)data.size();
-    for (DanBoxData& d : data) {
-        out.push_back(std::move(d));
-    }
-    return added;
-}
-
-int DanNavigator::scan_root(const fs::path& root_path) {
-    std::vector<DanBoxData> data;
-    int added = scan_root_data(root_path, data);
-    for (const DanBoxData& d : data) {
-        boxes.push_back(make_box(d));
-    }
-    return added;
 }
 
 std::vector<DanBoxData> DanNavigator::scan_all_data(const std::vector<fs::path>& song_paths) {
@@ -728,37 +702,27 @@ void DanNavigator::set_positions(bool init, float duration) {
     }
 }
 
-void DanNavigator::move_left() {
-    last_moved = get_current_ms();
-    if (boxes.empty()) {
-        return;
-    }
-    boxes[selected_index]->close_box();
-    selected_index = (selected_index - 1 + (int)boxes.size()) % (int)boxes.size();
-    set_positions(false, 166);
-    boxes[selected_index]->expand_box();
-}
-
-void DanNavigator::move_right() {
-    last_moved = get_current_ms();
-    if (boxes.empty()) {
-        return;
-    }
-    boxes[selected_index]->close_box();
-    selected_index = (selected_index + 1) % (int)boxes.size();
-    set_positions(false, 166);
-    boxes[selected_index]->expand_box();
-}
-
-void DanNavigator::skip(int delta) {
+void DanNavigator::step(int delta, bool init, float duration) {
     last_moved = get_current_ms();
     if (boxes.empty()) {
         return;
     }
     boxes[selected_index]->close_box();
     selected_index = ((selected_index + delta) % (int)boxes.size() + (int)boxes.size()) % (int)boxes.size();
-    set_positions(true, 0);
+    set_positions(init, duration);
     boxes[selected_index]->expand_box();
+}
+
+void DanNavigator::move_left() {
+    step(-1, false, 166);
+}
+
+void DanNavigator::move_right() {
+    step(1, false, 166);
+}
+
+void DanNavigator::skip(int delta) {
+    step(delta, true, 0);
 }
 
 DanBox* DanNavigator::get_current() {

@@ -8,7 +8,6 @@
 #include "../../libs/scores.h"
 
 static void apply_pd_look(Chara3D& chara, PlayerData* pd, PlayerNum player_num) {
-    std::string player_id = get_player_id(player_num);
     if (pd) {
         chara.set_don_colors(pd->chara_color_1, pd->chara_color_2, pd->chara_color_3);
         chara.apply_face(pd->chara_face_index);
@@ -23,13 +22,7 @@ EntryPlayer::EntryPlayer(PlayerNum player_num, int side, BoxManager* box_manager
     : player_num(player_num), side(side), box_manager(box_manager) {
     indicator = std::make_unique<Indicator>(Indicator::State::SELECT);
 
-    std::string player_id = get_player_id(player_num);
-    auto pd = scores_manager.get_player_data(player_id);
-    nameplate = std::make_unique<Nameplate>(pd ? pd->username : "", pd ? pd->title : "", player_num, pd ? pd->dan : -1,
-                                            pd ? pd->gold : false, pd ? pd->rainbow : false, pd ? pd->title_bg : 0);
-    PlayerData* pd_ptr = pd ? &*pd : nullptr;
-    chara = make_chara_from_player_data(pd_ptr, player_num == PlayerNum::P2);
-    apply_pd_look(*chara, pd_ptr, player_num);
+    refresh_from_player_data();
     chara->set_anim(AnimIndex::DON_ENTRY_IN);
 
     if (!load("EntryPlayer", "player", side)) {
@@ -91,22 +84,16 @@ void EntryPlayer::open_costume_menu() {
 }
 
 void EntryPlayer::draw_drum() {
-    auto pos_opt = call_r<sol::table>(fn_draw_drum_back, "EntryPlayer:draw_drum_back");
-    if (pos_opt) {
-        sol::table& pos = pos_opt.value();
-        sol::optional<float> x = pos[1];
-        sol::optional<float> y = pos[2];
-        sol::optional<float> s = pos[3];
-        chara->draw(x.value_or(0.0f), y.value_or(0.0f), s.value_or(1.0f));
+    if (auto pos = call_r<sol::table>(fn_draw_drum_back, "EntryPlayer:draw_drum_back")) {
+        chara->draw((*pos)[1].get_or(0.0f), (*pos)[2].get_or(0.0f), (*pos)[3].get_or(1.0f));
     }
     call(fn_draw_drum_front, "EntryPlayer:draw_drum_front");
 }
 
 void EntryPlayer::draw_costume_menu() {
-    if (!costume_menu) {
-        return;
+    if (costume_menu) {
+        costume_menu->draw();
     }
-    costume_menu->draw();
 }
 
 void EntryPlayer::draw_nameplate_and_indicator(float fade) {

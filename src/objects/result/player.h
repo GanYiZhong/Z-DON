@@ -5,8 +5,13 @@
 #include "../enums.h"
 #include "../global/chara_3d.h"
 #include "../global/nameplate.h"
-#include "result_crown.h"
 #include "score_animator.h"
+
+enum CrownType {
+    CROWN_CLEAR = 0,
+    CROWN_FC = 1,
+    CROWN_DFC = 2
+};
 
 class ResultPlayer : public LuaScript {
     sol::protected_function fn_update, fn_draw, fn_draw_gauge, fn_draw_front, fn_chara_pos, fn_nameplate_pos,

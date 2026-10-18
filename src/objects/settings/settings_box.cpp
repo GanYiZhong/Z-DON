@@ -243,9 +243,7 @@ void SettingsBox::draw_text() const {
     float text_x = x + t_box->x[0] + (t_box->x2[0] / 2.0f) - (label->width / 2.0f);
     float text_y = y + t_box->y[0] + (t_box->y2[0] / 2.0f) - (label->height / 2.0f);
 
-    if (is_selected) {
-        label->draw({.x = text_x, .y = text_y});
-    } else if (box_name == "exit") {
+    if (!is_selected && box_name == "exit") {
         label->draw({.color = ray::RED, .x = text_x, .y = text_y});
     } else {
         label->draw({.x = text_x, .y = text_y});

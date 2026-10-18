@@ -89,11 +89,7 @@ struct ConfigRef {
         throw std::runtime_error("ConfigRef: not a string/path");
     }
 
-    bool is_bool() const { return std::holds_alternative<bool*>(ptr); }
     bool is_int() const { return std::holds_alternative<int*>(ptr); }
-    bool is_float() const { return std::holds_alternative<float*>(ptr); }
-    bool is_vec() const { return std::holds_alternative<std::vector<int>*>(ptr); }
-    bool is_str() const { return std::holds_alternative<std::string*>(ptr) || std::holds_alternative<fs::path*>(ptr); }
 };
 
 inline ConfigRef get_config_ref(const std::string& path) {

@@ -216,32 +216,20 @@ void ResultPlayer::draw() {
     auto [cx, cy] = tex.chara_xy("result");
     cy += (int)is_2p * tex.screen_height / 2;
     float cs = 1.0f;
-    if (fn_chara_pos.valid()) {
-        auto pos_opt = call_r<sol::table>(fn_chara_pos, "ResultPlayer:chara_pos");
-        if (pos_opt) {
-            sol::table& pos = pos_opt.value();
-            sol::optional<float> px = pos[1], py = pos[2], ps = pos[3];
-            cx = px.value_or(cx);
-            cy = py.value_or(cy);
-            cs = ps.value_or(cs);
-        }
+    if (auto pos = call_r<sol::table>(fn_chara_pos, "ResultPlayer:chara_pos")) {
+        cx = (*pos)[1].get_or((float)cx);
+        cy = (*pos)[2].get_or((float)cy);
+        cs = (*pos)[3].get_or(cs);
     }
     chara->draw(cx, cy, cs);
-    if (fn_draw_front.valid()) {
-        call(fn_draw_front, "ResultPlayer:draw_front");
-    }
+    call(fn_draw_front, "ResultPlayer:draw_front");
     call(fn_draw_gauge, "ResultPlayer:draw_gauge");
     auto [nx, ny] = tex.nameplate_xy(is_2p ? "result_2p" : "result", "result");
     float nf = 1.0f;
-    if (fn_nameplate_pos.valid()) {
-        auto pos_opt = call_r<sol::table>(fn_nameplate_pos, "ResultPlayer:nameplate_pos");
-        if (pos_opt) {
-            sol::table& pos = pos_opt.value();
-            sol::optional<float> px = pos[1], py = pos[2], pf = pos[3];
-            nx = px.value_or(nx);
-            ny = py.value_or(ny);
-            nf = pf.value_or(nf);
-        }
+    if (auto pos = call_r<sol::table>(fn_nameplate_pos, "ResultPlayer:nameplate_pos")) {
+        nx = (*pos)[1].get_or((float)nx);
+        ny = (*pos)[2].get_or((float)ny);
+        nf = (*pos)[3].get_or(nf);
     }
     nameplate.draw(nx, ny, nf);
 }

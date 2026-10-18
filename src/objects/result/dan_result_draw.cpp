@@ -145,11 +145,8 @@ void DanResultDraw::draw_overlay(const FrameState& s) {
     call(fn_draw_overlay, "DanResultDraw:draw_overlay", state_table(s));
 }
 
-bool DanResultDraw::chara_pos(float& x, float& y, float& scale) {
-    if (!fn_chara_pos.valid()) {
-        return false;
-    }
-    auto pos_opt = call_r<sol::table>(fn_chara_pos, "DanResultDraw:chara_pos");
+bool DanResultDraw::read_xy_scale(sol::protected_function& fn, const char* context, float& x, float& y, float& scale) {
+    auto pos_opt = call_r<sol::table>(fn, context);
     if (!pos_opt) {
         return false;
     }
@@ -164,21 +161,10 @@ bool DanResultDraw::chara_pos(float& x, float& y, float& scale) {
     return true;
 }
 
+bool DanResultDraw::chara_pos(float& x, float& y, float& scale) {
+    return read_xy_scale(fn_chara_pos, "DanResultDraw:chara_pos", x, y, scale);
+}
+
 bool DanResultDraw::nameplate_pos(float& x, float& y, float& fade) {
-    if (!fn_nameplate_pos.valid()) {
-        return false;
-    }
-    auto pos_opt = call_r<sol::table>(fn_nameplate_pos, "DanResultDraw:nameplate_pos");
-    if (!pos_opt) {
-        return false;
-    }
-    sol::table& pos = pos_opt.value();
-    sol::optional<float> px = pos[1], py = pos[2], pf = pos[3];
-    if (!px || !py) {
-        return false;
-    }
-    x = px.value();
-    y = py.value();
-    fade = pf.value_or(fade);
-    return true;
+    return read_xy_scale(fn_nameplate_pos, "DanResultDraw:nameplate_pos", x, y, fade);
 }
