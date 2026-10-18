@@ -10,6 +10,7 @@
 #include "global_data.h"
 #include "han_fold_table.h"
 #include "script.h"
+#include "text_stats.h"
 
 #if defined(_WIN32)
 #include "../platform/platform_windows.h"
@@ -225,6 +226,7 @@ bool FontManager::rasterize_new(SizedFont& entry, int font_size, const std::vect
 // Pack the cached glyphs into a fresh atlas texture. Glyph images stay in `cache`
 // (raylib's LoadFontEx would crop them out of the atlas; nothing here reads them).
 void FontManager::rebuild_atlas(SizedFont& entry, int font_size) {
+    text_stats::Scope stat(text_stats::ATLAS);
     release_font(entry);
     const int n = (int)entry.cache.size();
     ray::Font f{};
@@ -342,6 +344,7 @@ bool FontManager::register_codepoints(SizedFont& entry, int font_size, const std
 }
 
 void FontManager::register_text(const std::string& text, int font_size) {
+    text_stats::Scope stat(text_stats::REGISTER);
     std::lock_guard<std::mutex> lock(font_mutex);
     font_size = std::max(font_size, 1);
     register_codepoints(fonts[font_size], font_size, text);
@@ -689,6 +692,7 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
                            const std::string& font_name)
     : text(std::move(text)), font_size(static_cast<float>(font_size)),
       outline_thickness(outline_thickness * global_tex.screen_scale), v_advance(v_advance) {
+    text_stats::Scope stat(text_stats::CTOR);
     worker_font = named_font_manager(font_name).copy_font(this->text, font_size);
 
     if (is_vertical) {
@@ -969,8 +973,12 @@ bool OutlinedText::upload_pending() {
     ray::UnloadFont(worker_font);
     worker_font = {};
 
-    ray::Texture tex = ray::LoadTextureFromImage(*img);
-    ray::SetTextureFilter(tex, ray::TEXTURE_FILTER_BILINEAR);
+    ray::Texture tex{};
+    {
+        text_stats::Scope stat(text_stats::UPLOAD);
+        tex = ray::LoadTextureFromImage(*img);
+        ray::SetTextureFilter(tex, ray::TEXTURE_FILTER_BILINEAR);
+    }
     ray::UnloadImage(*img);
 
     texture = tex;
