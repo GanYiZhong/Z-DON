@@ -17,6 +17,7 @@
 #include "libs/song_parser.h"
 #include "libs/text.h"
 #include "libs/webcam.h"
+#include "objects/global/chara_3d.h"
 
 #ifdef _WIN32
 #include "platform/platform_windows.h"
@@ -381,6 +382,9 @@ void reload_skin_screens() {
     populate_screens(g_loop->screens, g_loop->current_screen);
 }
 
+static bool dump_screen_tick();         // dev hook, defined below
+static bool g_dump_screen_done = false; // the dump hook's last shot is taken: leave the main loop
+
 static void run_frame() {
     PROFILE_FRAME();
     PROFILE_SCOPE();
@@ -460,6 +464,68 @@ static void run_frame() {
     }
     sync_text_input();
 
+    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title>;<ms>" jumps there once,
+    // <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
+    {
+        static const auto jump_start = std::chrono::steady_clock::now();
+        static bool jump_done = false;
+        static const char* jump = std::getenv("YATAIDON_JUMP_SCREEN");
+        if (!jump_done && jump && *jump) {
+            std::string j(jump);
+            size_t semi = j.find(';');
+            double at = semi == std::string::npos ? 3000.0 : std::atof(j.substr(semi + 1).c_str());
+            std::string name = j.substr(0, semi);
+            if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - jump_start).count() >=
+                at) {
+                jump_done = true;
+                if (name == "entry") {
+                    debug_menu.requested_screen = Screens::ENTRY;
+                } else if (name == "song_select") {
+                    debug_menu.requested_screen = Screens::SONG_SELECT;
+                } else if (name == "dan_select") {
+                    debug_menu.requested_screen = Screens::DAN_SELECT;
+                } else if (name == "title") {
+                    debug_menu.requested_screen = Screens::TITLE;
+                } else if (name == "practice_select") {
+                    debug_menu.requested_screen = Screens::PRACTICE_SELECT;
+                }
+            }
+        }
+        // Dev hook: YATAIDON_FAKE_KEYS="<ms>:<raylib key code>,..." presses each key once, <ms> after
+        // the first frame, through the game's own input queue (no OS input: other windows unaffected)
+        static const char* fake = std::getenv("YATAIDON_FAKE_KEYS");
+        static std::vector<std::pair<double, int>> fake_keys;
+        static bool fake_parsed = false;
+        if (fake && *fake && !fake_parsed) {
+            fake_parsed = true;
+            std::string f(fake);
+            size_t pos = 0;
+            while (pos < f.size()) {
+                size_t comma = f.find(',', pos);
+                std::string item = f.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                size_t colon = item.find(':');
+                if (colon != std::string::npos) {
+                    fake_keys.emplace_back(std::atof(item.substr(0, colon).c_str()),
+                                           std::atoi(item.substr(colon + 1).c_str()));
+                }
+                if (comma == std::string::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+        }
+        const double since =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - jump_start).count();
+        for (auto it = fake_keys.begin(); it != fake_keys.end();) {
+            if (since >= it->first) {
+                spdlog::info("[devkeys] key {} at {:.0f} ms", it->second, since);
+                dev_inject_key(it->second);
+                it = fake_keys.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     if (!next_screen.has_value() && debug_menu.requested_screen.has_value()) {
         next_screen = screen->on_screen_end(debug_menu.requested_screen.value());
         debug_menu.requested_screen.reset();
@@ -511,9 +577,14 @@ static void run_frame() {
 
     ray::EndBlendMode();
     ray::EndMode2D();
+    const bool dump_done = dump_screen_tick();
     {
         PROFILE_SCOPE_N("present");
         ray::EndDrawing();
+        if (dump_done) {
+            g_dump_screen_done = true; // shut down as on a normal quit (std::exit here crashed
+                                       // in static destructors with the worker threads still running)
+        }
 
         if (!next_screen.has_value()) {
             ray::SwapScreenBuffer();
@@ -555,6 +626,124 @@ static void run_frame() {
 #endif
 }
 
+// Dev hook: YATAIDON_DUMP_CHARA="<outdir>;<cos>|<head>+<body>;<anim>;<shots>" renders the
+// character in a hidden window, one PNG per 250 ms of animation time, and exits.
+// Dev hook: YATAIDON_DUMP_SCREEN="<outdir>;<t1,t2,...>" (ms after the first frame) runs the game in a
+// hidden window, saves the frame at each listed time to <outdir>/<n>_<ms>.png and exits after the last.
+// Combine with the normal CLI ("<song.tja> <difficulty> --auto") for the game and result screens.
+static struct {
+    bool active = false;
+    std::string outdir;
+    std::vector<double> times;
+    size_t next = 0;
+    double t0 = -1;
+} g_dump_screen;
+static void dump_screen_init() {
+    const char* spec = std::getenv("YATAIDON_DUMP_SCREEN");
+    if (!spec || !*spec) {
+        return;
+    }
+    std::string sp(spec);
+    size_t semi = sp.find(';');
+    if (semi == std::string::npos) {
+        spdlog::error("YATAIDON_DUMP_SCREEN: outdir;t1,t2,...");
+        return;
+    }
+    g_dump_screen.outdir = sp.substr(0, semi);
+    std::string ts = sp.substr(semi + 1);
+    size_t st = 0;
+    for (size_t i; (i = ts.find(',', st)) != std::string::npos; st = i + 1) {
+        g_dump_screen.times.push_back(std::atof(ts.substr(st, i - st).c_str()));
+    }
+    if (st < ts.size()) {
+        g_dump_screen.times.push_back(std::atof(ts.substr(st).c_str()));
+    }
+    if (g_dump_screen.times.empty()) {
+        return;
+    }
+    fs::create_directories(g_dump_screen.outdir);
+    g_dump_screen.active = true;
+}
+// call between BeginDrawing and EndDrawing; returns true when the last shot was taken
+static bool dump_screen_tick() {
+    if (!g_dump_screen.active) {
+        return false;
+    }
+    static const auto start = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    // grab the frames in memory and write them after the last one: exporting a PNG takes several
+    // frames and would stall the game (auto play hits once per frame)
+    static std::vector<std::pair<std::string, ray::Image>> shots;
+    bool grabbed = false;
+    while (g_dump_screen.next < g_dump_screen.times.size() && ms >= g_dump_screen.times[g_dump_screen.next]) {
+        const std::string name = std::to_string(g_dump_screen.next) + "_" +
+                                 std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
+        if (!grabbed) {
+            shots.emplace_back(name, ray::LoadImageFromScreen());
+            grabbed = true;
+        } else {
+            shots.emplace_back(name, ray::ImageCopy(shots.back().second));
+        }
+        g_dump_screen.next++;
+    }
+    if (g_dump_screen.next < g_dump_screen.times.size()) {
+        return false;
+    }
+    for (auto& [name, img] : shots) {
+        ray::ExportImage(img, (fs::path(g_dump_screen.outdir) / name).string().c_str());
+        ray::UnloadImage(img);
+    }
+    shots.clear();
+    return true;
+}
+
+static int dump_chara(const std::string& spec) {
+    std::vector<std::string> f;
+    size_t st = 0;
+    for (size_t i; (i = spec.find(';', st)) != std::string::npos; st = i + 1) {
+        f.push_back(spec.substr(st, i - st));
+    }
+    f.push_back(spec.substr(st));
+    if (f.size() < 4) {
+        spdlog::error("YATAIDON_DUMP_CHARA: outdir;model;anim;shots");
+        return 1;
+    }
+    fs::create_directories(f[0]);
+    std::unique_ptr<Chara3D> ch;
+    if (auto plus = f[1].find('+'); plus != std::string::npos) {
+        std::string head = f[1].substr(0, plus), body = f[1].substr(plus + 1);
+        ch = std::make_unique<Chara3D>(head, body, false, true);
+    } else {
+        ch = std::make_unique<Chara3D>(f[1], false, true);
+    }
+    ch->set_don_colors({104, 191, 192, 255}, {249, 71, 40, 255}, {249, 240, 225, 255});
+    ch->set_bpm(120.0f);
+    ch->set_anim(static_cast<AnimIndex>(std::atoi(f[2].c_str())));
+    const int shots = std::atoi(f[3].c_str());
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD,
+                              RL_FUNC_ADD);
+    double ms = 0.0;
+    for (int i = 0; i < shots; i++) {
+        for (int k = 0; k < 15; k++) {
+            ms += 16.6667;
+            ch->update(ms);
+        } // ~250 ms of animation
+        ray::Camera2D cam = compute_camera2d(tex.screen_width, tex.screen_height);
+        ray::BeginDrawing();
+        ray::ClearBackground({200, 220, 200, 255});
+        ray::BeginMode2D(cam);
+        ray::BeginBlendMode(ray::BLEND_CUSTOM_SEPARATE);
+        ch->draw(tex.screen_width * 0.5f, tex.screen_height * 0.55f, 2.0f);
+        ray::EndBlendMode();
+        ray::EndMode2D();
+        ray::Image img = ray::LoadImageFromScreen();
+        ray::EndDrawing();
+        ray::ExportImage(img, (fs::path(f[0]) / (std::to_string(i) + ".png")).string().c_str());
+        ray::UnloadImage(img);
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     spdlog::info("Starting YataiDON");
     set_working_directory_to_executable();
@@ -564,6 +753,10 @@ int main(int argc, char* argv[]) {
     ensure_config_file(*global_data.config);
     parse_card_reader_args(argc, argv, global_data.config->card_reader);
     Screens initial_screen = check_args(argc, argv);
+    // Dev hook: YATAIDON_FORCE_AUTO=1 plays every chart on auto (the dan courses have no CLI)
+    if (const char* fa = std::getenv("YATAIDON_FORCE_AUTO"); fa && *fa == '1') {
+        global_data.force_auto_play = true;
+    }
     init_scores_manager(global_data.config->general.score_method == ScoreMethod::GEN3);
     unsigned int flags = ray::FLAG_WINDOW_RESIZABLE;
     if (global_data.config->video.vsync) {
@@ -573,12 +766,24 @@ int main(int argc, char* argv[]) {
 #ifdef YATAIDON_PLATFORM_IOS
     ios_configure_window_flags(flags);
 #endif
+    const char* dump_chara_spec = std::getenv("YATAIDON_DUMP_CHARA");
+    if (dump_chara_spec && *dump_chara_spec) {
+        flags |= ray::FLAG_WINDOW_HIDDEN;
+    }
+    dump_screen_init();
+    if (g_dump_screen.active) {
+        flags |= ray::FLAG_WINDOW_HIDDEN;
+    }
     ray::SetConfigFlags(flags);
     ray::SetTraceLogLevel(ray::LOG_ERROR);
     setup_logging(global_data.config->general.log_level);
 
     ray::InitWindow(1280, 720, "YataiDON");
     load_skin();
+    if (dump_chara_spec && *dump_chara_spec) {
+        std::exit(
+            dump_chara(dump_chara_spec)); // exit() like the label dump: the audio thread keeps a plain return alive
+    }
     apply_queued_window_resize();
 
     // Apply config defaults for empty access codes
@@ -652,7 +857,7 @@ int main(int argc, char* argv[]) {
     input_thread = std::thread(input_polling_thread);
     start_midi_input(global_data.config->midi);
 
-    while (!ray::WindowShouldClose()) {
+    while (!ray::WindowShouldClose() && !g_dump_screen_done) {
         process_midi_events();
 
         // Consume buffered quit-key presses while editing to prevent a delayed game exit after the field closes.

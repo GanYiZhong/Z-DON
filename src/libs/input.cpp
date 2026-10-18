@@ -808,6 +808,12 @@ void input_polling_thread() {
     }
 }
 
+void dev_inject_key(int key) {
+    std::lock_guard<std::mutex> lock(input_mutex);
+    pressed_keys.emplace(key, 1.0f);
+    released_keys.insert(key);
+}
+
 bool check_key_pressed(int key, float* strength) {
     std::lock_guard<std::mutex> lock(input_mutex);
     auto it = pressed_keys.find(key);
