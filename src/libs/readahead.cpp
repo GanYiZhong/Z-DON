@@ -2,6 +2,7 @@
 
 #include "filesystem.h"
 #include "global_data.h"
+#include "texture_retain.h"
 #ifdef _WIN32
 #include "../platform/platform_windows.h"
 #endif
@@ -43,6 +44,7 @@ namespace readahead {
         struct Request {
             std::vector<fs::path> roots; // the skin's root, then its ancestors'
             std::vector<std::string> screens;
+            std::vector<std::string> resident; // screens whose textures are still loaded: Sounds only
         };
 
         std::mutex mutex;
@@ -107,6 +109,10 @@ namespace readahead {
             for (const std::string& screen : req.screens) {
                 for (const fs::path& root : req.roots) {
                     for (const char* kind : {"Graphics", "Sounds"}) {
+                        if (kind[0] == 'G' &&
+                            std::find(req.resident.begin(), req.resident.end(), screen) != req.resident.end()) {
+                            continue;
+                        }
                         const fs::path dir = root / kind / screen;
                         std::error_code ec;
                         if (!fs::is_directory(dir, ec)) {
@@ -218,6 +224,11 @@ namespace readahead {
             req.roots.push_back(r);
         }
         req.screens = it->second;
+        for (const std::string& s : req.screens) {
+            if (texture_retain::screen_complete(s)) {
+                req.resident.push_back(s);
+            }
+        }
         queued = std::move(req);
         if (!worker.t.joinable()) {
             worker.t = std::thread(run);

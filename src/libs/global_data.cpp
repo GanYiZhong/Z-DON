@@ -12,6 +12,7 @@
 #include "script.h"
 #include "text.h"
 #include "texture.h"
+#include "texture_retain.h"
 
 GlobalData global_data;
 
@@ -104,6 +105,7 @@ void unload_skin() {
     debug_menu.unload_fonts();
     tex.unload_textures();
     global_tex.unload_textures();
+    texture_retain::clear(); // before the GL context goes (shutdown) or the skin changes
     script_manager.shutdown();
     font_manager.unload();
     unload_named_fonts();

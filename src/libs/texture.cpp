@@ -13,6 +13,7 @@
 #include "profiler.h"
 #include "script.h"
 #include "text.h"
+#include "texture_retain.h"
 
 #ifdef _WIN32
 #include "../platform/platform_windows.h"
@@ -102,6 +103,7 @@ std::string TextureWrapper::skin_text(const std::string& key, const std::string&
 
 void TextureWrapper::init(const fs::path& skin_path) {
     graphics_path = skin_path;
+    texture_retain::clear(); // a new or reloaded skin: nothing loaded before may be reused
 
     if (!fs::exists(graphics_path)) {
         throw std::runtime_error("The skin path provided is not a valid path");
@@ -599,6 +601,28 @@ std::unordered_set<std::string> overridden_names(DirIndex& dirs, const fs::path&
     return names;
 }
 
+// For each ancestor (nearest first), the texture names a nearer skin already provides for
+// <screen>/<subset>; child_has_folder tells whether the skin itself has that folder.
+std::vector<std::unordered_set<std::string>> subset_skips(DirIndex& dirs, const fs::path& own_dir,
+                                                          const std::vector<fs::path>& ancestor_dirs,
+                                                          bool& child_has_folder) {
+    child_has_folder = ancestor_dirs.empty() || dirs.is_file(own_dir, "texture.json");
+    std::vector<std::unordered_set<std::string>> skips(ancestor_dirs.size());
+    std::unordered_set<std::string> claimed;
+    if (child_has_folder && !ancestor_dirs.empty()) {
+        claimed = overridden_names(dirs, own_dir);
+    }
+    for (size_t i = 0; i < ancestor_dirs.size(); i++) {
+        skips[i] = claimed;
+        if (dirs.is_file(ancestor_dirs[i], "texture.json")) {
+            for (const std::string& n : overridden_names(dirs, ancestor_dirs[i])) {
+                claimed.insert(n);
+            }
+        }
+    }
+    return skips;
+}
+
 class ImagePrefetch {
 public:
     ImagePrefetch(const std::vector<std::vector<fs::path>>& groups, const std::unordered_set<std::string>& border_keys,
@@ -632,8 +656,8 @@ public:
             t.join();
         }
         for (Item& it : items) {
-            if (it.state == State::Done && it.image.data) {
-                ray::UnloadImage(it.image);
+            if (it.state == State::Done) {
+                texture_retain::free_image_async(it.image);
             }
         }
     }
@@ -678,9 +702,7 @@ public:
             if (it.state == State::Pending) {
                 it.state = State::Dropped;
             } else if (it.state == State::Done) {
-                if (it.image.data) {
-                    ray::UnloadImage(it.image);
-                }
+                texture_retain::free_image_async(it.image);
                 it.image = ray::Image{};
                 held -= it.bytes;
                 it.state = State::Dropped;
@@ -834,6 +856,12 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 std::string tex_id = subset_key + "/" + tex_name;
 
                 std::string cache_key = (folder / tex_name).string();
+                if (auto kept = texture_retain::reuse(cache_key)) {
+                    textures[tex_id] = kept;
+                    ids_this_call.insert(tex_id);
+                    ++loaded_count;
+                    continue;
+                }
                 auto cit = cache.find(cache_key);
                 if (cit != cache.end()) {
                     if (auto shared = cit->second.lock()) {
@@ -950,6 +978,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                         }
                     }
 
+                    texture_retain::add(screen_name, p.cache_key, obj);
                     textures[p.id] = obj;
                     cache[p.cache_key] = obj;
                     ids_this_call.insert(p.id);
@@ -957,17 +986,13 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 }
             } catch (...) {
                 for (auto& img : images) {
-                    if (img.data) {
-                        ray::UnloadImage(img);
-                    }
+                    texture_retain::free_image_async(img);
                 }
                 throw;
             }
 
             for (auto& img : images) {
-                if (img.data) {
-                    ray::UnloadImage(img);
-                }
+                texture_retain::free_image_async(img);
             }
 
             spdlog::debug("Textures loaded from folder: {}", folder.string());
@@ -980,21 +1005,13 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
     // Farthest ancestor first, child last (later loads overwrite), each ancestor skipping
     // the names already provided by the child or a closer ancestor.
     const fs::path own_dir = graphics_path / screen_name / subset;
-    const bool child_has_folder = ancestor_graphics_paths.empty() || dirs.is_file(own_dir, "texture.json");
-    std::vector<std::unordered_set<std::string>> skips(ancestor_graphics_paths.size());
-    std::unordered_set<std::string> claimed;
-    if (child_has_folder && !ancestor_graphics_paths.empty()) {
-        claimed = overridden_names(dirs, own_dir);
+    std::vector<fs::path> ancestor_dirs;
+    for (const fs::path& a : ancestor_graphics_paths) {
+        ancestor_dirs.push_back(a / screen_name / subset);
     }
-    for (size_t i = 0; i < ancestor_graphics_paths.size(); i++) {
-        const fs::path dir = ancestor_graphics_paths[i] / screen_name / subset;
-        skips[i] = claimed;
-        if (dirs.is_file(dir, "texture.json")) {
-            for (const std::string& n : overridden_names(dirs, dir)) {
-                claimed.insert(n);
-            }
-        }
-    }
+    bool child_has_folder = false;
+    const std::vector<std::unordered_set<std::string>> skips =
+        subset_skips(dirs, own_dir, ancestor_dirs, child_has_folder);
     for (size_t i = ancestor_graphics_paths.size(); i-- > 0;) {
         const fs::path dir = ancestor_graphics_paths[i] / screen_name / subset;
         if (dirs.is_file(dir, "texture.json")) {
@@ -1094,50 +1111,65 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         }
     }
 
-    // every PNG those folders hold (frame folders included), one group per subset
+    // The files load_folder will read for each subset, in the order it reads them (farthest
+    // ancestor first, child last), one group per subset: names a nearer skin overrides and
+    // textures still loaded (texture_retain) are left out.
     std::vector<std::vector<fs::path>> groups(subsets.size());
     std::unordered_set<std::string> border_keys;
+    auto& cache = tex_object_cache();
+    auto plan_folder = [&](const fs::path& dir, const std::unordered_set<std::string>* skip,
+                           std::vector<fs::path>& out) {
+        if (!dirs.is_file(dir, "texture.json")) {
+            return;
+        }
+        try {
+            auto cfg = read_json_file(dir / "texture.json");
+            for (auto& m : cfg.GetObject()) {
+                const std::string name = m.name.GetString();
+                if (skip && skip->count(name)) {
+                    continue;
+                }
+                const std::string cache_key = (dir / name).string();
+                if (texture_retain::contains(cache_key)) {
+                    continue;
+                }
+                if (auto cit = cache.find(cache_key); cit != cache.end() && !cit->second.expired()) {
+                    continue;
+                }
+                const bool file_override =
+                    m.value.IsObject() && m.value.HasMember("file") && m.value["file"].IsString();
+                const fs::path tex_file =
+                    dir / (file_override ? std::string(m.value["file"].GetString()) : name + ".png");
+                if (!file_override && dirs.is_dir(dir, name)) {
+                    for (const fs::path& frame : sorted_frames(dirs, dir / name)) {
+                        out.push_back(frame);
+                    }
+                    continue;
+                }
+                if (!dirs.exists(tex_file.parent_path(), tex_file.filename())) {
+                    continue;
+                }
+                out.push_back(tex_file);
+                if (m.value.IsObject() && !m.value.HasMember("x2") && !m.value.HasMember("crop")) {
+                    border_keys.insert(ImagePrefetch::image_key(tex_file));
+                }
+            }
+        } catch (const std::exception&) {
+        }
+    };
     for (size_t g = 0; g < subsets.size(); ++g) {
-        for (const fs::path& root : roots) {
-            const fs::path dir = root / screen_name / subsets[g];
-            if (!dirs.is_file(dir, "texture.json")) {
-                continue;
-            }
-
-            try {
-                auto cfg = read_json_file(dir / "texture.json");
-                for (auto& m : cfg.GetObject()) {
-                    if (!m.value.IsObject() || m.value.HasMember("x2") || m.value.HasMember("crop")) {
-                        continue;
-                    }
-                    const bool file_override = m.value.HasMember("file") && m.value["file"].IsString();
-                    const std::string name = m.name.GetString();
-                    if (!file_override && dirs.is_dir(dir, name)) {
-                        continue;
-                    }
-                    border_keys.insert(ImagePrefetch::image_key(
-                        dir / (file_override ? std::string(m.value["file"].GetString()) : name + ".png")));
-                }
-            } catch (const std::exception&) {
-            }
-            const auto* entries = dirs.list(dir);
-            if (!entries) {
-                continue;
-            }
-            for (const DirIndex::Entry& entry : *entries) {
-                const fs::path& p = entry.path;
-                if (entry.is_dir) {
-                    if (const auto* frames = dirs.list(p)) {
-                        for (const DirIndex::Entry& frame : *frames) {
-                            if (!frame.is_dir && frame.path.extension() == ".png") {
-                                groups[g].push_back(frame.path);
-                            }
-                        }
-                    }
-                } else if (p.extension() == ".png") {
-                    groups[g].push_back(p);
-                }
-            }
+        const fs::path own_dir = graphics_path / screen_name / subsets[g];
+        std::vector<fs::path> ancestor_dirs;
+        for (const fs::path& a : ancestor_graphics_paths) {
+            ancestor_dirs.push_back(a / screen_name / subsets[g]);
+        }
+        bool child_has_folder = false;
+        const auto skips = subset_skips(dirs, own_dir, ancestor_dirs, child_has_folder);
+        for (size_t i = ancestor_dirs.size(); i-- > 0;) {
+            plan_folder(ancestor_dirs[i], &skips[i], groups[g]);
+        }
+        if (child_has_folder) {
+            plan_folder(own_dir, nullptr, groups[g]);
         }
     }
 
@@ -1155,6 +1187,7 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     }
 
     spdlog::info("Screen textures loaded for: {}", screen_name);
+    texture_retain::log_screen(screen_name);
 }
 
 std::vector<std::string> TextureWrapper::language_variants(const std::string& name) const {
