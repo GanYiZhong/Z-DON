@@ -398,10 +398,20 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
         // (at buffer_size=1, pitch 0.9 never advances and 1.5 plays at 1.0).
         double frame_f = (double)frame + std::atomic_ref<float>(snd.frame_frac).load(std::memory_order_relaxed);
 
+        unsigned int end_frame = snd.frame_count;
+        bool decoding = false; // the tail isn't decoded yet: past end_frame is silence for now, not the end
+        if (snd.decode_job) {
+            decoding = !snd.decode_job->done.load(std::memory_order_acquire);
+            end_frame = snd.decode_job->frames_ready.load(std::memory_order_acquire);
+        }
+
         while (frames_to_process > 0 && still_playing) {
             unsigned long src_frame = (unsigned long)frame_f;
-            if (src_frame >= snd.frame_count) {
-                if (std::atomic_ref<bool>(snd.loop).load(std::memory_order_relaxed) && snd.frame_count > 0) {
+            if (src_frame >= end_frame) {
+                if (decoding) {
+                    break;
+                }
+                if (std::atomic_ref<bool>(snd.loop).load(std::memory_order_relaxed) && end_frame > 0) {
                     frame_f = 0.0;
                     continue;
                 } else {
@@ -996,6 +1006,7 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
     auto it = sounds.find(name);
     if (it != sounds.end()) {
         std::atomic_ref<bool>(it->second.is_playing).store(false, std::memory_order_relaxed);
+        stop_decode_job(it->second);
         delete[] it->second.data;
         if (it->second.resampler) {
             src_delete(it->second.resampler);
@@ -1003,6 +1014,143 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
         delete[] it->second.resample_buffer;
     }
     sounds[name] = snd;
+}
+
+void AudioEngine::stop_decode_job(sound& snd) {
+    if (!snd.decode_job) {
+        return;
+    }
+    snd.decode_job->cancel.store(true, std::memory_order_relaxed);
+    // wait out a chunk being written; the decoder checks cancel before the next one
+    std::lock_guard<std::mutex> lock(snd.decode_job->writing);
+    snd.decode_job.reset();
+}
+
+// Z-DON: a long sound (a screen's bgm: Nijiiro's song select bgm.ogg took ~210 ms warm, ~450 ms
+// from a cold disk to decode whole) decodes its first seconds here and the rest on a background
+// thread, into the same buffer; it can start playing at once. Takes ownership of file.
+std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
+                                                const std::string& name) {
+    const unsigned int channels = static_cast<unsigned int>(info.channels);
+    const bool resample = static_cast<double>(info.samplerate) != target_sample_rate;
+    const double ratio = resample ? target_sample_rate / static_cast<double>(info.samplerate) : 1.0;
+    const size_t expected = static_cast<size_t>(static_cast<double>(info.frames) * ratio);
+    const size_t capacity = expected + 64; // frames; room for the resampler's rounding
+
+    struct Decoder {
+        SNDFILE* file = nullptr;
+        SRC_STATE* src = nullptr;
+        float* out = nullptr;
+        size_t capacity = 0;
+        size_t written = 0;
+        unsigned int channels = 0;
+        double ratio = 1.0;
+        bool eof = false;
+        std::vector<float> in;
+
+        // decodes up to frames source frames; false once the whole file is in
+        bool step(sf_count_t frames) {
+            if (eof) {
+                return false;
+            }
+            if (!src) {
+                const sf_count_t room = static_cast<sf_count_t>(capacity - written);
+                const sf_count_t n = sf_readf_float(file, out + written * channels, std::min(frames, room));
+                written += static_cast<size_t>(std::max<sf_count_t>(n, 0));
+                eof = n < std::min(frames, room) || written >= capacity;
+                return !eof;
+            }
+            in.resize(static_cast<size_t>(frames) * channels);
+            const sf_count_t n = sf_readf_float(file, in.data(), frames);
+            eof = n < frames;
+            SRC_DATA d{};
+            d.data_in = in.data();
+            d.input_frames = static_cast<long>(std::max<sf_count_t>(n, 0));
+            d.src_ratio = ratio;
+            d.end_of_input = eof ? 1 : 0;
+            do {
+                d.data_out = out + written * channels;
+                d.output_frames = static_cast<long>(capacity - written);
+                if (d.output_frames <= 0 || src_process(src, &d) != 0) {
+                    eof = true;
+                    return false;
+                }
+                written += static_cast<size_t>(d.output_frames_gen);
+                if (d.input_frames_used == 0 && d.output_frames_gen == 0) {
+                    break;
+                }
+                d.data_in += d.input_frames_used * channels;
+                d.input_frames -= d.input_frames_used;
+                // at the end, keep draining the resampler until it has nothing left
+            } while (d.input_frames > 0 || (eof && d.output_frames_gen > 0));
+            return !eof;
+        }
+    };
+
+    auto dec = std::make_shared<Decoder>();
+    dec->file = file;
+    dec->capacity = capacity;
+    dec->channels = channels;
+    dec->ratio = ratio;
+    if (resample) {
+        int err = 0;
+        dec->src = src_new(SRC_SINC_FASTEST, static_cast<int>(channels), &err);
+        if (!dec->src) {
+            spdlog::error("Failed to create resampler for {}: {}", file_path.string(), src_strerror(err));
+            sf_close(file);
+            return "";
+        }
+    }
+    dec->out = new float[capacity * channels]; // only the frames_ready part is ever read
+
+    // the first seconds now, so play_sound right after this has something to play
+    const sf_count_t head = static_cast<sf_count_t>(info.samplerate) * kProgressiveHeadSeconds;
+    const bool more = dec->step(head);
+
+    auto job = std::make_shared<SoundDecodeJob>();
+    job->frames_ready.store(static_cast<unsigned int>(dec->written), std::memory_order_release);
+
+    sound snd{};
+    snd.data = dec->out;
+    snd.frame_count = static_cast<unsigned int>(more ? expected : dec->written);
+    snd.sample_rate = resample ? static_cast<unsigned int>(target_sample_rate) : info.samplerate;
+    snd.channels = channels;
+    snd.decode_job = job;
+
+    auto finish = [](Decoder& d) {
+        sf_close(d.file);
+        if (d.src) {
+            src_delete(d.src);
+        }
+    };
+    if (!more) {
+        job->done.store(true, std::memory_order_release);
+        finish(*dec);
+        store_sound(name, snd);
+        return name;
+    }
+    store_sound(name, snd);
+
+    std::thread([dec, job, finish, path = file_path.string()]() {
+        const sf_count_t chunk = 1 << 15; // ~0.7 s at 44.1 kHz
+        while (true) {
+            std::lock_guard<std::mutex> lock(job->writing);
+            if (job->cancel.load(std::memory_order_relaxed)) {
+                break; // the sound was unloaded or replaced: its buffer may be gone
+            }
+            const bool more = dec->step(chunk);
+            job->frames_ready.store(static_cast<unsigned int>(dec->written), std::memory_order_release);
+            if (!more) {
+                job->done.store(true, std::memory_order_release);
+                spdlog::debug("Decoded the rest of {} ({} frames)", path, dec->written);
+                break;
+            }
+        }
+        finish(*dec);
+    }).detach();
+
+    spdlog::debug("Loading sound in the background: {} ({} frames ready of ~{})", name, dec->written, expected);
+    return name;
 }
 
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
@@ -1100,6 +1248,9 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
             return "";
         }
         unsigned int total_frames = static_cast<unsigned int>(total_frames_sf);
+        if (total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
+            return load_sound_progressive(file, file_info, file_path, name);
+        }
         float* data = new float[static_cast<size_t>(total_frames_sf) * channels];
 
         sf_count_t frames_read = sf_readf_float(file, data, total_frames);
@@ -1258,6 +1409,7 @@ void AudioEngine::unload_sound(const std::string& name) {
         sound& snd = it->second;
 
         std::atomic_ref<bool>(snd.is_playing).store(false, std::memory_order_relaxed);
+        stop_decode_job(snd);
 
         if (snd.data) {
             delete[] snd.data;

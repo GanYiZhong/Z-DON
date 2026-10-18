@@ -61,6 +61,15 @@ struct VirtualFile {
     sf_count_t pos = 0;
 };
 
+// A long sound whose tail is still being decoded on a background thread (see load_sound):
+// the mixer plays the frames that are ready.
+struct SoundDecodeJob {
+    std::atomic<unsigned int> frames_ready{0}; // frames of sound::data written so far
+    std::atomic<bool> done{false};             // frames_ready is the sound's final length
+    std::atomic<bool> cancel{false};
+    std::mutex writing; // held while the decoder writes into sound::data
+};
+
 struct sound {
     float* data = nullptr;        // Audio sample data (interleaved stereo or mono)
     unsigned int frame_count = 0; // Total number of frames in the sound
@@ -79,6 +88,8 @@ struct sound {
 
     SRC_STATE* resampler = nullptr;   // libsamplerate state (if needed)
     float* resample_buffer = nullptr; // Buffer for resampled audio
+
+    std::shared_ptr<SoundDecodeJob> decode_job; // set while (or after) the tail decodes in the background
 };
 
 struct music {
@@ -130,6 +141,9 @@ public:
     void load_screen_sounds(const std::string& screen_name);
 
     std::string load_sound(const fs::path& file_path, const std::string& name);
+    // sounds longer than this decode their tail in the background (Z-DON)
+    static constexpr int kProgressiveMinSeconds = 8;
+    static constexpr int kProgressiveHeadSeconds = 2;
     void unload_sound(const std::string& name);
     void unload_all_sounds();
     void store_sound(const std::string& name, const sound& snd);
@@ -178,6 +192,9 @@ public:
     void seek_music_stream(const std::string& name, float position);
 
 private:
+    std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
+                                       const std::string& name);
+    static void stop_decode_job(sound& snd);
     double target_sample_rate;
     unsigned long buffer_size;
     std::string device_name; // Output device to open (empty = system default)
