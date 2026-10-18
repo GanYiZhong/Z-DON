@@ -175,11 +175,14 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Profiling")
   message(STATUS "Profiler build")
 else()
   if(WIN32)
+    # Z-DON: -O3 and link-time optimization (the other desktop targets already used -flto)
     target_compile_options(${PROJECT_NAME} PRIVATE
-          -O2
+          -O3
           -march=x86-64
           -DNDEBUG
+          -flto=auto
       )
+    target_link_options(${PROJECT_NAME} PRIVATE -flto=auto -O3)
   elseif(IOS)
     target_compile_options(${PROJECT_NAME} PRIVATE -O2 -DNDEBUG)
   elseif(APPLE)
