@@ -13,37 +13,18 @@
 #include <portaudio.h>
 #endif
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <samplerate.h>
 #include <shared_mutex>
 #include <sndfile.h>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
-
-#ifdef __ANDROID__
-// NDK r27d libc++ omits std::atomic_ref; polyfill with __atomic builtins
-namespace std {
-    template<typename T>
-    struct atomic_ref {
-        T& ref;
-        explicit atomic_ref(T& t) noexcept : ref(t) {}
-        T load(memory_order order = memory_order_seq_cst) const noexcept {
-            T val;
-            __atomic_load(&ref, &val, static_cast<int>(order));
-            return val;
-        }
-        void store(T desired, memory_order order = memory_order_seq_cst) noexcept {
-            __atomic_store(&ref, &desired, static_cast<int>(order));
-        }
-        T fetch_add(T val, memory_order order = memory_order_seq_cst) noexcept {
-            return __atomic_fetch_add(&ref, val, static_cast<int>(order));
-        }
-    };
-} // namespace std
-#endif
 
 namespace fs = std::filesystem;
 
@@ -79,6 +60,9 @@ struct SoundDecodeJob {
     float* orphaned = nullptr;
 };
 
+// A decoded sound as a loader hands it to store_sound. Once stored, the PCM part (data,
+// frame_count, sample_rate, channels, normalization_gain, decode_job) is immutable and owned by
+// the engine; the playback part seeds the sound's slot.
 struct sound {
     float* data = nullptr;        // Audio sample data (interleaved stereo or mono)
     unsigned int frame_count = 0; // Total number of frames in the sound
@@ -103,34 +87,79 @@ struct sound {
     std::shared_ptr<SoundDecodeJob> decode_job; // set while (or after) the tail decodes in the background
 };
 
+// Stable handle of a sound name (Z-DON): resolve once with AudioEngine::sound_id, play with no
+// string hashing and no lock. A handle stays valid for the engine's lifetime, across unload and
+// reload of the name.
+using SoundId = uint32_t;
+inline constexpr SoundId kNoSound = 0xFFFFFFFFu;
+
+// Z-DON: everything the mixer callback touches is reached through atomics: a slot per sound name
+// (playback state), immutable PCM published by pointer, and retired PCM freed only after the
+// callback has moved on. The callback takes no lock and does no I/O.
+struct SoundSlot {
+    std::atomic<sound*> pcm{nullptr}; // the stored sound (PCM part), null when not loaded
+    std::atomic<bool> is_playing{false};
+    std::atomic<unsigned int> current_frame{0};
+    std::atomic<float> frame_frac{0.0f};
+    std::atomic<bool> loop{false};
+    std::atomic<float> volume{1.0f};
+    std::atomic<float> playback_gain{1.0f};
+    std::atomic<float> pan{0.5f};
+    std::atomic<float> pitch{1.0f};
+    std::atomic<uint64_t> play_count{0};
+    bool in_active = false; // mixer thread only: listed in the active voices
+};
+
+// A music stream. File-backed streams are decoded on the engine's stream decoder thread into a
+// single-producer/single-consumer ring; the callback only copies out of it. Seek and stop are
+// commands (cmd_gen) the decoder carries out. PCM-backed streams (fully decoded) are read in place.
 struct music {
-    SNDFILE* file_handle = nullptr; // libsndfile file handle for streaming
-    SF_INFO file_info{};            // Audio file information
-
-    float* stream_buffer = nullptr;    // Buffer for reading from file
-    unsigned int buffer_size = 0;      // Size of stream buffer in frames
-    unsigned int buffer_position = 0;  // Current position in stream buffer
-    unsigned int frames_in_buffer = 0; // Number of valid frames currently in buffer
-
-    bool is_playing = false;              // Whether the music is currently playing
-    unsigned long long current_frame = 0; // Current playback position in frames
-    bool loop = false;                    // Whether to loop the music
-
+    // fixed at load
+    SF_INFO file_info{};
+    std::string file_path;
     float normalization_gain = 1.0f;
+    bool loop = false;
+    float* pcm_data = nullptr; // fully decoded PCM at the device rate (nus3bank preview, FFmpeg fallback)
+    sf_count_t pcm_total_frames = 0;
 
-    float volume = 1.0f; // Volume multiplier (0.0 to 1.0+)
-    float pan = 0.5f;    // Stereo pan (0.0 = left, 0.5 = center, 1.0 = right)
-    float pitch = 1.0f;  // Pitch/speed multiplier (1.0 = normal)
+    // shared with the main thread
+    std::atomic<bool> is_playing{false};
+    std::atomic<unsigned long long> current_frame{0};
+    std::atomic<float> volume{1.0f};
+    std::atomic<float> pan{0.5f};
 
-    SRC_STATE* resampler = nullptr;   // libsamplerate state (if needed)
-    float* resample_buffer = nullptr; // Buffer for resampled audio
+    // commands, main -> mixer/decoder: a seek target, published by bumping cmd_gen
+    std::atomic<long long> cmd_source_frame{0};       // file position to seek to (source rate)
+    std::atomic<unsigned long long> cmd_out_frame{0}; // current_frame once the seek is in effect
+    std::atomic<uint32_t> cmd_gen{0};
 
-    std::string file_path; // Path to the audio file
+    // decoder only (file-backed)
+    SNDFILE* file_handle = nullptr;
+    SRC_STATE* resampler = nullptr;
+    float* stream_buffer = nullptr;   // source frames read from the file
+    float* resample_buffer = nullptr; // resampled frames
+    unsigned int buffer_size = 0;     // source frames per read
+    uint32_t decoder_gen = 0;
+    bool decoder_eof = false;
     std::shared_ptr<std::vector<uint8_t>> memory_buffer;
     VirtualFile vio_cursor;
 
-    float* pcm_data = nullptr; // Android FFmpeg fallback: fully decoded PCM
-    sf_count_t pcm_total_frames = 0;
+    // the ring, decoder -> mixer: frames at the device rate, file_info.channels interleaved
+    std::unique_ptr<float[]> ring;
+    unsigned long long ring_frames = 0;
+    std::atomic<unsigned long long> write_pos{0}; // decoder
+    std::atomic<unsigned long long> read_pos{0};  // mixer
+    std::atomic<unsigned long long> flush_pos{0}; // frames before this belong to an earlier seek
+    std::atomic<uint32_t> ring_gen{0};            // the command the data after flush_pos answers
+    std::atomic<bool> eof{false};                 // nothing follows write_pos (for ring_gen)
+
+    // mixer only
+    uint32_t mixer_gen = 0;
+
+    music() = default;
+    music(const music&) = delete;
+    music& operator=(const music&) = delete;
+    ~music();
 };
 
 // Enumerates output device names for the given backend (device_type).
@@ -160,7 +189,10 @@ public:
     void unload_sound(const std::string& name);
     void unload_all_sounds();
     void store_sound(const std::string& name, const sound& snd);
+    // the handle of name (created if new; it need not be loaded yet)
+    SoundId sound_id(const std::string& name);
     void play_sound(const std::string& name, VolumePreset volume_preset = VolumePreset::NONE, float gain = 1.0f);
+    void play_sound(SoundId id, VolumePreset volume_preset = VolumePreset::NONE, float gain = 1.0f);
     bool has_sound(const std::string& name);
     void stop_sound(const std::string& name);
     void set_sound_loop(const std::string& name, bool loop);
@@ -204,7 +236,14 @@ public:
 #endif
     void seek_music_stream(const std::string& name, float position);
 
+    // Z-DON dev hook YATAIDON_AUDIO_SELFTEST (audio_selftest.cpp)
+    void run_selftest(const std::string& spec);
+
 private:
+    void dev_pause_device(bool pause);
+    void dev_wait_streams();                        // until every stream's decoder has caught up
+    void dev_wait_decoded(const std::string& name); // until a progressive sound is fully decoded
+
     std::unique_ptr<song_loudness::Scanner> loudness_scanner;
 
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
@@ -213,7 +252,7 @@ private:
     static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns
     static void free_sound(sound& snd);
-    void install_music(const std::string& name, music&& mus);
+    void install_music(const std::string& name, std::shared_ptr<music> mus);
     double target_sample_rate;
     unsigned long buffer_size;
     std::string device_name; // Output device to open (empty = system default)
@@ -221,9 +260,6 @@ private:
     unsigned int rt_total_channels = 2;
     VolumeConfig volume_presets;
     bool is_ready;
-    mutable std::shared_mutex rw_lock;
-    std::mutex play_count_lock;
-    std::unordered_map<std::string, uint64_t> play_counts;
     std::atomic<float> master_volume;
 
     SDL_AudioStream* sdl_stream = nullptr;
@@ -234,8 +270,65 @@ private:
     RtAudio* rt_audio = nullptr; // ALSA/JACK/PulseAudio/OSS/CoreAudio/DirectSound/ASIO/WASAPI
 #endif
 
-    std::unordered_map<std::string, sound> sounds;
-    std::unordered_map<std::string, music> music_streams;
+    // ---- sounds: name -> slot (main/loader threads, under names_lock; never the callback) ----
+    static constexpr size_t kSlotChunk = 256;
+    static constexpr size_t kMaxSlotChunks = 64;
+    mutable std::shared_mutex names_lock;
+    std::unordered_map<std::string, SoundId> sound_ids;
+    std::atomic<SoundSlot*> slot_chunks[kMaxSlotChunks]{};
+    std::atomic<uint32_t> slot_count{0};
+    SoundSlot* slot_at(SoundId id) const {
+        return &slot_chunks[id / kSlotChunk].load(std::memory_order_acquire)[id % kSlotChunk];
+    }
+    SoundId find_sound(const std::string& name) const; // kNoSound if the name was never used
+    template<class Fn>
+    bool with_sound(const std::string& name, Fn&& fn) const; // fn(slot, pcm) if loaded
+
+    // play_sound -> mixer: slots to add to the active voices (bounded MPMC queue)
+    static constexpr size_t kActivateCap = 1024;
+    struct ActivateCell {
+        std::atomic<size_t> seq;
+        SoundId id;
+    };
+    std::unique_ptr<ActivateCell[]> activate_cells;
+    std::atomic<size_t> activate_head{0}, activate_tail{0};
+    std::atomic<bool> activate_rescan{false}; // the queue overflowed: the mixer scans every slot once
+    void activate(SoundId id);
+    std::vector<SoundId> active_voices; // mixer only; capacity reserved up front
+
+    // ---- music streams ----
+    mutable std::mutex music_lock; // main/loader threads; never the callback
+    std::unordered_map<std::string, std::shared_ptr<music>> music_streams;
+    std::shared_ptr<music> find_music(const std::string& name) const;
+    struct StreamList {
+        std::vector<music*> streams;
+    };
+    std::atomic<StreamList*> mixer_streams{nullptr}; // what the callback mixes
+    StreamList* publish_streams();                   // under music_lock; returns the old list to retire
+
+    // the stream decoder thread
+    std::thread decoder_thread;
+    std::mutex decoder_mutex;
+    std::condition_variable decoder_cv;
+    bool decoder_running = false;
+    bool decoder_kick = false;
+    std::vector<std::shared_ptr<music>> decoder_streams; // under decoder_mutex
+    void start_decoder();
+    void stop_decoder();
+    void kick_decoder();
+    void decoder_main();
+    static bool decode_into_ring(music& mus, double target_rate); // one read; false when nothing was written
+
+    // ---- deferred reclamation: freed once no callback can still be using it ----
+    std::atomic<uint64_t> mix_epoch{0}; // odd while a callback runs
+    std::mutex retire_lock;
+    struct Retired {
+        uint64_t safe_epoch;
+        std::function<void()> free;
+    };
+    std::vector<Retired> retired;
+    void retire(std::function<void()> free);
+    void reclaim(bool force = false);
 
     std::string path_to_string(const fs::path& path) const;
     float loaded_sound_gain(const fs::path& file_path, const std::string& name);
@@ -247,6 +340,8 @@ private:
     bool init_sdl3_device();
 
     static void mix(float* out, unsigned int framesPerBuffer, AudioEngine* engine);
+    void mix_sounds(float* out, unsigned int frames);
+    void mix_streams(float* out, unsigned int frames);
     static void sdl_audio_callback(void* userdata, SDL_AudioStream* stream, int additional_amount, int total_amount);
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
     static int rt_audio_callback(void* outputBuffer, void* inputBuffer, unsigned int framesPerBuffer, double streamTime,
