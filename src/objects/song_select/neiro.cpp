@@ -56,11 +56,12 @@ void NeiroSelector::load_sound() {
     }
 }
 
-void NeiroSelector::left() {
+void NeiroSelector::step(int delta) {
     if (move->is_started && !move->is_finished) {
         return;
     }
-    selected_sound = ((selected_sound - 1) % (int)sounds.size() + (int)sounds.size()) % (int)sounds.size();
+    const int n = (int)sounds.size();
+    selected_sound = ((selected_sound + delta) % n + n) % n;
     if (!curr_sound.empty()) {
         audio.unload_sound(curr_sound);
     }
@@ -69,31 +70,19 @@ void NeiroSelector::left() {
     fade_sideways->start();
     change_seq++;
 
-    direction = 1;
-    if (selected_sound == (int)sounds.size() - 1) {
+    direction = -delta;
+    if (selected_sound == n - 1) {
         return;
     }
     audio.play_sound(curr_sound, VolumePreset::HITSOUND);
 }
 
-void NeiroSelector::right() {
-    if (move->is_started && !move->is_finished) {
-        return;
-    }
-    selected_sound = (selected_sound + 1) % (int)sounds.size();
-    if (!curr_sound.empty()) {
-        audio.unload_sound(curr_sound);
-    }
-    load_sound();
-    move_sideways->start();
-    fade_sideways->start();
-    change_seq++;
+void NeiroSelector::left() {
+    step(-1);
+}
 
-    direction = -1;
-    if (selected_sound == (int)sounds.size() - 1) {
-        return;
-    }
-    audio.play_sound(curr_sound, VolumePreset::HITSOUND);
+void NeiroSelector::right() {
+    step(1);
 }
 
 void NeiroSelector::confirm() {

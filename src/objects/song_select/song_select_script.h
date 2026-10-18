@@ -25,15 +25,17 @@ private:
 
     double animation_ms();
 
+    // Pins the script clock to animation_ms() for the duration of a hook call.
+    struct ClockScope {
+        std::optional<double> previous = script_manager.current_ms_override;
+
+        explicit ClockScope(double ms) { script_manager.current_ms_override = ms; }
+        ~ClockScope() { script_manager.current_ms_override = previous; }
+    };
+
     template<typename... Args>
     void call(sol::protected_function& fn, std::string_view context, Args&&... args) {
-        struct ClockScope {
-            std::optional<double> previous = script_manager.current_ms_override;
-
-            ~ClockScope() { script_manager.current_ms_override = previous; }
-        } scope;
-
-        script_manager.current_ms_override = animation_ms();
+        ClockScope scope(animation_ms());
 
         LuaScript::call(fn, context, std::forward<Args>(args)...);
     }
@@ -41,13 +43,7 @@ private:
     // Like call(), for a hook that returns true/false/nothing. Only an explicit `false` declines.
     template<typename... Args>
     bool call_handled(sol::protected_function& fn, std::string_view context, Args&&... args) {
-        struct ClockScope {
-            std::optional<double> previous = script_manager.current_ms_override;
-
-            ~ClockScope() { script_manager.current_ms_override = previous; }
-        } scope;
-
-        script_manager.current_ms_override = animation_ms();
+        ClockScope scope(animation_ms());
 
         auto r = call_r<sol::object>(fn, context, std::forward<Args>(args)...);
         if (!r) {
@@ -56,8 +52,16 @@ private:
         return !(r->template is<bool>() && !r->template as<bool>());
     }
 
-    // module from the skin chain that supplies a hook the skin's SongSelect does not define
-    sol::protected_function load_default_hook(const char* module, const char* fn_name);
+    // A hook the skin may override; when it declines, the default from the skin chain draws instead.
+    template<typename... Args>
+    bool draw_with_default(sol::protected_function& fn, std::string_view context, sol::protected_function& default_fn,
+                           std::string_view default_context, Args&&... args) {
+        if (fn.valid() && call_handled(fn, context, args...)) {
+            return true;
+        }
+        call(default_fn, default_context, std::forward<Args>(args)...);
+        return false;
+    }
 
     sol::protected_function fn_update;
     sol::protected_function fn_restart_text_fade;
@@ -92,7 +96,6 @@ public:
     void draw_top(float dan_progress);
 
     bool draw_box(BaseBox* box);
-    bool has_draw_box() const { return fn_draw_box.valid(); } // the skin draws the wheel itself
     bool draw_box_bg(BaseBox* box);
     bool has_box_bg() const { return fn_draw_box_bg.valid(); }
     bool draw_background(Navigator* nav);

@@ -5,7 +5,6 @@
 #endif
 #include <deque>
 #include <mutex>
-#include <unordered_set>
 
 #include "../../../libs/audio.h"
 #include "../../../libs/filesystem.h"
@@ -25,6 +24,11 @@ namespace {
     std::mutex deferred_mutex;
     std::deque<fs::path> deferred_scans;
 
+    void store_scan(const fs::path& path, FolderScan scan) {
+        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        scan_cache[path] = std::move(scan);
+    }
+
     void scan_folder_now(const fs::path& path) {
         std::map<int, Crown> crown;
         std::map<int, Crown> crown_p2;
@@ -35,15 +39,13 @@ namespace {
         const std::string& player_1_id = global_data.config->network.access_code_1;
         const std::string& player_2_id = global_data.config->network.access_code_2;
 
-        auto update_crown = [&](const fs::path& file_path, const std::string& player_id,
+        auto update_crown = [&](const std::array<std::string, 5>& hashes, const std::string& player_id,
                                 std::map<int, Crown>& out_crown, std::set<int>& disqualified) {
-            const auto& hashes = scores_manager.get_hashes(file_path);
             for (int diff = 0; diff < 5; diff++) {
                 if (hashes[diff].empty()) {
                     continue;
                 }
-                std::string hash = hashes[diff];
-                auto score = scores_manager.get_score(hash, diff, player_id);
+                auto score = scores_manager.get_score(hashes[diff], diff, player_id);
 
                 if (!score || score->crown == Crown::NONE) {
                     out_crown.erase(diff);
@@ -55,12 +57,16 @@ namespace {
                     continue;
                 }
 
-                if (out_crown.find(diff) == out_crown.end()) {
-                    out_crown[diff] = score->crown;
-                } else {
-                    out_crown[diff] = std::min(out_crown[diff], score->crown);
+                auto [it, inserted] = out_crown.try_emplace(diff, score->crown);
+                if (!inserted) {
+                    it->second = std::min(it->second, score->crown);
                 }
             }
+        };
+        auto update_both = [&](const fs::path& file_path) {
+            const auto hashes = scores_manager.get_hashes(file_path);
+            update_crown(hashes, player_1_id, crown, disqualified_p1);
+            update_crown(hashes, player_2_id, crown_p2, disqualified_p2);
         };
 
         // Errors are stepped over rather than thrown: one unreadable entry deep in
@@ -74,8 +80,7 @@ namespace {
                 tja_count += (int)entries.size();
                 for (const auto& e : entries) {
                     if (auto found = scores_manager.get_path_by_hash(e.hash)) {
-                        update_crown(*found, player_1_id, crown, disqualified_p1);
-                        update_crown(*found, player_2_id, crown_p2, disqualified_p2);
+                        update_both(*found);
                     }
                 }
                 scan.increment(scan_ec);
@@ -87,8 +92,7 @@ namespace {
             auto ext = entry.path().extension();
             if (ext == ".tja" || ext == ".osu") {
                 tja_count++;
-                update_crown(entry.path(), player_1_id, crown, disqualified_p1);
-                update_crown(entry.path(), player_2_id, crown_p2, disqualified_p2);
+                update_both(entry.path());
             }
 
             scan.increment(scan_ec);
@@ -97,8 +101,13 @@ namespace {
             }
         }
 
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
-        scan_cache[path] = {crown, crown_p2, tja_count};
+        store_scan(path, {crown, crown_p2, tja_count});
+    }
+
+    void load_box_texture(std::optional<ray::Texture>& out, const fs::path& file) {
+        out = ray::LoadTexture(file.string().c_str());
+        ray::GenTextureMipmaps(&out.value());
+        ray::SetTextureFilter(out.value(), ray::TEXTURE_FILTER_TRILINEAR);
     }
 } // namespace
 
@@ -107,16 +116,13 @@ void FolderBox::invalidate_scan_cache() {
     scan_cache.clear();
 }
 
-FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def,
-                     std::map<std::pair<std::string, std::string>, fs::path>& song_files)
-    : BaseBox(path, box_def), tja_count(0) {
+FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def) : BaseBox(path, box_def), tja_count(0) {
     this->text_name = box_def.name;
     enter_fade = std::make_unique<FadeAnimation>(166);
-    refresh_scores(song_files);
+    refresh_scores();
 }
 
-void FolderBox::refresh_scores(const std::map<std::pair<std::string, std::string>, fs::path>& song_files) {
-    (void)song_files;
+void FolderBox::refresh_scores() {
     {
         std::lock_guard<std::mutex> lock(scan_cache_mutex);
         auto it = scan_cache.find(path);
@@ -140,8 +146,7 @@ void FolderBox::refresh_scores(const std::map<std::pair<std::string, std::string
                 tja_count++;
             }
         }
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
-        scan_cache[path] = {crown, crown_p2, tja_count};
+        store_scan(path, {crown, crown_p2, tja_count});
         return;
     }
     if (const gen3::Library* library = gen3::library_for(path)) {
@@ -151,8 +156,7 @@ void FolderBox::refresh_scores(const std::map<std::pair<std::string, std::string
                 tja_count++;
             }
         }
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
-        scan_cache[path] = {crown, crown_p2, tja_count};
+        store_scan(path, {crown, crown_p2, tja_count});
         return;
     }
 #endif
@@ -202,14 +206,10 @@ void FolderBox::load_text() {
             it++;
         }
         if (!dir_ec && it != end) {
-            box_texture = ray::LoadTexture((it->path()).string().c_str());
-            ray::GenTextureMipmaps(&box_texture.value());
-            ray::SetTextureFilter(box_texture.value(), ray::TEXTURE_FILTER_TRILINEAR);
+            load_box_texture(box_texture, it->path());
         }
     } else if (fs::exists(fs::path(path / "box.png")) && !box_texture.has_value()) {
-        box_texture = ray::LoadTexture((path / "box.png").string().c_str());
-        ray::GenTextureMipmaps(&box_texture.value());
-        ray::SetTextureFilter(box_texture.value(), ray::TEXTURE_FILTER_TRILINEAR);
+        load_box_texture(box_texture, path / "box.png");
     }
     text_loaded = true;
 }
@@ -230,14 +230,13 @@ void FolderBox::update(double current_time) {
     enter_fade->update(current_time);
     BaseBox::update(current_time);
 
-    std::string genre_voice_str = "genre_voice_" + std::to_string((int)genre_index);
     if (!is_open_prev && yellow_box_opened) {
         if (!audio.is_sound_playing("voice_enter")) {
-            audio.play_sound(genre_voice_str, VolumePreset::VOICE);
+            audio.play_sound("genre_voice_" + std::to_string((int)genre_index), VolumePreset::VOICE);
             genre_voice_started = true;
         }
     } else if (!yellow_box_opened && genre_voice_started) {
-        audio.stop_sound(genre_voice_str);
+        audio.stop_sound("genre_voice_" + std::to_string((int)genre_index));
         genre_voice_started = false;
     }
 }

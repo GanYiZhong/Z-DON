@@ -24,13 +24,13 @@ SongSelectScript::SongSelectScript() {
     fn_draw_selector = lua_object["draw_selector"];
     fn_draw_option_panel = lua_object["draw_option_panel"];
     fn_draw_sort_window = lua_object["draw_sort_window"];
-    fn_default_option_panel = load_default_hook("song_select/option_panel", "draw_option_panel");
-    fn_default_sort_window = load_default_hook("song_select/sort_window", "draw_sort_window");
+    fn_default_option_panel = load_skin_module_fn("song_select/option_panel", "draw_option_panel");
+    fn_default_sort_window = load_skin_module_fn("song_select/sort_window", "draw_sort_window");
     fn_draw_background_diffs = lua_object["draw_background_diffs"];
     fn_draw_search_box = lua_object["draw_search_box"];
-    fn_default_search_box = load_default_hook("song_select/player_ui", "draw_search_box");
-    fn_default_selector = load_default_hook("song_select/player_ui", "draw_selector");
-    fn_default_background_diffs = load_default_hook("song_select/player_ui", "draw_background_diffs");
+    fn_default_search_box = load_skin_module_fn("song_select/player_ui", "draw_search_box");
+    fn_default_selector = load_skin_module_fn("song_select/player_ui", "draw_selector");
+    fn_default_background_diffs = load_skin_module_fn("song_select/player_ui", "draw_background_diffs");
 }
 
 sol::protected_function load_skin_module_fn(const char* module, const char* fn_name) {
@@ -67,10 +67,6 @@ float option_panel_offset(const MoveAnimation* move, bool confirmed) {
         cached_skin_module_fn("song_select/option_panel", "slide_out", "__option_panel_slide_out");
     auto r = slide_out.valid() ? slide_out() : sol::protected_function_result();
     return v + (r.valid() ? r.get<float>() : 0.0f);
-}
-
-sol::protected_function SongSelectScript::load_default_hook(const char* module, const char* fn_name) {
-    return load_skin_module_fn(module, fn_name);
 }
 
 double SongSelectScript::animation_ms() {
@@ -177,38 +173,23 @@ bool SongSelectScript::draw_genre_bg(GenreBG* genre_bg, float start_pos, float e
 }
 
 bool SongSelectScript::draw_selector(SongSelectPlayer* player, bool is_half, float fade_in, int pass) {
-    if (fn_draw_selector.valid() &&
-        call_handled(fn_draw_selector, "SongSelect:draw_selector", player, is_half, fade_in, pass)) {
-        return true;
-    }
-    call(fn_default_selector, "player_ui.draw_selector", player, is_half, fade_in, pass);
-    return false;
+    return draw_with_default(fn_draw_selector, "SongSelect:draw_selector", fn_default_selector,
+                             "player_ui.draw_selector", player, is_half, fade_in, pass);
 }
 
 bool SongSelectScript::draw_background_diffs(SongSelectPlayer* player) {
-    if (fn_draw_background_diffs.valid() &&
-        call_handled(fn_draw_background_diffs, "SongSelect:draw_background_diffs", player)) {
-        return true;
-    }
-    call(fn_default_background_diffs, "player_ui.draw_background_diffs", player);
-    return false;
+    return draw_with_default(fn_draw_background_diffs, "SongSelect:draw_background_diffs", fn_default_background_diffs,
+                             "player_ui.draw_background_diffs", player);
 }
 
 bool SongSelectScript::draw_option_panel(SongSelectPlayer* player, int kind) {
-    if (fn_draw_option_panel.valid() &&
-        call_handled(fn_draw_option_panel, "SongSelect:draw_option_panel", player, kind)) {
-        return true;
-    }
-    call(fn_default_option_panel, "option_panel.draw_option_panel", player, kind);
-    return false;
+    return draw_with_default(fn_draw_option_panel, "SongSelect:draw_option_panel", fn_default_option_panel,
+                             "option_panel.draw_option_panel", player, kind);
 }
 
 bool SongSelectScript::draw_sort_window(DiffSortSelect* window) {
-    if (fn_draw_sort_window.valid() && call_handled(fn_draw_sort_window, "SongSelect:draw_sort_window", window)) {
-        return true;
-    }
-    call(fn_default_sort_window, "sort_window.draw_sort_window", window);
-    return false;
+    return draw_with_default(fn_draw_sort_window, "SongSelect:draw_sort_window", fn_default_sort_window,
+                             "sort_window.draw_sort_window", window);
 }
 
 bool SongSelectScript::draw_search_box(const std::string& search, double bg_resize, double fade_in) {
@@ -216,9 +197,6 @@ bool SongSelectScript::draw_search_box(const std::string& search, double bg_resi
     box["search"] = search;
     box["bg_resize"] = bg_resize;
     box["fade_in"] = fade_in;
-    if (fn_draw_search_box.valid() && call_handled(fn_draw_search_box, "SongSelect:draw_search_box", box)) {
-        return true;
-    }
-    call(fn_default_search_box, "player_ui.draw_search_box", box);
-    return false;
+    return draw_with_default(fn_draw_search_box, "SongSelect:draw_search_box", fn_default_search_box,
+                             "player_ui.draw_search_box", box);
 }

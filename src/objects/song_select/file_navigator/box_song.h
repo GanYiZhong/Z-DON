@@ -46,10 +46,7 @@ public:
 
     SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser);
     ~SongBox() override {
-        if (preview_thread.joinable()) {
-            preview_thread.join();
-        }
-        release_preview_slot();
+        stop_preview_load();
         if (preimage.has_value()) {
             ray::UnloadTexture(preimage.value());
         }
@@ -58,6 +55,8 @@ public:
     static void service_bgm_resume(double current_ms);
     static void reset_bgm_slot();
     void release_preview_slot();
+    void stop_preview_load();
+    void play_preview(float seek_position);
     bool holds_preview_slot = false;
 
     void reset() override;
@@ -74,25 +73,24 @@ public:
     std::string hash_for(int difficulty);
 
     const char* lua_kind() const override { return "song"; }
+    float subtitle_font_size() const {
+        float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size;
+        if (utf8_char_count(text_subtitle) >= 30) {
+            font_size -= (int)(10 * tex.screen_scale);
+        }
+        return font_size;
+    }
     OutlinedText* horizontal_subtitle() {
         if (!horizontal_subtitle_cache) {
-            float font_size =
-                utf8_char_count(text_subtitle) < 30
-                    ? tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size
-                    : tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size - (int)(10 * tex.screen_scale);
             horizontal_subtitle_cache =
-                std::make_unique<OutlinedText>(text_subtitle, font_size, text_color, fore_color, false);
+                std::make_unique<OutlinedText>(text_subtitle, subtitle_font_size(), text_color, fore_color, false);
         }
         return horizontal_subtitle_cache.get();
     }
     OutlinedText* horizontal_subtitle_large() {
         if (!horizontal_subtitle_large_cache) {
-            float font_size =
-                utf8_char_count(text_subtitle) < 30
-                    ? tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size
-                    : tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size - (int)(10 * tex.screen_scale);
-            horizontal_subtitle_large_cache =
-                std::make_unique<OutlinedText>(text_subtitle, (int)(font_size * 1.3f), text_color, fore_color, false);
+            horizontal_subtitle_large_cache = std::make_unique<OutlinedText>(
+                text_subtitle, (int)(subtitle_font_size() * 1.3f), text_color, fore_color, false);
         }
         return horizontal_subtitle_large_cache.get();
     }

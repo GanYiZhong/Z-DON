@@ -33,29 +33,38 @@ namespace {
         return out;
     }
 
-    sol::table modifier_change_table(const ModifierSelector& m) {
+    // the same sideways-slide state is exposed by the modifier and the neiro panels
+    template<class Selector>
+    sol::table change_table(const Selector& sel) {
         sol::table t = script_manager.lua->create_table();
-        t["dir"] = m.lua_change_dir();
-        t["fade"] = m.lua_change_fade();
-        t["active"] = m.lua_change_active();
-        t["move"] = m.lua_change_move();
-        t["seq"] = m.lua_change_seq();
-        t["id"] = m.lua_id();
-        t["arrow_fade"] = m.lua_arrow_fade();
-        t["arrow_move"] = m.lua_arrow_move();
+        t["dir"] = sel.lua_change_dir();
+        t["fade"] = sel.lua_change_fade();
+        t["active"] = sel.lua_change_active();
+        t["move"] = sel.lua_change_move();
+        t["seq"] = sel.lua_change_seq();
+        t["id"] = sel.lua_id();
+        t["arrow_fade"] = sel.lua_arrow_fade();
+        t["arrow_move"] = sel.lua_arrow_move();
         return t;
     }
 
-    sol::table neiro_change_table(const NeiroSelector& n) {
-        sol::table t = script_manager.lua->create_table();
-        t["dir"] = n.lua_change_dir();
-        t["fade"] = n.lua_change_fade();
-        t["active"] = n.lua_change_active();
-        t["move"] = n.lua_change_move();
-        t["seq"] = n.lua_change_seq();
-        t["id"] = n.lua_id();
-        t["arrow_fade"] = n.lua_arrow_fade();
-        t["arrow_move"] = n.lua_arrow_move();
+    sol::table string_list(const std::vector<std::string>& names) {
+        sol::table out = script_manager.lua->create_table();
+        for (int i = 0; i < (int)names.size(); i++) {
+            out[i + 1] = names[i];
+        }
+        return out;
+    }
+
+    template<class Info>
+    sol::table course_table(const Info& info, bool has_score) {
+        sol::table t = script_manager.lua->create_table(0, 6);
+        t["has_course"] = info.has_course;
+        t["level"] = info.level;
+        t["is_branching"] = info.is_branching;
+        t["crown"] = info.crown;
+        t["rank"] = info.rank;
+        t["has_score"] = has_score;
         return t;
     }
 
@@ -95,14 +104,7 @@ void register_song_select_lua_bindings(sol::state& lua) {
         &SongBox::ex_data_flag, "course_info",
         [](SongBox& self, double diff) {
             auto info = self.course_info(static_cast<int>(diff));
-            sol::table t = script_manager.lua->create_table(0, 6);
-            t["has_course"] = info.has_course;
-            t["level"] = info.level;
-            t["is_branching"] = info.is_branching;
-            t["crown"] = info.crown;
-            t["rank"] = info.rank;
-            t["has_score"] = (diff >= 0 && diff < (int)self.scores.size() && self.scores[diff].has_value());
-            return t;
+            return course_table(info, diff >= 0 && diff < (int)self.scores.size() && self.scores[diff].has_value());
         },
         "course_info_p2",
         [](SongBox& self, double diff) {
@@ -113,14 +115,8 @@ void register_song_select_lua_bindings(sol::state& lua) {
                 info.crown = (int)self.scores_p2[diff]->crown;
                 info.rank = (int)self.scores_p2[diff]->rank;
             }
-            sol::table t = script_manager.lua->create_table(0, 6);
-            t["has_course"] = info.has_course;
-            t["level"] = info.level;
-            t["is_branching"] = info.is_branching;
-            t["crown"] = info.crown;
-            t["rank"] = info.rank;
-            t["has_score"] = (diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
-            return t;
+            return course_table(info,
+                                diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
         },
         "has_preimage", [](SongBox& self) { return self.preimage.has_value(); },
         // the song's own image scaled into the rectangle (x, y, width, height)
@@ -387,7 +383,7 @@ void register_song_select_lua_bindings(sol::state& lua) {
             if (!self.modifier_selector.has_value()) {
                 return sol::lua_nil;
             }
-            return modifier_change_table(self.modifier_selector.value());
+            return change_table(self.modifier_selector.value());
         },
         "neiro_offset",
         [](SongSelectPlayer& self) -> sol::optional<float> {
@@ -402,12 +398,7 @@ void register_song_select_lua_bindings(sol::state& lua) {
             if (!self.neiro_selector.has_value()) {
                 return sol::lua_nil;
             }
-            sol::table out = script_manager.lua->create_table();
-            const auto& names = self.neiro_selector.value().lua_names();
-            for (int i = 0; i < (int)names.size(); i++) {
-                out[i + 1] = names[i];
-            }
-            return out;
+            return string_list(self.neiro_selector.value().lua_names());
         },
         "neiro_index",
         [](SongSelectPlayer& self) -> sol::optional<int> {
@@ -421,7 +412,7 @@ void register_song_select_lua_bindings(sol::state& lua) {
             if (!self.neiro_selector.has_value()) {
                 return sol::lua_nil;
             }
-            return neiro_change_table(self.neiro_selector.value());
+            return change_table(self.neiro_selector.value());
         },
         // the selectors themselves, for the default option panel (see ModifierPanel / NeiroPanel)
         "modifier_panel",
@@ -439,21 +430,13 @@ void register_song_select_lua_bindings(sol::state& lua) {
         [](ModifierSelector& m) { return modifier_rows_table(m); }, "index",
         [](ModifierSelector& m) { return m.lua_index() + 1; }, "confirmed",
         [](ModifierSelector& m) { return m.is_confirmed; }, "change",
-        [](ModifierSelector& m) { return modifier_change_table(m); });
+        [](ModifierSelector& m) { return change_table(m); });
 
     lua.new_usertype<NeiroSelector>(
         "NeiroPanel", "player_num", [](NeiroSelector& n) { return (int)n.lua_player(); }, "offset",
         [](NeiroSelector& n) { return option_panel_offset(n.move, n.is_confirmed); }, "names",
-        [](NeiroSelector& n) {
-            sol::table out = script_manager.lua->create_table();
-            const auto& names = n.lua_names();
-            for (int i = 0; i < (int)names.size(); i++) {
-                out[i + 1] = names[i];
-            }
-            return out;
-        },
-        "index", [](NeiroSelector& n) { return n.lua_index() + 1; }, "change",
-        [](NeiroSelector& n) { return neiro_change_table(n); });
+        [](NeiroSelector& n) { return string_list(n.lua_names()); }, "index",
+        [](NeiroSelector& n) { return n.lua_index() + 1; }, "change", [](NeiroSelector& n) { return change_table(n); });
 
     lua.new_usertype<Navigator>(
         "Navigator", "background_move", &Navigator::background_move_anim, "background_fade_change",

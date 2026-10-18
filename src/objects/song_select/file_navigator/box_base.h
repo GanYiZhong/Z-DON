@@ -27,6 +27,9 @@ inline size_t utf8_char_count(const std::string& s) {
     return count;
 }
 
+// Points the colortransform shader at the genre colour (the stock green folder is the source).
+void set_recolor_uniforms(ray::Shader& shader, const ray::Color& target);
+
 class BaseBox {
 public:
     bool text_loaded = false;
@@ -105,14 +108,6 @@ public:
         return "closed";
     }
     virtual const char* lua_kind() const { return "box"; }
-    float bar_anime_count() const {
-        double elapsed = get_current_ms() - bar_open_started_at;
-        if (elapsed <= 200.0) {
-            return 0.0f;
-        }
-        float deg = std::min((float)(elapsed - 200.0) * 1.5f, 90.0f);
-        return std::sin(deg * 3.14159265f / 180.0f) * 62.0f;
-    }
     OutlinedText* name_text() const { return name.get(); }
 
     // The base/folder boards recolour their green folder texture through a shader when a
@@ -131,30 +126,25 @@ public:
         }
     }
 
+    float box_name_font_size() const {
+        float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
+        if (utf8_char_count(text_name) >= 30) {
+            font_size -= (int)(10 * tex.screen_scale);
+        }
+        return font_size;
+    }
+
     OutlinedText* horizontal_name() {
         if (!horizontal_name_cache) {
-            float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
-            if (utf8_char_count(text_name) >= 30) {
-                font_size -= (int)(10 * tex.screen_scale);
-            }
-            horizontal_name_cache = std::make_unique<OutlinedText>(text_name, font_size, text_color, fore_color, false);
+            horizontal_name_cache =
+                std::make_unique<OutlinedText>(text_name, box_name_font_size(), text_color, fore_color, false);
         }
         return horizontal_name_cache.get();
     }
 
-    OutlinedText* horizontal_name_large() {
-        if (!horizontal_name_large_cache) {
-            float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
-            if (utf8_char_count(text_name) >= 30) {
-                font_size -= (int)(10 * tex.screen_scale);
-            }
-            horizontal_name_large_cache =
-                std::make_unique<OutlinedText>(text_name, (int)(font_size * 1.5f), text_color, fore_color, false, 6);
-        }
-        return horizontal_name_large_cache.get();
-    }
-
 protected:
+    void set_box_state(bool active);
+
     std::unique_ptr<MoveAnimation> move;
 
     ray::Shader shader;
@@ -162,7 +152,6 @@ protected:
 
     std::unique_ptr<OutlinedText> name;
     std::unique_ptr<OutlinedText> horizontal_name_cache;
-    std::unique_ptr<OutlinedText> horizontal_name_large_cache;
 
     // Box state: whether the box is expanded/opened and in diff-select. The yellow-box
     // geometry and animation driving now live in Lua; the engine only tracks the state and

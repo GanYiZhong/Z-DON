@@ -1,50 +1,6 @@
 #include "color_utils.h"
 
-#include <algorithm>
 #include <cmath>
-#include <stdexcept>
-
-float rgb_to_hue(int r, int g, int b) {
-    float rf = r / 255.0f;
-    float gf = g / 255.0f;
-    float bf = b / 255.0f;
-
-    float max_val = std::max({rf, gf, bf});
-    float min_val = std::min({rf, gf, bf});
-    float delta = max_val - min_val;
-
-    if (delta == 0.0f) {
-        return 0.0f;
-    }
-
-    float hue = 0.0f;
-    if (max_val == rf) {
-        hue = 60.0f * (std::fmod((gf - bf) / delta, 6.0f));
-    } else if (max_val == gf) {
-        hue = 60.0f * ((bf - rf) / delta + 2.0f);
-    } else {
-        hue = 60.0f * ((rf - gf) / delta + 4.0f);
-    }
-
-    if (hue < 0.0f) {
-        hue += 360.0f;
-    }
-    return hue;
-}
-
-float calculate_hue_shift(const ray::Color& source_rgb, const ray::Color& target_rgb) {
-    float source_hue = rgb_to_hue(source_rgb.r, source_rgb.g, source_rgb.b);
-    float target_hue = rgb_to_hue(target_rgb.r, target_rgb.g, target_rgb.b);
-
-    float shift = (target_hue - source_hue) / 360.0f;
-    while (shift < 0.0f) {
-        shift += 1.0f;
-    }
-    while (shift >= 1.0f) {
-        shift -= 1.0f;
-    }
-    return shift;
-}
 
 ray::Color darken_color(const ray::Color& rgb) {
     constexpr float darkening_factor = 0.63f;
@@ -59,13 +15,8 @@ BoxColors resolve_box_colors(const std::optional<ray::Color>& box_color, const s
     result.box = box_color.has_value() ? box_color : back_color;
     ray::Color default_outline =
         result.box.has_value() ? darken_color(result.box.value()) : ray::Color(101, 0, 82, 255);
-    if (box_color.has_value()) {
-        result.outline = fore_color.value_or(default_outline);
-        result.text = fore_color.value_or(ray::WHITE);
-    } else {
-        result.outline = fore_color.value_or(default_outline);
-        result.text = ray::WHITE;
-    }
+    result.outline = fore_color.value_or(default_outline);
+    result.text = box_color.has_value() ? fore_color.value_or(ray::WHITE) : ray::WHITE;
     return result;
 }
 

@@ -13,8 +13,9 @@ void SongSelectPlayer::try_lua_selector(bool is_half, float fade_in, int pass) {
 }
 
 SongSelectPlayer::SongSelectPlayer(PlayerNum player_num) : player_num(player_num) {
-    std::string player_id = (player_num == global_data.first_login_player) ? global_data.config->network.access_code_1
-                                                                           : global_data.config->network.access_code_2;
+    const std::string& player_id = (player_num == global_data.first_login_player)
+                                       ? global_data.config->network.access_code_1
+                                       : global_data.config->network.access_code_2;
     if (auto p = scores_manager.get_player_data(player_id)) {
         player_data = *p;
     }
@@ -91,11 +92,15 @@ bool SongSelectPlayer::is_voice_playing() {
     return audio.is_sound_playing("voice_start_song_" + std::to_string((int)player_num) + "p");
 }
 
+bool SongSelectPlayer::has_course(Difficulty d) const {
+    return std::find(curr_diffs.begin(), curr_diffs.end(), d) != curr_diffs.end();
+}
+
 void SongSelectPlayer::init_diff_cursor() {
     // Ura mode follows the song: a chart with only an ura course opens in ura mode (there is
     // no oni to toggle from), and a chart without one leaves it.
-    const bool has_ura = std::find(curr_diffs.begin(), curr_diffs.end(), Difficulty::URA) != curr_diffs.end();
-    const bool has_oni = std::find(curr_diffs.begin(), curr_diffs.end(), Difficulty::ONI) != curr_diffs.end();
+    const bool has_ura = has_course(Difficulty::URA);
+    const bool has_oni = has_course(Difficulty::ONI);
     if (has_ura && !has_oni) {
         is_ura = true;
     } else if (!has_ura && is_ura) {
@@ -247,7 +252,6 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
     int dir = is_kat_held(true, player_num) ? -1 : is_kat_held(false, player_num) ? 1 : 0;
     if (l_kat || r_kat) {
         hold_dir = dir;
-        hold_start = current_ms;
         next_repeat = current_ms + 350;
     } else if (dir != hold_dir) {
         hold_dir = 0;
@@ -496,8 +500,8 @@ void SongSelectPlayer::navigate_difficulty_left() {
 void SongSelectPlayer::navigate_difficulty_right() {
     diff_select_move_right = true;
 
-    bool has_ura = std::find(curr_diffs.begin(), curr_diffs.end(), Difficulty::URA) != curr_diffs.end();
-    bool has_oni = std::find(curr_diffs.begin(), curr_diffs.end(), Difficulty::ONI) != curr_diffs.end();
+    bool has_ura = has_course(Difficulty::URA);
+    bool has_oni = has_course(Difficulty::ONI);
 
     if (is_ura && has_ura && selected_difficulty == Difficulty::HARD) {
         prev_diff = selected_difficulty;
@@ -568,17 +572,11 @@ void SongSelectPlayer::draw(SongSelectState state, bool is_half, float diff_fade
         offset = 0.0f;
     }
 
-    if (player_num == PlayerNum::P1) {
-        auto [nx, ny] = tex.nameplate_xy("song_select_1p");
-        nameplate.draw(nx, ny);
-        auto [cx, cy] = tex.chara_xy("song_select_1p");
-        chara->draw(cx, cy + (offset * 0.6f), 1.0f);
-    } else {
-        auto [nx, ny] = tex.nameplate_xy("song_select_2p");
-        nameplate.draw(nx, ny);
-        auto [cx, cy] = tex.chara_xy("song_select_2p");
-        chara->draw(cx, cy + (offset * 0.6f), 1.0f);
-    }
+    const char* slot = player_num == PlayerNum::P1 ? "song_select_1p" : "song_select_2p";
+    auto [nx, ny] = tex.nameplate_xy(slot);
+    nameplate.draw(nx, ny);
+    auto [cx, cy] = tex.chara_xy(slot);
+    chara->draw(cx, cy + (offset * 0.6f), 1.0f);
 
     bool panel_by_lua = false;
     if (neiro_selector.has_value() && script) {

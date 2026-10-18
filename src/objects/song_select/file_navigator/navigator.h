@@ -110,7 +110,6 @@ private:
 
     bool awaiting_diff_sort = false;
     std::optional<std::array<int, 3>> diff_sort_filter;
-    std::optional<std::pair<int, int>> last_diff_sort_result;
 
     bool vertical_gallery = false;
 
@@ -169,6 +168,9 @@ public:
     SongSelectScript* script = nullptr;
 
     void join_loader();
+    void clear_folder_caches();
+    void apply_genre_of(const fs::path& song_path, SongBox* song);
+    void enqueue_inline_back_every_ten(int songs_added, const fs::path& parent);
     // `files`: the chart files under songs_paths when the caller already listed them (the loading screen)
     void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> files = std::nullopt);
     void init(std::vector<fs::path> songs_paths);
@@ -180,7 +182,6 @@ public:
     BoxDef parse_box_def(const fs::path& path);
     static BoxDef parse_box_def_uncached(const fs::path& path);
     std::atomic<bool> song_files_ready{true};
-    bool needs_diff_sort() const { return awaiting_diff_sort; }
     bool diff_sort_ready() { return awaiting_diff_sort; }
     void apply_diff_sort(int course, int level, int order = 1);
     void cancel_diff_sort();

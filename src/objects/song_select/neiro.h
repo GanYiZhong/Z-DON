@@ -19,6 +19,7 @@ private:
     FadeAnimation* fade_sideways;
 
     void load_sound();
+    void step(int delta);
 
     int change_seq = 0;
     int instance_id = 0;

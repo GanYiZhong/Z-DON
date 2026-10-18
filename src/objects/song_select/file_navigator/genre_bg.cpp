@@ -14,12 +14,7 @@ GenreBG::GenreBG(const std::string& text_name, std::optional<ray::Color> color, 
 
     if (color.has_value()) {
         shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
-        float src[3] = {142 / 255.0f, 212 / 255.0f, 30 / 255.0f};
-        float tgt[3] = {color.value().r / 255.0f, color.value().g / 255.0f, color.value().b / 255.0f};
-        int source_loc = ray::GetShaderLocation(shader, "sourceColor");
-        int target_loc = ray::GetShaderLocation(shader, "targetColor");
-        ray::SetShaderValue(shader, source_loc, src, ray::SHADER_UNIFORM_VEC3);
-        ray::SetShaderValue(shader, target_loc, tgt, ray::SHADER_UNIFORM_VEC3);
+        set_recolor_uniforms(shader, color.value());
         shader_loaded = ray::IsShaderValid(shader);
     }
 
@@ -35,16 +30,15 @@ GenreBG::GenreBG(const std::string& text_name, std::optional<ray::Color> color, 
     scale->start();
     move->start();
     fade->start();
-    move_left = nullptr;
-    move_right = nullptr;
 }
 
 void GenreBG::exit(float left_position, float right_position, FolderBox* center_box) {
     float left_start = (left_position < 0.f || left_position > tex.screen_width) ? 0.f : left_position;
     float right_start = (right_position < 0.f || right_position > tex.screen_width) ? tex.screen_width : right_position;
 
-    float boundary_left_exit = tex.get_skin_config(SC::SONG_SELECT_GENRE_BG_BOUNDARY)->x;
-    float boundary_right_exit = tex.get_skin_config(SC::SONG_SELECT_GENRE_BG_BOUNDARY)->width;
+    const auto* boundary = tex.get_skin_config(SC::SONG_SELECT_GENRE_BG_BOUNDARY);
+    float boundary_left_exit = boundary->x;
+    float boundary_right_exit = boundary->width;
     int left_distance = (int)((boundary_left_exit - left_start) * tex.screen_scale);
     int right_distance = (int)((boundary_right_exit - right_start) * tex.screen_scale);
 

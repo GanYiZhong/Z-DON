@@ -7,8 +7,6 @@
 #include "../../../libs/color_utils.h"
 #include "../../enums.h"
 
-float rgb_to_hue(int r, int g, int b);
-float calculate_hue_shift(const ray::Color& source_rgb, const ray::Color& target_rgb);
 ray::Color darken_color(const ray::Color& rgb);
 
 struct BoxColors {

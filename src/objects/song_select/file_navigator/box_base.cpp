@@ -1,9 +1,16 @@
 #include "box_base.h"
 
-#include <string_view>
-
 #include "../../../libs/text.h"
 #include "color_utils.h"
+
+void set_recolor_uniforms(ray::Shader& shader, const ray::Color& target) {
+    float src[3] = {142 / 255.0f, 212 / 255.0f, 30 / 255.0f};
+    float tgt[3] = {target.r / 255.0f, target.g / 255.0f, target.b / 255.0f};
+    int source_loc = ray::GetShaderLocation(shader, "sourceColor");
+    int target_loc = ray::GetShaderLocation(shader, "targetColor");
+    ray::SetShaderValue(shader, source_loc, src, ray::SHADER_UNIFORM_VEC3);
+    ray::SetShaderValue(shader, target_loc, tgt, ray::SHADER_UNIFORM_VEC3);
+}
 
 BaseBox::BaseBox(const fs::path& path, const BoxDef& box_def)
     : path(path), texture_index(box_def.texture_index), genre_index(box_def.genre_index),
@@ -35,55 +42,41 @@ BaseBox::~BaseBox() {
 }
 
 void BaseBox::preregister_text() {
-    float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
-    if (utf8_char_count(text_name) >= 30) {
-        font_size -= (int)(10 * tex.screen_scale);
-    }
-    font_manager.register_text(text_name, (int)font_size);
+    font_manager.register_text(text_name, (int)box_name_font_size());
 }
 
 void BaseBox::load_text() {
-    float font_size = tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
-    if (utf8_char_count(text_name) >= 30) {
-        font_size -= (int)(10 * tex.screen_scale);
-    }
-    name = make_unique<OutlinedText>(text_name, font_size, text_color, fore_color, true);
+    name = make_unique<OutlinedText>(text_name, box_name_font_size(), text_color, fore_color, true);
 
     if (back_color.has_value()) {
         shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
         shader_loaded = true;
-        const auto& target_rgb = back_color.value();
-        float src[3] = {142 / 255.0f, 212 / 255.0f, 30 / 255.0f};
-        float tgt[3] = {target_rgb.r / 255.0f, target_rgb.g / 255.0f, target_rgb.b / 255.0f};
-        int source_loc = ray::GetShaderLocation(shader, "sourceColor");
-        int target_loc = ray::GetShaderLocation(shader, "targetColor");
-        ray::SetShaderValue(shader, source_loc, src, ray::SHADER_UNIFORM_VEC3);
-        ray::SetShaderValue(shader, target_loc, tgt, ray::SHADER_UNIFORM_VEC3);
+        set_recolor_uniforms(shader, back_color.value());
     }
 
     text_loaded = true;
 }
 
-void BaseBox::reset() {
-    yellow_box_active = false;
+void BaseBox::set_box_state(bool active) {
+    yellow_box_active = active;
     yellow_box_opened = false;
     is_diff_select = false;
+}
+
+void BaseBox::reset() {
+    set_box_state(false);
     open_anim->reset();
     open_fade->reset();
 }
 
 void BaseBox::expand_box() {
-    yellow_box_active = true;
-    yellow_box_opened = false;
-    is_diff_select = false;
+    set_box_state(true);
     open_anim->start();
     bar_open_started_at = get_current_ms();
 }
 
 void BaseBox::close_box() {
-    yellow_box_active = false;
-    yellow_box_opened = false;
-    is_diff_select = false;
+    set_box_state(false);
 }
 
 void BaseBox::enter_box() {
@@ -94,9 +87,7 @@ void BaseBox::enter_box() {
 }
 
 void BaseBox::exit_box() {
-    yellow_box_active = true;
-    yellow_box_opened = false;
-    is_diff_select = false;
+    set_box_state(true);
     open_fade->start();
 }
 

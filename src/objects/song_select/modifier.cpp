@@ -1,5 +1,8 @@
 #include "modifier.h"
 
+#include <algorithm>
+#include <string_view>
+
 #include "../../libs/audio.h"
 
 const std::array<std::string, 5> ModifierSelector::BASE_MOD_NAMES = {"auto", "speed", "display", "inverse", "random"};
@@ -175,7 +178,7 @@ static int speed_step(int value, int dir) {
     return 30;
 }
 
-void ModifierSelector::left() {
+void ModifierSelector::step(int dir) {
     if (is_confirmed) {
         return;
     }
@@ -185,67 +188,31 @@ void ModifierSelector::left() {
     }
 
     if (mod_name == "speed") {
-        player->modifier_speed = speed_step(player->modifier_speed, -1);
-        start_text_animation(1);
+        player->modifier_speed = speed_step(player->modifier_speed, dir);
     } else if (mod_name == "neiro") {
-        step_neiro(-1);
-        start_text_animation(1);
+        step_neiro(dir);
     } else if (mod_name == "random") {
-        player->modifier_random = (player->modifier_random + 2) % 3;
-        start_text_animation(1);
+        player->modifier_random = (player->modifier_random + dir + 3) % 3;
     } else {
         set_bool(current_mod_index, !get_bool(current_mod_index));
-        start_text_animation(1);
     }
+    start_text_animation(-dir);
+}
+
+void ModifierSelector::left() {
+    step(-1);
 }
 
 void ModifierSelector::right() {
-    if (is_confirmed) {
-        return;
-    }
-    const std::string& mod_name = mod_names[current_mod_index];
-    if (row_greyed(mod_name)) {
-        return;
-    }
-
-    if (mod_name == "speed") {
-        player->modifier_speed = speed_step(player->modifier_speed, +1);
-        start_text_animation(-1);
-    } else if (mod_name == "neiro") {
-        step_neiro(1);
-        start_text_animation(-1);
-    } else if (mod_name == "random") {
-        player->modifier_random = (player->modifier_random + 1) % 3;
-        start_text_animation(-1);
-    } else {
-        set_bool(current_mod_index, !get_bool(current_mod_index));
-        start_text_animation(-1);
-    }
+    step(+1);
 }
 
 std::string ModifierSelector::row_label(const std::string& n) const {
-    if (n == "auto") {
-        return font_manager.get_text_label("modifier_name_auto");
+    static constexpr std::string_view known[] = {"auto", "speed", "display", "inverse", "random", "skip", "neiro"};
+    if (std::find(std::begin(known), std::end(known), n) == std::end(known)) {
+        return std::string();
     }
-    if (n == "speed") {
-        return font_manager.get_text_label("modifier_name_speed");
-    }
-    if (n == "display") {
-        return font_manager.get_text_label("modifier_name_display");
-    }
-    if (n == "inverse") {
-        return font_manager.get_text_label("modifier_name_inverse");
-    }
-    if (n == "random") {
-        return font_manager.get_text_label("modifier_name_random");
-    }
-    if (n == "skip") {
-        return font_manager.get_text_label("modifier_name_skip");
-    }
-    if (n == "neiro") {
-        return font_manager.get_text_label("modifier_name_neiro");
-    }
-    return std::string();
+    return font_manager.get_text_label("modifier_name_" + n);
 }
 
 bool ModifierSelector::row_greyed(const std::string& name) const {

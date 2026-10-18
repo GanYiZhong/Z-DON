@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "../../libs/animation.h"
 #include "../../libs/texture.h"
 
@@ -19,12 +21,13 @@ private:
     TextureObject* t_emblem = nullptr;
     TextureObject* t_flash = nullptr;
 
+    std::array<BaseAnimation*, 5> animations() const { return {slide_in, don_rise, emblem_fade, emblem_spin, flash}; }
+
 public:
     explicit DanTransition(int base_id = 38);
     bool start(); // false when the skin has no slide-in animation at base_id
     void update(double current_ms);
     void draw();
-    bool is_started() const;
     bool is_finished() const;
 
     double progress() const;

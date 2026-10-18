@@ -18,7 +18,7 @@ public:
     Difficulty prev_diff;
     std::vector<Difficulty> curr_diffs;
     double last_moved;
-    double hold_start = 0, next_repeat = 0;
+    double next_repeat = 0;
     int hold_dir = 0;
     bool selected_song;
     bool is_ready;
@@ -73,6 +73,7 @@ private:
     bool voice_played;
     void navigate_difficulty_left();
     void navigate_difficulty_right();
+    bool has_course(Difficulty d) const;
     void toggle_ura_mode();
     void start_background_diffs();
 };

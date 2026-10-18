@@ -83,8 +83,6 @@ public:
     int lua_diff() const { return sort_param[0]; }  // 1..5 (5 = oni-ura)
     int lua_star() const { return sort_param[1]; }  // 1..10
     int lua_order() const { return sort_param[2]; } // 1..4
-    int lua_diff_count() const { return diff_count; }
-    int lua_order_count() const { return order_count; }
     int lua_song_num() const { return song_num; }
     // 0 = fading in, 1 = open, 2 = the 2 s hold after the last row, 3 = fading out
     int lua_phase() const;

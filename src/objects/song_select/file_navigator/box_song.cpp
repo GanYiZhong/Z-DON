@@ -94,12 +94,7 @@ void SongBox::reset() {
         audio.unload_music_stream("preview");
     }
     music_playing = false;
-    if (preview_thread.joinable()) {
-        preview_thread.join();
-    }
-    preview_load.reset();
-    preview_attempted = false;
-    release_preview_slot();
+    stop_preview_load();
     score_history.reset();
     box_opened_at = 0.0;
 }
@@ -117,9 +112,6 @@ void SongBox::preregister_text() {
     float base_sub_font = (float)tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size;
     float sub_font = utf8_char_count(text_subtitle) >= 30 ? base_sub_font - 10.0f * tex.screen_scale : base_sub_font;
     font_manager.register_text(text_subtitle, (int)sub_font);
-    float base_name_font = (float)tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
-    float name_font = utf8_char_count(text_name) >= 30 ? base_name_font - 10.0f * tex.screen_scale : base_name_font;
-    font_manager.register_text(text_name, (int)name_font);
     font_manager.register_text("BPM\n0123456789", tex.get_skin_config(SC::SONG_SELECT_BOX_BPM)->font_size);
 }
 
@@ -173,12 +165,7 @@ void SongBox::update(double current_time) {
 
     if (is_stream && yellow_box_active && box_opened && !music_playing) {
         audio.load_music_stream(parser.metadata.wave, "preview");
-        if (audio.is_music_stream_valid("preview")) {
-            music_playing = true;
-            audio.stop_sound("bgm");
-            audio.play_music_stream("preview", VolumePreset::MUSIC);
-            audio.seek_music_stream("preview", parser.metadata.demostart);
-        }
+        play_preview(parser.metadata.demostart);
     }
 
     if (preview_load && preview_load->done.load(std::memory_order_acquire) && yellow_box_active && box_opened &&
@@ -187,12 +174,7 @@ void SongBox::update(double current_time) {
         if (state->ok) {
             float demo_start = state->pcm.preview_ms > 0 ? state->pcm.preview_ms / 1000.0f : parser.metadata.demostart;
             audio.load_music_stream_prepared(std::move(state->pcm), "preview");
-            if (audio.is_music_stream_valid("preview")) {
-                music_playing = true;
-                audio.stop_sound("bgm");
-                audio.play_music_stream("preview", VolumePreset::MUSIC);
-                audio.seek_music_stream("preview", demo_start);
-            }
+            play_preview(demo_start);
         }
     }
 
@@ -219,6 +201,26 @@ void SongBox::expand_box() {
     }
 }
 
+// Starts the freshly loaded "preview" stream in place of the bgm, if the load succeeded.
+void SongBox::play_preview(float seek_position) {
+    if (!audio.is_music_stream_valid("preview")) {
+        return;
+    }
+    music_playing = true;
+    audio.stop_sound("bgm");
+    audio.play_music_stream("preview", VolumePreset::MUSIC);
+    audio.seek_music_stream("preview", seek_position);
+}
+
+void SongBox::stop_preview_load() {
+    if (preview_thread.joinable()) {
+        preview_thread.join();
+    }
+    preview_load.reset();
+    preview_attempted = false;
+    release_preview_slot();
+}
+
 void SongBox::release_preview_slot() {
     if (!holds_preview_slot) {
         return;
@@ -232,12 +234,7 @@ void SongBox::release_preview_slot() {
 void SongBox::close_box() {
     BaseBox::close_box();
     box_opened_at = 0.0;
-    if (preview_thread.joinable()) {
-        preview_thread.join();
-    }
-    preview_load.reset();
-    preview_attempted = false;
-    release_preview_slot();
+    stop_preview_load();
     if (music_playing) {
         if (audio.is_music_stream_valid("preview")) {
             audio.stop_music_stream("preview");

@@ -35,12 +35,9 @@ private:
     int change_seq = 0;
     int instance_id = 0;
 
-    bool has_row(const std::string& name) const {
-        return std::find(mod_names.begin(), mod_names.end(), name) != mod_names.end();
-    }
-    bool has_neiro_row() const { return has_row("neiro"); }
     void load_neiro_names();
     void step_neiro(int dir);
+    void step(int dir);
 
     std::string row_label(const std::string& name) const;
     bool get_bool(int mod_index);
@@ -61,7 +58,6 @@ public:
     bool row_greyed(const std::string& name) const;
     std::vector<ModRow> lua_rows();
     int lua_index() const { return current_mod_index; }
-    int lua_row_count() const { return (int)mod_names.size(); }
     int lua_change_dir() const { return direction; }
     float lua_change_fade() const { return (float)fade_sideways->attribute; }
     bool lua_change_active() const { return !move_sideways->is_finished; }
