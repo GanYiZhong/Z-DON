@@ -25,6 +25,7 @@ export PATH=/c/msys64/mingw64/bin:$PATH   # 少了這行 gcc 會靜默失敗
 cd build && nice -n 10 cmake --build . -j 4
 ```
 
+- Release 預設開 LTO（完整連結數分鐘）；開發中可 `cmake . -DZDON_LTO=OFF` 加快，**量效能和交付前要切回 ON**。
 - 改完 `src/` 要跑 clang-format（上游 CI 用 23.1.3 `--dry-run --Werror`）：
   `"$APPDATA/Python/Python313/Scripts/clang-format.exe" -i $(cygpath -m <file>)`
 - 建置好就停，**不要自動啟動遊戲測試**（使用者可能正在玩）；需要時先 `tasklist` 確認。

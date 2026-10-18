@@ -175,14 +175,18 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Profiling")
   message(STATUS "Profiler build")
 else()
   if(WIN32)
-    # Z-DON: -O3 and link-time optimization (the other desktop targets already used -flto)
+    # Z-DON: -O3 and link-time optimization (the other desktop targets already used -flto).
+    # -DZDON_LTO=OFF skips LTO for quick development rebuilds (the LTO link takes minutes).
+    option(ZDON_LTO "Link-time optimization for the Windows Release build" ON)
     target_compile_options(${PROJECT_NAME} PRIVATE
           -O3
           -march=x86-64
           -DNDEBUG
-          -flto=auto
       )
-    target_link_options(${PROJECT_NAME} PRIVATE -flto=auto -O3)
+    if(ZDON_LTO)
+      target_compile_options(${PROJECT_NAME} PRIVATE -flto=auto)
+      target_link_options(${PROJECT_NAME} PRIVATE -flto=auto -O3)
+    endif()
   elseif(IOS)
     target_compile_options(${PROJECT_NAME} PRIVATE -O2 -DNDEBUG)
   elseif(APPLE)
