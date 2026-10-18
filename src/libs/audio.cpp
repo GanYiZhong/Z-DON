@@ -1,5 +1,6 @@
 #include "audio.h"
 
+#include "audio_dev.h"
 #include "loudness.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
@@ -365,7 +366,10 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
         return;
     }
 
+    const bool stats = audio_dev::stats_enabled();
+    const int64_t t_start = stats ? audio_dev::now_ns() : 0;
     std::shared_lock<std::shared_mutex> guard(engine->rw_lock);
+    const int64_t t_locked = stats ? audio_dev::now_ns() : 0;
 
     for (auto& [name, snd] : engine->sounds) {
         std::atomic_ref<bool> aref_playing(snd.is_playing);
@@ -577,9 +581,13 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
 
     guard.unlock();
 
+    audio_dev::capture(out, framesPerBuffer);
     const float master_vol = engine->master_volume.load(std::memory_order_relaxed);
     for (unsigned long i = 0; i < buffer_size; i++) {
         out[i] = std::clamp(out[i] * master_vol, -1.0f, 1.0f);
+    }
+    if (stats) {
+        audio_dev::record_callback(audio_dev::now_ns() - t_start, t_locked - t_start);
     }
 }
 
@@ -608,8 +616,11 @@ void AudioEngine::sdl_audio_callback(void* userdata, SDL_AudioStream* stream, in
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
 int AudioEngine::rt_audio_callback(void* outputBuffer, void* /*inputBuffer*/, unsigned int framesPerBuffer,
-                                   double /*streamTime*/, unsigned int /*status*/, void* userData) {
+                                   double /*streamTime*/, unsigned int status, void* userData) {
     AudioEngine* engine = static_cast<AudioEngine*>(userData);
+    if (status & RTAUDIO_OUTPUT_UNDERFLOW) {
+        audio_dev::record_underflow();
+    }
     float* out = static_cast<float*>(outputBuffer);
     const unsigned int total_channels = engine->rt_total_channels;
     std::memset(out, 0, static_cast<size_t>(framesPerBuffer) * total_channels * sizeof(float));
@@ -828,22 +839,40 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     // Dev hook: YATAIDON_TEST=1 (automated test runs) plays everything at 1% volume
     this->master_volume = zdon_test_mode() ? 0.01f : 1.0f;
     try {
+        bool ok = false;
+        bool chosen = false;
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
         if (const RtApiEntry* entry = rt_api_for_type(audio_config.device_type)) {
-            return init_rtaudio_device(entry->api, entry->label);
+            ok = init_rtaudio_device(entry->api, entry->label);
+            chosen = true;
         }
 #endif
 #ifdef _WIN32
-        switch (audio_config.device_type) {
-        case 9:
-            return win32_init_portaudio_wdmks(target_sample_rate, buffer_size, device_name);
-        case 10:
-            return win32_init_portaudio_mme(target_sample_rate, buffer_size, device_name);
-        default:
-            break;
+        if (!chosen) {
+            switch (audio_config.device_type) {
+            case 9:
+                ok = win32_init_portaudio_wdmks(target_sample_rate, buffer_size, device_name);
+                chosen = true;
+                break;
+            case 10:
+                ok = win32_init_portaudio_mme(target_sample_rate, buffer_size, device_name);
+                chosen = true;
+                break;
+            default:
+                break;
+            }
         }
 #endif
-        return init_sdl3_device();
+        if (!chosen) {
+            ok = init_sdl3_device();
+        }
+        if (ok) {
+            audio_dev::start(target_sample_rate);
+            if (!audio_dev::selftest_spec().empty()) {
+                run_selftest(audio_dev::selftest_spec());
+            }
+        }
+        return ok;
     } catch (const std::exception& e) {
         spdlog::error("Failed to initialize audio device: {}", e.what());
         return false;
@@ -852,6 +881,7 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
 
 void AudioEngine::close_audio_device() {
     loudness_scanner.reset();
+    audio_dev::stop();
 
     if (!is_ready) {
         return;
@@ -1952,6 +1982,40 @@ void AudioEngine::seek_music_stream(const std::string& name, float position) {
         }
     } else {
         spdlog::warn("Music stream {} not found", name);
+    }
+}
+
+void AudioEngine::dev_pause_device(bool pause) {
+    if (sdl_stream) {
+        if (pause) {
+            SDL_PauseAudioStreamDevice(sdl_stream);
+        } else {
+            SDL_ResumeAudioStreamDevice(sdl_stream);
+        }
+    }
+#if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
+    if (rt_audio && rt_audio->isStreamOpen()) {
+        if (pause && rt_audio->isStreamRunning()) {
+            rt_audio->stopStream();
+        } else if (!pause && !rt_audio->isStreamRunning()) {
+            rt_audio->startStream();
+        }
+    }
+#endif
+}
+
+void AudioEngine::dev_wait_streams() {
+    // the mixer reads streams synchronously: nothing to wait for
+}
+
+void AudioEngine::dev_wait_decoded(const std::string& name) {
+    for (;;) {
+        std::shared_ptr<SoundDecodeJob> job;
+        with_entry(rw_lock, sounds, name, [&job](sound& snd) { job = snd.decode_job; });
+        if (!job || job->done.load(std::memory_order_acquire)) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 

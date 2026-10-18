@@ -204,7 +204,14 @@ public:
 #endif
     void seek_music_stream(const std::string& name, float position);
 
+    // Z-DON dev hook YATAIDON_AUDIO_SELFTEST (audio_selftest.cpp)
+    void run_selftest(const std::string& spec);
+
 private:
+    void dev_pause_device(bool pause);
+    void dev_wait_streams();                        // until every stream's decoder has caught up
+    void dev_wait_decoded(const std::string& name); // until a progressive sound is fully decoded
+
     std::unique_ptr<song_loudness::Scanner> loudness_scanner;
 
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
