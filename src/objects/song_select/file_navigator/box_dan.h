@@ -1,16 +1,19 @@
 #pragma once
 
 #include "../../../libs/global_data.h"
+#include "../../../libs/scores.h"
 #include "box_base.h"
 
 class DanBox : public BaseBox {
 public:
     std::string dan_title;
     int dan_color = 0;
-    std::vector<bool> song_masked; // hidden songs not yet reached
-    int clear_mark = 0;            // 0 none, 1 passed, 2 perfect (from the saved dan record)
-    int dan_rank = -1;             // -1 = unearned/not yet ranked
-    int dan_index = -1;            // -1 = unselected
+    std::vector<bool> song_masked;       // hidden songs not yet reached
+    int clear_mark = 0;                  // 0 none, 1 passed, 2 perfect (from the saved dan record)
+    int record_rank = 0;                 // the saved record's rank: 0 none, 1 played/failed, 2..7 passes
+    std::vector<DanExamBest> exam_bests; // the saved record's best per exam
+    int dan_rank = -1;                   // -1 = unearned/not yet ranked
+    int dan_index = -1;                  // -1 = unselected
     bool gaiden = false;
     bool is_back = false; // the "back" folder: no course, leaves to song select
     std::vector<DanSongEntry> songs;

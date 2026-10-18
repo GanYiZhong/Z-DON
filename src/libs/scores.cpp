@@ -1050,6 +1050,65 @@ static void ensure_dan_table(sqlite3* db) {
                  "score_id INTEGER REFERENCES scores(score_id),"
                  "PRIMARY KEY(dan_score_id, song_index));",
                  nullptr, nullptr, nullptr);
+    // Z-DON: the exam bests as of each attempt (fails harmlessly once the column exists)
+    sqlite3_exec(db, "ALTER TABLE dan_scores ADD COLUMN exam_bests TEXT NOT NULL DEFAULT '';", nullptr, nullptr,
+                 nullptr);
+}
+
+// exam_bests column: one "type:value,s1,s2,s3" per exam, joined by ';' (-1 = none)
+static std::string encode_exam_bests(const std::vector<DanExamBest>& bests) {
+    std::string out;
+    for (size_t i = 0; i < bests.size(); i++) {
+        const DanExamBest& b = bests[i];
+        if (i) {
+            out += ';';
+        }
+        out += b.type + ':' + std::to_string(b.value);
+        for (int v : b.song) {
+            out += ',' + std::to_string(v);
+        }
+    }
+    return out;
+}
+
+static std::vector<DanExamBest> decode_exam_bests(const std::string& s) {
+    std::vector<DanExamBest> out;
+    size_t start = 0;
+    while (start < s.size()) {
+        size_t end = s.find(';', start);
+        if (end == std::string::npos) {
+            end = s.size();
+        }
+        const std::string item = s.substr(start, end - start);
+        start = end + 1;
+        DanExamBest b;
+        size_t colon = item.find(':');
+        if (colon == std::string::npos) {
+            out.push_back(b);
+            continue;
+        }
+        b.type = item.substr(0, colon);
+        int vals[4] = {-1, -1, -1, -1};
+        size_t pos = colon + 1;
+        for (int k = 0; k < 4 && pos <= item.size(); k++) {
+            size_t comma = item.find(',', pos);
+            if (comma == std::string::npos) {
+                comma = item.size();
+            }
+            try {
+                vals[k] = std::stoi(item.substr(pos, comma - pos));
+            } catch (...) {
+                vals[k] = -1;
+            }
+            pos = comma + 1;
+        }
+        b.value = vals[0];
+        for (int k = 0; k < 3; k++) {
+            b.song[k] = vals[k + 1];
+        }
+        out.push_back(b);
+    }
+    return out;
 }
 
 std::string dan_song_hash(const DanSongEntry& song) {
@@ -1111,15 +1170,28 @@ std::optional<DanRecord> ScoresManager::get_dan_record(const std::string& player
         out = r;
     }
     sqlite3_finalize(stmt);
+    if (out && sqlite3_prepare_v2(db_fsd,
+                                  "SELECT exam_bests FROM dan_scores WHERE player_id = ? AND course_id = ?"
+                                  " ORDER BY dan_score_id DESC LIMIT 1;",
+                                  -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, course_id.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (const unsigned char* eb = sqlite3_column_text(stmt, 0)) {
+                out->exam_bests = decode_exam_bests(reinterpret_cast<const char*>(eb));
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
     return out;
 }
 
 void ScoresManager::save_dan_score(const std::string& player_id, const std::string& course_id, const DanResultData& rd,
-                                   int arrival) {
+                                   int arrival, const std::vector<DanExamBest>& exam_bests) {
     sqlite3_stmt* stmt;
     const char* query = "INSERT INTO dan_scores (player_id, course_id, title, dan_index, odai_result, score, "
-                        "max_combo, gauge_length, arrival, played_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+                        "max_combo, gauge_length, arrival, played_at, exam_bests)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
         spdlog::error("save_dan_score: failed to prepare: {}", sqlite3_errmsg(db_fsd));
         return;
@@ -1134,6 +1206,8 @@ void ScoresManager::save_dan_score(const std::string& player_id, const std::stri
     sqlite3_bind_double(stmt, 8, rd.gauge_length);
     sqlite3_bind_int(stmt, 9, arrival);
     sqlite3_bind_int64(stmt, 10, unix_now());
+    const std::string bests = encode_exam_bests(exam_bests);
+    sqlite3_bind_text(stmt, 11, bests.c_str(), -1, SQLITE_TRANSIENT);
     bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     if (!ok) {
         spdlog::error("save_dan_score: failed for {}: {}", rd.dan_title, sqlite3_errmsg(db_fsd));

@@ -48,6 +48,8 @@ void DanBox::load_text() {
         if (rec) {
             clear_mark = rec->rank >= 7 ? 2 : (rec->rank >= 2 ? 1 : 0);
         }
+        record_rank = rec ? rec->rank : 0;
+        exam_bests = rec ? rec->exam_bests : std::vector<DanExamBest>{};
         bool any_hidden = false;
         for (const auto& e : songs) {
             any_hidden |= e.hidden;
