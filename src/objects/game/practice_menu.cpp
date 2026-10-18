@@ -57,11 +57,7 @@ void PracticeMenu::open_dialog(Dialog which, bool auto_on) {
         dialog_sel = auto_on ? 0 : 1;
         break;
     case Dialog::RESTART:
-        dialog_sel = 0;
-        break;
     case Dialog::ANOTHER:
-        dialog_sel = 0;
-        break;
     case Dialog::END:
         dialog_sel = 0;
         break;

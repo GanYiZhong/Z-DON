@@ -1,4 +1,5 @@
 #include <sol/sol.hpp>
+#include <spdlog/spdlog.h>
 
 #include "../../libs/global_data.h"
 
@@ -26,6 +27,18 @@ private:
     sol::protected_function fn_handle_gogo;
     sol::protected_function fn_handle_miss_streak;
 
+    template<class... Args>
+    void invoke(sol::protected_function& fn, const char* name, Args&&... args) {
+        if (!fn.valid()) {
+            return;
+        }
+        auto result = fn(lua_object, std::forward<Args>(args)...);
+        if (!result.valid()) {
+            sol::error err = result;
+            spdlog::error("Error calling {}: {}", name, err.what());
+        }
+    }
+
 public:
     Background(PlayerNum player_num, float bpm, const std::string& scene_preset);
     Background(const Background&) = delete;
@@ -50,7 +63,6 @@ public:
     void handle_score(PlayerNum player_num, int score);
     void handle_ending(PlayerNum player_num, const std::string& kind);
     void draw_ending(PlayerNum player_num);
-    bool wants_ending() const { return fn_handle_ending.valid() && fn_draw_ending.valid(); }
     bool wants_handle_ending() const { return fn_handle_ending.valid(); }
     // Optional: a balloon reached its end without bursting (a burst plays "balloon_pop")
     void handle_balloon_end(PlayerNum player_num);
@@ -62,5 +74,4 @@ public:
     void draw_fore();
 
     void draw_gauge(PlayerNum player_num);
-    bool wants_gauge_draw() const { return fn_draw_gauge.valid(); }
 };

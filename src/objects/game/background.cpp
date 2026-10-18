@@ -77,69 +77,27 @@ Background::~Background() {
 }
 
 void Background::update(double current_ms, float bpm) {
-    if (!fn_update.valid()) {
-        return;
-    }
-    auto result = fn_update(lua_object, current_ms, bpm);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling update: {}", err.what());
-    }
+    invoke(fn_update, "update", current_ms, bpm);
 }
 
 void Background::handle_good(PlayerNum player_num) {
-    if (!fn_handle_good.valid()) {
-        return;
-    }
-    auto result = fn_handle_good(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_good: {}", err.what());
-    }
+    invoke(fn_handle_good, "handle_good", static_cast<int>(player_num));
 }
 
 void Background::handle_ok(PlayerNum player_num) {
-    if (!fn_handle_ok.valid()) {
-        return;
-    }
-    auto result = fn_handle_ok(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_ok: {}", err.what());
-    }
+    invoke(fn_handle_ok, "handle_ok", static_cast<int>(player_num));
 }
 
 void Background::handle_bad(PlayerNum player_num) {
-    if (!fn_handle_bad.valid()) {
-        return;
-    }
-    auto result = fn_handle_bad(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_bad: {}", err.what());
-    }
+    invoke(fn_handle_bad, "handle_bad", static_cast<int>(player_num));
 }
 
 void Background::handle_drumroll(PlayerNum player_num) {
-    if (!fn_handle_drumroll.valid()) {
-        return;
-    }
-    auto result = fn_handle_drumroll(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_drumroll: {}", err.what());
-    }
+    invoke(fn_handle_drumroll, "handle_drumroll", static_cast<int>(player_num));
 }
 
 void Background::handle_balloon(PlayerNum player_num, int remaining) {
-    if (!fn_handle_balloon.valid()) {
-        return;
-    }
-    auto result = fn_handle_balloon(lua_object, static_cast<int>(player_num), remaining);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_balloon: {}", err.what());
-    }
+    invoke(fn_handle_balloon, "handle_balloon", static_cast<int>(player_num), remaining);
 }
 
 // A kusudama hit: skins without handle_kusudama get handle_balloon, as before.
@@ -157,145 +115,54 @@ void Background::handle_kusudama(PlayerNum player_num) {
 
 void Background::handle_gauge(PlayerNum player_num, float progress, bool is_clear, bool is_rainbow,
                               float clear_progress, float flash) {
-    if (!fn_handle_gauge.valid()) {
-        return;
-    }
-    auto result = fn_handle_gauge(lua_object, static_cast<int>(player_num), progress, is_clear, is_rainbow,
-                                  clear_progress, flash);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_gauge: {}", err.what());
-    }
+    invoke(fn_handle_gauge, "handle_gauge", static_cast<int>(player_num), progress, is_clear, is_rainbow,
+           clear_progress, flash);
 }
 
 void Background::handle_song_end(PlayerNum player_num, int good, int ok, int bad, int total_notes) {
-    if (!fn_handle_song_end.valid()) {
-        return;
-    }
-    auto result = fn_handle_song_end(lua_object, static_cast<int>(player_num), good, ok, bad, total_notes);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_song_end: {}", err.what());
-    }
+    invoke(fn_handle_song_end, "handle_song_end", static_cast<int>(player_num), good, ok, bad, total_notes);
 }
 
 void Background::handle_dan(PlayerNum player_num, const sol::table& state) {
-    if (!fn_handle_dan.valid()) {
-        return;
-    }
-    auto result = fn_handle_dan(lua_object, static_cast<int>(player_num), state);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_dan: {}", err.what());
-    }
+    invoke(fn_handle_dan, "handle_dan", static_cast<int>(player_num), state);
 }
 
 void Background::handle_score(PlayerNum player_num, int score) {
-    if (!fn_handle_score.valid()) {
-        return;
-    }
-    auto result = fn_handle_score(lua_object, static_cast<int>(player_num), score);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_score: {}", err.what());
-    }
+    invoke(fn_handle_score, "handle_score", static_cast<int>(player_num), score);
 }
 
 void Background::handle_ending(PlayerNum player_num, const std::string& kind) {
-    if (!fn_handle_ending.valid()) {
-        return;
-    }
-    auto result = fn_handle_ending(lua_object, static_cast<int>(player_num), kind);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_ending: {}", err.what());
-    }
+    invoke(fn_handle_ending, "handle_ending", static_cast<int>(player_num), kind);
 }
 
 void Background::draw_ending(PlayerNum player_num) {
-    if (!fn_draw_ending.valid()) {
-        return;
-    }
-    auto result = fn_draw_ending(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling draw_ending: {}", err.what());
-    }
+    invoke(fn_draw_ending, "draw_ending", static_cast<int>(player_num));
 }
 
 void Background::handle_balloon_end(PlayerNum player_num) {
-    if (!fn_handle_balloon_end.valid()) {
-        return;
-    }
-    auto result = fn_handle_balloon_end(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_balloon_end: {}", err.what());
-    }
+    invoke(fn_handle_balloon_end, "handle_balloon_end", static_cast<int>(player_num));
 }
 
 void Background::handle_skip(PlayerNum player_num, const sol::table& state) {
-    if (!fn_handle_skip.valid()) {
-        return;
-    }
-    auto result = fn_handle_skip(lua_object, static_cast<int>(player_num), state);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_skip: {}", err.what());
-    }
+    invoke(fn_handle_skip, "handle_skip", static_cast<int>(player_num), state);
 }
 
 void Background::draw_back() {
-    if (!fn_draw_back.valid()) {
-        return;
-    }
-    auto result = fn_draw_back(lua_object);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling draw_back: {}", err.what());
-    }
+    invoke(fn_draw_back, "draw_back");
 }
 
 void Background::draw_fore() {
-    if (!fn_draw_fore.valid()) {
-        return;
-    }
-    auto result = fn_draw_fore(lua_object);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling draw_fore: {}", err.what());
-    }
+    invoke(fn_draw_fore, "draw_fore");
 }
 
 void Background::draw_gauge(PlayerNum player_num) {
-    if (!fn_draw_gauge.valid()) {
-        return;
-    }
-    auto result = fn_draw_gauge(lua_object, static_cast<int>(player_num));
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling draw_gauge: {}", err.what());
-    }
+    invoke(fn_draw_gauge, "draw_gauge", static_cast<int>(player_num));
 }
 
 void Background::handle_miss_streak(PlayerNum player_num, bool on) {
-    if (!fn_handle_miss_streak.valid()) {
-        return;
-    }
-    auto result = fn_handle_miss_streak(lua_object, static_cast<int>(player_num), on);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_miss_streak: {}", err.what());
-    }
+    invoke(fn_handle_miss_streak, "handle_miss_streak", static_cast<int>(player_num), on);
 }
 
 void Background::handle_gogo(PlayerNum player_num, bool on) {
-    if (!fn_handle_gogo.valid()) {
-        return;
-    }
-    auto result = fn_handle_gogo(lua_object, static_cast<int>(player_num), on);
-    if (!result.valid()) {
-        sol::error err = result;
-        spdlog::error("Error calling handle_gogo: {}", err.what());
-    }
+    invoke(fn_handle_gogo, "handle_gogo", static_cast<int>(player_num), on);
 }

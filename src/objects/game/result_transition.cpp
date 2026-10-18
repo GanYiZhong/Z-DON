@@ -38,10 +38,7 @@ void ResultTransition::update(double current_ms) {
     }
 
     call(fn_update, "ResultTransition:update", current_ms);
-    auto done = call_r<bool>(fn_is_finished, "ResultTransition:is_finished");
-    if (done.has_value()) {
-        is_finished = is_finished || done.value();
-    }
+    is_finished = is_finished || call_r<bool>(fn_is_finished, "ResultTransition:is_finished").value_or(false);
 }
 
 void ResultTransition::draw() {

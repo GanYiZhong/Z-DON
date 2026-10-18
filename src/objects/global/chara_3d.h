@@ -71,8 +71,6 @@ private:
     std::vector<ray::Model> parts;
     std::vector<std::unordered_map<std::string, int>> part_material_indices;
     std::vector<std::vector<int>> part_recolor_indices;
-    std::vector<std::vector<int>> part_additive_indices;
-    std::vector<std::vector<int>> part_cutout_indices; // alpha-tested (_AT_ZERO_ / _AT_ONE_) materials
     std::vector<std::vector<int>>
         part_twosided_indices; // _CULLNONE materials: drawn without back-face culling, no hull
     std::vector<std::vector<int>>
@@ -149,8 +147,9 @@ private:
     void draw_full_target(float x, float y, int rw, int rh, const ray::Camera2D& cam2d);
     bool screen_bounds(float x, float y, const ray::Camera3D& cam3d, float zoom, int rw, int rh, float& x0, float& y0,
                        float& x1, float& y1);
-    void ensure_render_targets(int rw, int rh);
-    void prewarm_render_targets();
+    void init_common(bool mirror, bool use_skin_config);
+    void finish_load(); // face textures + animations, after the model parts are loaded
+    ray::Matrix rotation_matrix() const;
 
 public:
     Chara3D(std::string& model_name, bool mirror = false, bool use_skin_config = false);
@@ -159,8 +158,6 @@ public:
     ~Chara3D();
 
     void apply_face(int face_index);
-    void set_body_texture(fs::path& texture_path);
-    void set_face_rim_texture(fs::path& texture_path);
 
     void set_don_colors(ray::Color body, ray::Color face, ray::Color rim);
 

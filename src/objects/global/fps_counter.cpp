@@ -50,5 +50,5 @@ void FPSCounter::draw() {
         color = ray::LIME;
     }
 
-    DrawTextEx(font, ray::TextFormat("%d FPS", curr_fps), ray::Vector2{pos, pos}, pos, 1.0f, color);
+    DrawTextEx(font, fps_text.c_str(), ray::Vector2{pos, pos}, pos, 1.0f, color);
 }

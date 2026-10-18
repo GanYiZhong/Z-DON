@@ -198,10 +198,11 @@ static std::string name_lower(const char* s) {
     return r;
 }
 
-static std::unordered_map<std::string, int>
-parse_glb_material_indices(const std::string& path, std::vector<int>& recolor_out, int& face_out,
-                           std::vector<int>& additive_out, std::vector<int>& cutout_out, std::vector<int>& blend_out,
-                           std::vector<int>& twosided_out) {
+static std::unordered_map<std::string, int> parse_glb_material_indices(const std::string& path,
+                                                                       std::vector<int>& recolor_out, int& face_out,
+                                                                       std::vector<int>& additive_out,
+                                                                       std::vector<int>& blend_out,
+                                                                       std::vector<int>& twosided_out) {
     std::unordered_map<std::string, int> result;
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) {
@@ -270,9 +271,8 @@ parse_glb_material_indices(const std::string& path, std::vector<int>& recolor_ou
             std::string nl = name_lower(mat_name_raw);
             if (nl.find("_aa_add") != std::string::npos) {
                 additive_out.push_back(raylib_idx);
-            } else if (nl.find("_color_s_cus_") != std::string::npos && nl.find("_a_ab") == std::string::npos) {
-                cutout_out.push_back(raylib_idx); // _AT_ZERO_ / _AT_ONE_: alpha-tested, never blended
             }
+            // _AT_ZERO_ / _AT_ONE_: alpha-tested, never blended
             const bool cutout = nl.find("_color_s_cus_") != std::string::npos && nl.find("_a_ab") == std::string::npos;
             const bool gltf_blend = materials[i].HasMember("alphaMode") && materials[i]["alphaMode"].IsString() &&
                                     std::string(materials[i]["alphaMode"].GetString()) == "BLEND";
@@ -321,11 +321,10 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     // The vertex colours stay as shipped: the main shader does not tint by them, and the black
     // line pass reads its per-vertex thickness from the green channel.
 
-    std::vector<int> recolor_indices, additive_indices, cutout_indices, blend_indices, twosided_indices;
+    std::vector<int> recolor_indices, additive_indices, blend_indices, twosided_indices;
     int face_material_index = -1;
-    auto material_indices =
-        parse_glb_material_indices(model_path.string(), recolor_indices, face_material_index, additive_indices,
-                                   cutout_indices, blend_indices, twosided_indices);
+    auto material_indices = parse_glb_material_indices(model_path.string(), recolor_indices, face_material_index,
+                                                       additive_indices, blend_indices, twosided_indices);
 
     // Material indices come from the GLB's own JSON and are not guaranteed to line up
     // with what raylib actually imported (e.g. LoadModel failure, fewer materials).
@@ -333,21 +332,10 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     if (!valid_material(face_material_index)) {
         face_material_index = -1;
     }
-    auto filter_materials = [&](std::vector<int>& v) {
-        v.erase(std::remove_if(v.begin(), v.end(), [&](int idx) { return !valid_material(idx); }), v.end());
-    };
-    filter_materials(recolor_indices);
-    filter_materials(additive_indices);
-    filter_materials(cutout_indices);
-    filter_materials(blend_indices);
-    filter_materials(twosided_indices);
-    for (auto it = material_indices.begin(); it != material_indices.end();) {
-        if (!valid_material(it->second)) {
-            it = material_indices.erase(it);
-        } else {
-            ++it;
-        }
+    for (std::vector<int>* v : {&recolor_indices, &additive_indices, &blend_indices, &twosided_indices}) {
+        std::erase_if(*v, [&](int idx) { return !valid_material(idx); });
     }
+    std::erase_if(material_indices, [&](const auto& kv) { return !valid_material(kv.second); });
 
     if (face_material_index != -1) {
         // head/body parts always get the standard 0.137 plate; a costume keeps its own plate
@@ -378,10 +366,8 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
         model.materials[face_material_index].shader = face_shader;
     }
 #endif
-    additive_indices.erase(std::remove(additive_indices.begin(), additive_indices.end(), face_material_index),
-                           additive_indices.end());
-    blend_indices.erase(std::remove(blend_indices.begin(), blend_indices.end(), face_material_index),
-                        blend_indices.end());
+    std::erase(additive_indices, face_material_index);
+    std::erase(blend_indices, face_material_index);
     for (int idx : additive_indices) {
         model.materials[idx].maps[ray::MATERIAL_MAP_DIFFUSE].color = {255, 255, 255, 255};
     }
@@ -405,8 +391,6 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     parts.push_back(model);
     part_material_indices.push_back(std::move(material_indices));
     part_recolor_indices.push_back(std::move(recolor_indices));
-    part_additive_indices.push_back(std::move(additive_indices));
-    part_cutout_indices.push_back(std::move(cutout_indices));
     part_blend_indices.push_back(std::move(blend_indices));
     part_twosided_indices.push_back(std::move(twosided_indices));
     part_face_material_index.push_back(face_material_index);
@@ -433,7 +417,7 @@ static void init_shaders(ray::Shader& outline_fxaa_shader, int& outline_fxaa_siz
     }
 }
 
-Chara3D::Chara3D(std::string& model_name, bool mirror, bool use_skin_config) {
+void Chara3D::init_common(bool mirror, bool use_skin_config) {
     init_shaders(outline_fxaa_shader, outline_fxaa_size_loc, outline_fxaa_thickness_loc, null_shader, face_shader,
                  cutout_shader, outline_shader, use_render_textures);
     this->mirror = mirror;
@@ -442,13 +426,9 @@ Chara3D::Chara3D(std::string& model_name, bool mirror, bool use_skin_config) {
     rot_x = cfg.rot_x;
     rot_y = cfg.rot_y;
     rot_z = cfg.rot_z;
+}
 
-    // Models has no inheritance mechanism of its own (unlike Graphics) — each asset
-    // resolves against the child skin first, falling back to the parent's.
-    fs::path model_path = resolve_skin_path(fs::path("Models/cos") / (model_name + ".glb"));
-    fs::path anim_path = resolve_skin_path("Models/animations.glb");
-    load_part(model_path, anim_path);
-
+void Chara3D::finish_load() {
     fs::path face_dir = resolve_skin_path("Models/face");
     load_face_textures(face_dir);
 
@@ -458,15 +438,20 @@ Chara3D::Chara3D(std::string& model_name, bool mirror, bool use_skin_config) {
     set_anim(anim_index);
 }
 
+Chara3D::Chara3D(std::string& model_name, bool mirror, bool use_skin_config) {
+    init_common(mirror, use_skin_config);
+
+    // Models has no inheritance mechanism of its own (unlike Graphics) — each asset
+    // resolves against the child skin first, falling back to the parent's.
+    fs::path model_path = resolve_skin_path(fs::path("Models/cos") / (model_name + ".glb"));
+    fs::path anim_path = resolve_skin_path("Models/animations.glb");
+    load_part(model_path, anim_path);
+
+    finish_load();
+}
+
 Chara3D::Chara3D(std::string& head_name, std::string& body_name, bool mirror, bool use_skin_config) {
-    init_shaders(outline_fxaa_shader, outline_fxaa_size_loc, outline_fxaa_thickness_loc, null_shader, face_shader,
-                 cutout_shader, outline_shader, use_render_textures);
-    this->mirror = mirror;
-    Chara3DConfig cfg = use_skin_config ? tex.chara_3d_config : Chara3DConfig{};
-    scale = cfg.scale;
-    rot_x = cfg.rot_x;
-    rot_y = cfg.rot_y;
-    rot_z = cfg.rot_z;
+    init_common(mirror, use_skin_config);
 
     fs::path head_path = resolve_skin_path(fs::path("Models/head") / (head_name + ".glb"));
     fs::path body_path = resolve_skin_path(fs::path("Models/body") / (body_name + ".glb"));
@@ -474,13 +459,7 @@ Chara3D::Chara3D(std::string& head_name, std::string& body_name, bool mirror, bo
     load_part(body_path, anim_path);
     load_part(head_path, anim_path, true);
 
-    fs::path face_dir = resolve_skin_path("Models/face");
-    load_face_textures(face_dir);
-
-    fs::path skin_anim_path = resolve_skin_path("Graphics/global/animation.json");
-    load_face_anims(skin_anim_path);
-
-    set_anim(anim_index);
+    finish_load();
 }
 
 Chara3D::~Chara3D() {
@@ -519,26 +498,6 @@ void Chara3D::set_texture(fs::path& texture_path, int part_index, int material_i
     int map_type = ray::MATERIAL_MAP_DIFFUSE;
     ray::SetMaterialTexture(&parts[part_index].materials[material_index], map_type, tex);
     render_dirty = true;
-}
-
-void Chara3D::set_body_texture(fs::path& texture_path) {
-    for (size_t p = 0; p < parts.size(); p++) {
-        auto it = part_material_indices[p].find("RGB_don_color_S_CUS_0x10000001_");
-        if (it != part_material_indices[p].end()) {
-            set_texture(texture_path, (int)p, it->second);
-            return;
-        }
-    }
-}
-
-void Chara3D::set_face_rim_texture(fs::path& texture_path) {
-    for (size_t p = 0; p < parts.size(); p++) {
-        auto it = part_material_indices[p].find("don_FACEHIP_color_S_CUS_0x10000001_");
-        if (it != part_material_indices[p].end()) {
-            set_texture(texture_path, (int)p, it->second);
-            return;
-        }
-    }
 }
 
 void Chara3D::load_face_textures(fs::path& face_dir) {
@@ -740,6 +699,11 @@ void Chara3D::set_tint(ray::Color color, float amount) {
     ray::SetShaderValue(outline_fxaa_shader, outline_fxaa_tint_amount_loc, &amount, ray::SHADER_UNIFORM_FLOAT);
 }
 
+ray::Matrix Chara3D::rotation_matrix() const {
+    const float y_angle = mirror ? -rot_y : rot_y;
+    return rotation_xyz(rot_x * DEG2RAD, y_angle * DEG2RAD, rot_z * DEG2RAD);
+}
+
 void Chara3D::apply_pose() {
     const int ai = static_cast<int>(anim_index);
     for (size_t p = 0; p < parts.size(); p++) {
@@ -822,13 +786,7 @@ void Chara3D::update(double current_ms) {
                     anim_frame = (anim_frame + 1) % loop_frames;
                     // UpdateModelAnimation CPU-skins and uploads position/normal
                     // buffers to the GPU itself; no manual UpdateMeshBuffer needed
-                    for (size_t p = 0; p < parts.size(); p++) {
-                        if (ai >= part_anim_count[p]) {
-                            continue;
-                        }
-                        ray::UpdateModelAnimation(parts[p], part_anims[p][ai], anim_frame);
-                    }
-                    render_dirty = true;
+                    apply_pose();
 
                     if (!is_looping && anim_frame == loop_frames - 1) {
                         set_anim(prev_anim_idx);
@@ -863,8 +821,7 @@ void Chara3D::draw_outline(float x, float y, int rt_w, int rt_h, float full_h) {
     }
 
     std::vector<ray::Matrix> saved_transform(parts.size());
-    float y_angle = mirror ? -rot_y : rot_y;
-    ray::Matrix rot = rotation_xyz(rot_x * DEG2RAD, y_angle * DEG2RAD, rot_z * DEG2RAD);
+    ray::Matrix rot = rotation_matrix();
     for (size_t p = 0; p < parts.size(); p++) {
         saved_transform[p] = parts[p].transform;
         parts[p].transform = rot;
@@ -901,8 +858,7 @@ void Chara3D::draw_outline(float x, float y, int rt_w, int rt_h, float full_h) {
 
 void Chara3D::draw_3d(float x, float y) {
     std::vector<ray::Matrix> saved(parts.size());
-    float y_angle = mirror ? -rot_y : rot_y;
-    ray::Matrix rot = rotation_xyz(rot_x * DEG2RAD, y_angle * DEG2RAD, rot_z * DEG2RAD);
+    ray::Matrix rot = rotation_matrix();
     for (size_t p = 0; p < parts.size(); p++) {
         saved[p] = parts[p].transform;
         parts[p].transform = rot;
@@ -925,8 +881,7 @@ static constexpr float SUPERSAMPLE = 2.0f;
 // camera of camera2d_to_3d (camera rotation 0).
 bool Chara3D::screen_bounds(float x, float y, const ray::Camera3D& cam3d, float zoom, int rw, int rh, float& x0,
                             float& y0, float& x1, float& y1) {
-    float y_angle = mirror ? -rot_y : rot_y;
-    ray::Matrix rot = rotation_xyz(rot_x * DEG2RAD, y_angle * DEG2RAD, rot_z * DEG2RAD);
+    ray::Matrix rot = rotation_matrix();
     const float s = scale * draw_scale * tex.screen_scale;
     ray::Matrix transform =
         ray::MatrixMultiply(rot, ray::MatrixMultiply(ray::MatrixScale(s, s, s), ray::MatrixTranslate(x, y, 400.0f)));

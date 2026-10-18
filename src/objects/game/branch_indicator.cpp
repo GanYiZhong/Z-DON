@@ -46,7 +46,7 @@ void BranchIndicator::update(double current_ms) {
     level_scale->update(current_ms);
 }
 
-void BranchIndicator::level_up(BranchDifficulty difficulty) {
+void BranchIndicator::change_level(BranchDifficulty difficulty, int new_direction) {
     diff_2 = this->difficulty;
     this->difficulty = difficulty;
     diff_down->start();
@@ -54,25 +54,21 @@ void BranchIndicator::level_up(BranchDifficulty difficulty) {
     diff_fade->start();
     level_fade->start();
     level_scale->start();
-    direction = 1;
+    direction = new_direction;
+}
+
+void BranchIndicator::level_up(BranchDifficulty difficulty) {
+    change_level(difficulty, 1);
 }
 
 void BranchIndicator::level_down(BranchDifficulty difficulty) {
-    diff_2 = this->difficulty;
-    this->difficulty = difficulty;
-    diff_down->start();
-    diff_up->start();
-    diff_fade->start();
-    level_fade->start();
-    level_scale->start();
-    direction = -1;
+    change_level(difficulty, -1);
 }
 
 void BranchIndicator::draw(float y) {
-    if (difficulty == BranchDifficulty::EXPERT) {
-        tex.draw_texture(t_expert_bg, {.y = y, .fade = std::clamp(1.0f - (float)diff_fade->attribute, 0.0f, 0.5f)});
-    } else if (difficulty == BranchDifficulty::MASTER) {
-        tex.draw_texture(t_master_bg, {.y = y, .fade = std::clamp(1.0f - (float)diff_fade->attribute, 0.0f, 0.5f)});
+    if (difficulty == BranchDifficulty::EXPERT || difficulty == BranchDifficulty::MASTER) {
+        tex.draw_texture(difficulty == BranchDifficulty::EXPERT ? t_expert_bg : t_master_bg,
+                         {.y = y, .fade = std::clamp(1.0f - (float)diff_fade->attribute, 0.0f, 0.5f)});
     }
 
     tex.draw_texture(direction == -1 ? t_level_down : t_level_up,

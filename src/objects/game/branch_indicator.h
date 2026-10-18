@@ -15,6 +15,7 @@ private:
     int direction;
     TextureObject* t_expert_bg = nullptr;
     TextureObject* t_master_bg = nullptr;
+    void change_level(BranchDifficulty difficulty, int new_direction);
     TextureObject* t_level_up = nullptr;
     TextureObject* t_level_down = nullptr;
     TextureObject* t_diff[3] = {}; // indexed by BranchDifficulty

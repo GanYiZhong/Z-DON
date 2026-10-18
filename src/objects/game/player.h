@@ -11,13 +11,11 @@
 #include "background.h"
 #include "balloon_counter.h"
 #include "branch_indicator.h"
-#include "clear_animation.h"
 #include "combo.h"
 #include "combo_announce.h"
 #include "drum_hit_effect.h"
 #include "drumroll_counter.h"
-#include "fail_animation.h"
-#include "fc_animation.h"
+#include "ending_animation.h"
 #include "fireworks.h"
 #include "gauge.h"
 #include "gauge_hit_effect.h"
@@ -105,7 +103,6 @@ public:
         note_judgments.clear();
         last_reported_score = -1;
         last_reported_gogo = -1;
-        arc_points = 25;
         if (judge_counter) {
             judge_counter = JudgeCounter();
         }
@@ -171,7 +168,6 @@ private:
     int hit_offset_count = 0;
     std::unordered_map<int, Judgments> note_judgments;
 
-    int arc_points;
     float judge_x;
     float judge_y;
     std::pair<double, int> last_jpos_key{-1e300, -1}; // (start_time, seq) of the newest #JPOSSCROLL applied
@@ -275,7 +271,7 @@ private:
     std::optional<double> audio_end_ms;
     std::optional<ComboAnnounce> combo_announce;
     std::optional<BranchIndicator> branch_indicator;
-    std::optional<std::variant<FailAnimation, ClearAnimation, FCAnimation>> ending_anim;
+    std::optional<EndingAnimation> ending_anim;
 
     void get_load_time(Note& note);
 
@@ -283,6 +279,11 @@ private:
     bool unplayable(const Note& note) const;
 
     void handle_timeline(double ms_from_start);
+    void consume_timeline_entry(int buffer_index);
+    void clear_note_queues();
+    const Note* find_tail(const Note& head, double& current_ms) const;
+    void dispatch_timeline_entry(double ms, const TimelineObject& entry, int index);
+    Gauge* active_gauge() { return dan_gauge ? dan_gauge : (gauge.has_value() ? &*gauge : nullptr); }
 
     void autoplay_manager(double ms_from_start, double current_ms, std::optional<Background>& background);
 
@@ -305,8 +306,6 @@ private:
     void handle_section(double ms_from_start, const TimelineObject& timeline_object, int buffer_index);
 
     void play_note_manager(double current_ms, std::optional<Background>& background);
-
-    bool is_balloon_type(int type);
 
     void draw_note_manager(double current_ms);
 

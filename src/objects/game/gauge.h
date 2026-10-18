@@ -21,7 +21,6 @@ public:
 
     bool get_is_clear() const { return points >= clear_points; }
     bool get_is_rainbow() const { return points >= max_points; }
-    bool is_dan() const { return dan_mode; }
     float get_length() const { return (float)(points / max_points * 100); }
 
     // exam threshold check: floor like the arcade and use POINTS_EPS to absorb
@@ -32,6 +31,7 @@ private:
     bool lua_tried = false;
     sol::protected_function fn_draw;
     void apply_points_clamped(double delta);
+    void add_points(double delta);
     bool dan_mode = false;
     double good_points;
     double ok_points;
@@ -39,7 +39,6 @@ private:
     double points = 0;
     int max_points = 10000;
     int clear_points = 8000;
-    int points_per_bar = 200;
     static constexpr double POINTS_EPS = 1e-6;
 
     std::string string_diff;
@@ -49,16 +48,15 @@ private:
     std::optional<FadeAnimation*> rainbow_fade_in;
     double rainbow_start_ms = -1.0;
     float rainbow_frac = 0.0f;
-    bool anims_loaded = false;
     int difficulty;
     double previous_points = 0;
-    static constexpr float max_length = 100.0f;
 
     struct GaugeTable {
         double soul_percent;
         double ok_multiplier;
         double bad_multiplier;
     };
+    void set_points_from_row(int total_notes, const GaugeTable& row);
     std::vector<std::vector<GaugeTable>> table = {
         // Easy (★1–5, ★6–10 unused)
         {

@@ -134,14 +134,6 @@ void Transition::draw() {
     }
 
     call(fn_draw_bg, "SongTransition:draw_bg", total_offset, cur_rainbow);
-    if (!loading_graphic.has_value()) {
-        if (fn_draw_info.valid()) {
-            call(fn_draw_info, "SongTransition:draw_info", total_offset, cur_rainbow, cur_fade, cur_fade_out);
-        } else {
-            draw_song_info();
-        }
-        return;
-    }
     if (loading_graphic.has_value()) {
         ray::Rectangle src = {0, 0, (float)loading_graphic.value().width, (float)loading_graphic.value().height};
         ray::Rectangle dst = {0,

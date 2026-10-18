@@ -122,20 +122,44 @@ public:
         fonts_loaded = false;
     }
 
-    void draw_text(const char* text, int x, int y, int font_size, ray::Color color) const {
-        ray::DrawTextEx(ui_font, text, {(float)x, (float)y}, (float)font_size, font_size / 10.0f, color);
+    static void draw_with(const ray::Font& font, const char* text, int x, int y, int font_size, ray::Color color) {
+        ray::DrawTextEx(font, text, {(float)x, (float)y}, (float)font_size, font_size / 10.0f, color);
     }
 
-    int measure_text(const char* text, int font_size) const {
-        return (int)ray::MeasureTextEx(ui_font, text, (float)font_size, font_size / 10.0f).x;
+    static int measure_with(const ray::Font& font, const char* text, int font_size) {
+        return (int)ray::MeasureTextEx(font, text, (float)font_size, font_size / 10.0f).x;
     }
+
+    void draw_text(const char* text, int x, int y, int font_size, ray::Color color) const {
+        draw_with(ui_font, text, x, y, font_size, color);
+    }
+
+    int measure_text(const char* text, int font_size) const { return measure_with(ui_font, text, font_size); }
 
     void draw_code_text(const char* text, int x, int y, int font_size, ray::Color color) const {
-        ray::DrawTextEx(code_font, text, {(float)x, (float)y}, (float)font_size, font_size / 10.0f, color);
+        draw_with(code_font, text, x, y, font_size, color);
     }
 
-    int measure_code_text(const char* text, int font_size) const {
-        return (int)ray::MeasureTextEx(code_font, text, (float)font_size, font_size / 10.0f).x;
+    int measure_code_text(const char* text, int font_size) const { return measure_with(code_font, text, font_size); }
+
+    // The text of an edited field with a blinking caret.
+    static std::string editing_text(bool editing, const std::string& shown, const std::string& buffer) {
+        std::string text = editing ? buffer : shown;
+        if (editing && std::fmod(ray::GetTime(), 1.0) < 0.5) {
+            text += "|";
+        }
+        return text;
+    }
+
+    static void draw_scrollbar(float track_x, float top, float height, int count, int shown, int scroll) {
+        if (count <= shown) {
+            return;
+        }
+        ray::DrawRectangle((int)track_x, (int)top, (int)SCROLLBAR_WIDTH, (int)height, ray::Fade(ray::WHITE, 0.1f));
+        const int max_scroll = count - shown;
+        const float thumb_h = std::max(SCROLLBAR_THUMB_MIN, height * ((float)shown / count));
+        const float thumb_y = top + (max_scroll > 0 ? (scroll / (float)max_scroll) * (height - thumb_h) : 0.0f);
+        ray::DrawRectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h, ray::Fade(ray::WHITE, 0.5f));
     }
 
     FramedTexture* get_selected_framed() const { return dynamic_cast<FramedTexture*>(selected_obj()); }
@@ -959,17 +983,8 @@ private:
         }
         ray::EndScissorMode();
 
-        if (scene_count > scene_shown) {
-            float track_x = panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH;
-            ray::DrawRectangle((int)track_x, (int)list_top, (int)SCROLLBAR_WIDTH, (int)SCENE_LIST_HEIGHT,
-                               ray::Fade(ray::WHITE, 0.1f));
-            int max_scroll = scene_count - scene_shown;
-            float thumb_h = std::max(SCROLLBAR_THUMB_MIN, SCENE_LIST_HEIGHT * ((float)scene_shown / scene_count));
-            float thumb_y =
-                list_top + (max_scroll > 0 ? (scene_scroll / (float)max_scroll) * (SCENE_LIST_HEIGHT - thumb_h) : 0.0f);
-            ray::DrawRectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h,
-                               ray::Fade(ray::WHITE, 0.5f));
-        }
+        draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, list_top, SCENE_LIST_HEIGHT, scene_count, scene_shown,
+                       scene_scroll);
 
         const float button_top = list_bottom;
         ray::Rectangle button = {panel_x + 6, button_top + 3, PANEL_WIDTH - 12, SWITCH_BTN_HEIGHT - 6};
@@ -1012,10 +1027,7 @@ private:
                 bool is_editing = editing_data_ptr == static_cast<void*>(f.s);
                 ray::DrawRectangleRec(r.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
                 ray::DrawRectangleLinesEx(r.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
-                std::string text = is_editing ? edit_data_buffer : *f.s;
-                if (is_editing && std::fmod(ray::GetTime(), 1.0) < 0.5) {
-                    text += "|";
-                }
+                std::string text = editing_text(is_editing, *f.s, edit_data_buffer);
                 draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 13, ray::WHITE);
             } else if (f.kind == DataField::Kind::PLAYER_NUM) {
                 ray::DrawRectangleRec(r.minus, ray::Fade(ray::WHITE, 0.2f));
@@ -1034,26 +1046,14 @@ private:
                 draw_text("+", (int)r.plus.x + 4, (int)r.plus.y, 14, ray::WHITE);
                 ray::DrawRectangleRec(r.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
                 ray::DrawRectangleLinesEx(r.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
-                std::string text = is_editing ? edit_data_buffer : data_field_display(f);
-                if (is_editing && std::fmod(ray::GetTime(), 1.0) < 0.5) {
-                    text += "|";
-                }
+                std::string text = editing_text(is_editing, data_field_display(f), edit_data_buffer);
                 draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 12, ray::WHITE);
             }
         }
         ray::EndScissorMode();
 
-        if (field_count > data_shown) {
-            float track_x = panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH;
-            float area_h = data_bottom - data_top;
-            ray::DrawRectangle((int)track_x, (int)data_top, (int)SCROLLBAR_WIDTH, (int)area_h,
-                               ray::Fade(ray::WHITE, 0.1f));
-            int max_scroll = field_count - data_shown;
-            float thumb_h = std::max(SCROLLBAR_THUMB_MIN, area_h * ((float)data_shown / field_count));
-            float thumb_y = data_top + (max_scroll > 0 ? (data_scroll / (float)max_scroll) * (area_h - thumb_h) : 0.0f);
-            ray::DrawRectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h,
-                               ray::Fade(ray::WHITE, 0.5f));
-        }
+        draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, data_top, data_bottom - data_top, field_count,
+                       data_shown, data_scroll);
     }
 
     bool is_selected_entry(const DrawLogEntry& entry) const {
@@ -1163,17 +1163,18 @@ private:
     void rebuild_visible_rows() {
         visible_rows.clear();
         std::map<std::string, std::vector<int>> groups;
+        std::vector<std::pair<std::string, std::string>> split(debug_draw_log_prev.size());
         for (int i = 0; i < (int)debug_draw_log_prev.size(); i++) {
-            groups[split_subset(debug_draw_log_prev[i]).first].push_back(i);
+            split[i] = split_subset(debug_draw_log_prev[i]);
+            groups[split[i].first].push_back(i);
         }
         for (auto& [subset, indices] : groups) {
-            std::sort(indices.begin(), indices.end(), [](int a, int b) {
-                return split_subset(debug_draw_log_prev[a]).second < split_subset(debug_draw_log_prev[b]).second;
-            });
+            std::sort(indices.begin(), indices.end(),
+                      [&split](int a, int b) { return split[a].second < split[b].second; });
             visible_rows.push_back({true, subset, subset + " (" + std::to_string(indices.size()) + ")", -1});
             if (expanded_subsets.count(subset)) {
                 for (int idx : indices) {
-                    visible_rows.push_back({false, "", split_subset(debug_draw_log_prev[idx]).second, idx});
+                    visible_rows.push_back({false, "", split[idx].second, idx});
                 }
             }
         }
@@ -1281,18 +1282,8 @@ private:
         }
         ray::EndScissorMode();
 
-        if (row_count > rows_shown) {
-            float track_x = panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH;
-            ray::DrawRectangle((int)track_x, (int)list_top, (int)SCROLLBAR_WIDTH, (int)(list_bottom - list_top),
-                               ray::Fade(ray::WHITE, 0.1f));
-            float list_height = list_bottom - list_top;
-            float thumb_h = std::max(SCROLLBAR_THUMB_MIN, list_height * ((float)rows_shown / row_count));
-            int max_scroll = row_count - rows_shown;
-            float thumb_y =
-                list_top + (max_scroll > 0 ? (scroll_offset / (float)max_scroll) * (list_height - thumb_h) : 0.0f);
-            ray::DrawRectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h,
-                               ray::Fade(ray::WHITE, 0.5f));
-        }
+        draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, list_top, list_bottom - list_top, row_count, rows_shown,
+                       scroll_offset);
 
         const ray::Rectangle* box_rect = nullptr;
         std::string box_name;
@@ -1364,10 +1355,7 @@ private:
             ray::DrawRectangleRec(b.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
             ray::DrawRectangleLinesEx(b.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
 
-            std::string text = is_editing ? edit_buffer : std::to_string(*value);
-            if (is_editing && std::fmod(ray::GetTime(), 1.0) < 0.5) {
-                text += "|";
-            }
+            std::string text = editing_text(is_editing, std::to_string(*value), edit_buffer);
             draw_text(text.c_str(), (int)b.value.x + 4, (int)b.value.y + 4, 14, ray::WHITE);
         }
 

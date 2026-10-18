@@ -1,7 +1,5 @@
 #pragma once
 
-#include <map>
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -52,29 +50,3 @@ inline std::string exam_border_text(const TextureWrapper& tex, const Exam& exam,
     }
     return exam_threshold_text(tex, exam.type, exam.range, num, lang);
 }
-
-class ExamCaptionCache {
-public:
-    OutlinedText* get(const std::string& s, int size, float outline, ray::Color fill = ray::WHITE,
-                      ray::Color ol = ray::BLACK) {
-        if (s.empty() || size <= 0) {
-            return nullptr;
-        }
-        const std::string k = s + "\x1f" + std::to_string(size) + "\x1f" + std::to_string((int)(outline * 100)) +
-                              "\x1f" + std::to_string(fill.r) + "," + std::to_string(fill.g) + "," +
-                              std::to_string(fill.b) + "," + std::to_string(fill.a) + "\x1f" + std::to_string(ol.r) +
-                              "," + std::to_string(ol.g) + "," + std::to_string(ol.b) + "," + std::to_string(ol.a);
-        auto it = items.find(k);
-        if (it == items.end()) {
-            it = items.emplace(k, std::make_unique<OutlinedText>(s, size, fill, ol, false, outline)).first;
-        }
-        return it->second.get();
-    }
-
-    void clear() { items.clear(); }
-
-    static float pad_for(float outline, float screen_scale) { return (float)((int)(outline * screen_scale) + 2); }
-
-private:
-    std::map<std::string, std::unique_ptr<OutlinedText>> items;
-};

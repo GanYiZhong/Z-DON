@@ -24,7 +24,6 @@ public:
     void update(double now);
     void draw(float lane_y);
 
-    bool is_active() const { return active; }
     bool song_may_start() const { return !active || elapsed >= SONG_OPEN_MS; }
 
 private:

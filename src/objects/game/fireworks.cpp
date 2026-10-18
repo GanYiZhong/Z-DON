@@ -17,14 +17,11 @@ Fireworks::Fireworks() {
 }
 
 void Fireworks::update(double current_ms) {
-    if (!explosion_anim) {
-        return;
-    }
     explosion_anim->update(current_ms);
 }
 
 void Fireworks::draw() {
-    if (!explosion_anim || !t_explosion) { // a skin without gogo_time/explosion art
+    if (!t_explosion) { // a skin without gogo_time/explosion art
         return;
     }
     if (!explosion_anim->is_finished) {
@@ -62,5 +59,5 @@ void Fireworks::draw() {
 }
 
 bool Fireworks::is_finished() const {
-    return !explosion_anim || explosion_anim->is_finished;
+    return explosion_anim->is_finished;
 }

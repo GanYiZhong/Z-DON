@@ -28,9 +28,7 @@ void DrumrollCounter::update_count(int count) {
 
 void DrumrollCounter::update(double current_ms, int count) {
     update_count(count);
-
-    fade->update(current_ms);
-    stretch->update(current_ms);
+    update_animations(current_ms);
 }
 
 void DrumrollCounter::update_animations(double current_ms) {

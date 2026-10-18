@@ -7,8 +7,6 @@
 
 class GaugeHitEffect {
 private:
-    NoteType note_type;
-    bool is_big;
     bool is_2p;
     TextureChangeAnimation* texture_change;
     FadeAnimation* circle_fadein;

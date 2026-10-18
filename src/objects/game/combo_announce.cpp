@@ -51,8 +51,5 @@ void ComboAnnounce::draw(float y) {
 
     float fade_value = is_finished ? fade->attribute : 1 - fade->attribute;
 
-    if (fn_draw.valid()) {
-        call(fn_draw, "ComboAnnounce:draw", y, fade_value);
-        return;
-    }
+    call(fn_draw, "ComboAnnounce:draw", y, fade_value);
 }

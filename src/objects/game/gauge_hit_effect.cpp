@@ -2,8 +2,7 @@
 
 #include <stdexcept>
 
-GaugeHitEffect::GaugeHitEffect(NoteType note_type, bool is_big, bool is_2p)
-    : note_type(note_type), is_big(is_big), is_2p(is_2p) {
+GaugeHitEffect::GaugeHitEffect(NoteType note_type, bool is_big, bool is_2p) : is_2p(is_2p) {
     texture_change = dynamic_cast<TextureChangeAnimation*>(tex.get_animation(2, true));
     circle_fadein = dynamic_cast<FadeAnimation*>(tex.get_animation(31, true));
     resize = dynamic_cast<TextureResizeAnimation*>(tex.get_animation(32, true));
@@ -52,17 +51,9 @@ void GaugeHitEffect::update(double current_ms) {
     } else if (resize->attribute <= 0.80) {
         color = ray::YELLOW;
     } else if (resize->attribute <= 0.90) {
-        if (is_2p) {
-            color = ray::GREEN;
-        } else {
-            color = ray::ORANGE;
-        }
+        color = is_2p ? ray::GREEN : ray::ORANGE;
     } else {
-        if (is_2p) {
-            color = ray::Color{84, 250, 238, 255};
-        } else {
-            color = ray::RED;
-        }
+        color = is_2p ? ray::Color{84, 250, 238, 255} : ray::RED;
     }
 
     const bool ring = (int)texture_change->attribute >= 2;
@@ -94,12 +85,8 @@ void GaugeHitEffect::draw(float y) {
                      {.x = pos_data.x, .y = y + pos_data.y + (pos_data.height * is_2p), .fade = fade_out->attribute});
 
     // Circle effect texture
-    ray::Color texture_color;
-    if (circle_fadein->is_finished) {
-        texture_color = ray::Fade(ray::WHITE, std::min(circle_fadein->attribute, fade_out->attribute));
-    } else {
-        texture_color = ray::Fade(ray::YELLOW, std::min(circle_fadein->attribute, fade_out->attribute));
-    }
+    const ray::Color base_color = circle_fadein->is_finished ? ray::WHITE : ray::YELLOW;
+    const ray::Color texture_color = ray::Fade(base_color, std::min(circle_fadein->attribute, fade_out->attribute));
     tex.draw_texture(t_circle, {.color = texture_color, .y = y, .index = is_2p});
 }
 

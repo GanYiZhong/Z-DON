@@ -9,10 +9,7 @@ Gauge::Gauge(int total_notes, int difficulty, int level, PlayerNum player_num) :
                    : this->difficulty <= (int)Difficulty::HARD ? 7000
                                                                : 8000;
     const GaugeTable& table_row = table[this->difficulty][std::clamp(level - 1, 0, 9)];
-    const double denom = std::max(1, total_notes) * (double)table_row.soul_percent;
-    good_points = (denom > 0.0) ? 1'000'000.0 / denom : 0;
-    ok_points = good_points * table_row.ok_multiplier;
-    bad_points = good_points * table_row.bad_multiplier;
+    set_points_from_row(total_notes, table_row);
     points = 0;
 
     if (this->difficulty == (int)Difficulty::EASY) {
@@ -59,11 +56,15 @@ Gauge Gauge::dan(const std::vector<DanSongEntry>& songs, int total_notes, Player
     }
     row.soul_percent = songs.size() / inv_sum;
 
-    const double denom = std::max(1, total_notes) * row.soul_percent;
-    g.good_points = (denom > 0.0) ? 1'000'000.0 / denom : 0;
-    g.ok_points = g.good_points * row.ok_multiplier;
-    g.bad_points = g.good_points * row.bad_multiplier;
+    g.set_points_from_row(total_notes, row);
     return g;
+}
+
+void Gauge::set_points_from_row(int total_notes, const GaugeTable& row) {
+    const double denom = std::max(1, total_notes) * (double)row.soul_percent;
+    good_points = (denom > 0.0) ? 1'000'000.0 / denom : 0;
+    ok_points = good_points * row.ok_multiplier;
+    bad_points = good_points * row.bad_multiplier;
 }
 
 void Gauge::apply_points_clamped(double delta) {
@@ -77,18 +78,17 @@ void Gauge::apply_points_clamped(double delta) {
     }
 }
 
+void Gauge::add_points(double delta) {
+    gauge_update_anim->start();
+    apply_points_clamped(delta);
+}
+
 void Gauge::add_good() {
-    if (gauge_update_anim) {
-        gauge_update_anim->start();
-    }
-    apply_points_clamped(good_points);
+    add_points(good_points);
 }
 
 void Gauge::add_ok() {
-    if (gauge_update_anim) {
-        gauge_update_anim->start();
-    }
-    apply_points_clamped(ok_points);
+    add_points(ok_points);
 }
 
 void Gauge::add_bad() {
@@ -117,12 +117,8 @@ void Gauge::update(double current_ms) {
         rainbow_start_ms = current_ms;
     }
 
-    if (gauge_update_anim) {
-        gauge_update_anim->update(current_ms);
-    }
-    if (tamashii_fire_change) {
-        tamashii_fire_change->update(current_ms);
-    }
+    gauge_update_anim->update(current_ms);
+    tamashii_fire_change->update(current_ms);
 
     if (rainbow_fade_in.has_value()) {
         rainbow_fade_in.value()->update(current_ms);
@@ -139,10 +135,10 @@ void Gauge::draw(float y) {
             spdlog::error("Gauge: game/gauge.lua failed to load, gauge will not be drawn");
         }
     }
-    const bool anim_active = gauge_update_anim && gauge_update_anim->is_started && !gauge_update_anim->is_finished;
-    const float anim_alpha = gauge_update_anim ? (float)gauge_update_anim->attribute : 0.0f;
+    const bool anim_active = gauge_update_anim->is_started && !gauge_update_anim->is_finished;
+    const float anim_alpha = (float)gauge_update_anim->attribute;
     const float rainbow_fade = rainbow_fade_in.has_value() ? (float)rainbow_fade_in.value()->attribute : -1.0f;
-    const int fire_frame = tamashii_fire_change ? (int)tamashii_fire_change->attribute : 0;
+    const int fire_frame = (int)tamashii_fire_change->attribute;
     call(fn_draw, "Gauge:draw", y, points, previous_points, max_points, clear_points, get_is_clear(), get_is_rainbow(),
          anim_active, anim_alpha, rainbow_fade, rainbow_frac, fire_frame);
 }
