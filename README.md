@@ -1,3 +1,7 @@
+# Z-DON
+
+Z-DON is an AI-developed fork of [YataiDON](https://github.com/Yonokid/YataiDON) focused on aggressive performance work and new features. It tracks upstream and stays compatible with YataiDON skins and save data. Licensed under GPL-3.0 like the original.
+
 <img src="/docs/logo.png">
 
 A TJA player and Taiko simulator written in C++ using the [raylib](https://www.raylib.com/) library.
