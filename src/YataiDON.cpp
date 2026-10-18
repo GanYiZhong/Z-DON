@@ -349,10 +349,38 @@ void reload_skin_screens() {
 static bool dump_screen_tick();         // dev hook, defined below
 static bool g_dump_screen_done = false; // the dump hook's last shot is taken: leave the main loop
 
+// Dev hook: YATAIDON_FRAME_STATS=1 logs, every 2 s, the CPU time each frame spent before present
+// (input, update, draw submission; not the vsync / frame-limiter wait).
+static void frame_stats_add(std::chrono::steady_clock::time_point start) {
+    static const bool on = [] {
+        const char* v = std::getenv("YATAIDON_FRAME_STATS");
+        return v && *v == '1';
+    }();
+    if (!on) {
+        return;
+    }
+    static std::vector<double> work;
+    static auto window = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    work.push_back(std::chrono::duration<double, std::milli>(now - start).count());
+    if (now - window >= std::chrono::seconds(2)) {
+        std::sort(work.begin(), work.end());
+        double sum = 0;
+        for (double v : work) {
+            sum += v;
+        }
+        spdlog::info("[frame] {} frames, work ms: avg {:.3f} p50 {:.3f} p99 {:.3f} max {:.3f}", work.size(),
+                     sum / work.size(), work[work.size() / 2], work[work.size() * 99 / 100], work.back());
+        work.clear();
+        window = now;
+    }
+}
+
 static void run_frame() {
     PROFILE_FRAME();
     PROFILE_SCOPE();
     LoopState& L = *g_loop;
+    const auto frame_start = std::chrono::steady_clock::now();
 
     g_frame_ms = get_current_ms();
 
@@ -542,6 +570,7 @@ static void run_frame() {
     ray::EndBlendMode();
     ray::EndMode2D();
     const bool dump_done = dump_screen_tick();
+    frame_stats_add(frame_start);
     {
         PROFILE_SCOPE_N("present");
         ray::EndDrawing();
