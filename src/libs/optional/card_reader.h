@@ -76,6 +76,7 @@ namespace card_reader {
         bool send_command(uint8_t cmd, const std::vector<uint8_t>& payload = {}, bool expect_response = true);
         bool send_command_with_payload(uint8_t cmd, const std::vector<uint8_t>& payload,
                                        std::vector<uint8_t>* out_payload, bool expect_response = true);
+        std::vector<uint8_t> build_frame(uint8_t cmd, const std::vector<uint8_t>& payload); // advances sequence_
         std::vector<uint8_t> encode_packet(const std::vector<uint8_t>& payload);
         std::optional<std::vector<uint8_t>> decode_packet(const std::vector<uint8_t>& data);
 
@@ -113,17 +114,13 @@ namespace card_reader {
         static constexpr uint8_t CMD_LED_SET_COLOR = 0x81;
         static constexpr uint8_t CMD_LED_RESET = 0xF5;
         static constexpr uint8_t CMD_MIFARE_READ_BLOCK = 0x52;
-        static constexpr uint8_t CMD_MIFARE_SET_KEY_SEGA = 0x54;
         static constexpr uint8_t CMD_MIFARE_SELECT = 0x43;
         static constexpr uint8_t CMD_MIFARE_AUTHENTICATE = 0x55;
 
         // Polling modes
-        static constexpr uint8_t POLL_MODE_MIFARE = 0x01;
-        static constexpr uint8_t POLL_MODE_FELICA = 0x02;
         static constexpr uint8_t POLL_MODE_BOTH = 0x03;
 
         // Card types from reader
-        static constexpr uint8_t CARD_TYPE_NONE = 0x00;
         static constexpr uint8_t CARD_TYPE_MIFARE = 0x10;
         static constexpr uint8_t CARD_TYPE_FELICA = 0x20;
     };

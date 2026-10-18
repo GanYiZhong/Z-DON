@@ -83,8 +83,8 @@ struct CameraEvent {
 };
 
 struct TimelineObject {
-    double start_time;
-    double end_time;
+    double start_time = 0.0;
+    double end_time = 0.0; // was left uninitialized by events without a duration (e.g. GOGOSTART)
 
     std::optional<double> bpm;
     std::optional<std::string> branch_params;
@@ -153,15 +153,6 @@ namespace std {
         size_t operator()(const Note& note) const { return note.hash(); }
     };
 } // namespace std
-
-struct CompareNotes {
-    bool operator()(const Note& a, const Note& b) const { return a < b; }
-
-    template<typename T, typename U>
-    bool operator()(const T& a, const U& b) const {
-        return a.hit_ms < b.hit_ms;
-    }
-};
 
 struct TempoPoint {
     double ms;
@@ -373,22 +364,15 @@ private:
     std::deque<NoteList> branch_n;
     static const std::regex complex_number_regex;
 
-    std::vector<std::string> read_file_lines(const std::filesystem::path& path, const std::string& encoding);
-
     static std::string to_lower(const std::string& str);
     static std::string split_after_colon(const std::string& str);
-    static std::string join_after_colon(const std::string& str);
     static void replace_all(std::string& str, const std::string& from, const std::string& to);
     static std::string trim(const std::string& str);
     static std::vector<int> parse_balloon_data(const std::string& data);
 
     std::vector<std::vector<std::string>> data_to_notes(int diff);
 
-    Note* get_note_ptr(Note& variant);
     void add_tempo_point(double bpm);
-
-    void set_branch_params(std::vector<TimelineObject>& bar_list, std::string branch_params,
-                           std::optional<Note> section_bar);
 
     std::map<std::string, CommandHandler> build_command_registry();
     void register_extended_commands(std::map<std::string, CommandHandler>& registry);
@@ -421,8 +405,8 @@ private:
 
 double get_ms_per_measure(double bpm_val, double time_sig);
 int calculate_base_score(const NoteList& notes);
-std::string test_encodings(const std::filesystem::path& file_path);
-std::string strip_comments(const std::string& code);
+// MD5 over the note hashes, for parsers whose notes come from a single list
+std::string hash_notes(const std::deque<Note>& notes);
 
 Interval get_note_interval_type(double interval_ms, double bpm, double time_sig = 4.0);
 std::vector<std::pair<int, int>> find_streams(const std::deque<Note>& modded_notes, Interval interval_type);

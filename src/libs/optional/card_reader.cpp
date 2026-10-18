@@ -11,17 +11,25 @@
 #include <termios.h>
 #include <unistd.h>
 #endif
-#include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <iomanip>
 #include <spdlog/spdlog.h>
-#include <sstream>
 
 namespace card_reader {
 
     static void sleep_us(long us) {
         std::this_thread::sleep_for(std::chrono::microseconds(us));
+    }
+
+    static std::string to_hex_upper(const uint8_t* p, size_t n) {
+        std::string hex;
+        hex.reserve(n * 2);
+        for (size_t i = 0; i < n; i++) {
+            char buf[3];
+            snprintf(buf, sizeof(buf), "%02X", p[i]);
+            hex += buf;
+        }
+        return hex;
     }
 
     CardReader::CardReader() = default;
@@ -314,12 +322,8 @@ namespace card_reader {
             }
         }
 
-        std::vector<uint8_t> full_packet;
-        full_packet.push_back(SYNC_BYTE);
-        full_packet.push_back(packet_len);
-        full_packet.insert(full_packet.end(), rest.begin(), rest.end());
-
-        return full_packet;
+        rest.insert(rest.begin(), {SYNC_BYTE, packet_len});
+        return rest;
     }
 
     std::vector<uint8_t> CardReader::encode_packet(const std::vector<uint8_t>& payload) {
@@ -327,22 +331,21 @@ namespace card_reader {
         out.reserve(payload.size() + 4);
         out.push_back(SYNC_BYTE);
 
-        uint8_t checksum = 0;
-        for (uint8_t byte : payload) {
+        auto push_escaped = [&out](uint8_t byte) {
             if (byte == SYNC_BYTE || byte == ESCAPE_BYTE) {
                 out.push_back(ESCAPE_BYTE);
                 out.push_back(byte - 1);
             } else {
                 out.push_back(byte);
             }
+        };
+
+        uint8_t checksum = 0;
+        for (uint8_t byte : payload) {
+            push_escaped(byte);
             checksum += byte;
         }
-        if (checksum == SYNC_BYTE || checksum == ESCAPE_BYTE) {
-            out.push_back(ESCAPE_BYTE);
-            out.push_back(checksum - 1);
-        } else {
-            out.push_back(checksum);
-        }
+        push_escaped(checksum);
         return out;
     }
 
@@ -389,72 +392,25 @@ namespace card_reader {
     }
 
     bool CardReader::send_command(uint8_t cmd, const std::vector<uint8_t>& payload, bool expect_response) {
-        std::lock_guard<std::recursive_mutex> lk(io_mutex_);
-        if (serial_fd_ < 0) {
-            return false;
-        }
+        return send_command_with_payload(cmd, payload, nullptr, expect_response);
+    }
 
+    std::vector<uint8_t> CardReader::build_frame(uint8_t cmd, const std::vector<uint8_t>& payload) {
         uint8_t payload_len = static_cast<uint8_t>(payload.size());
         uint8_t packet_len = 5 + payload_len;
-
-        uint8_t expected_sequence = sequence_;
 
         std::vector<uint8_t> frame;
         frame.reserve(packet_len);
         frame.push_back(packet_len);
         frame.push_back(0);
-        frame.push_back(expected_sequence);
+        frame.push_back(sequence_);
         frame.push_back(cmd);
         frame.push_back(payload_len);
         frame.insert(frame.end(), payload.begin(), payload.end());
 
         sequence_ = (sequence_ + 1) & 0xFF;
 
-        std::vector<uint8_t> encoded = encode_packet(frame);
-
-        if (!serial_write(encoded)) {
-            return false;
-        }
-
-        if (!expect_response) {
-            return true;
-        }
-
-        sleep_us(50000);
-
-        for (int attempt = 0; attempt < 5; attempt++) {
-            auto raw_response = serial_read_response();
-            if (!raw_response) {
-                sleep_us(10000);
-                continue;
-            }
-
-            auto decoded = decode_packet(*raw_response);
-            if (!decoded) {
-                flush_input();
-                sleep_us(10000);
-                continue;
-            }
-
-            if (decoded->size() < 6) {
-                flush_input();
-                sleep_us(10000);
-                continue;
-            }
-
-            if ((*decoded)[2] != expected_sequence) {
-            }
-
-            uint8_t status = (*decoded)[4];
-            if (status != 0) {
-                spdlog::warn("Command 0x{:02x} returned status 0x{:02x}", cmd, status);
-            }
-
-            return true;
-        }
-
-        spdlog::error("Command 0x{:02x} failed after retries", cmd);
-        return false;
+        return encode_packet(frame);
     }
 
     bool CardReader::send_command_with_payload(uint8_t cmd, const std::vector<uint8_t>& payload,
@@ -464,23 +420,7 @@ namespace card_reader {
             return false;
         }
 
-        uint8_t payload_len = static_cast<uint8_t>(payload.size());
-        uint8_t packet_len = 5 + payload_len;
-
-        uint8_t expected_sequence = sequence_;
-
-        std::vector<uint8_t> frame;
-        frame.reserve(packet_len);
-        frame.push_back(packet_len);
-        frame.push_back(0);
-        frame.push_back(expected_sequence);
-        frame.push_back(cmd);
-        frame.push_back(payload_len);
-        frame.insert(frame.end(), payload.begin(), payload.end());
-
-        sequence_ = (sequence_ + 1) & 0xFF;
-
-        std::vector<uint8_t> encoded = encode_packet(frame);
+        std::vector<uint8_t> encoded = build_frame(cmd, payload);
 
         if (!serial_write(encoded)) {
             return false;
@@ -510,9 +450,6 @@ namespace card_reader {
                 flush_input();
                 sleep_us(10000);
                 continue;
-            }
-
-            if ((*decoded)[2] != expected_sequence) {
             }
 
             uint8_t status = (*decoded)[4];
@@ -593,22 +530,7 @@ namespace card_reader {
             return false;
         }
 
-        uint8_t expected_sequence = sequence_;
-
-        uint8_t payload_len = 0;
-        uint8_t packet_len = 5 + payload_len;
-
-        std::vector<uint8_t> frame;
-        frame.reserve(packet_len);
-        frame.push_back(packet_len);
-        frame.push_back(0);
-        frame.push_back(expected_sequence);
-        frame.push_back(CMD_POLL);
-        frame.push_back(payload_len);
-
-        sequence_ = (sequence_ + 1) & 0xFF;
-
-        std::vector<uint8_t> encoded = encode_packet(frame);
+        std::vector<uint8_t> encoded = build_frame(CMD_POLL, {});
 
         if (!serial_write(encoded)) {
             return false;
@@ -636,22 +558,15 @@ namespace card_reader {
                 continue;
             }
 
-            if ((*decoded)[2] != expected_sequence) {
-            }
-
             uint8_t status = (*decoded)[4];
             if (status != 0) {
-                if (card_info_.valid) {
-                    card_info_ = CardInfo{};
-                }
+                card_info_ = CardInfo{};
                 return false;
             }
 
             uint8_t resp_payload_len = (*decoded)[5];
             if (resp_payload_len == 0 || decoded->size() < 6 + resp_payload_len) {
-                if (card_info_.valid) {
-                    card_info_ = CardInfo{};
-                }
+                card_info_ = CardInfo{};
                 return false;
             }
 
@@ -686,9 +601,7 @@ namespace card_reader {
                 }
             }
 
-            if (card_info_.valid) {
-                card_info_ = CardInfo{};
-            }
+            card_info_ = CardInfo{};
             return false;
         }
 
@@ -703,33 +616,19 @@ namespace card_reader {
         uint32_t uid = static_cast<uint32_t>(uid_bytes[0]) | (static_cast<uint32_t>(uid_bytes[1]) << 8) |
                        (static_cast<uint32_t>(uid_bytes[2]) << 16) | (static_cast<uint32_t>(uid_bytes[3]) << 24);
 
-        std::vector<uint8_t> select_payload(4);
-        select_payload[0] = uid_bytes[0];
-        select_payload[1] = uid_bytes[1];
-        select_payload[2] = uid_bytes[2];
-        select_payload[3] = uid_bytes[3];
-
-        if (!send_command(CMD_MIFARE_SELECT, select_payload)) {
+        if (!send_command(CMD_MIFARE_SELECT, uid_bytes)) {
             return false;
         }
 
-        std::vector<uint8_t> auth_payload(5);
-        auth_payload[0] = uid_bytes[0];
-        auth_payload[1] = uid_bytes[1];
-        auth_payload[2] = uid_bytes[2];
-        auth_payload[3] = uid_bytes[3];
-        auth_payload[4] = 0x03;
+        std::vector<uint8_t> auth_payload = uid_bytes;
+        auth_payload.push_back(0x03);
 
         if (!send_command(CMD_MIFARE_AUTHENTICATE, auth_payload)) {
             return false;
         }
 
-        std::vector<uint8_t> read_payload(5);
-        read_payload[0] = uid_bytes[0];
-        read_payload[1] = uid_bytes[1];
-        read_payload[2] = uid_bytes[2];
-        read_payload[3] = uid_bytes[3];
-        read_payload[4] = 0x02;
+        std::vector<uint8_t> read_payload = uid_bytes;
+        read_payload.push_back(0x02);
 
         std::vector<uint8_t> block_data;
         if (!send_command_with_payload(CMD_MIFARE_READ_BLOCK, read_payload, &block_data)) {
@@ -742,13 +641,7 @@ namespace card_reader {
 
         std::vector<uint8_t> aime_id(block_data.begin() + 6, block_data.begin() + 16);
 
-        std::string hex;
-        hex.reserve(20);
-        for (uint8_t b : aime_id) {
-            char buf[3];
-            snprintf(buf, sizeof(buf), "%02X", b);
-            hex += buf;
-        }
+        std::string hex = to_hex_upper(aime_id.data(), aime_id.size());
 
         if (!card_info_.valid || card_info_.card_id_hex != hex) {
             spdlog::info("Card detected: Aime (MIFARE)");
@@ -763,13 +656,7 @@ namespace card_reader {
             return false;
         }
 
-        std::string hex;
-        hex.reserve(16);
-        for (int i = 0; i < 8; i++) {
-            char buf[3];
-            snprintf(buf, sizeof(buf), "%02X", idm_bytes[i]);
-            hex += buf;
-        }
+        std::string hex = to_hex_upper(idm_bytes.data(), 8);
 
         if (!card_info_.valid || card_info_.card_id_hex != hex) {
             spdlog::info("Card detected: FeliCa");

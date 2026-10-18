@@ -1,6 +1,5 @@
 #include "tja.h"
 
-#include <SDL3/SDL_stdinc.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -38,9 +37,8 @@ int calculate_base_score(const NoteList& notes) {
     double drumroll_msec = 0.0f;
 
     for (size_t i = 0; i < notes.notes.size(); i++) {
-        Note note = notes.notes[i];
-
-        Note next_note = *((i < notes.notes.size() - 1) ? &notes.notes[i + 1] : &notes.notes[notes.notes.size() - 1]);
+        const Note& note = notes.notes[i];
+        const Note& next_note = notes.notes[std::min(i + 1, notes.notes.size() - 1)];
 
         if (note.color.has_value()) { // is drumroll
             drumroll_msec += (next_note.hit_ms - note.hit_ms);
@@ -66,31 +64,6 @@ int calculate_base_score(const NoteList& notes) {
     return static_cast<int>(std::ceil(calculation)) * 10;
 }
 
-std::string test_encodings(const std::filesystem::path& file_path) {
-    std::ifstream file(file_path, std::ios::binary);
-    if (!file.is_open()) {
-        return "";
-    }
-
-    unsigned char bom[4] = {0};
-    file.read(reinterpret_cast<char*>(bom), 4);
-    file.seekg(0);
-
-    if (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF) {
-        return "utf-8-sig";
-    }
-
-    if (bom[0] == 0xFF && bom[1] == 0xFE) {
-        return "utf-16-le";
-    }
-
-    if (bom[0] == 0xFE && bom[1] == 0xFF) {
-        return "utf-16-be";
-    }
-
-    return "shift-jis";
-}
-
 inline std::filesystem::path get_proper_path(const std::string& path, const std::string& encoding,
                                              const std::filesystem::path& base_path) {
 #ifdef _WIN32
@@ -100,9 +73,8 @@ inline std::filesystem::path get_proper_path(const std::string& path, const std:
 #endif
 }
 
-// One open per chart. test_encodings + read_file_lines opened the file twice, and on Windows the
-// open is most of the cost of reading a chart's metadata. Same result as those two: the encoding
-// from the BOM, lines split like std::getline on '\n' (a UTF-8 BOM is skipped).
+// One open per chart: on Windows the open is most of the cost of reading a chart's metadata. The
+// encoding comes from the BOM, lines are split like std::getline on '\n' (a UTF-8 BOM is skipped).
 static std::vector<std::string> read_lines_once(const std::filesystem::path& path, std::string& encoding) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -174,19 +146,24 @@ TJAParser::TJAParser(const std::filesystem::path& path, int start_delay, int pla
         data.push_back(cleaned.substr(start, end - start + 1));
     }
 
-    metadata = TJAMetadata();
-    ex_data = TJAEXData();
-
     try {
         get_metadata();
     } catch (const std::exception& e) {
         spdlog::error("Failed to parse TJA metadata: " + std::string(e.what()));
     }
+}
 
-    master_notes = NoteList();
-    branch_m = std::deque<NoteList>();
-    branch_e = std::deque<NoteList>();
-    branch_n = std::deque<NoteList>();
+// An empty value gives 0; so does one that does not parse (with a warning)
+static double float_field_or_zero(const std::string& data_str, const char* name, const std::string& file) {
+    if (data_str.empty()) {
+        return 0.0;
+    }
+    try {
+        return std::stof(data_str);
+    } catch (const std::exception&) {
+        spdlog::warn("Invalid {} value '{}' in {}", name, data_str, file);
+        return 0.0;
+    }
 }
 
 void TJAParser::get_metadata() {
@@ -202,7 +179,7 @@ void TJAParser::get_metadata() {
             if (item.size() > 8 && item[8] != ':') {
                 region_code = to_lower(item.substr(8, 2));
             }
-            std::string value = join_after_colon(item);
+            std::string value = split_after_colon(item);
             if (value.rfind("++", 0) == 0) {
                 metadata.subtitle_full_display = true;
                 value = value.substr(2);
@@ -224,48 +201,18 @@ void TJAParser::get_metadata() {
             if (item.size() > 5 && item[5] != ':') {
                 region_code = to_lower(item.substr(5, 2));
             }
-            metadata.title[region_code] = join_after_colon(item);
+            metadata.title[region_code] = split_after_colon(item);
         } else if (item.find("BPM") == 0) {
-            std::string data_str = split_after_colon(item);
-            if (data_str.empty()) {
-                metadata.bpm = 0.0f;
-            } else {
-                try {
-                    metadata.bpm = std::stof(data_str);
-                } catch (const std::exception&) {
-                    spdlog::warn("Invalid BPM value '{}' in {}", data_str, file_path.string());
-                    metadata.bpm = 0.0f;
-                }
-            }
+            metadata.bpm = float_field_or_zero(split_after_colon(item), "BPM", file_path.string());
         } else if (item.find("WAVE") == 0) {
             std::string data_str = trim(split_after_colon(item));
 
             fs::path wave_path = get_proper_path(data_str, encoding, file_path.parent_path());
             metadata.wave = wave_path;
         } else if (item.find("OFFSET") == 0) {
-            std::string data_str = split_after_colon(item);
-            if (data_str.empty()) {
-                metadata.offset = 0.0f;
-            } else {
-                try {
-                    metadata.offset = std::stof(data_str);
-                } catch (const std::exception&) {
-                    spdlog::warn("Invalid OFFSET value '{}' in {}", data_str, file_path.string());
-                    metadata.offset = 0.0f;
-                }
-            }
+            metadata.offset = float_field_or_zero(split_after_colon(item), "OFFSET", file_path.string());
         } else if (item.find("DEMOSTART") == 0) {
-            std::string data_str = split_after_colon(item);
-            if (data_str.empty()) {
-                metadata.demostart = 0.0f;
-            } else {
-                try {
-                    metadata.demostart = std::stof(data_str);
-                } catch (const std::exception&) {
-                    spdlog::warn("Invalid DEMOSTART value '{}' in {}", data_str, file_path.string());
-                    metadata.demostart = 0.0f;
-                }
-            }
+            metadata.demostart = float_field_or_zero(split_after_colon(item), "DEMOSTART", file_path.string());
         } else if (item.find("BGMOVIE") == 0) {
             std::string data_str = split_after_colon(item);
             if (data_str.empty()) {
@@ -275,17 +222,7 @@ void TJAParser::get_metadata() {
                 metadata.bgmovie = get_proper_path(trim(data_str), encoding, file_path.parent_path());
             }
         } else if (item.find("MOVIEOFFSET") == 0) {
-            std::string data_str = split_after_colon(item);
-            if (data_str.empty()) {
-                metadata.movieoffset = 0.0f;
-            } else {
-                try {
-                    metadata.movieoffset = std::stof(data_str);
-                } catch (const std::exception&) {
-                    spdlog::warn("Invalid MOVIEOFFSET value '{}' in {}", data_str, file_path.string());
-                    metadata.movieoffset = 0.0f;
-                }
-            }
+            metadata.movieoffset = float_field_or_zero(split_after_colon(item), "MOVIEOFFSET", file_path.string());
         } else if (item.find("PREIMAGE") == 0) {
             std::string data_str = split_after_colon(item);
             if (data_str.empty()) {
@@ -321,81 +258,55 @@ void TJAParser::get_metadata() {
                 metadata.course_data[current_diff] = CourseData();
             }
         } else if (current_diff != -1) {
+            CourseData& course = metadata.course_data[current_diff];
+            auto parse_balloons = [&](const char* name,
+                                      const std::string& balloon_data) -> std::optional<std::vector<int>> {
+                try {
+                    return parse_balloon_data(balloon_data);
+                } catch (const std::exception& e) {
+                    spdlog::warn("Invalid {} value '{}' in {}: {}", name, balloon_data, file_path.string(), e.what());
+                    return std::nullopt;
+                }
+            };
+
             if (item.find("LEVEL") == 0) {
-                std::string data_str = split_after_colon(item);
-                if (data_str.empty()) {
-                    metadata.course_data[current_diff].level = 0;
-                } else {
-                    try {
-                        metadata.course_data[current_diff].level = static_cast<int>(std::stof(data_str));
-                    } catch (const std::exception&) {
-                        spdlog::warn("Invalid LEVEL value '{}' in {}", data_str, file_path.string());
-                        metadata.course_data[current_diff].level = 0;
-                    }
-                }
-            } else if (item.find("BALLOONNOR") == 0) {
+                course.level =
+                    static_cast<int>(float_field_or_zero(split_after_colon(item), "LEVEL", file_path.string()));
+            } else if (item.find("BALLOONNOR") == 0 || item.find("BALLOONEXP") == 0) {
+                const char* name = item.find("BALLOONNOR") == 0 ? "BALLOONNOR" : "BALLOONEXP";
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
-                    try {
-                        auto balloons = parse_balloon_data(balloon_data);
-                        metadata.course_data[current_diff].balloon.insert(
-                            metadata.course_data[current_diff].balloon.end(), balloons.begin(), balloons.end());
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Invalid BALLOONNOR value '{}' in {}: {}", balloon_data, file_path.string(),
-                                     e.what());
-                    }
-                }
-            } else if (item.find("BALLOONEXP") == 0) {
-                std::string balloon_data = split_after_colon(item);
-                if (!balloon_data.empty()) {
-                    try {
-                        auto balloons = parse_balloon_data(balloon_data);
-                        metadata.course_data[current_diff].balloon.insert(
-                            metadata.course_data[current_diff].balloon.end(), balloons.begin(), balloons.end());
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Invalid BALLOONEXP value '{}' in {}: {}", balloon_data, file_path.string(),
-                                     e.what());
-                    }
-                }
-            } else if (item.find("BALLOONMAS") == 0) {
-                std::string balloon_data = split_after_colon(item);
-                if (!balloon_data.empty()) {
-                    try {
-                        metadata.course_data[current_diff].balloon = parse_balloon_data(balloon_data);
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Invalid BALLOONMAS value '{}' in {}: {}", balloon_data, file_path.string(),
-                                     e.what());
+                    if (auto balloons = parse_balloons(name, balloon_data)) {
+                        course.balloon.insert(course.balloon.end(), balloons->begin(), balloons->end());
                     }
                 }
             } else if (item.find("BALLOON") == 0) {
-                if (item.find(':') == std::string::npos) {
-                    metadata.course_data[current_diff].balloon.clear();
+                const bool mas = item.find("BALLOONMAS") == 0;
+                if (!mas && item.find(':') == std::string::npos) {
+                    course.balloon.clear();
                     continue;
                 }
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
-                    try {
-                        metadata.course_data[current_diff].balloon = parse_balloon_data(balloon_data);
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Invalid BALLOON value '{}' in {}: {}", balloon_data, file_path.string(),
-                                     e.what());
+                    if (auto balloons = parse_balloons(mas ? "BALLOONMAS" : "BALLOON", balloon_data)) {
+                        course.balloon = std::move(*balloons);
                     }
                 }
             } else if (item.find("SCOREINIT") == 0) {
                 std::string score_init = split_after_colon(item);
                 if (!score_init.empty()) {
                     try {
-                        metadata.course_data[current_diff].scoreinit = parse_balloon_data(score_init);
+                        course.scoreinit = parse_balloon_data(score_init);
                     } catch (const std::exception& e) {
                         spdlog::warn("Failed to parse SCOREINIT: " + std::string(e.what()));
-                        metadata.course_data[current_diff].scoreinit = {0, 0};
+                        course.scoreinit = {0, 0};
                     }
                 }
             } else if (item.find("SCOREDIFF") == 0) {
                 std::string score_diff = split_after_colon(item);
                 if (!score_diff.empty()) {
                     try {
-                        metadata.course_data[current_diff].scorediff = static_cast<int>(std::stof(score_diff));
+                        course.scorediff = static_cast<int>(std::stof(score_diff));
                     } catch (const std::exception&) {
                         spdlog::warn("Invalid SCOREDIFF value '{}' in {}", score_diff, file_path.string());
                     }
@@ -521,26 +432,6 @@ TJAParser::notes_to_position(int diff) {
     return {master_notes, branch_m, branch_e, branch_n};
 }
 
-std::vector<std::string> TJAParser::read_file_lines(const std::filesystem::path& path, const std::string& encoding) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + path.string());
-    }
-
-    if (encoding == "utf-8-sig") {
-        file.seekg(3); // skip 3-byte UTF-8 BOM
-    }
-
-    std::vector<std::string> lines;
-    std::string line;
-
-    while (std::getline(file, line)) {
-        lines.push_back(line);
-    }
-
-    return lines;
-}
-
 std::string TJAParser::to_lower(const std::string& str) {
     std::string result = str;
     std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -548,14 +439,6 @@ std::string TJAParser::to_lower(const std::string& str) {
 }
 
 std::string TJAParser::split_after_colon(const std::string& str) {
-    size_t pos = str.find(':');
-    if (pos == std::string::npos) {
-        return "";
-    }
-    return str.substr(pos + 1);
-}
-
-std::string TJAParser::join_after_colon(const std::string& str) {
     size_t pos = str.find(':');
     if (pos == std::string::npos) {
         return "";
@@ -643,41 +526,25 @@ std::vector<std::vector<std::string>> TJAParser::data_to_notes(int diff) {
             }
             // Like Taiko-san Jiro, the scroll mode only counts before #START
             bool started = note_start != -1 || p1_start != -1 || p2_start != -1;
-            if (line.find("#NMSCROLL") != std::string::npos) {
-                if (!started) {
-                    scroll_type = ScrollType::NMSCROLL;
+            for (const auto& [tag, type] : {std::pair<const char*, ScrollType>{"#NMSCROLL", ScrollType::NMSCROLL},
+                                            {"#BMSCROLL", ScrollType::BMSCROLL},
+                                            {"#HBSCROLL", ScrollType::HBSCROLL}}) {
+                if (line.find(tag) != std::string::npos) {
+                    if (!started) {
+                        scroll_type = type;
+                    }
+                    break;
                 }
-                continue;
-            } else if (line.find("#BMSCROLL") != std::string::npos) {
-                if (!started) {
-                    scroll_type = ScrollType::BMSCROLL;
-                }
-                continue;
-            } else if (line.find("#HBSCROLL") != std::string::npos) {
-                if (!started) {
-                    scroll_type = ScrollType::HBSCROLL;
-                }
-                continue;
             }
         }
     }
 
-    if (note_start != -1) {
-        if (player_num == 1 && p1_start != -1) {
-            note_start = p1_start;
-        } else if (player_num == 2 && p2_start != -1) {
-            note_start = p2_start;
-        }
-    } else {
-        if (player_num == 1 && p1_start != -1) {
-            note_start = p1_start;
-        } else if (player_num == 2 && p2_start != -1) {
-            note_start = p2_start;
-        } else if (player_num == 0 && p1_start != -1) {
-            note_start = p1_start;
-        } else if (player_num == 0 && p2_start != -1) {
-            note_start = p2_start;
-        }
+    if (player_num == 1 && p1_start != -1) {
+        note_start = p1_start;
+    } else if (player_num == 2 && p2_start != -1) {
+        note_start = p2_start;
+    } else if (note_start == -1 && player_num == 0) {
+        note_start = p1_start != -1 ? p1_start : p2_start;
     }
 
     if (note_start != -1 && note_end == -1) {
@@ -906,16 +773,6 @@ void TJAParser::handle_MEASURE(const std::string& value, ParserState& state) {
     }
 }
 
-double safe_stof(const std::string& str) {
-    try {
-        return std::stof(str);
-    } catch (const std::invalid_argument&) {
-        return std::numeric_limits<double>::max();
-    } catch (const std::out_of_range&) {
-        return std::numeric_limits<double>::max();
-    }
-}
-
 void TJAParser::handle_SCROLL(const std::string& value, ParserState& state) {
     if (state.scroll_type == ScrollType::BMSCROLL) {
         return;
@@ -1028,18 +885,19 @@ void TJAParser::add_tempo_point(double bpm) {
     points.push_back({current_ms, master_notes.tempo_map.beat_at(current_ms), bpm});
 }
 
-void TJAParser::handle_GOGOSTART(const std::string& value, ParserState& state) {
+static void push_gogo(ParserState& state, double ms, bool on) {
     TimelineObject timeline_obj;
-    timeline_obj.start_time = current_ms;
-    timeline_obj.gogo_time = true;
+    timeline_obj.start_time = ms;
+    timeline_obj.gogo_time = on;
     state.curr_timeline->push_back(timeline_obj);
 }
 
+void TJAParser::handle_GOGOSTART(const std::string& value, ParserState& state) {
+    push_gogo(state, current_ms, true);
+}
+
 void TJAParser::handle_GOGOEND(const std::string& value, ParserState& state) {
-    TimelineObject timeline_obj;
-    timeline_obj.start_time = current_ms;
-    timeline_obj.gogo_time = false;
-    state.curr_timeline->push_back(timeline_obj);
+    push_gogo(state, current_ms, false);
 }
 
 void TJAParser::handle_DELAY(const std::string& value, ParserState& state) {
@@ -1082,8 +940,6 @@ void TJAParser::handle_BRANCHSTART(const std::string& value, ParserState& state)
     state.branch_balloon_index = state.balloon_index;
     state.branch_balloon_cursor = state.balloon_cursor;
 
-    std::string branch_params = value;
-
     TimelineObject branch_obj;
     double two_measures = get_ms_per_measure(state.bpm, state.time_signature) * 2.0;
     if (state.section_bar.has_value()) {
@@ -1092,17 +948,13 @@ void TJAParser::handle_BRANCHSTART(const std::string& value, ParserState& state)
     } else {
         branch_obj.start_time = this->current_ms - two_measures;
     }
-    branch_obj.branch_params = branch_params;
+    branch_obj.branch_params = value;
     state.curr_timeline->push_back(branch_obj);
 
-    if (!this->branch_m.empty()) {
-        this->branch_m.back().timeline.push_back(branch_obj);
-    }
-    if (!this->branch_e.empty()) {
-        this->branch_e.back().timeline.push_back(branch_obj);
-    }
-    if (!this->branch_n.empty()) {
-        this->branch_n.back().timeline.push_back(branch_obj);
+    for (auto* branch : {&branch_m, &branch_e, &branch_n}) {
+        if (!branch->empty()) {
+            branch->back().timeline.push_back(branch_obj);
+        }
     }
 }
 
@@ -1234,11 +1086,12 @@ void TJAParser::handle_JPOSSCROLL(const std::string& part, ParserState& state) {
     state.judge_pos_y += delta_y;
 }
 
-void TJAParser::handle_N(const std::string& value, ParserState& state) {
-    branch_n.push_back(NoteList());
-    state.curr_note_list = &branch_n.back().notes;
-    state.curr_timeline = &branch_n.back().timeline;
-    this->current_ms = state.start_branch_ms;
+// Starts a branch variant: a new list that begins where the branch began
+static void enter_branch(std::deque<NoteList>& branch, ParserState& state, double& current_ms) {
+    branch.push_back(NoteList());
+    state.curr_note_list = &branch.back().notes;
+    state.curr_timeline = &branch.back().timeline;
+    current_ms = state.start_branch_ms;
     state.bpm = state.start_branch_bpm;
     state.time_signature = state.start_branch_time_sig;
     state.scroll_x_modifier = state.start_branch_x_scroll;
@@ -1247,36 +1100,18 @@ void TJAParser::handle_N(const std::string& value, ParserState& state) {
     state.balloon_index = state.branch_balloon_index;
     state.balloon_cursor = state.branch_balloon_cursor;
     state.is_branching = true;
+}
+
+void TJAParser::handle_N(const std::string& value, ParserState& state) {
+    enter_branch(branch_n, state, current_ms);
 }
 
 void TJAParser::handle_E(const std::string& value, ParserState& state) {
-    branch_e.push_back(NoteList());
-    state.curr_note_list = &branch_e.back().notes;
-    state.curr_timeline = &branch_e.back().timeline;
-    this->current_ms = state.start_branch_ms;
-    state.bpm = state.start_branch_bpm;
-    state.time_signature = state.start_branch_time_sig;
-    state.scroll_x_modifier = state.start_branch_x_scroll;
-    state.scroll_y_modifier = state.start_branch_y_scroll;
-    state.barline_display = state.start_branch_barline;
-    state.balloon_index = state.branch_balloon_index;
-    state.balloon_cursor = state.branch_balloon_cursor;
-    state.is_branching = true;
+    enter_branch(branch_e, state, current_ms);
 }
 
 void TJAParser::handle_M(const std::string& value, ParserState& state) {
-    branch_m.push_back(NoteList());
-    state.curr_note_list = &branch_m.back().notes;
-    state.curr_timeline = &branch_m.back().timeline;
-    this->current_ms = state.start_branch_ms;
-    state.bpm = state.start_branch_bpm;
-    state.time_signature = state.start_branch_time_sig;
-    state.scroll_x_modifier = state.start_branch_x_scroll;
-    state.scroll_y_modifier = state.start_branch_y_scroll;
-    state.barline_display = state.start_branch_barline;
-    state.balloon_index = state.branch_balloon_index;
-    state.balloon_cursor = state.branch_balloon_cursor;
-    state.is_branching = true;
+    enter_branch(branch_m, state, current_ms);
 }
 
 void TJAParser::handle_SECTION(const std::string& value, ParserState& state) {
@@ -1374,12 +1209,10 @@ Note TJAParser::add_note(char item, ParserState& state) {
 
     if (note.type == NoteType::ROLL_HEAD || note.type == NoteType::ROLL_HEAD_L) {
         note.color = 255;
-        return note;
     } else if (note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) {
         state.balloon_index++;
         note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
         state.balloon_cursor++;
-        return note;
     }
 
     return note;
@@ -1400,17 +1233,25 @@ void modifier_display(NoteList& notes) {
     }
 }
 
-void modifier_inverse(NoteList& notes) {
-    std::map<NoteType, NoteType> type_mapping = {{NoteType::DON, NoteType::KAT},
-                                                 {NoteType::KAT, NoteType::DON},
-                                                 {NoteType::DON_L, NoteType::KAT_L},
-                                                 {NoteType::KAT_L, NoteType::DON_L}};
+// Swaps don and kat (small and big alike); every other type stays
+static NoteType flip_don_kat(NoteType type) {
+    switch (type) {
+    case NoteType::DON:
+        return NoteType::KAT;
+    case NoteType::KAT:
+        return NoteType::DON;
+    case NoteType::DON_L:
+        return NoteType::KAT_L;
+    case NoteType::KAT_L:
+        return NoteType::DON_L;
+    default:
+        return type;
+    }
+}
 
+void modifier_inverse(NoteList& notes) {
     for (auto& note : notes.notes) {
-        auto it = type_mapping.find(note.type);
-        if (it != type_mapping.end()) {
-            note.type = it->second;
-        }
+        note.type = flip_don_kat(note.type);
     }
 }
 
@@ -1433,16 +1274,8 @@ void modifier_random(NoteList& notes, int value) {
 
     std::vector<int> selected_notes(indices.begin(), indices.begin() + percentage);
 
-    std::map<NoteType, NoteType> type_mapping = {{NoteType::DON, NoteType::KAT},
-                                                 {NoteType::KAT, NoteType::DON},
-                                                 {NoteType::DON_L, NoteType::KAT_L},
-                                                 {NoteType::KAT_L, NoteType::DON_L}};
-
     for (int i : selected_notes) {
-        auto it = type_mapping.find(notes.notes[i].type);
-        if (it != type_mapping.end()) {
-            notes.notes[i].type = it->second;
-        }
+        notes.notes[i].type = flip_don_kat(notes.notes[i].type);
     }
 }
 
@@ -1542,9 +1375,13 @@ std::vector<std::pair<int, int>> find_streams(const std::deque<Note>& modded_not
         return streams;
     }
 
+    auto is_roll_or_balloon = [](NoteType t) {
+        return t == NoteType::ROLL_HEAD || t == NoteType::ROLL_HEAD_L || t == NoteType::BALLOON_HEAD ||
+               t == NoteType::KUSUDAMA;
+    };
+
     while (i < modded_notes.size() - 1) {
-        if (modded_notes[i].type == NoteType::ROLL_HEAD || modded_notes[i].type == NoteType::ROLL_HEAD_L ||
-            modded_notes[i].type == NoteType::BALLOON_HEAD || modded_notes[i].type == NoteType::KUSUDAMA) {
+        if (is_roll_or_balloon(modded_notes[i].type)) {
             i++;
             continue;
         }
@@ -1553,8 +1390,7 @@ std::vector<std::pair<int, int>> find_streams(const std::deque<Note>& modded_not
         int stream_length = 1;
 
         while (i < modded_notes.size() - 1) {
-            if (modded_notes[i + 1].type == NoteType::ROLL_HEAD || modded_notes[i + 1].type == NoteType::ROLL_HEAD_L ||
-                modded_notes[i + 1].type == NoteType::BALLOON_HEAD || modded_notes[i + 1].type == NoteType::KUSUDAMA) {
+            if (is_roll_or_balloon(modded_notes[i + 1].type)) {
                 break;
             }
 
@@ -1579,39 +1415,47 @@ std::vector<std::pair<int, int>> find_streams(const std::deque<Note>& modded_not
     return streams;
 }
 
-std::string TJAParser::get_song_hash() {
+std::string hash_notes(const std::deque<Note>& notes) {
     std::vector<unsigned char> buffer;
+    for (const Note& n : notes) {
+        auto h = n.hash();
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&h);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(h));
+    }
+    return md5_hexdigest(buffer);
+}
+
+static void absorb_notes_into(std::vector<unsigned char>& buffer, const NoteList& note_list) {
     auto absorb = [&](const void* data, size_t size) {
         const unsigned char* bytes = static_cast<const unsigned char*>(data);
         buffer.insert(buffer.end(), bytes, bytes + size);
     };
+    for (const Note& note : note_list.notes) {
+        absorb(&note.bpm, sizeof(note.bpm));
+        absorb(&note.hit_ms, sizeof(note.hit_ms));
+        absorb(&note.scroll_x, sizeof(note.scroll_x));
+        absorb(&note.scroll_y, sizeof(note.scroll_y));
+        int t = static_cast<int>(note.type);
+        absorb(&t, sizeof(t));
+    }
+}
 
-    for (const auto& [course, course_data] : metadata.course_data) {
-        {
-            auto [notes, branch_m, branch_e, branch_n] = notes_to_position(course);
-
-            auto absorb_notes = [&](const NoteList& note_list) {
-                for (const Note& note : note_list.notes) {
-                    absorb(&note.bpm, sizeof(note.bpm));
-                    absorb(&note.hit_ms, sizeof(note.hit_ms));
-                    absorb(&note.scroll_x, sizeof(note.scroll_x));
-                    absorb(&note.scroll_y, sizeof(note.scroll_y));
-                    int t = static_cast<int>(note.type);
-                    absorb(&t, sizeof(t));
-                }
-            };
-
-            absorb_notes(notes);
-            for (const NoteList& nl : branch_m) {
-                absorb_notes(nl);
-            }
-            for (const NoteList& nl : branch_e) {
-                absorb_notes(nl);
-            }
-            for (const NoteList& nl : branch_n) {
-                absorb_notes(nl);
-            }
+static void absorb_all_into(std::vector<unsigned char>& buffer, const NoteList& notes,
+                            const std::deque<NoteList>& branch_m, const std::deque<NoteList>& branch_e,
+                            const std::deque<NoteList>& branch_n) {
+    absorb_notes_into(buffer, notes);
+    for (const auto* branches : {&branch_m, &branch_e, &branch_n}) {
+        for (const NoteList& nl : *branches) {
+            absorb_notes_into(buffer, nl);
         }
+    }
+}
+
+std::string TJAParser::get_song_hash() {
+    std::vector<unsigned char> buffer;
+    for (const auto& [course, course_data] : metadata.course_data) {
+        auto [notes, branch_m, branch_e, branch_n] = notes_to_position(course);
+        absorb_all_into(buffer, notes, branch_m, branch_e, branch_n);
     }
     return md5_hexdigest(buffer);
 }
@@ -1634,31 +1478,6 @@ std::string TJAParser::get_diff_hash(int difficulty) {
     }
 
     std::vector<unsigned char> buffer;
-    auto absorb = [&](const void* data, size_t size) {
-        const unsigned char* bytes = static_cast<const unsigned char*>(data);
-        buffer.insert(buffer.end(), bytes, bytes + size);
-    };
-
-    auto absorb_notes = [&](const NoteList& note_list) {
-        for (const Note& note : note_list.notes) {
-            absorb(&note.bpm, sizeof(note.bpm));
-            absorb(&note.hit_ms, sizeof(note.hit_ms));
-            absorb(&note.scroll_x, sizeof(note.scroll_x));
-            absorb(&note.scroll_y, sizeof(note.scroll_y));
-            int t = static_cast<int>(note.type);
-            absorb(&t, sizeof(t));
-        }
-    };
-
-    absorb_notes(notes);
-    for (const NoteList& nl : branch_m) {
-        absorb_notes(nl);
-    }
-    for (const NoteList& nl : branch_e) {
-        absorb_notes(nl);
-    }
-    for (const NoteList& nl : branch_n) {
-        absorb_notes(nl);
-    }
+    absorb_all_into(buffer, notes, branch_m, branch_e, branch_n);
     return md5_hexdigest(buffer);
 }

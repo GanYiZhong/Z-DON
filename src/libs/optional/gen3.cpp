@@ -6,6 +6,7 @@
 #include <fstream>
 #include <mutex>
 #include <spdlog/spdlog.h>
+#include <string_view>
 
 #include "../../objects/enums.h"
 
@@ -231,6 +232,17 @@ namespace gen3 {
             by_id[e.id] = &e;
         }
 
+        // Stars and chart flag of the record's difficulty slot `src`, stored as `dst` in the entry
+        auto apply = [&](SongEntry& e, int dst, int src, size_t base) {
+            int32_t stars = be32(base + (3 + src * 32 + 1) * 4);
+            if (stars > 0 && stars <= 10) {
+                e.stars[dst] = (int)stars;
+            }
+            if (be32(base + (3 + src * 32) * 4) >= 0) {
+                e.has_chart[dst] = true;
+            }
+        };
+
         for (int32_t r = 0; r < count; r++) {
             size_t base = 4 + (size_t)r * RECORD_SIZE;
             std::string id = pool_string(be32(base));
@@ -240,13 +252,7 @@ namespace gen3 {
                 if (it == by_id.end()) {
                     continue;
                 }
-                int32_t stars = be32(base + (3 + 3 * 32 + 1) * 4);
-                if (stars > 0 && stars <= 10) {
-                    it->second->stars[4] = (int)stars;
-                }
-                if (be32(base + (3 + 3 * 32) * 4) >= 0) {
-                    it->second->has_chart[4] = true;
-                }
+                apply(*it->second, 4, 3, base);
                 continue;
             }
 
@@ -256,13 +262,7 @@ namespace gen3 {
             }
             it->second->charts_known = true;
             for (int d = 0; d < 5; d++) {
-                int32_t stars = be32(base + (3 + d * 32 + 1) * 4);
-                if (stars > 0 && stars <= 10) {
-                    it->second->stars[d] = (int)stars;
-                }
-                if (be32(base + (3 + d * 32) * 4) >= 0) {
-                    it->second->has_chart[d] = true;
-                }
+                apply(*it->second, d, d, base);
             }
         }
     }
@@ -342,32 +342,21 @@ namespace gen3 {
     }
 
     int genre_index_for(const std::string& genre) {
-        if (genre == "J-POP") {
-            return (int)GenreIndex::JPOP;
-        }
-        if (genre == "アニメ") {
-            return (int)GenreIndex::ANIME;
-        }
-        if (genre == "ボーカロイド") {
-            return (int)GenreIndex::VOCALOID;
-        }
-        if (genre == "童謡") {
-            return (int)GenreIndex::CHILDREN;
-        }
-        if (genre == "バラエティ") {
-            return (int)GenreIndex::VARIETY;
-        }
-        if (genre == "メドレー") {
-            return (int)GenreIndex::VARIETY;
-        }
-        if (genre == "クラシック") {
-            return (int)GenreIndex::CLASSICAL;
-        }
-        if (genre == "ゲームミュージック") {
-            return (int)GenreIndex::GAME;
-        }
-        if (genre == "ナムコオリジナル") {
-            return (int)GenreIndex::NAMCO;
+        static const std::pair<std::string_view, GenreIndex> TABLE[] = {
+            {"J-POP", GenreIndex::JPOP},
+            {"アニメ", GenreIndex::ANIME},
+            {"ボーカロイド", GenreIndex::VOCALOID},
+            {"童謡", GenreIndex::CHILDREN},
+            {"バラエティ", GenreIndex::VARIETY},
+            {"メドレー", GenreIndex::VARIETY},
+            {"クラシック", GenreIndex::CLASSICAL},
+            {"ゲームミュージック", GenreIndex::GAME},
+            {"ナムコオリジナル", GenreIndex::NAMCO},
+        };
+        for (const auto& [name, index] : TABLE) {
+            if (genre == name) {
+                return (int)index;
+            }
         }
         return (int)GenreIndex::DEFAULT;
     }

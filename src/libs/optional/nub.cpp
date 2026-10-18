@@ -64,16 +64,31 @@ namespace gen3 {
             return target;
         }
 
+        // Planar samples (one array per channel) appended interleaved, each through conv
+        template<class T, class Conv>
+        void append_planar(const AVFrame* frame, int channels, std::vector<float>& out, Conv conv) {
+            for (int s = 0; s < frame->nb_samples; s++) {
+                for (int c = 0; c < channels; c++) {
+                    out.push_back(conv(reinterpret_cast<const T*>(frame->data[c])[s]));
+                }
+            }
+        }
+
+        // Packed (already interleaved) samples appended, each through conv
+        template<class T, class Conv>
+        void append_packed(const AVFrame* frame, int channels, std::vector<float>& out, Conv conv) {
+            const T* p = reinterpret_cast<const T*>(frame->data[0]);
+            for (int i = 0; i < frame->nb_samples * channels; i++) {
+                out.push_back(conv(p[i]));
+            }
+        }
+
         // One decoded frame's samples appended as interleaved floats, whatever
         // packing the codec used.
         bool append_samples(const AVFrame* frame, int channels, std::vector<float>& out) {
             switch (frame->format) {
             case AV_SAMPLE_FMT_FLTP:
-                for (int s = 0; s < frame->nb_samples; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        out.push_back(reinterpret_cast<const float*>(frame->data[c])[s]);
-                    }
-                }
+                append_planar<float>(frame, channels, out, [](float v) { return v; });
                 return true;
             case AV_SAMPLE_FMT_FLT: {
                 const float* p = reinterpret_cast<const float*>(frame->data[0]);
@@ -81,54 +96,26 @@ namespace gen3 {
                 return true;
             }
             case AV_SAMPLE_FMT_S16P:
-                for (int s = 0; s < frame->nb_samples; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        out.push_back(reinterpret_cast<const int16_t*>(frame->data[c])[s] / 32768.0f);
-                    }
-                }
+                append_planar<int16_t>(frame, channels, out, [](int16_t v) { return v / 32768.0f; });
                 return true;
-            case AV_SAMPLE_FMT_S16: {
-                const int16_t* p = reinterpret_cast<const int16_t*>(frame->data[0]);
-                for (int i = 0; i < frame->nb_samples * channels; i++) {
-                    out.push_back(p[i] / 32768.0f);
-                }
+            case AV_SAMPLE_FMT_S16:
+                append_packed<int16_t>(frame, channels, out, [](int16_t v) { return v / 32768.0f; });
                 return true;
-            }
             case AV_SAMPLE_FMT_S32P:
-                for (int s = 0; s < frame->nb_samples; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        out.push_back(reinterpret_cast<const int32_t*>(frame->data[c])[s] / 2147483648.0f);
-                    }
-                }
+                append_planar<int32_t>(frame, channels, out, [](int32_t v) { return v / 2147483648.0f; });
                 return true;
-            case AV_SAMPLE_FMT_S32: {
-                const int32_t* p = reinterpret_cast<const int32_t*>(frame->data[0]);
-                for (int i = 0; i < frame->nb_samples * channels; i++) {
-                    out.push_back(p[i] / 2147483648.0f);
-                }
+            case AV_SAMPLE_FMT_S32:
+                append_packed<int32_t>(frame, channels, out, [](int32_t v) { return v / 2147483648.0f; });
                 return true;
-            }
-            case AV_SAMPLE_FMT_U8: {
-                const uint8_t* p = reinterpret_cast<const uint8_t*>(frame->data[0]);
-                for (int i = 0; i < frame->nb_samples * channels; i++) {
-                    out.push_back((p[i] - 128) / 128.0f);
-                }
+            case AV_SAMPLE_FMT_U8:
+                append_packed<uint8_t>(frame, channels, out, [](uint8_t v) { return (v - 128) / 128.0f; });
                 return true;
-            }
             case AV_SAMPLE_FMT_DBLP:
-                for (int s = 0; s < frame->nb_samples; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        out.push_back((float)reinterpret_cast<const double*>(frame->data[c])[s]);
-                    }
-                }
+                append_planar<double>(frame, channels, out, [](double v) { return (float)v; });
                 return true;
-            case AV_SAMPLE_FMT_DBL: {
-                const double* p = reinterpret_cast<const double*>(frame->data[0]);
-                for (int i = 0; i < frame->nb_samples * channels; i++) {
-                    out.push_back((float)p[i]);
-                }
+            case AV_SAMPLE_FMT_DBL:
+                append_packed<double>(frame, channels, out, [](double v) { return (float)v; });
                 return true;
-            }
             default:
                 return false;
             }
@@ -197,10 +184,13 @@ namespace gen3 {
         unsigned char* avio_buf = (unsigned char*)av_malloc(0x4000);
         AVIOContext* avio = avio_alloc_context(avio_buf, 0x4000, 0, &reader, mem_read, nullptr, mem_seek);
         AVFormatContext* fmt = avformat_alloc_context();
+        auto free_avio = [&avio] {
+            av_freep(&avio->buffer);
+            avio_context_free(&avio);
+        };
         if (!avio_buf || !avio || !fmt) {
             if (avio) {
-                av_freep(&avio->buffer);
-                avio_context_free(&avio);
+                free_avio();
             } else {
                 av_freep(&avio_buf);
             }
@@ -341,8 +331,7 @@ namespace gen3 {
             avformat_close_input(&fmt);
         }
         if (avio) {
-            av_freep(&avio->buffer);
-            avio_context_free(&avio);
+            free_avio();
         }
 
         if (ok) {

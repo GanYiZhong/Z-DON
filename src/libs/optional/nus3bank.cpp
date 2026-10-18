@@ -178,6 +178,16 @@ namespace gen4 {
             }
         }
 
+        // The first `count` samples of every channel, interleaved, as floats
+        void push_interleaved(const std::vector<std::vector<int16_t>>& pcm, size_t count, int channels,
+                              std::vector<float>& out) {
+            for (size_t s = 0; s < count; s++) {
+                for (int c = 0; c < channels; c++) {
+                    out.push_back((float)pcm[c][s] / 32768.0f);
+                }
+            }
+        }
+
         bool decode_idsp(const std::vector<uint8_t>& file, size_t pack, size_t pack_size, DecodedAudio& out) {
             if (pack_size < 0x40) {
                 return false;
@@ -248,11 +258,7 @@ namespace gen4 {
                 if (!block_ok) {
                     break; // don't emit stale/zero samples for skipped channels
                 }
-                for (uint32_t s = 0; s < block_frames * 14; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        out.samples.push_back((float)pcm[c][s] / 32768.0f);
-                    }
-                }
+                push_interleaved(pcm, block_frames * 14, channels, out.samples);
             }
 
             // The header's sample count is the real length; the rest is frame padding.
@@ -331,11 +337,7 @@ namespace gen4 {
             }
             pos += info.block_size;
 
-            for (int s = 0; s < samples_per_frame; s++) {
-                for (int c = 0; c < info.channels; c++) {
-                    out.samples.push_back((float)pcm[c][s] / 32768.0f);
-                }
-            }
+            push_interleaved(pcm, samples_per_frame, info.channels, out.samples);
         }
 
         // The header's sample count is the real length; the last frame is padding.

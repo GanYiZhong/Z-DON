@@ -659,9 +659,7 @@ namespace gen4 {
         }
         try {
             return std::stoi(name.substr(7));
-        } catch (const std::invalid_argument&) {
-            return -1;
-        } catch (const std::out_of_range&) {
+        } catch (const std::logic_error&) { // invalid_argument or out_of_range
             return -1;
         }
     }

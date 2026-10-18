@@ -4,8 +4,6 @@
 #include <cmath>
 #include <fstream>
 
-#include "../md5.h"
-
 #pragma pack(push, 1)
 
 struct FumenJudgeTiming {
@@ -114,8 +112,26 @@ static bool is_roll(uint32_t t) {
 static bool is_balloon(uint32_t t) {
     return t == FUMEN_BALLOON || t == FUMEN_KUSUDAMA;
 }
-static bool has_renda_padding(uint32_t t) {
-    return t == FUMEN_RENDA || t == FUMEN_BIG_RENDA;
+
+static Note make_tail(double hit_ms, double bpm, double scroll, int index) {
+    Note tail;
+    tail.type = NoteType::TAIL;
+    tail.hit_ms = hit_ms;
+    tail.load_ms = hit_ms;
+    tail.unload_ms = hit_ms;
+    tail.bpm = bpm;
+    tail.scroll_x = scroll;
+    tail.index = index;
+    return tail;
+}
+
+// The whole file, or empty when it cannot be opened
+static std::vector<uint8_t> read_whole_file(const fs::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        return {};
+    }
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
 static uint32_t bswap32(uint32_t v) {
@@ -208,9 +224,6 @@ static void swap_note(FumenNoteBase& n) {
 
 FumenParser::FumenParser(const fs::path& path, int start_delay)
     : file_path(path), start_delay(static_cast<double>(start_delay)) {
-    metadata = TJAMetadata();
-    ex_data = TJAEXData();
-
     std::error_code ec;
     if (fs::is_directory(path, ec)) {
         song_id = path.filename().string();
@@ -279,11 +292,7 @@ std::vector<uint8_t> FumenParser::read_chart(int diff) {
     }
 
     if (gen3_library) {
-        std::ifstream f(gen3_library->chart_path(song_id, diff), std::ios::binary);
-        if (!f) {
-            return {};
-        }
-        return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        return read_whole_file(gen3_library->chart_path(song_id, diff));
     }
 
     static const std::vector<uint8_t> key = gen4::derive_key(FUMEN_SEED);
@@ -408,7 +417,7 @@ void FumenParser::build_notes(int diff) {
                     swap_note(nb);
                 }
 
-                if (has_renda_padding(nb.type)) {
+                if (is_roll(nb.type)) {
                     uint32_t extra[2]{};
                     if (!take(extra, 8)) {
                         truncated = true;
@@ -437,42 +446,20 @@ void FumenParser::build_notes(int diff) {
                 note.unload_ms = hit_ms;
                 note.bpm = bpm;
                 note.scroll_x = static_cast<double>(scroll);
-                note.scroll_y = 0.0;
-                note.display = true;
                 note.index = idx++;
 
                 if (is_roll(nb.type)) {
                     note.color = 255;
                     cached_notes.notes.push_back(note);
-
-                    Note tail;
-                    tail.type = NoteType::TAIL;
-                    tail.hit_ms = hit_ms + note_length;
-                    tail.load_ms = tail.hit_ms;
-                    tail.unload_ms = tail.hit_ms;
-                    tail.bpm = bpm;
-                    tail.scroll_x = static_cast<double>(scroll);
-                    tail.scroll_y = 0.0;
-                    tail.display = true;
-                    tail.index = idx++;
-                    cached_notes.notes.push_back(tail);
+                    cached_notes.notes.push_back(
+                        make_tail(hit_ms + note_length, bpm, static_cast<double>(scroll), idx++));
 
                 } else if (is_balloon(nb.type)) {
                     int hits = (int)(uint16_t)(nb.unknown2 & 0xFFFF);
                     note.count = hits > 0 ? hits : 20;
                     cached_notes.notes.push_back(note);
-
-                    Note tail;
-                    tail.type = NoteType::TAIL;
-                    tail.hit_ms = hit_ms + note_length;
-                    tail.load_ms = tail.hit_ms;
-                    tail.unload_ms = tail.hit_ms;
-                    tail.bpm = bpm;
-                    tail.scroll_x = static_cast<double>(scroll);
-                    tail.scroll_y = 0.0;
-                    tail.display = true;
-                    tail.index = idx++;
-                    cached_notes.notes.push_back(tail);
+                    cached_notes.notes.push_back(
+                        make_tail(hit_ms + note_length, bpm, static_cast<double>(scroll), idx++));
 
                 } else {
                     cached_notes.notes.push_back(note);
@@ -491,7 +478,6 @@ void FumenParser::build_notes(int diff) {
                 barline.unload_ms = measure_ms;
                 barline.bpm = bpm;
                 barline.scroll_x = static_cast<double>(normal_scroll);
-                barline.scroll_y = 0.0;
                 barline.display = show_bar;
                 barline.index = idx++;
                 cached_notes.notes.push_back(barline);
@@ -528,13 +514,7 @@ std::string FumenParser::get_diff_hash(int difficulty) {
     if (cached_notes.notes.empty()) {
         return "";
     }
-    std::vector<unsigned char> buffer;
-    for (const Note& n : cached_notes.notes) {
-        auto h = n.hash();
-        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&h);
-        buffer.insert(buffer.end(), bytes, bytes + sizeof(h));
-    }
-    return md5_hexdigest(buffer);
+    return hash_notes(cached_notes.notes);
 }
 
 std::string FumenParser::get_song_hash() {

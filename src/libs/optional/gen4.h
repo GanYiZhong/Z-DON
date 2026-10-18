@@ -34,7 +34,7 @@ namespace gen4 {
 
     class Library {
     public:
-        // Check loaded() before trusting songs()/order()/root(): a failed load()
+        // Check loaded() before trusting order()/root(): a failed load()
         // (returns false) may leave those holding partial state from the attempt.
         bool load(const fs::path& data_root);
 
@@ -45,7 +45,6 @@ namespace gen4 {
         // reloaded (load() clears and repopulates `entries`); it is not
         // synchronized against a concurrent load() on the same instance.
         const SongEntry* find(const std::string& id) const;
-        const std::vector<SongEntry>& songs() const { return entries; }
 
         const std::vector<OrderEntry>& order() const { return order_entries; }
 
