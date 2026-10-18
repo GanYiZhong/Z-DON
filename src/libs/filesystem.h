@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <rapidjson/istreamwrapper.h>
 #include <string>
 #include <vector>
@@ -17,7 +19,23 @@ void ensure_skin_extracted(const std::string& skin_name);
 
 std::vector<std::string> list_available_skins();
 
-std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path);
+// What the directory listing said about a file get_song_files found (Windows; elsewhere `listed` is
+// false and a caller that needs the size or write time stats the file).
+struct SongFileStamp {
+    bool listed = false;
+    bool is_dir = false;     // a folder whose name ends in .tja (the walk lists those too)
+    bool is_reparse = false; // a link: the listing describes the link, not its target
+    int64_t size = -1;
+    int64_t ft_write = 0; // FILETIME of the last write
+};
+
+class LibraryIndex;
+
+// `stamps`, when given, gets one entry per returned path; `index`, the listing of every folder walked
+// (Windows; nullptr elsewhere and when .osz archives were extracted during the walk)
+std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path,
+                                     std::vector<SongFileStamp>* stamps = nullptr,
+                                     std::shared_ptr<const LibraryIndex>* index = nullptr);
 
 rapidjson::Document read_json_file(fs::path file_path);
 

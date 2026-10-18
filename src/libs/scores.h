@@ -94,6 +94,9 @@ struct Score {
 struct SongCacheEntry {
     int64_t mtime = 0;
     int64_t size = 0;
+    // FILETIME of the last write as the directory listing gave it; 0 = not recorded (rows written by
+    // an older build or upstream, which leave the column out): those are checked against mtime once
+    int64_t ft_write = 0;
     std::array<std::string, 5> hashes;
     std::string title;
     std::string subtitle;
@@ -149,6 +152,8 @@ public:
     // song_cache: path -> entry, current SONG_CACHE_VERSION only
     std::unordered_map<std::string, SongCacheEntry> load_song_cache();
     void store_song_cache(const std::string& path, const SongCacheEntry& entry);
+    // fills in ft_write of rows that matched by mtime and size
+    void set_song_cache_ft_write(const std::vector<std::pair<std::string, int64_t>>& rows);
     void remove_song_cache(const std::string& path);
     // the loading screen's scan result per chart (key: UTF-8 path), for Navigator::preload
     void set_song_meta(const std::string& path, const SongCacheEntry& entry);

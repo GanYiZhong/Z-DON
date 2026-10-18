@@ -17,6 +17,7 @@
 
 #include "../../libs/filesystem.h"
 #include "../../libs/input.h"
+#include "../../libs/library_index.h"
 #include "../../libs/script.h"
 #include "../../libs/song_parser.h"
 #include "../song_select/file_navigator/navigator.h"
@@ -359,6 +360,46 @@ std::unique_ptr<DanBox> DanNavigator::make_box(const DanBoxData& d) {
     return box;
 }
 
+// The course files collect_dan_jsons' recursive_directory_iterator finds, in the same order, from the
+// library index. False when a folder of the tree is not in the index.
+static bool dan_jsons_from_index(const LibraryIndex& index, const fs::path& dir, const LibraryIndex::Dir& listing,
+                                 std::vector<const LibraryIndex::Dir*>& stack, std::vector<fs::path>& out,
+                                 const std::atomic<bool>& abort) {
+    for (const LibraryIndex::Entry& e : listing.entries) {
+        if (abort.load()) {
+            return true;
+        }
+        fs::path p = dir / e.name;
+        bool is_dir = e.is_dir;
+        if (e.is_reparse) {
+            std::error_code ec;
+            is_dir = fs::is_directory(p, ec);
+        }
+#ifdef SUPPORT_FUMEN
+        if (is_dir && (gen4::find_data_root(p) == p || gen3::find_data_root(p) == p)) {
+            continue;
+        }
+#endif
+        if (e.name == L"dan.json" || name_has_ext(e.name, L".tcm") || name_has_ext(e.name, L".optktcm")) {
+            out.push_back(p);
+        }
+        if (!is_dir) {
+            continue;
+        }
+        const LibraryIndex::Dir* sub = index.child(e);
+        if (!sub || std::find(stack.begin(), stack.end(), sub) != stack.end()) {
+            return false; // not listed by the walk, or a link back to a folder above
+        }
+        stack.push_back(sub);
+        const bool ok = dan_jsons_from_index(index, p, *sub, stack, out, abort);
+        stack.pop_back();
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void DanNavigator::collect_dan_jsons(const fs::path& root_path, std::vector<fs::path>& out) {
     if (root_path.empty()) {
         spdlog::warn("DanNavigator: skipping an empty dan root path");
@@ -375,6 +416,18 @@ void DanNavigator::collect_dan_jsons(const fs::path& root_path, std::vector<fs::
         return;
     }
 #endif
+
+    // the library walk at startup listed the tree already
+    if (auto index = library_index()) {
+        if (const LibraryIndex::Dir* listing = index->find(root_path)) {
+            std::vector<const LibraryIndex::Dir*> stack{listing};
+            std::vector<fs::path> found;
+            if (dan_jsons_from_index(*index, root_path, *listing, stack, found, scan_abort)) {
+                out.insert(out.end(), found.begin(), found.end());
+                return;
+            }
+        }
+    }
 
     try {
         auto it = fs::recursive_directory_iterator(root_path, fs::directory_options::skip_permission_denied);

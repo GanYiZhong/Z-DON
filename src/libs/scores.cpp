@@ -712,6 +712,8 @@ static void ensure_song_cache_table(sqlite3* db) {
         std::string sql = std::string("ALTER TABLE song_cache ADD COLUMN ") + col + " TEXT;";
         sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr); // fails harmlessly if present
     }
+    // Z-DON: the write time from the directory listing (SongCacheEntry::ft_write); upstream ignores it
+    sqlite3_exec(db, "ALTER TABLE song_cache ADD COLUMN ft_write INTEGER;", nullptr, nullptr, nullptr);
 }
 
 // language/text pairs as "lang \x1f text \x1e ..." (control characters no title uses)
@@ -794,7 +796,7 @@ std::unordered_map<std::string, SongCacheEntry> ScoresManager::load_song_cache()
     ensure_song_cache_table(db_fsd);
     sqlite3_stmt* stmt;
     const char* query = "SELECT path, mtime, size, hash_0, hash_1, hash_2, hash_3, hash_4, title, subtitle, "
-                        "titles, subtitles, levels FROM song_cache WHERE version = ?;";
+                        "titles, subtitles, levels, ft_write FROM song_cache WHERE version = ?;";
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
         spdlog::error("load_song_cache: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
         return cache;
@@ -816,6 +818,7 @@ std::unordered_map<std::string, SongCacheEntry> ScoresManager::load_song_cache()
         e.titles = decode_pairs(text(10));
         e.subtitles = decode_pairs(text(11));
         e.levels = decode_levels(text(12));
+        e.ft_write = sqlite3_column_type(stmt, 13) == SQLITE_NULL ? 0 : sqlite3_column_int64(stmt, 13);
         cache.emplace(text(0), std::move(e));
     }
     sqlite3_finalize(stmt);
@@ -827,7 +830,7 @@ void ScoresManager::store_song_cache(const std::string& path, const SongCacheEnt
     sqlite3_stmt* stmt;
     const char* query = "INSERT OR REPLACE INTO song_cache "
                         "(path, version, mtime, size, hash_0, hash_1, hash_2, hash_3, hash_4, title, subtitle, "
-                        "titles, subtitles, levels) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+                        "titles, subtitles, levels, ft_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
         spdlog::error("store_song_cache: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
         return;
@@ -846,7 +849,31 @@ void ScoresManager::store_song_cache(const std::string& path, const SongCacheEnt
     sqlite3_bind_text(stmt, 12, titles.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 13, subtitles.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 14, levels.c_str(), -1, SQLITE_STATIC);
+    if (entry.ft_write != 0) {
+        sqlite3_bind_int64(stmt, 15, entry.ft_write);
+    } else {
+        sqlite3_bind_null(stmt, 15);
+    }
     sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void ScoresManager::set_song_cache_ft_write(const std::vector<std::pair<std::string, int64_t>>& rows) {
+    if (rows.empty()) {
+        return;
+    }
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "UPDATE song_cache SET ft_write = ? WHERE path = ?;", -1, &stmt, nullptr) !=
+        SQLITE_OK) {
+        spdlog::error("set_song_cache_ft_write: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    for (const auto& [path, ft_write] : rows) {
+        sqlite3_bind_int64(stmt, 1, ft_write);
+        sqlite3_bind_text(stmt, 2, path.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
     sqlite3_finalize(stmt);
 }
 

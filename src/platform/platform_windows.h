@@ -3,6 +3,7 @@
 #ifndef YATAIDON_PLATFORM_WIN32_H
 #define YATAIDON_PLATFORM_WIN32_H
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -55,6 +56,9 @@ struct Win32DirEntry {
     std::wstring name;
     bool is_dir = false;
     bool is_reparse = false; // symlink, junction or other reparse point
+    // as the directory recorded them when the file was last closed (a file open for writing can be newer)
+    uint64_t size = 0;
+    uint64_t ft_write = 0; // FILETIME of the last write, 100 ns since 1601
 };
 
 // Lists `dir` (without "." and "..") in the order the file system returns it.

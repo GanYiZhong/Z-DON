@@ -5,6 +5,7 @@
 #include "../libs/filesystem.h"
 #include "../libs/global_data.h"
 #include "../libs/input.h"
+#include "../libs/library_index.h"
 #include "../libs/scores.h"
 #include "../libs/script.h"
 #include "../libs/skin_updater.h"
@@ -64,7 +65,10 @@ void LoadingScreen::init_visuals() {
 void LoadingScreen::load_song_hashes() {
     try {
         // Listed here, not in on_screen_start: the screen keeps drawing while a large library is walked
-        songs = get_song_files(global_data.config->paths.tja_path);
+        std::shared_ptr<const LibraryIndex> index;
+        songs = get_song_files(global_data.config->paths.tja_path, &song_stamps, &index);
+        // the song select answers its folder questions from this walk (nullptr: from the disk)
+        publish_library_index(std::move(index));
         std::atomic<int> songs_loaded = 0;
         const int thread_count = std::max(1u, std::thread::hardware_concurrency());
         std::vector<std::thread> threads;
@@ -74,6 +78,9 @@ void LoadingScreen::load_song_hashes() {
         // workers only read `cache`, new or changed entries are written after they finish.
         const std::unordered_map<std::string, SongCacheEntry> cache = scores_manager.load_song_cache();
         std::vector<std::pair<std::string, SongCacheEntry>> fresh;
+        std::vector<std::pair<std::string, int64_t>> ft_backfill; // rows that only had mtime
+        // bound to their paths once the workers are done (see below)
+        std::vector<std::optional<std::array<std::string, 5>>> bindings(songs.size());
         std::atomic<int> cache_hits = 0;
 
         auto worker = [&](int start, int end) {
@@ -81,24 +88,44 @@ void LoadingScreen::load_song_hashes() {
                 auto u8 = songs[i].u8string();
                 const std::string path(u8.begin(), u8.end());
 
-                std::error_code ec;
-                const auto mtime = std::filesystem::last_write_time(songs[i], ec);
-                if (ec) {
-                    spdlog::error("Could not stat {}: {}", path, ec.message());
-                    continue;
-                }
-                const auto size = std::filesystem::file_size(songs[i], ec);
+                // A row with the listing's write time and size is current without opening the file. Only
+                // a row without it (older build), a changed file (its mtime is stored for builds that
+                // compare that) and a link or folder (the listing describes the link) stat the file.
+                const SongFileStamp& listed = song_stamps[i];
+                const bool listing_usable = listed.listed && !listed.is_dir && !listed.is_reparse;
+                auto cached = cache.find(path);
                 SongCacheEntry stamp;
-                stamp.mtime = static_cast<int64_t>(mtime.time_since_epoch().count());
-                stamp.size = ec ? -1 : static_cast<int64_t>(size);
+                bool from_cache = false;
+                if (listing_usable && cached != cache.end() && cached->second.ft_write != 0) {
+                    from_cache = cached->second.ft_write == listed.ft_write && cached->second.size == listed.size;
+                    stamp.mtime = cached->second.mtime;
+                    stamp.size = cached->second.size;
+                }
+                if (!from_cache) {
+                    std::error_code ec;
+                    const auto mtime = std::filesystem::last_write_time(songs[i], ec);
+                    if (ec) {
+                        spdlog::error("Could not stat {}: {}", path, ec.message());
+                        continue;
+                    }
+                    const auto size = std::filesystem::file_size(songs[i], ec);
+                    stamp.mtime = static_cast<int64_t>(mtime.time_since_epoch().count());
+                    stamp.size = ec ? -1 : static_cast<int64_t>(size);
+                    if (cached != cache.end() && cached->second.ft_write == 0) {
+                        from_cache = cached->second.mtime == stamp.mtime && cached->second.size == stamp.size;
+                        if (from_cache && listing_usable) {
+                            std::lock_guard<std::mutex> lock(scores_mutex);
+                            ft_backfill.emplace_back(path, listed.ft_write);
+                        }
+                    } else if (cached != cache.end() && !listing_usable) {
+                        from_cache = cached->second.mtime == stamp.mtime && cached->second.size == stamp.size;
+                    }
+                }
+                stamp.ft_write = listing_usable ? listed.ft_write : 0;
 
                 std::array<std::string, 5> hashes;
                 std::string title, subtitle;
                 SongCacheEntry meta; // handed to Navigator::preload
-
-                auto cached = cache.find(path);
-                const bool from_cache =
-                    cached != cache.end() && cached->second.mtime == stamp.mtime && cached->second.size == stamp.size;
                 if (from_cache) {
                     hashes = cached->second.hashes;
                     title = cached->second.title;
@@ -150,7 +177,7 @@ void LoadingScreen::load_song_hashes() {
                     if (!from_cache) {
                         scores_manager.add_song(hashes, title, subtitle);
                     }
-                    scores_manager.add_path_binding(songs[i], hashes);
+                    bindings[i] = hashes;
                     scores_manager.set_song_meta(path, meta);
 
                     progress = (float)++songs_loaded / songs.size();
@@ -160,23 +187,51 @@ void LoadingScreen::load_song_hashes() {
             }
         };
 
-        scores_manager.begin_transaction();
+        std::vector<std::pair<int, int>> ranges; // each worker's [start, end) of songs
 #ifdef __EMSCRIPTEN__
-        worker(0, songs.size());
+        ranges.emplace_back(0, (int)songs.size());
 #else
         int chunk = songs.size() / thread_count;
         for (int i = 0; i < thread_count; i++) {
             int start = i * chunk;
             int end = (i == thread_count - 1) ? songs.size() : start + chunk;
+            ranges.emplace_back(start, end);
+        }
+#endif
+        scores_manager.begin_transaction();
+#ifdef __EMSCRIPTEN__
+        worker(0, songs.size());
+#else
+        for (const auto& [start, end] : ranges) {
             threads.emplace_back(worker, start, end);
         }
         for (auto& t : threads) {
             t.join();
         }
 #endif
+        // Charts sharing a hash map to the one bound last. The workers used to bind as they went, so
+        // that was the one its worker reached last: with every chart about as quick (from the cache),
+        // the later position in its worker's range. Bound in that order here -- position in the range,
+        // then range -- for the same result without the race between workers.
+        for (int offset = 0;; offset++) {
+            bool any = false;
+            for (const auto& [start, end] : ranges) {
+                const int i = start + offset;
+                if (i < end) {
+                    any = true;
+                    if (bindings[i]) {
+                        scores_manager.add_path_binding(songs[i], *bindings[i]);
+                    }
+                }
+            }
+            if (!any) {
+                break;
+            }
+        }
         for (const auto& [path, entry] : fresh) {
             scores_manager.store_song_cache(path, entry);
         }
+        scores_manager.set_song_cache_ft_write(ft_backfill);
         // forget files that are gone, so the table does not grow with deleted songs
         if (!cache.empty()) {
             std::unordered_set<std::string> present;
@@ -207,7 +262,7 @@ void LoadingScreen::load_song_hashes() {
 }
 
 void LoadingScreen::load_navigator() {
-    navigator.preload(global_data.config->paths.tja_path, songs);
+    navigator.preload(global_data.config->paths.tja_path, songs, song_stamps);
 }
 
 Screens LoadingScreen::on_screen_end(Screens next_screen) {

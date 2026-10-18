@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ostream>
+
 #include "../../../libs/global_data.h"
 #include "box_base.h"
 
@@ -27,6 +29,8 @@ public:
     static void run_deferred_scans(std::atomic<bool>& abort_flag);
     bool scan_pending = false;
     static void invalidate_scan_cache();
+    // YATAIDON_LIBRARY_DUMP: every cached folder scan, then `scan_paths` scanned now (sorted by path)
+    static void dump_scans(std::ostream& out, const std::vector<fs::path>& scan_paths);
 
     const char* lua_kind() const override { return "folder"; }
 };

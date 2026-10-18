@@ -3,11 +3,13 @@
 #include "../../../libs/optional/gen3.h"
 #include "../../../libs/optional/gen4.h"
 #endif
+#include <algorithm>
 #include <deque>
 #include <mutex>
 
 #include "../../../libs/audio.h"
 #include "../../../libs/filesystem.h"
+#include "../../../libs/library_index.h"
 #include "../../../libs/scores.h"
 #include "navigator.h"
 
@@ -29,7 +31,52 @@ namespace {
         scan_cache[path] = std::move(scan);
     }
 
-    void scan_folder_now(const fs::path& path) {
+    // The entries the recursive_directory_iterator in scan_folder_now visits, from the library index:
+    // every song_list.txt and every .tja / .osu (by name, as that loop checks them) under `dir`,
+    // links followed like that iterator does. False when a folder of the tree is not in the index.
+    bool scan_index_tree(const LibraryIndex& index, const fs::path& dir, const LibraryIndex::Dir& listing,
+                         std::vector<const LibraryIndex::Dir*>& stack, std::vector<fs::path>& song_lists,
+                         std::vector<fs::path>& charts) {
+        bool has_song_list = false;
+        for (const LibraryIndex::Entry& e : listing.entries) {
+            fs::path p = dir / e.name;
+            if (e.name == L"song_list.txt") {
+                has_song_list = true;
+                song_lists.push_back(p);
+            } else if (name_has_ext(e.name, L".tja") || name_has_ext(e.name, L".osu")) {
+                charts.push_back(p);
+            }
+            bool is_dir = e.is_dir;
+            if (e.is_reparse) {
+                std::error_code ec;
+                is_dir = fs::is_directory(p, ec);
+            }
+            if (!is_dir) {
+                continue;
+            }
+            const LibraryIndex::Dir* sub = index.child(e);
+            if (!sub || std::find(stack.begin(), stack.end(), sub) != stack.end()) {
+                return false; // not listed by the walk, or a link back to a folder above
+            }
+            stack.push_back(sub);
+            const bool ok = scan_index_tree(index, p, *sub, stack, song_lists, charts);
+            stack.pop_back();
+            if (!ok) {
+                return false;
+            }
+        }
+        // a song_list.txt written since the walk (favorites / recently played)
+        if (!has_song_list && index.song_list_written(dir)) {
+            std::error_code ec;
+            if (fs::exists(dir / "song_list.txt", ec)) {
+                song_lists.push_back(dir / "song_list.txt");
+            }
+        }
+        return true;
+    }
+
+    // `visited` (YATAIDON_LIBRARY_DUMP): every chart whose scores were read, in scan order
+    void scan_folder_now(const fs::path& path, std::vector<std::string>* visited = nullptr) {
         std::map<int, Crown> crown;
         std::map<int, Crown> crown_p2;
         int tja_count = 0;
@@ -64,10 +111,42 @@ namespace {
             }
         };
         auto update_both = [&](const fs::path& file_path) {
+            if (visited) {
+                visited->push_back(file_path.string());
+            }
             const auto hashes = scores_manager.get_hashes(file_path);
             update_crown(hashes, player_1_id, crown, disqualified_p1);
             update_crown(hashes, player_2_id, crown_p2, disqualified_p2);
         };
+
+        auto add_song_list = [&](const fs::path& song_list) {
+            auto entries = read_song_list(song_list);
+            tja_count += (int)entries.size();
+            for (const auto& e : entries) {
+                if (auto found = scores_manager.get_path_by_hash(e.hash)) {
+                    update_both(*found);
+                }
+            }
+        };
+
+        // The library walk listed the tree already: no disk access (the song_list.txt files aside)
+        if (auto index = library_index()) {
+            if (const LibraryIndex::Dir* listing = index->find(path)) {
+                std::vector<const LibraryIndex::Dir*> stack{listing};
+                std::vector<fs::path> song_lists, charts;
+                if (scan_index_tree(*index, path, *listing, stack, song_lists, charts)) {
+                    for (const fs::path& song_list : song_lists) {
+                        add_song_list(song_list);
+                    }
+                    tja_count += (int)charts.size();
+                    for (const fs::path& chart : charts) {
+                        update_both(chart);
+                    }
+                    store_scan(path, {crown, crown_p2, tja_count});
+                    return;
+                }
+            }
+        }
 
         // Errors are stepped over rather than thrown: one unreadable entry deep in
         // a tree should not take the folder box down with it.
@@ -76,13 +155,7 @@ namespace {
         while (scan != fs::end(scan)) {
             const fs::directory_entry& entry = *scan;
             if (entry.path().filename() == "song_list.txt") {
-                auto entries = read_song_list(entry.path());
-                tja_count += (int)entries.size();
-                for (const auto& e : entries) {
-                    if (auto found = scores_manager.get_path_by_hash(e.hash)) {
-                        update_both(*found);
-                    }
-                }
+                add_song_list(entry.path());
                 scan.increment(scan_ec);
                 if (scan_ec) {
                     break;
@@ -114,6 +187,44 @@ namespace {
 void FolderBox::invalidate_scan_cache() {
     std::lock_guard<std::mutex> lock(scan_cache_mutex);
     scan_cache.clear();
+}
+
+void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_paths) {
+    auto write = [&out](const fs::path& path, const FolderScan& scan) {
+        out << path.string() << " tja_count=" << scan.tja_count << " crown=";
+        for (const auto& [diff, c] : scan.crown) {
+            out << diff << ':' << (int)c << ',';
+        }
+        out << " crown_p2=";
+        for (const auto& [diff, c] : scan.crown_p2) {
+            out << diff << ':' << (int)c << ',';
+        }
+        out << '\n';
+    };
+    std::map<fs::path, FolderScan> cached;
+    {
+        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        cached = scan_cache;
+    }
+    out << "[cached folder scans]\n";
+    for (const auto& [path, scan] : cached) {
+        write(path, scan);
+    }
+    out << "[folder scans]\n";
+    for (const fs::path& path : scan_paths) {
+        std::vector<std::string> visited;
+        scan_folder_now(path, &visited);
+        std::sort(visited.begin(), visited.end());
+        uint64_t fnv = 1469598103934665603ull;
+        for (const std::string& v : visited) {
+            for (unsigned char c : v + '\n') {
+                fnv = (fnv ^ c) * 1099511628211ull;
+            }
+        }
+        out << "visited=" << visited.size() << " fnv=" << fnv << ' ';
+        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        write(path, scan_cache[path]);
+    }
 }
 
 FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def) : BaseBox(path, box_def), tja_count(0) {

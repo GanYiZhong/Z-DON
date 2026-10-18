@@ -501,6 +501,8 @@ bool win32_list_dir(const std::filesystem::path& dir, std::vector<Win32DirEntry>
         e.name = n;
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.is_reparse = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        e.size = (uint64_t(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+        e.ft_write = (uint64_t(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
         out.push_back(std::move(e));
     } while (FindNextFileW(h, &fd));
     FindClose(h);

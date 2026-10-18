@@ -6,6 +6,7 @@
 #include <queue>
 #include <unordered_map>
 
+#include "../../../libs/filesystem.h"
 #include "box_song.h"
 #include "genre_bg.h"
 
@@ -153,6 +154,7 @@ private:
     void flush_pending_boxes();
     void exit_inline();
     void begin_inline_load();
+    void dump_library_if_requested();
 
 public:
     Navigator();
@@ -171,8 +173,10 @@ public:
     void clear_folder_caches();
     void apply_genre_of(const fs::path& song_path, SongBox* song);
     void enqueue_inline_back_every_ten(int songs_added, const fs::path& parent);
-    // `files`: the chart files under songs_paths when the caller already listed them (the loading screen)
-    void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> files = std::nullopt);
+    // `files`: the chart files under songs_paths when the caller already listed them (the loading screen),
+    // `stamps` what their listing said about each (get_song_files)
+    void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> files = std::nullopt,
+                 std::vector<SongFileStamp> stamps = {});
     void init(std::vector<fs::path> songs_paths);
 
     void reset_for_skin_reload();

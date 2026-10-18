@@ -1,6 +1,8 @@
 #include "filesystem.h"
 
+#include "library_index.h"
 #include "miniz.h" // IWYU pragma: keep
+#include "test_mode.h"
 #ifdef SUPPORT_FUMEN
 #include "optional/gen3.h"
 #include "optional/gen4.h"
@@ -235,16 +237,18 @@ static bool path_is_under_fumen(fs::path dir) {
 
 // Files in a "fumen" folder are only charts when they are .bin (gen3/gen4 data).
 static void add_chart_file(std::vector<fs::path>& songs, std::vector<fs::path>* osz_out, const fs::path& p,
-                           bool under_fumen) {
+                           bool under_fumen, std::vector<SongFileStamp>* stamps = nullptr,
+                           const SongFileStamp& stamp = {}) {
     const fs::path ext = p.extension();
-    if (ext == ".tja" || ext == ".osu") {
+    if (ext == ".tja" || ext == ".osu" || (ext == ".bin" && under_fumen)) {
         songs.push_back(p);
+        if (stamps) {
+            stamps->push_back(stamp);
+        }
     } else if (ext == ".osz") {
         if (osz_out) {
             osz_out->push_back(p);
         }
-    } else if (ext == ".bin" && under_fumen) {
-        songs.push_back(p);
     }
 }
 
@@ -253,20 +257,50 @@ static void add_chart_file(std::vector<fs::path>& songs, std::vector<fs::path>* 
 // fs::canonical stats every component of every folder, which took seconds on a library of a few
 // thousand folders; a directory listing already carries each entry's attributes. Same paths in the
 // same order as the portable walk below.
+static SongFileStamp stamp_of(const Win32DirEntry& e) {
+    return {true, e.is_dir, e.is_reparse, static_cast<int64_t>(e.size), static_cast<int64_t>(e.ft_write)};
+}
+
+// the index's copy of a listing, without the names: the walk still reads them, and moves them in
+// once it is done with the folder (move_names)
+static std::vector<LibraryIndex::Entry> index_entries(const std::vector<Win32DirEntry>& entries) {
+    std::vector<LibraryIndex::Entry> out;
+    out.reserve(entries.size());
+    for (const Win32DirEntry& e : entries) {
+        out.push_back({{}, e.is_dir, e.is_reparse, -1});
+    }
+    return out;
+}
+
+static void move_names(LibraryIndex* index, int32_t dir, std::vector<Win32DirEntry>& entries) {
+    if (index && dir >= 0) {
+        std::vector<LibraryIndex::Entry>& out = index->entries_of(dir);
+        for (size_t k = 0; k < entries.size(); k++) {
+            out[k].name = std::move(entries[k].name);
+        }
+    }
+}
+
 struct ChartWalk {
     std::vector<fs::path>& songs;
     std::vector<fs::path>* osz_out;
+    std::vector<SongFileStamp>* stamps;
     // Resolved path of every folder entered: a link back to one of them is not followed again.
     // A plain folder resolves to its parent's resolved path plus its name, so only links are opened.
     std::unordered_set<std::wstring> visited_dirs;
+    // When set, every listing is recorded (`dir_id`: dir's record); a link to a folder entered
+    // before points at that folder's record (by resolved path)
+    LibraryIndex* index;
+    std::unordered_map<std::wstring, int32_t> index_by_resolved;
 
     // `entries` is the listing of `dir`; `resolved` is dir's resolved path
-    void walk(const fs::path& dir, const std::wstring& resolved, const std::vector<Win32DirEntry>& entries,
-              bool under_fumen) {
-        for (const Win32DirEntry& e : entries) {
+    void walk(const fs::path& dir, const std::wstring& resolved, std::vector<Win32DirEntry>& entries, bool under_fumen,
+              int32_t dir_id) {
+        for (size_t k = 0; k < entries.size(); k++) {
+            const Win32DirEntry& e = entries[k];
             fs::path p = dir / e.name;
             if (!e.is_dir) {
-                add_chart_file(songs, osz_out, p, under_fumen);
+                add_chart_file(songs, osz_out, p, under_fumen, stamps, stamp_of(e));
                 continue;
             }
             std::wstring child_resolved = e.is_reparse ? win32_final_path(p) : resolved + L'\\' + e.name;
@@ -276,11 +310,22 @@ struct ChartWalk {
                 continue;
             }
             if (!visited_dirs.insert(child_resolved).second) {
+                if (index) {
+                    if (auto it = index_by_resolved.find(child_resolved); it != index_by_resolved.end()) {
+                        index->set_child(dir_id, k, it->second);
+                    }
+                }
                 continue;
             }
 
             std::vector<Win32DirEntry> children;
             const bool listed = win32_list_dir(p, children);
+            int32_t child_id = -1;
+            if (index && listed) {
+                child_id = index->add_dir(p, index_entries(children));
+                index->set_child(dir_id, k, child_id);
+                index_by_resolved.emplace(child_resolved, child_id);
+            }
 #ifdef SUPPORT_FUMEN
             // Both data roots have a fumen folder: only then ask them
             bool has_fumen = false;
@@ -291,19 +336,22 @@ struct ChartWalk {
                 }
             }
             if (has_fumen && (gen4::find_data_root(p) == p || gen3::find_data_root(p) == p)) {
+                move_names(index, child_id, children); // indexed without its subfolders
                 continue;
             }
 #endif
-            add_chart_file(songs, osz_out, p, under_fumen);
+            add_chart_file(songs, osz_out, p, under_fumen, stamps, stamp_of(e));
             if (listed) {
-                walk(p, child_resolved, children, under_fumen || e.name == L"fumen");
+                walk(p, child_resolved, children, under_fumen || e.name == L"fumen", child_id);
             }
         }
+        move_names(index, dir_id, entries);
     }
 };
 #endif
 
-static void collect_charts_from(const fs::path& path, std::vector<fs::path>& songs, std::vector<fs::path>* osz_out) {
+static void collect_charts_from(const fs::path& path, std::vector<fs::path>& songs, std::vector<fs::path>* osz_out,
+                                std::vector<SongFileStamp>* stamps, LibraryIndex* index) {
 #ifdef _WIN32
     std::vector<Win32DirEntry> entries;
     if (!win32_list_dir(path, entries)) {
@@ -311,14 +359,20 @@ static void collect_charts_from(const fs::path& path, std::vector<fs::path>& son
                                    std::make_error_code(std::errc::no_such_file_or_directory));
     }
     const bool under_fumen = path_is_under_fumen(path);
-    ChartWalk w{songs, osz_out, {}};
+    ChartWalk w{songs, osz_out, stamps, {}, index, {}};
     std::wstring root = win32_final_path(path);
     if (root.empty()) {
         root = fs::absolute(path).wstring();
     }
     w.visited_dirs.insert(root);
-    w.walk(path, root, entries, under_fumen);
+    int32_t root_id = -1;
+    if (index) {
+        root_id = index->add_dir(path, index_entries(entries));
+        w.index_by_resolved.emplace(root, root_id);
+    }
+    w.walk(path, root, entries, under_fumen, root_id);
 #else
+    (void)index;
     // A symlinked directory that points back at one of its own ancestors would
     // otherwise make the recursive iterator loop forever. Track the canonical
     // path of every directory entered so a symlink resolving to one of them
@@ -367,13 +421,22 @@ static void collect_charts_from(const fs::path& path, std::vector<fs::path>& son
 #endif
 
         add_chart_file(songs, osz_out, entry.path(),
-                       entry.path().extension() == ".bin" && path_is_under_fumen(entry.path().parent_path()));
+                       entry.path().extension() == ".bin" && path_is_under_fumen(entry.path().parent_path()), stamps);
     }
 #endif
 }
 
-std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path) {
+std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path, std::vector<SongFileStamp>* stamps_out,
+                                     std::shared_ptr<const LibraryIndex>* index_out) {
+    std::shared_ptr<LibraryIndex> index;
+#ifdef _WIN32
+    if (index_out) {
+        index = std::make_shared<LibraryIndex>();
+    }
+#endif
     std::vector<fs::path> songs;
+    std::vector<SongFileStamp> stamps;
+    std::vector<SongFileStamp>* stamps_ptr = stamps_out ? &stamps : nullptr;
     for (const fs::path& path : root_path) {
 #ifdef SUPPORT_FUMEN
         if (!gen4::find_data_root(path).empty() || !gen3::find_data_root(path).empty()) {
@@ -383,13 +446,14 @@ std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path) {
 
         std::vector<fs::path> osz_files;
         try {
-            collect_charts_from(path, songs, &osz_files);
+            collect_charts_from(path, songs, &osz_files, stamps_ptr, index.get());
         } catch (const std::filesystem::filesystem_error& e) {
             spdlog::error("Error scanning song directory: {}", e.what());
             continue;
         }
 
         if (!osz_files.empty()) {
+            index.reset(); // the extracted folders are not in their parent's listing
             for (const auto& osz : osz_files) {
                 extract_osz(osz);
             }
@@ -400,7 +464,7 @@ std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path) {
                     continue;
                 }
                 try {
-                    collect_charts_from(out_dir, songs, nullptr);
+                    collect_charts_from(out_dir, songs, nullptr, stamps_ptr, nullptr);
                 } catch (const std::filesystem::filesystem_error& e) {
                     spdlog::error("Error scanning extracted archive {}: {}", out_dir.string(), e.what());
                 }
@@ -410,10 +474,20 @@ std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path) {
     std::unordered_set<std::string> seen;
     std::vector<fs::path> deduped;
     deduped.reserve(songs.size());
-    for (auto& p : songs) {
-        if (seen.insert(p.string()).second) {
-            deduped.push_back(std::move(p));
+    if (stamps_out) {
+        stamps_out->clear();
+        stamps_out->reserve(songs.size());
+    }
+    for (size_t i = 0; i < songs.size(); i++) {
+        if (seen.insert(songs[i].string()).second) {
+            deduped.push_back(std::move(songs[i]));
+            if (stamps_out) {
+                stamps_out->push_back(stamps[i]);
+            }
         }
+    }
+    if (index_out) {
+        *index_out = std::move(index);
     }
     return deduped;
 }
@@ -482,6 +556,12 @@ std::vector<SongListEntry> read_song_list(const fs::path& path) {
 }
 
 void write_song_list(const fs::path& path, const std::vector<SongListEntry>& entries) {
+    if (zdon_test_mode()) {
+        return; // test runs never touch the player's song lists
+    }
+    if (auto index = library_index(); index && path.filename() == "song_list.txt") {
+        index->note_song_list_written(path.parent_path());
+    }
     std::ofstream out(path, std::ios::trunc);
     if (!out) {
         spdlog::error("write_song_list: failed to open {}", path.string());

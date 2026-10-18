@@ -4,7 +4,9 @@
 
 #include "../../../libs/filesystem.h"
 #include "../../../libs/han_fold_table.h"
+#include "../../../libs/library_index.h"
 #include "../../../libs/text.h"
+#include "../../dan_select/dan_navigator.h"
 #include "../song_select_script.h"
 #include "box_back.h"
 #include "box_song_osu.h"
@@ -19,7 +21,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <random>
+#include <sstream>
 #include <thread>
 
 // Song Search normalisation: ASCII is lower-cased, full-width ASCII (U+FF01..FF5E) becomes
@@ -304,6 +308,7 @@ void Navigator::load_all_roots() {
         for (const fs::path& root : root_paths) {
             prefetch_child_folders(root);
         }
+        dump_library_if_requested();
     };
 
 #ifndef __EMSCRIPTEN__
@@ -311,6 +316,147 @@ void Navigator::load_all_roots() {
 #else
     walk_roots();
 #endif
+}
+
+// Dev hook: YATAIDON_LIBRARY_DUMP=<file> writes, once, after the first song select load and its
+// deferred folder scans (loader thread), what the navigator knows about the library: the folder
+// scans (tja_count, crowns), every song it indexed, favorites, has_def_file / is_osu_song_folder /
+// has_child_folders of every folder below the roots, the folder scan and inline-open plan of every
+// folder with a box.def or song_list.txt, and the dojo courses of each DAN folder at the root. Diff
+// the files of two builds to check that a change to library scanning keeps the same results.
+void Navigator::dump_library_if_requested() {
+    static std::atomic<bool> done{false};
+    const char* out_path = std::getenv("YATAIDON_LIBRARY_DUMP");
+    if (!out_path || !*out_path || abort_loading || done.exchange(true)) {
+        return;
+    }
+    wait_for_song_files();
+    std::ostringstream out;
+
+    std::vector<fs::path> dirs;
+    for (const fs::path& root : root_paths) {
+        std::error_code ec;
+        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+             !ec && it != fs::end(it); it.increment(ec)) {
+            std::error_code dec;
+            if (it->is_directory(dec)) {
+                dirs.push_back(it->path());
+            }
+        }
+    }
+    std::sort(dirs.begin(), dirs.end());
+    std::vector<fs::path> folder_dirs;
+    for (const fs::path& d : dirs) {
+        std::error_code ec;
+        if (fs::exists(d / "box.def", ec) || fs::exists(d / "song_list.txt", ec)) {
+            folder_dirs.push_back(d);
+        }
+    }
+
+    // Charts sharing a title and subtitle: song_files keeps whichever the preload pool stored last,
+    // so which of them a title lookup returns differs from run to run -- shown by their title
+    std::map<std::pair<std::string, std::string>, int> title_count;
+    for (const auto& [path, lv] : song_levels) {
+        if (auto meta = scores_manager.get_song_meta(path)) {
+            title_count[{meta->title, meta->subtitle}]++;
+        }
+    }
+    auto show = [&](const fs::path& p) {
+        auto u8 = p.u8string();
+        if (auto meta = scores_manager.get_song_meta(std::string(u8.begin(), u8.end()))) {
+            if (title_count[{meta->title, meta->subtitle}] > 1) {
+                return "(one of the charts titled " + meta->title + '|' + meta->subtitle + ')';
+            }
+        }
+        return p.string();
+    };
+
+    out << "[dan courses]\n";
+    for (const fs::path& root : root_paths) {
+        std::error_code ec;
+        std::vector<fs::path> dan_dirs;
+        for (const auto& e : fs::directory_iterator(root, ec)) {
+            if (fs::exists(e.path() / "box.def", ec) &&
+                parse_box_def_uncached(e.path()).genre_index == GenreIndex::DAN) {
+                dan_dirs.push_back(e.path());
+            }
+        }
+        std::sort(dan_dirs.begin(), dan_dirs.end());
+        for (const fs::path& dan_dir : dan_dirs) {
+            DanNavigator dan;
+            for (const DanBoxData& d : dan.scan_for_dump({dan_dir})) {
+                out << d.json_path.string() << " title=" << d.title << " rank=" << d.rank << " notes=" << d.total_notes
+                    << " songs=";
+                for (const DanSongEntry& s : d.songs) {
+                    out << show(s.song_path) << '#' << s.difficulty << ';';
+                }
+                out << '\n';
+            }
+        }
+    }
+
+    out << "[song_files]\n";
+    for (const auto& [key, path] : song_files) {
+        out << key.first << '|' << key.second << " -> " << show(path) << '\n';
+    }
+    out << "[song_levels]\n";
+    std::vector<std::pair<std::string, std::array<int, 5>>> levels(song_levels.begin(), song_levels.end());
+    std::sort(levels.begin(), levels.end());
+    for (const auto& [path, lv] : levels) {
+        out << path << ' ' << lv[0] << ',' << lv[1] << ',' << lv[2] << ',' << lv[3] << ',' << lv[4] << '\n';
+    }
+    out << "[favorites]\n";
+    out << "recent=" << (recent_folder_path ? recent_folder_path->string() : "") << '\n';
+    out << "favorite=" << (favorite_folder_path ? favorite_folder_path->string() : "") << '\n';
+    for (const std::string& f : favorite_songs) {
+        out << f << '\n';
+    }
+
+    out << "[folders: has_def_file is_osu_song_folder has_child_folders]\n";
+    for (const fs::path& d : dirs) {
+        out << d.string() << ' ' << has_def_file(d) << ' ' << is_osu_song_folder(d) << ' ';
+        try {
+            out << has_child_folders(d);
+        } catch (const std::exception& e) {
+            out << "throws";
+        }
+        out << '\n';
+    }
+
+    FolderBox::dump_scans(out, folder_dirs);
+
+    out << "[inline-open plans]\n";
+    for (const fs::path& d : folder_dirs) {
+        std::vector<fs::path> song_paths;
+        std::unordered_map<std::string, std::vector<std::pair<bool, fs::path>>> plan;
+        try {
+            scan_song_tree(d, song_paths, plan);
+        } catch (const std::exception& e) {
+            out << d.string() << " throws " << e.what() << '\n';
+            continue;
+        }
+        out << d.string() << " songs:\n";
+        for (const fs::path& p : song_paths) {
+            out << "  " << p.string() << '\n';
+        }
+        std::vector<std::string> keys;
+        for (const auto& [key, entries] : plan) {
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end());
+        for (const std::string& key : keys) {
+            out << " plan " << key << ":\n";
+            for (const auto& [is_osu, p] : plan[key]) {
+                out << "  " << (is_osu ? "osu " : "") << p.string() << '\n';
+            }
+        }
+    }
+
+    if (abort_loading) {
+        out << "ABORTED (the navigator was reloaded during the dump: some sections are incomplete)\n";
+    }
+    std::ofstream(out_path, std::ios::binary) << out.str();
+    spdlog::info("YATAIDON_LIBRARY_DUMP: wrote {} ({} folders)", out_path, dirs.size());
 }
 
 void Navigator::reset_for_skin_reload() {
@@ -336,7 +482,8 @@ void Navigator::reset_for_skin_reload() {
     is_init = false;
 }
 
-void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> listed) {
+void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> listed,
+                        std::vector<SongFileStamp> stamps) {
     if (is_preloaded) {
         return;
     }
@@ -352,7 +499,7 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
 
 #ifndef __EMSCRIPTEN__
     song_files_ready = false;
-    song_files_thread = std::thread([this, songs_paths, listed = std::move(listed)]() {
+    song_files_thread = std::thread([this, songs_paths, listed = std::move(listed), stamps = std::move(stamps)]() {
         std::vector<fs::path> files = listed ? *listed : get_song_files(songs_paths);
         std::mutex map_mutex;
         std::atomic<size_t> cursor{0};
@@ -366,7 +513,13 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
                         break;
                     }
                     const fs::path& file = files[i];
-                    if (!is_song_file(file)) {
+                    // the listing already says which of these are files, except for a link
+                    if (i < stamps.size() && stamps[i].listed && !stamps[i].is_reparse) {
+                        const fs::path ext = file.extension();
+                        if (stamps[i].is_dir || (ext != ".tja" && ext != ".osu")) {
+                            continue;
+                        }
+                    } else if (!is_song_file(file)) {
                         continue;
                     }
                     // the loading screen already read this chart (parsed or from its cache)
@@ -1390,35 +1543,85 @@ void Navigator::scan_song_tree(const fs::path& path, std::vector<fs::path>& song
     // path again, and deciding "osu folder" from the same listing instead of re-listing
     // each folder through is_osu_song_folder().  On a 600-song genre the old walk cost
     // ~4 stats per file plus one extra enumeration per folder -- most of the open time.
+    //
+    // A folder the startup walk listed is read from the library index instead (no disk access);
+    // entries are typed the way directory_entry::is_directory / is_regular_file type them.
+    struct Typed {
+        fs::path path;
+        bool is_dir;
+        bool is_regular;
+        const LibraryIndex::Dir* listing; // the folder's own listing in the index, if any
+    };
+    const std::shared_ptr<const LibraryIndex> index = library_index();
     std::error_code ec;
-    // plan[top-level dir] = what sits under it, in walk order: {false, song file} or {true, osu folder}.
-    // The second pass below replays this instead of walking the tree again.
-    std::vector<std::pair<fs::path, std::string>> work; // (dir to list, top-level key)
-    auto scan_dir = [&](const fs::path& dir, const std::string& key) {
-        std::vector<fs::path> here, subdirs;
-        bool is_osu = false;
+    // the entries of `dir` in listing order, until an abort
+    auto list = [&](const fs::path& dir, const LibraryIndex::Dir* listing, std::vector<Typed>& out) {
+        out.clear();
+        if (!listing && index) {
+            listing = index->find(dir);
+        }
+        if (listing) {
+            for (const LibraryIndex::Entry& e : listing->entries) {
+                if (abort_loading) {
+                    return;
+                }
+                fs::path p = dir / e.name;
+                if (e.is_reparse) {
+                    std::error_code tec;
+                    const bool d = fs::is_directory(p, tec);
+                    const bool r = !d && fs::is_regular_file(p, tec);
+                    out.push_back({std::move(p), d, r, index->child(e)});
+                } else {
+                    out.push_back({std::move(p), e.is_dir, !e.is_dir, index->child(e)});
+                }
+            }
+            return;
+        }
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             if (abort_loading) {
                 return;
             }
             const fs::directory_entry& e = *it;
             std::error_code tec;
-            if (e.is_directory(tec)) {
-                subdirs.push_back(e.path());
+            const bool d = e.is_directory(tec);
+            const bool r = !d && e.is_regular_file(tec);
+            out.push_back({e.path(), d, r, nullptr});
+        }
+        ec.clear();
+    };
+    // plan[top-level dir] = what sits under it, in walk order: {false, song file} or {true, osu folder}.
+    // The second pass below replays this instead of walking the tree again.
+    struct Work {
+        fs::path dir;    // to list
+        std::string key; // top-level key
+        const LibraryIndex::Dir* listing;
+    };
+    std::vector<Work> work;
+    std::vector<Typed> entries;
+    auto scan_dir = [&](const fs::path& dir, const std::string& key, const LibraryIndex::Dir* listing) {
+        std::vector<fs::path> here;
+        std::vector<Typed> subdirs;
+        bool is_osu = false;
+        list(dir, listing, entries);
+        if (abort_loading) {
+            return;
+        }
+        for (Typed& e : entries) {
+            if (e.is_dir) {
+                subdirs.push_back(std::move(e));
                 continue;
             }
-            if (!e.is_regular_file(tec)) {
+            if (!e.is_regular) {
                 continue;
             }
-            auto ext = e.path().extension();
+            auto ext = e.path.extension();
             if (ext == ".osu") {
                 is_osu = true;
             }
             if (ext == ".tja" || ext == ".osu") {
-                here.push_back(e.path());
+                here.push_back(std::move(e.path));
             }
         }
-        ec.clear();
         if (is_osu) {
             plan[key].emplace_back(true, dir);
             return;
@@ -1427,30 +1630,27 @@ void Navigator::scan_song_tree(const fs::path& path, std::vector<fs::path>& song
             song_paths.push_back(f);
             plan[key].emplace_back(false, f);
         }
-        for (const auto& d : subdirs) {
-            work.emplace_back(d, key);
+        for (Typed& d : subdirs) {
+            work.push_back({std::move(d.path), key, d.listing});
         }
     };
-    for (fs::directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
-        if (abort_loading) {
-            break;
-        }
-        const fs::directory_entry& e = *it;
-        std::error_code tec;
-        if (e.is_directory(tec)) {
-            std::string key = e.path().string();
+    list(path, nullptr, entries);
+    for (Typed& e : entries) {
+        if (e.is_dir) {
+            std::string key = e.path.string();
             plan[key];
-            work.emplace_back(e.path(), key);
-        } else if (e.is_regular_file(tec)) {
-            auto ext = e.path().extension();
+            work.push_back({std::move(e.path), key, e.listing});
+        } else if (e.is_regular) {
+            auto ext = e.path.extension();
             if (ext == ".tja" || ext == ".osu") {
-                song_paths.push_back(e.path());
+                song_paths.push_back(e.path);
             }
         }
     }
-    ec.clear();
     for (size_t i = 0; i < work.size() && !abort_loading; i++) {
-        scan_dir(work[i].first, work[i].second);
+        // a copy: scan_dir appends to `work`, which can move the element a reference would point at
+        const Work item = work[i];
+        scan_dir(item.dir, item.key, item.listing);
     }
 }
 
@@ -1715,6 +1915,34 @@ bool Navigator::has_def_file(const std::filesystem::path& path) {
         def_file_cache[key] = result;
         return result;
     };
+
+    // From the library index when the startup walk listed the folder: the same answer without a stat
+    if (auto index = library_index()) {
+        if (const LibraryIndex::Dir* listing = index->find(path)) {
+            for (const LibraryIndex::Entry& e : listing->entries) {
+                if (_wcsicmp(e.name.c_str(), L"box.def") == 0) {
+                    std::error_code ec;
+                    if (!e.is_reparse || fs::exists(path / e.name, ec)) {
+                        return remember(true);
+                    }
+                }
+            }
+            for (const LibraryIndex::Entry& e : listing->entries) {
+                const fs::path sub = path / e.name;
+                std::error_code ec;
+                if (e.is_reparse ? !fs::is_directory(sub, ec) : !e.is_dir) {
+                    continue;
+                }
+                if (is_gen4_root(sub) || !gen3_root_at(sub).empty()) {
+                    continue;
+                }
+                if (has_def_file(sub)) {
+                    return remember(true);
+                }
+            }
+            return remember(false);
+        }
+    }
 
     std::error_code ec;
     if (fs::exists(path / "box.def", ec)) {
@@ -2081,6 +2309,29 @@ bool Navigator::has_child_folders(const fs::path& path) {
 // genre of several hundred songs otherwise lists each song folder on the main thread first (~80 ms
 // warm, far longer from a cold disk) before the folder starts to open.
 void Navigator::prefetch_child_folders(const fs::path& parent) {
+    auto prefetch = [&](const fs::path& child) {
+        try {
+            has_child_folders(child);
+        } catch (const std::exception& e) {
+            spdlog::warn("Folder scan of {} failed: {}", child.string(), e.what());
+        }
+    };
+    if (auto index = library_index()) {
+        if (const LibraryIndex::Dir* listing = index->find(parent)) {
+            for (const LibraryIndex::Entry& e : listing->entries) {
+                if (abort_loading) {
+                    return;
+                }
+                const fs::path child = parent / e.name;
+                std::error_code dir_ec;
+                if (e.is_reparse ? (!fs::is_directory(child, dir_ec) || dir_ec) : !e.is_dir) {
+                    continue;
+                }
+                prefetch(child);
+            }
+            return;
+        }
+    }
     std::error_code ec;
     for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec)) {
         if (abort_loading) {
@@ -2090,11 +2341,7 @@ void Navigator::prefetch_child_folders(const fs::path& parent) {
         if (!it->is_directory(dir_ec) || dir_ec) {
             continue;
         }
-        try {
-            has_child_folders(it->path());
-        } catch (const std::exception& e) {
-            spdlog::warn("Folder scan of {} failed: {}", it->path().string(), e.what());
-        }
+        prefetch(it->path());
     }
 }
 
@@ -2114,29 +2361,52 @@ bool Navigator::scan_child_folders(const fs::path& path) {
 #ifdef _WIN32
     // The same checks from one listing per child folder: the portable loop listed each child twice and
     // stat'ed it about six times, which took most of a second for a genre of several hundred songs.
-    std::vector<Win32DirEntry> entries;
-    if (!win32_list_dir(path, entries)) {
+    // The listings come from the library index when the startup walk listed the folder.
+    const std::shared_ptr<const LibraryIndex> index = library_index();
+    std::vector<LibraryIndex::Entry> entries_storage, inner_storage;
+    auto listing_of = [&](const fs::path& dir, const LibraryIndex::Dir* listed,
+                          std::vector<LibraryIndex::Entry>& storage) -> const std::vector<LibraryIndex::Entry>* {
+        if (!listed && index) {
+            listed = index->find(dir);
+        }
+        if (listed) {
+            return &listed->entries;
+        }
+        std::vector<Win32DirEntry> raw;
+        if (!win32_list_dir(dir, raw)) {
+            return nullptr;
+        }
+        storage.clear();
+        for (Win32DirEntry& e : raw) {
+            storage.push_back({std::move(e.name), e.is_dir, e.is_reparse, -1});
+        }
+        return &storage;
+    };
+    const std::vector<LibraryIndex::Entry>* entries = listing_of(path, nullptr, entries_storage);
+    if (!entries) {
         throw fs::filesystem_error("cannot open directory", path,
                                    std::make_error_code(std::errc::no_such_file_or_directory));
     }
-    auto named = [](const Win32DirEntry& e, const wchar_t* name) { return _wcsicmp(e.name.c_str(), name) == 0; };
-    for (const Win32DirEntry& entry : entries) {
+    auto named = [](const LibraryIndex::Entry& e, const wchar_t* name) { return _wcsicmp(e.name.c_str(), name) == 0; };
+    for (const LibraryIndex::Entry& entry : *entries) {
         if (!entry.is_dir) {
             continue;
         }
         const fs::path child = path / entry.name;
-        std::vector<Win32DirEntry> inner;
-        if (!win32_list_dir(child, inner)) {
+        const std::vector<LibraryIndex::Entry>* inner_listing =
+            listing_of(child, index ? index->child(entry) : nullptr, inner_storage);
+        if (!inner_listing) {
             continue;
         }
+        const std::vector<LibraryIndex::Entry>& inner = *inner_listing;
 
         bool has_fumen = false, has_usrdir = false;
-        for (const Win32DirEntry& e : inner) {
+        for (const LibraryIndex::Entry& e : inner) {
             if (named(e, L"box.def")) {
                 return true; // has_def_file
             }
             if (!e.is_dir) {
-                if (fs::path(e.name).extension() == ".osu") {
+                if (name_has_ext(e.name, L".osu")) {
                     return true; // is_osu_song_folder
                 }
             } else if (named(e, L"fumen")) {
@@ -2150,7 +2420,7 @@ bool Navigator::scan_child_folders(const fs::path& path) {
             return true;
         }
         // has_def_file: a box.def further down, not inside a data root
-        for (const Win32DirEntry& e : inner) {
+        for (const LibraryIndex::Entry& e : inner) {
             if (!e.is_dir) {
                 continue;
             }
@@ -2527,6 +2797,22 @@ bool Navigator::is_gen4_song_folder(const fs::path& path) {
 }
 
 bool Navigator::is_osu_song_folder(const fs::path& path) {
+    if (auto index = library_index()) {
+        if (const LibraryIndex::Dir* listing = index->find(path)) {
+            try {
+                for (const LibraryIndex::Entry& e : listing->entries) {
+                    if (!name_has_ext(e.name, L".osu")) {
+                        continue;
+                    }
+                    if (e.is_reparse ? fs::is_regular_file(path / e.name) : !e.is_dir) {
+                        return true;
+                    }
+                }
+            } catch (...) {
+            }
+            return false;
+        }
+    }
     if (!fs::is_directory(path)) {
         return false;
     }

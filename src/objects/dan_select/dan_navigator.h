@@ -71,6 +71,8 @@ public:
     DanBox* get_current();
     void update(double current_ms);
     void draw();
+    // YATAIDON_LIBRARY_DUMP: the courses a dojo entry lists for `roots`, in scan order (blocks)
+    std::vector<DanBoxData> scan_for_dump(const std::vector<fs::path>& roots) { return scan_all_data(roots); }
 
 private:
     static constexpr float BOX_CENTER = 594.0f;

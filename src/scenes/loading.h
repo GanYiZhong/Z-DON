@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "../libs/filesystem.h"
 #include "../libs/screen.h"
 #include "../objects/global/allnet_indicator.h"
 
@@ -15,6 +16,7 @@ private:
     std::atomic<bool> loading_complete{false};
     std::atomic<float> progress{0.0f};
     std::vector<fs::path> songs;
+    std::vector<SongFileStamp> song_stamps; // what the directory listing said about each of `songs`
 
     ray::Rectangle progress_bar{};
 
