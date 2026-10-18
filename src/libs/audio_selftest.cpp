@@ -20,8 +20,8 @@ void AudioEngine::run_selftest(const std::string& spec) {
         return;
     }
     const std::string out_path = f[0];
-    const fs::path long_file = fs::u8path(f[1]);
-    const fs::path stream_file = fs::u8path(f[2]);
+    const fs::path long_file = fs::path(f[1]);
+    const fs::path stream_file = fs::path(f[2]);
 
     dev_pause_device(true);
     std::vector<float> out;

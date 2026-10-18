@@ -225,41 +225,13 @@ static sf_count_t vf_tell(void* user_data) {
     return static_cast<VirtualFile*>(user_data)->pos;
 }
 
-static void unload_music_stream_from_map(std::unordered_map<std::string, music>& music_streams,
-                                         const std::string& name) {
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        music& mus = it->second;
-
-        mus.is_playing = false;
-
-        if (mus.file_handle) {
-            sf_close(mus.file_handle);
-            mus.file_handle = nullptr;
-        }
-
-        delete[] mus.pcm_data;
-        mus.pcm_data = nullptr;
-
-        delete[] mus.stream_buffer;
-        mus.stream_buffer = nullptr;
-
-        if (mus.resampler) {
-            src_delete(mus.resampler);
-            mus.resampler = nullptr;
-        }
-
-        delete[] mus.resample_buffer;
-        mus.resample_buffer = nullptr;
-
-        music_streams.erase(it);
-        spdlog::debug("Unloaded music stream: {}", name);
-    } else {
-        spdlog::warn("Music stream {} not found", name);
+AudioEngine::AudioEngine() {
+    activate_cells = std::make_unique<ActivateCell[]>(kActivateCap);
+    for (size_t i = 0; i < kActivateCap; i++) {
+        activate_cells[i].seq.store(i, std::memory_order_relaxed);
     }
+    active_voices.reserve(kSlotChunk * kMaxSlotChunks); // the mixer never allocates
 }
-
-AudioEngine::AudioEngine() {}
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
 struct RtApiEntry {
@@ -338,6 +310,12 @@ std::vector<std::string> enumerate_audio_devices(int device_type) {
 
 AudioEngine::~AudioEngine() {
     close_audio_device();
+    stop_decoder();
+    reclaim(true);
+    delete mixer_streams.exchange(nullptr);
+    for (auto& chunk : slot_chunks) {
+        delete[] chunk.exchange(nullptr);
+    }
 }
 
 // Splits one source frame into left/right: mono by pan, stereo attenuated on the far side.
@@ -368,27 +346,73 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
 
     const bool stats = audio_dev::stats_enabled();
     const int64_t t_start = stats ? audio_dev::now_ns() : 0;
-    std::shared_lock<std::shared_mutex> guard(engine->rw_lock);
-    const int64_t t_locked = stats ? audio_dev::now_ns() : 0;
 
-    for (auto& [name, snd] : engine->sounds) {
-        std::atomic_ref<bool> aref_playing(snd.is_playing);
-        std::atomic_ref<unsigned int> aref_frame(snd.current_frame);
+    // No lock: what is freed elsewhere waits until this callback has left (see retire)
+    engine->mix_epoch.fetch_add(1, std::memory_order_seq_cst);
+    engine->mix_sounds(out, framesPerBuffer);
+    engine->mix_streams(out, framesPerBuffer);
+    engine->mix_epoch.fetch_add(1, std::memory_order_seq_cst);
 
-        if (!aref_playing.load(std::memory_order_acquire)) {
+    audio_dev::capture(out, framesPerBuffer);
+    const float master_vol = engine->master_volume.load(std::memory_order_relaxed);
+    for (unsigned long i = 0; i < buffer_size; i++) {
+        out[i] = std::clamp(out[i] * master_vol, -1.0f, 1.0f);
+    }
+    if (stats) {
+        audio_dev::record_callback(audio_dev::now_ns() - t_start, 0);
+    }
+}
+
+void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
+    auto add_voice = [this](SoundId id) {
+        SoundSlot& s = *slot_at(id);
+        if (!s.in_active) {
+            s.in_active = true;
+            active_voices.push_back(id); // capacity reserved for every possible slot
+        }
+    };
+    // voices play_sound started since the last callback
+    for (;;) {
+        const size_t pos = activate_tail.load(std::memory_order_relaxed);
+        ActivateCell& cell = activate_cells[pos % kActivateCap];
+        if (cell.seq.load(std::memory_order_acquire) != pos + 1) {
+            break;
+        }
+        const SoundId id = cell.id;
+        cell.seq.store(pos + kActivateCap, std::memory_order_release);
+        activate_tail.store(pos + 1, std::memory_order_relaxed);
+        add_voice(id);
+    }
+    if (activate_rescan.exchange(false, std::memory_order_acquire)) {
+        const uint32_t n = slot_count.load(std::memory_order_acquire);
+        for (SoundId id = 0; id < n; id++) {
+            if (slot_at(id)->is_playing.load(std::memory_order_relaxed)) {
+                add_voice(id);
+            }
+        }
+    }
+
+    for (size_t v = 0; v < active_voices.size();) {
+        SoundSlot& snd = *slot_at(active_voices[v]);
+        const sound* pcm =
+            snd.is_playing.load(std::memory_order_acquire) ? snd.pcm.load(std::memory_order_seq_cst) : nullptr;
+        if (!pcm) {
+            snd.is_playing.store(false, std::memory_order_relaxed); // unloaded while playing
+            snd.in_active = false;
+            active_voices[v] = active_voices.back();
+            active_voices.pop_back();
             continue;
         }
 
-        const float volume = std::atomic_ref<float>(snd.volume).load(std::memory_order_relaxed) *
-                             std::atomic_ref<float>(snd.playback_gain).load(std::memory_order_relaxed) *
-                             snd.normalization_gain;
+        const float volume = snd.volume.load(std::memory_order_relaxed) *
+                             snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain;
 
-        const float pan = std::atomic_ref<float>(snd.pan).load(std::memory_order_relaxed);
-        unsigned int frame = aref_frame.load(std::memory_order_relaxed);
+        const float pan = snd.pan.load(std::memory_order_relaxed);
+        unsigned int frame = snd.current_frame.load(std::memory_order_relaxed);
 
-        const float pitch = std::atomic_ref<float>(snd.pitch).load(std::memory_order_relaxed);
-        const float* data_ptr = snd.data;
-        const unsigned int channels = snd.channels;
+        const float pitch = snd.pitch.load(std::memory_order_relaxed);
+        const float* data_ptr = pcm->data;
+        const unsigned int channels = pcm->channels;
 
         unsigned long frames_to_process = framesPerBuffer;
         unsigned long output_index = 0;
@@ -397,13 +421,13 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
         // fraction must survive across mix() calls, otherwise non-integer
         // pitches degrade toward trunc(pitch) as the buffer size shrinks
         // (at buffer_size=1, pitch 0.9 never advances and 1.5 plays at 1.0).
-        double frame_f = (double)frame + std::atomic_ref<float>(snd.frame_frac).load(std::memory_order_relaxed);
+        double frame_f = (double)frame + snd.frame_frac.load(std::memory_order_relaxed);
 
-        unsigned int end_frame = snd.frame_count;
+        unsigned int end_frame = pcm->frame_count;
         bool decoding = false; // the tail isn't decoded yet: past end_frame is silence for now, not the end
-        if (snd.decode_job) {
-            decoding = !snd.decode_job->done.load(std::memory_order_acquire);
-            end_frame = snd.decode_job->frames_ready.load(std::memory_order_acquire);
+        if (pcm->decode_job) {
+            decoding = !pcm->decode_job->done.load(std::memory_order_acquire);
+            end_frame = pcm->decode_job->frames_ready.load(std::memory_order_acquire);
         }
 
         while (frames_to_process > 0 && still_playing) {
@@ -412,7 +436,7 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
                 if (decoding) {
                     break;
                 }
-                if (std::atomic_ref<bool>(snd.loop).load(std::memory_order_relaxed) && end_frame > 0) {
+                if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
                     frame_f = 0.0;
                     continue;
                 } else {
@@ -434,160 +458,116 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
         }
         frame = (unsigned int)frame_f;
 
-        std::atomic_ref<float>(snd.frame_frac).store((float)(frame_f - (double)frame), std::memory_order_relaxed);
-        aref_frame.store(frame, std::memory_order_relaxed);
-        if (!still_playing) {
-            aref_playing.store(false, std::memory_order_release);
+        // a store_sound/unload that replaced the PCM meanwhile has reset the position already
+        if (snd.pcm.load(std::memory_order_relaxed) == pcm) {
+            snd.frame_frac.store((float)(frame_f - (double)frame), std::memory_order_relaxed);
+            snd.current_frame.store(frame, std::memory_order_relaxed);
         }
+        if (!still_playing) {
+            snd.is_playing.store(false, std::memory_order_release);
+            snd.in_active = false;
+            active_voices[v] = active_voices.back();
+            active_voices.pop_back();
+            continue;
+        }
+        v++;
     }
+}
 
-    for (auto& [name, mus] : engine->music_streams) {
-        std::atomic_ref<bool> aref_playing(mus.is_playing);
+// Mixer side of a stream's seek: drop what the ring holds from before it.
+static void apply_stream_flush(music& mus) {
+    const uint32_t rgen = mus.ring_gen.load(std::memory_order_acquire);
+    if (rgen == mus.mixer_gen) {
+        return;
+    }
+    const unsigned long long fp = mus.flush_pos.load(std::memory_order_acquire);
+    if (mus.read_pos.load(std::memory_order_relaxed) < fp) {
+        mus.read_pos.store(fp, std::memory_order_release);
+    }
+    mus.mixer_gen = rgen;
+    mus.current_frame.store(mus.cmd_out_frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+}
 
-        if (!aref_playing.load(std::memory_order_acquire)) {
+void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
+    const StreamList* list = mixer_streams.load(std::memory_order_seq_cst);
+    if (!list) {
+        return;
+    }
+    for (music* mp : list->streams) {
+        music& mus = *mp;
+        const uint32_t gen = mus.cmd_gen.load(std::memory_order_acquire);
+        const unsigned int channels = (unsigned int)mus.file_info.channels;
+
+        if (mus.pcm_data) {
+            // fully decoded: read in place; a seek/stop/play takes effect here
+            if (gen != mus.mixer_gen) {
+                mus.mixer_gen = gen;
+                mus.current_frame.store(mus.cmd_out_frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            }
+            if (!mus.is_playing.load(std::memory_order_acquire)) {
+                continue;
+            }
+            const float volume = mus.volume.load(std::memory_order_relaxed) * mus.normalization_gain;
+            const float pan = mus.pan.load(std::memory_order_relaxed);
+            const unsigned long long total = (unsigned long long)std::max<sf_count_t>(mus.pcm_total_frames, 0);
+            unsigned long long pos = mus.current_frame.load(std::memory_order_relaxed);
+            unsigned long frames_to_process = framesPerBuffer;
+            unsigned long output_index = 0;
+            while (frames_to_process > 0) {
+                if (pos >= total) {
+                    if (mus.loop && total > 0) {
+                        pos = 0;
+                        continue;
+                    }
+                    mus.is_playing.store(false, std::memory_order_release);
+                    break;
+                }
+                const unsigned long n = (unsigned long)std::min<unsigned long long>(frames_to_process, total - pos);
+                for (unsigned long i = 0; i < n; i++) {
+                    float left, right;
+                    pan_frame(mus.pcm_data + (pos + i) * channels, channels, pan, left, right);
+                    out[(output_index + i) * 2] += left * volume;
+                    out[(output_index + i) * 2 + 1] += right * volume;
+                }
+                pos += n;
+                output_index += n;
+                frames_to_process -= n;
+            }
+            mus.current_frame.store(pos, std::memory_order_relaxed);
             continue;
         }
 
-        std::atomic_ref<unsigned long long> aref_frame(mus.current_frame);
-        const float volume =
-            std::atomic_ref<float>(mus.volume).load(std::memory_order_relaxed) * mus.normalization_gain;
-        const float pan = std::atomic_ref<float>(mus.pan).load(std::memory_order_relaxed);
-
-        unsigned long frames_to_process = framesPerBuffer;
-        unsigned long output_index = 0;
-
-        while (frames_to_process > 0 && aref_playing.load(std::memory_order_relaxed)) {
-            if (mus.buffer_position >= mus.frames_in_buffer) {
-                if (mus.file_handle) {
-                    sf_count_t frames_read = sf_readf_float(mus.file_handle, mus.stream_buffer, mus.buffer_size);
-
-                    if (frames_read == 0) {
-                        if (mus.loop) {
-                            sf_seek(mus.file_handle, 0, SEEK_SET);
-                            frames_read = sf_readf_float(mus.file_handle, mus.stream_buffer, mus.buffer_size);
-                            if (mus.resampler) {
-                                src_reset(mus.resampler);
-                            }
-                            if (frames_read == 0) {
-                                // Empty/broken stream even after seeking to the start -- stop
-                                // instead of spinning the driver thread forever.
-                                aref_playing.store(false, std::memory_order_release);
-                                break;
-                            }
-                        } else {
-                            aref_playing.store(false, std::memory_order_release);
-                            break;
-                        }
-                    }
-
-                    if (mus.resampler && frames_read > 0) {
-                        double ratio = engine->target_sample_rate / (double)mus.file_info.samplerate;
-                        const unsigned int channels = mus.file_info.channels;
-                        const long output_budget = (long)(frames_read * ratio) + 256;
-
-                        sf_count_t input_consumed = 0;
-                        long output_generated = 0;
-                        bool resample_error = false;
-
-                        while (input_consumed < frames_read && output_generated < output_budget) {
-                            SRC_DATA src_data;
-                            src_data.data_in = mus.stream_buffer + input_consumed * channels;
-                            src_data.input_frames = frames_read - input_consumed;
-                            src_data.data_out = mus.resample_buffer + output_generated * channels;
-                            src_data.output_frames = output_budget - output_generated;
-                            src_data.src_ratio = ratio;
-                            src_data.end_of_input = 0;
-
-                            int error = src_process(mus.resampler, &src_data);
-                            if (error) {
-                                spdlog::error("Resampling error for music stream {}: {}", name, src_strerror(error));
-                                aref_playing.store(false, std::memory_order_release);
-                                resample_error = true;
-                                break;
-                            }
-
-                            input_consumed += src_data.input_frames_used;
-                            output_generated += src_data.output_frames_gen;
-
-                            if (src_data.input_frames_used == 0 && src_data.output_frames_gen == 0) {
-                                spdlog::error("Resampler stalled for music stream {}", name);
-                                aref_playing.store(false, std::memory_order_release);
-                                resample_error = true;
-                                break;
-                            }
-                        }
-
-                        if (resample_error) {
-                            break;
-                        }
-
-                        mus.frames_in_buffer = output_generated;
-                    } else {
-                        mus.frames_in_buffer = frames_read;
-                    }
-
-                    mus.buffer_position = 0;
-                } else if (mus.pcm_data) {
-                    unsigned long long frame_pos = aref_frame.load(std::memory_order_relaxed);
-                    sf_count_t frames_left = (mus.pcm_total_frames > (sf_count_t)frame_pos)
-                                                 ? mus.pcm_total_frames - (sf_count_t)frame_pos
-                                                 : 0;
-                    sf_count_t to_fill = std::min((sf_count_t)mus.buffer_size, frames_left);
-
-                    if (to_fill == 0) {
-                        if (mus.loop && mus.pcm_total_frames > 0) {
-                            aref_frame.store(0ULL, std::memory_order_relaxed);
-                            frame_pos = 0;
-                            to_fill = std::min((sf_count_t)mus.buffer_size, mus.pcm_total_frames);
-                        } else {
-                            aref_playing.store(false, std::memory_order_release);
-                            break;
-                        }
-                    }
-
-                    unsigned int ch = (unsigned int)mus.file_info.channels;
-                    std::memcpy(mus.stream_buffer, mus.pcm_data + frame_pos * ch, (size_t)to_fill * ch * sizeof(float));
-                    mus.frames_in_buffer = (unsigned int)to_fill;
-                    mus.buffer_position = 0;
-                } else {
-                    aref_playing.store(false, std::memory_order_release);
-                    break;
-                }
-            }
-
-            unsigned long frames_available = mus.frames_in_buffer - mus.buffer_position;
-            unsigned long frames_to_read =
-                (frames_to_process < frames_available) ? frames_to_process : frames_available;
-
-            const unsigned int channels = mus.file_info.channels;
-            const float* source_buffer = mus.resampler ? mus.resample_buffer : mus.stream_buffer;
-
-            for (unsigned long i = 0; i < frames_to_read; i++) {
-                unsigned long dst_index = (output_index + i) * 2;
-
-                float left, right;
-                pan_frame(source_buffer + (mus.buffer_position + i) * channels, channels, pan, left, right);
-
-                out[dst_index] += left * volume;
-                out[dst_index + 1] += right * volume;
-            }
-
-            mus.buffer_position += frames_to_read;
-            aref_frame.fetch_add(frames_to_read, std::memory_order_relaxed);
-            output_index += frames_to_read;
-            frames_to_process -= frames_to_read;
+        apply_stream_flush(mus);
+        if (gen != mus.ring_gen.load(std::memory_order_acquire)) {
+            continue; // a seek/stop the decoder hasn't carried out yet: hold the position, play nothing
         }
-    }
+        if (!mus.is_playing.load(std::memory_order_acquire)) {
+            continue;
+        }
 
-    guard.unlock();
+        const float volume = mus.volume.load(std::memory_order_relaxed) * mus.normalization_gain;
+        const float pan = mus.pan.load(std::memory_order_relaxed);
+        const unsigned long long rp = mus.read_pos.load(std::memory_order_relaxed);
+        const unsigned long long avail = mus.write_pos.load(std::memory_order_acquire) - rp;
+        const unsigned long n = (unsigned long)std::min<unsigned long long>(framesPerBuffer, avail);
+        for (unsigned long i = 0; i < n; i++) {
+            const float* src = mus.ring.get() + ((rp + i) % mus.ring_frames) * channels;
+            float left, right;
+            pan_frame(src, channels, pan, left, right);
+            out[i * 2] += left * volume;
+            out[i * 2 + 1] += right * volume;
+        }
+        mus.read_pos.store(rp + n, std::memory_order_release);
+        mus.current_frame.fetch_add(n, std::memory_order_relaxed);
 
-    audio_dev::capture(out, framesPerBuffer);
-    const float master_vol = engine->master_volume.load(std::memory_order_relaxed);
-    for (unsigned long i = 0; i < buffer_size; i++) {
-        out[i] = std::clamp(out[i] * master_vol, -1.0f, 1.0f);
-    }
-    if (stats) {
-        audio_dev::record_callback(audio_dev::now_ns() - t_start, t_locked - t_start);
+        if (n < framesPerBuffer) {
+            if (mus.eof.load(std::memory_order_acquire) && mus.write_pos.load(std::memory_order_acquire) == rp + n &&
+                mus.cmd_gen.load(std::memory_order_acquire) == gen) {
+                mus.is_playing.store(false, std::memory_order_release); // the end of the file
+            } else {
+                audio_dev::record_stream_underrun(); // the decoder fell behind: silence, position held
+            }
+        }
     }
 }
 
@@ -838,6 +818,9 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     this->is_ready = false;
     // Dev hook: YATAIDON_TEST=1 (automated test runs) plays everything at 1% volume
     this->master_volume = zdon_test_mode() ? 0.01f : 1.0f;
+    // the backends' callbacks reuse this for multi-channel / SDL output: no allocation there
+    sdl_scratch_buffer.resize(std::max<size_t>(sdl_scratch_buffer.size(), 16384));
+    start_decoder();
     try {
         bool ok = false;
         bool chosen = false;
@@ -919,6 +902,9 @@ void AudioEngine::close_audio_device() {
     } catch (const std::exception& e) {
         spdlog::error("Error closing audio device: {}", e.what());
     }
+    // no callback runs any more: free what is still waiting for one to finish
+    stop_decoder();
+    reclaim(true);
 }
 
 bool AudioEngine::is_audio_device_ready() const {
@@ -965,14 +951,126 @@ static float* adopt_decoded_pcm(std::vector<float>& samples, int channels, unsig
     return resampled;
 }
 
-void AudioEngine::store_sound(const std::string& name, const sound& snd) {
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        std::atomic_ref<bool>(it->second.is_playing).store(false, std::memory_order_relaxed);
-        free_sound(it->second);
+// ---- deferred reclamation ----
+// mix() bumps mix_epoch on entry and exit (odd = inside). Whatever a callback can reach is unlinked
+// first (a seq_cst exchange) and then retired with the epoch seen afterwards: a callback that was
+// already running may still hold it, one that starts later can't, so it is freed once the epoch
+// shows that running callback has left.
+void AudioEngine::retire(std::function<void()> free) {
+    const uint64_t e = mix_epoch.load(std::memory_order_seq_cst);
+    {
+        std::lock_guard<std::mutex> g(retire_lock);
+        retired.push_back(Retired{(e & 1) ? e + 1 : e, std::move(free)});
     }
-    sounds[name] = snd;
+    reclaim();
+}
+
+void AudioEngine::reclaim(bool force) {
+    std::vector<std::function<void()>> ready;
+    {
+        std::lock_guard<std::mutex> g(retire_lock);
+        if (retired.empty()) {
+            return;
+        }
+        const uint64_t now = mix_epoch.load(std::memory_order_seq_cst);
+        for (size_t i = 0; i < retired.size();) {
+            if (force || now >= retired[i].safe_epoch) {
+                ready.push_back(std::move(retired[i].free));
+                retired[i] = std::move(retired.back());
+                retired.pop_back();
+            } else {
+                i++;
+            }
+        }
+    }
+    if (ready.empty()) {
+        return;
+    }
+    // the main-thread readers of a slot's PCM hold names_lock (shared): wait out any that may
+    // have loaded the pointer before it was unlinked
+    {
+        std::unique_lock<std::shared_mutex> grace(names_lock);
+    }
+    for (auto& f : ready) {
+        f();
+    }
+}
+
+SoundId AudioEngine::find_sound(const std::string& name) const {
+    std::shared_lock<std::shared_mutex> g(names_lock);
+    auto it = sound_ids.find(name);
+    return it == sound_ids.end() ? kNoSound : it->second;
+}
+
+SoundId AudioEngine::sound_id(const std::string& name) {
+    {
+        std::shared_lock<std::shared_mutex> g(names_lock);
+        auto it = sound_ids.find(name);
+        if (it != sound_ids.end()) {
+            return it->second;
+        }
+    }
+    std::unique_lock<std::shared_mutex> g(names_lock);
+    auto it = sound_ids.find(name);
+    if (it != sound_ids.end()) {
+        return it->second;
+    }
+    const uint32_t id = slot_count.load(std::memory_order_relaxed);
+    if (id >= kSlotChunk * kMaxSlotChunks) {
+        static std::once_flag warned;
+        std::call_once(warned, [] { spdlog::error("Too many sound names; further ones are ignored"); });
+        return kNoSound;
+    }
+    if (id % kSlotChunk == 0) {
+        slot_chunks[id / kSlotChunk].store(new SoundSlot[kSlotChunk], std::memory_order_release);
+    }
+    slot_count.store(id + 1, std::memory_order_release);
+    sound_ids.emplace(name, id);
+    return id;
+}
+
+// Runs fn(slot, pcm) for a loaded sound, holding names_lock (shared) so the PCM stays alive;
+// false if there is no such sound.
+template<class Fn>
+bool AudioEngine::with_sound(const std::string& name, Fn&& fn) const {
+    std::shared_lock<std::shared_mutex> g(names_lock);
+    auto it = sound_ids.find(name);
+    if (it == sound_ids.end()) {
+        return false;
+    }
+    SoundSlot& s = *slot_at(it->second);
+    sound* pcm = s.pcm.load(std::memory_order_acquire);
+    if (!pcm) {
+        return false;
+    }
+    fn(s, *pcm);
+    return true;
+}
+
+void AudioEngine::store_sound(const std::string& name, const sound& snd) {
+    const SoundId id = sound_id(name);
+    if (id == kNoSound) {
+        sound lost = snd;
+        free_sound(lost);
+        return;
+    }
+    SoundSlot& s = *slot_at(id);
+    s.is_playing.store(false, std::memory_order_relaxed);
+    sound* fresh = new sound(snd);
+    s.current_frame.store(snd.current_frame, std::memory_order_relaxed);
+    s.frame_frac.store(snd.frame_frac, std::memory_order_relaxed);
+    s.loop.store(snd.loop, std::memory_order_relaxed);
+    s.volume.store(snd.volume, std::memory_order_relaxed);
+    s.playback_gain.store(snd.playback_gain, std::memory_order_relaxed);
+    s.pan.store(snd.pan, std::memory_order_relaxed);
+    s.pitch.store(snd.pitch, std::memory_order_relaxed);
+    sound* old = s.pcm.exchange(fresh, std::memory_order_seq_cst);
+    if (old) {
+        retire([old] {
+            free_sound(*old);
+            delete old;
+        });
+    }
 }
 
 void AudioEngine::free_sound(sound& snd) {
@@ -1419,34 +1517,33 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
 }
 
 void AudioEngine::unload_sound(const std::string& name) {
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        sound& snd = it->second;
-
-        std::atomic_ref<bool>(snd.is_playing).store(false, std::memory_order_relaxed);
-        free_sound(snd);
-
-        sounds.erase(it);
-    } else {
+    const SoundId id = find_sound(name);
+    SoundSlot* s = id == kNoSound ? nullptr : slot_at(id);
+    if (!s || !s->pcm.load(std::memory_order_acquire)) {
         spdlog::warn("Sound {} not found", name);
+        return;
     }
-}
-
-// Snapshot of a map's keys under the shared lock, so entries can be unloaded one by one afterwards.
-template<class Map>
-static std::vector<std::string> keys_of(std::shared_mutex& mtx, const Map& map) {
-    std::vector<std::string> names;
-    std::shared_lock<std::shared_mutex> guard(mtx);
-    names.reserve(map.size());
-    for (const auto& entry : map) {
-        names.push_back(entry.first);
+    s->is_playing.store(false, std::memory_order_relaxed);
+    sound* old = s->pcm.exchange(nullptr, std::memory_order_seq_cst);
+    if (old) {
+        retire([old] {
+            free_sound(*old);
+            delete old;
+        });
     }
-    return names;
 }
 
 void AudioEngine::unload_all_sounds() {
-    for (const auto& name : keys_of(rw_lock, sounds)) {
+    std::vector<std::string> names;
+    {
+        std::shared_lock<std::shared_mutex> g(names_lock);
+        for (const auto& [name, id] : sound_ids) {
+            if (slot_at(id)->pcm.load(std::memory_order_acquire)) {
+                names.push_back(name);
+            }
+        }
+    }
+    for (const auto& name : names) {
         unload_sound(name);
     }
 
@@ -1471,55 +1568,64 @@ static float preset_volume(const VolumeConfig& presets, VolumePreset preset) {
 }
 
 uint64_t AudioEngine::sound_play_count(const std::string& name) {
-    std::lock_guard<std::mutex> g(play_count_lock);
-    auto it = play_counts.find(name);
-    return it == play_counts.end() ? 0 : it->second;
+    const SoundId id = find_sound(name);
+    return id == kNoSound ? 0 : slot_at(id)->play_count.load(std::memory_order_relaxed);
 }
 
 void AudioEngine::play_sound(const std::string& name, VolumePreset volume_preset, float gain) {
-    {
-        std::lock_guard<std::mutex> g(play_count_lock);
-        ++play_counts[name];
+    play_sound(sound_id(name), volume_preset, gain);
+}
+
+void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain) {
+    if (id == kNoSound) {
+        return;
     }
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        sound& snd = it->second;
+    SoundSlot& snd = *slot_at(id);
+    snd.play_count.fetch_add(1, std::memory_order_relaxed);
+    if (!snd.pcm.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (volume_preset != VolumePreset::NONE) {
+        snd.volume.store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
+    }
+    snd.playback_gain.store(std::max(gain, 0.0f), std::memory_order_relaxed);
+    snd.current_frame.store(0, std::memory_order_relaxed);
+    snd.frame_frac.store(0.0f, std::memory_order_relaxed);
+    snd.is_playing.store(true, std::memory_order_release);
+    activate(id);
+}
 
-        if (volume_preset != VolumePreset::NONE) {
-            std::atomic_ref<float>(snd.volume)
-                .store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
+// Vyukov's bounded MPMC queue (one consumer: the mixer). A full queue makes the mixer rescan.
+void AudioEngine::activate(SoundId id) {
+    size_t pos = activate_head.load(std::memory_order_relaxed);
+    for (;;) {
+        ActivateCell& cell = activate_cells[pos % kActivateCap];
+        const size_t seq = cell.seq.load(std::memory_order_acquire);
+        const intptr_t dif = (intptr_t)seq - (intptr_t)pos;
+        if (dif == 0) {
+            if (activate_head.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
+                cell.id = id;
+                cell.seq.store(pos + 1, std::memory_order_release);
+                return;
+            }
+        } else if (dif < 0) {
+            activate_rescan.store(true, std::memory_order_release);
+            return;
+        } else {
+            pos = activate_head.load(std::memory_order_relaxed);
         }
-
-        std::atomic_ref<float>(snd.playback_gain).store(std::max(gain, 0.0f), std::memory_order_relaxed);
-        std::atomic_ref<unsigned int>(snd.current_frame).store(0, std::memory_order_relaxed);
-        std::atomic_ref<float>(snd.frame_frac).store(0.0f, std::memory_order_relaxed);
-        std::atomic_ref<bool>(snd.is_playing).store(true, std::memory_order_release);
     }
 }
 
 bool AudioEngine::has_sound(const std::string& name) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    return sounds.find(name) != sounds.end();
-}
-
-// Runs fn on the sound under the shared lock; false if there is no such sound.
-template<class Map, class Fn>
-static bool with_entry(std::shared_mutex& mtx, Map& map, const std::string& name, Fn&& fn) {
-    std::shared_lock<std::shared_mutex> guard(mtx);
-    auto it = map.find(name);
-    if (it == map.end()) {
-        return false;
-    }
-    fn(it->second);
-    return true;
+    return with_sound(name, [](SoundSlot&, const sound&) {});
 }
 
 void AudioEngine::stop_sound(const std::string& name) {
-    const bool found = with_entry(rw_lock, sounds, name, [](sound& snd) {
-        std::atomic_ref<bool>(snd.is_playing).store(false, std::memory_order_relaxed);
-        std::atomic_ref<unsigned int>(snd.current_frame).store(0, std::memory_order_relaxed);
-        std::atomic_ref<float>(snd.frame_frac).store(0.0f, std::memory_order_relaxed);
+    const bool found = with_sound(name, [](SoundSlot& snd, const sound&) {
+        snd.is_playing.store(false, std::memory_order_relaxed);
+        snd.current_frame.store(0, std::memory_order_relaxed);
+        snd.frame_frac.store(0.0f, std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1527,15 +1633,13 @@ void AudioEngine::stop_sound(const std::string& name) {
 }
 
 void AudioEngine::set_sound_loop(const std::string& name, bool loop) {
-    with_entry(rw_lock, sounds, name,
-               [loop](sound& snd) { std::atomic_ref<bool>(snd.loop).store(loop, std::memory_order_relaxed); });
+    with_sound(name, [loop](SoundSlot& snd, const sound&) { snd.loop.store(loop, std::memory_order_relaxed); });
 }
 
 bool AudioEngine::is_sound_playing(const std::string& name) {
     bool playing = false;
-    const bool found = with_entry(rw_lock, sounds, name, [&playing](sound& snd) {
-        playing = std::atomic_ref<bool>(snd.is_playing).load(std::memory_order_relaxed);
-    });
+    const bool found = with_sound(
+        name, [&playing](SoundSlot& snd, const sound&) { playing = snd.is_playing.load(std::memory_order_relaxed); });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
@@ -1543,8 +1647,8 @@ bool AudioEngine::is_sound_playing(const std::string& name) {
 }
 
 void AudioEngine::set_sound_volume(const std::string& name, float volume) {
-    const bool found = with_entry(rw_lock, sounds, name, [volume](sound& snd) {
-        std::atomic_ref<float>(snd.volume).store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+    const bool found = with_sound(name, [volume](SoundSlot& snd, const sound&) {
+        snd.volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1552,8 +1656,8 @@ void AudioEngine::set_sound_volume(const std::string& name, float volume) {
 }
 
 void AudioEngine::set_sound_pan(const std::string& name, float pan) {
-    const bool found = with_entry(rw_lock, sounds, name, [pan](sound& snd) {
-        std::atomic_ref<float>(snd.pan).store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed);
+    const bool found = with_sound(name, [pan](SoundSlot& snd, const sound&) {
+        snd.pan.store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1561,9 +1665,9 @@ void AudioEngine::set_sound_pan(const std::string& name, float pan) {
 }
 
 void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
-    const bool found = with_entry(rw_lock, sounds, name, [pitch](sound& snd) {
+    const bool found = with_sound(name, [pitch](SoundSlot& snd, const sound&) {
         const float p = std::isfinite(pitch) ? pitch : 1.0f;
-        std::atomic_ref<float>(snd.pitch).store(std::clamp(p, 0.01f, 16.0f), std::memory_order_relaxed);
+        snd.pitch.store(std::clamp(p, 0.01f, 16.0f), std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1572,9 +1676,8 @@ void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
 
 float AudioEngine::get_sound_time_played(const std::string& name) const {
     float seconds = 0.0f;
-    const bool found = with_entry(rw_lock, sounds, name, [&](const sound& snd) {
-        unsigned int frame =
-            std::atomic_ref<unsigned int>(const_cast<unsigned int&>(snd.current_frame)).load(std::memory_order_relaxed);
+    const bool found = with_sound(name, [&](SoundSlot& snd, const sound&) {
+        unsigned int frame = snd.current_frame.load(std::memory_order_relaxed);
         seconds = static_cast<float>(frame) / static_cast<float>(target_sample_rate);
     });
     if (!found) {
@@ -1585,8 +1688,8 @@ float AudioEngine::get_sound_time_played(const std::string& name) const {
 
 float AudioEngine::get_sound_time_length(const std::string& name) const {
     float seconds = 0.0f;
-    const bool found = with_entry(rw_lock, sounds, name, [&](const sound& snd) {
-        seconds = static_cast<float>(snd.frame_count) / static_cast<float>(target_sample_rate);
+    const bool found = with_sound(name, [&](SoundSlot&, const sound& pcm) {
+        seconds = static_cast<float>(pcm.frame_count) / static_cast<float>(target_sample_rate);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1595,12 +1698,11 @@ float AudioEngine::get_sound_time_length(const std::string& name) const {
 }
 
 void AudioEngine::seek_sound(const std::string& name, float position) {
-    const bool found = with_entry(rw_lock, sounds, name, [&](sound& snd) {
+    const bool found = with_sound(name, [&](SoundSlot& snd, const sound& pcm) {
         unsigned int frame =
             static_cast<unsigned int>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
-        std::atomic_ref<unsigned int>(snd.current_frame)
-            .store(std::min(frame, snd.frame_count), std::memory_order_relaxed);
-        std::atomic_ref<float>(snd.frame_frac).store(0.0f, std::memory_order_relaxed);
+        snd.current_frame.store(std::min(frame, pcm.frame_count), std::memory_order_relaxed);
+        snd.frame_frac.store(0.0f, std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1637,11 +1739,269 @@ bool AudioEngine::prepare_nus3bank_pcm(const fs::path& file_path, PreparedPCM& o
 #endif
 }
 
+music::~music() {
+    if (file_handle) {
+        sf_close(file_handle);
+    }
+    if (resampler) {
+        src_delete(resampler);
+    }
+    delete[] pcm_data;
+    delete[] stream_buffer;
+    delete[] resample_buffer;
+}
+
+// Frames one decoder read can produce at most (the resampler's budget, as the mixer used to have it).
+static unsigned long long stream_max_out(const music& mus, double target_rate) {
+    if (!mus.resampler) {
+        return mus.buffer_size;
+    }
+    return (unsigned long long)(mus.buffer_size * (target_rate / (double)mus.file_info.samplerate)) + 256;
+}
+
+// Sets up the decode ring of a file-backed stream (~370 ms at 44.1 kHz).
+static void alloc_stream_ring(music& mus, double target_rate) {
+    mus.ring_frames = std::max<unsigned long long>(16384, stream_max_out(mus, target_rate) * 2);
+    mus.ring = std::make_unique<float[]>(mus.ring_frames * (unsigned long long)mus.file_info.channels);
+}
+
+std::shared_ptr<music> AudioEngine::find_music(const std::string& name) const {
+    std::lock_guard<std::mutex> g(music_lock);
+    auto it = music_streams.find(name);
+    return it == music_streams.end() ? nullptr : it->second;
+}
+
+// Under music_lock: the callback's stream list follows music_streams. Returns the old list, to retire.
+AudioEngine::StreamList* AudioEngine::publish_streams() {
+    auto* list = new StreamList();
+    list->streams.reserve(music_streams.size());
+    for (auto& [name, mus] : music_streams) {
+        list->streams.push_back(mus.get());
+    }
+    return mixer_streams.exchange(list, std::memory_order_seq_cst);
+}
+
 // Replaces any music stream stored under name with mus.
-void AudioEngine::install_music(const std::string& name, music&& mus) {
+void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> mus) {
     unload_music_stream(name);
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    music_streams[name] = std::move(mus);
+    StreamList* old_list = nullptr;
+    std::shared_ptr<music> replaced;
+    {
+        std::lock_guard<std::mutex> g(music_lock);
+        auto& entry = music_streams[name];
+        replaced = std::move(entry); // only if another thread installed the same name meanwhile
+        entry = mus;
+        old_list = publish_streams();
+    }
+    if (mus->file_handle) {
+        start_decoder();
+        {
+            std::lock_guard<std::mutex> g(decoder_mutex);
+            decoder_streams.push_back(mus);
+            if (replaced) {
+                std::erase(decoder_streams, replaced);
+            }
+            decoder_kick = true;
+        }
+        decoder_cv.notify_one();
+    }
+    retire([old_list, replaced]() mutable {
+        delete old_list;
+        replaced.reset();
+    });
+}
+
+void AudioEngine::unload_music_stream(const std::string& name) {
+    std::shared_ptr<music> old;
+    StreamList* old_list = nullptr;
+    {
+        std::lock_guard<std::mutex> g(music_lock);
+        auto it = music_streams.find(name);
+        if (it == music_streams.end()) {
+            spdlog::warn("Music stream {} not found", name);
+            return;
+        }
+        old = std::move(it->second);
+        music_streams.erase(it);
+        old_list = publish_streams();
+    }
+    old->is_playing.store(false, std::memory_order_relaxed);
+    if (old->file_handle) {
+        std::lock_guard<std::mutex> g(decoder_mutex);
+        std::erase(decoder_streams, old);
+    }
+    // the decoder may still be inside a read of it: it holds its own reference until done
+    retire([old_list, old]() mutable {
+        delete old_list;
+        old.reset();
+    });
+    spdlog::debug("Unloaded music stream: {}", name);
+}
+
+void AudioEngine::unload_all_music() {
+    std::vector<std::string> names;
+    {
+        std::lock_guard<std::mutex> g(music_lock);
+        for (const auto& entry : music_streams) {
+            names.push_back(entry.first);
+        }
+    }
+    for (const auto& name : names) {
+        unload_music_stream(name);
+    }
+
+    spdlog::info("All music streams unloaded");
+}
+
+// ---- the stream decoder thread: file reads, decoding and resampling, off the callback ----
+void AudioEngine::start_decoder() {
+    std::lock_guard<std::mutex> g(decoder_mutex);
+    if (decoder_running) {
+        return;
+    }
+    decoder_running = true;
+    decoder_thread = std::thread([this] { decoder_main(); });
+}
+
+void AudioEngine::stop_decoder() {
+    {
+        std::lock_guard<std::mutex> g(decoder_mutex);
+        if (!decoder_running) {
+            return;
+        }
+        decoder_running = false;
+    }
+    decoder_cv.notify_one();
+    if (decoder_thread.joinable()) {
+        decoder_thread.join();
+    }
+}
+
+void AudioEngine::kick_decoder() {
+    {
+        std::lock_guard<std::mutex> g(decoder_mutex);
+        decoder_kick = true;
+    }
+    decoder_cv.notify_one();
+}
+
+// One read of a file-backed stream into its ring; false when there was no room or nothing more to read.
+bool AudioEngine::decode_into_ring(music& mus, double target_rate) {
+    const unsigned int channels = (unsigned int)mus.file_info.channels;
+    const unsigned long long wp = mus.write_pos.load(std::memory_order_relaxed);
+    const unsigned long long used = wp - mus.read_pos.load(std::memory_order_acquire);
+    if (mus.decoder_eof || mus.ring_frames - used < stream_max_out(mus, target_rate)) {
+        return false;
+    }
+
+    auto end_of_stream = [&mus]() {
+        mus.decoder_eof = true;
+        mus.eof.store(true, std::memory_order_release);
+        return false;
+    };
+
+    sf_count_t frames_read = sf_readf_float(mus.file_handle, mus.stream_buffer, mus.buffer_size);
+    if (frames_read == 0) {
+        if (!mus.loop) {
+            return end_of_stream();
+        }
+        sf_seek(mus.file_handle, 0, SEEK_SET);
+        frames_read = sf_readf_float(mus.file_handle, mus.stream_buffer, mus.buffer_size);
+        if (mus.resampler) {
+            src_reset(mus.resampler);
+        }
+        if (frames_read == 0) {
+            // Empty/broken stream even after seeking to the start -- stop
+            return end_of_stream();
+        }
+    }
+
+    const float* produced = mus.stream_buffer;
+    unsigned long long frames = (unsigned long long)frames_read;
+    if (mus.resampler) {
+        double ratio = target_rate / (double)mus.file_info.samplerate;
+        const long output_budget = (long)(frames_read * ratio) + 256;
+
+        sf_count_t input_consumed = 0;
+        long output_generated = 0;
+
+        while (input_consumed < frames_read && output_generated < output_budget) {
+            SRC_DATA src_data;
+            src_data.data_in = mus.stream_buffer + input_consumed * channels;
+            src_data.input_frames = frames_read - input_consumed;
+            src_data.data_out = mus.resample_buffer + output_generated * channels;
+            src_data.output_frames = output_budget - output_generated;
+            src_data.src_ratio = ratio;
+            src_data.end_of_input = 0;
+
+            int error = src_process(mus.resampler, &src_data);
+            if (error) {
+                spdlog::error("Resampling error for music stream {}: {}", mus.file_path, src_strerror(error));
+                return end_of_stream();
+            }
+
+            input_consumed += src_data.input_frames_used;
+            output_generated += src_data.output_frames_gen;
+
+            if (src_data.input_frames_used == 0 && src_data.output_frames_gen == 0) {
+                spdlog::error("Resampler stalled for music stream {}", mus.file_path);
+                return end_of_stream();
+            }
+        }
+        produced = mus.resample_buffer;
+        frames = (unsigned long long)output_generated;
+    }
+
+    for (unsigned long long done = 0; done < frames;) {
+        const unsigned long long at = (wp + done) % mus.ring_frames;
+        const unsigned long long n = std::min(frames - done, mus.ring_frames - at);
+        std::memcpy(mus.ring.get() + at * channels, produced + done * channels, n * channels * sizeof(float));
+        done += n;
+    }
+    mus.write_pos.store(wp + frames, std::memory_order_release);
+    return true;
+}
+
+void AudioEngine::decoder_main() {
+    std::vector<std::shared_ptr<music>> local;
+    std::unique_lock<std::mutex> lk(decoder_mutex);
+    while (decoder_running) {
+        local = decoder_streams;
+        decoder_kick = false;
+        lk.unlock();
+
+        bool busy = false;
+        for (auto& mp : local) {
+            music& mus = *mp;
+            const uint32_t gen = mus.cmd_gen.load(std::memory_order_acquire);
+            if (gen != mus.decoder_gen) { // a seek or stop
+                sf_seek(mus.file_handle, mus.cmd_source_frame.load(std::memory_order_relaxed), SEEK_SET);
+                if (mus.resampler) {
+                    src_reset(mus.resampler);
+                }
+                mus.decoder_gen = gen;
+                mus.decoder_eof = false;
+                mus.eof.store(false, std::memory_order_relaxed);
+                mus.flush_pos.store(mus.write_pos.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                mus.ring_gen.store(gen, std::memory_order_release);
+                busy = true;
+            }
+            // a few reads, then the next stream; come back at once while there is room
+            for (int k = 0; k < 4 && mus.cmd_gen.load(std::memory_order_relaxed) == gen; k++) {
+                if (!decode_into_ring(mus, target_sample_rate)) {
+                    break;
+                }
+                busy = true;
+            }
+        }
+        local.clear(); // an unloaded stream may be destroyed here, off the main thread
+        reclaim();
+
+        lk.lock();
+        if (!busy && decoder_running && !decoder_kick) {
+            decoder_cv.wait_for(lk, std::chrono::milliseconds(5));
+        }
+    }
 }
 
 std::string AudioEngine::load_music_stream_prepared(PreparedPCM&& pcm, const std::string& name) {
@@ -1649,16 +2009,14 @@ std::string AudioEngine::load_music_stream_prepared(PreparedPCM&& pcm, const std
         return "";
     }
 
-    music mus{};
-    mus.file_info.channels = pcm.channels;
-    mus.file_info.samplerate = (int)pcm.rate;
-    mus.file_path = pcm.source_path;
-    mus.normalization_gain = name == "preview" ? loaded_song_gain(pcm.source_path) : 1.0f;
-    mus.pcm_data = pcm.data.release();
-    mus.pcm_total_frames = pcm.frames;
-    mus.buffer_size = 4096;
-    mus.stream_buffer = new float[mus.buffer_size * pcm.channels];
-    install_music(name, std::move(mus));
+    auto mus = std::make_shared<music>();
+    mus->file_info.channels = pcm.channels;
+    mus->file_info.samplerate = (int)pcm.rate;
+    mus->file_path = pcm.source_path;
+    mus->normalization_gain = name == "preview" ? loaded_song_gain(pcm.source_path) : 1.0f;
+    mus->pcm_data = pcm.data.release();
+    mus->pcm_total_frames = pcm.frames;
+    install_music(name, mus);
     spdlog::info("Loaded music stream (G.719): {} ({} frames, {} Hz, {} ch)", name, pcm.frames, pcm.rate, pcm.channels);
     return name;
 }
@@ -1713,16 +2071,14 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
                 ff_rate = (unsigned int)target_sample_rate;
             }
 
-            music mus{};
-            mus.file_info.channels = (int)ff_ch;
-            mus.file_info.samplerate = (int)ff_rate;
-            mus.file_path = file_path.string();
-            mus.normalization_gain = name == "preview" ? loaded_song_gain(file_path) : 1.0f;
-            mus.pcm_data = ff_data;
-            mus.pcm_total_frames = ff_frames;
-            mus.buffer_size = 4096;
-            mus.stream_buffer = new float[mus.buffer_size * ff_ch];
-            install_music(name, std::move(mus));
+            auto mus = std::make_shared<music>();
+            mus->file_info.channels = (int)ff_ch;
+            mus->file_info.samplerate = (int)ff_rate;
+            mus->file_path = file_path.string();
+            mus->normalization_gain = name == "preview" ? loaded_song_gain(file_path) : 1.0f;
+            mus->pcm_data = ff_data;
+            mus->pcm_total_frames = ff_frames;
+            install_music(name, mus);
             spdlog::debug("Loaded music stream (ffmpeg): {} ({} frames, {} Hz, {} ch)", name, ff_frames, ff_rate,
                           ff_ch);
             return name;
@@ -1732,34 +2088,33 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
 #endif
         }
 
-        music mus{};
-        mus.file_handle = file;
-        mus.file_info = file_info;
-        mus.file_path = file_path.string();
-        mus.normalization_gain = name == "preview" ? loaded_song_gain(file_path) : 1.0f;
+        auto mus = std::make_shared<music>();
+        mus->file_handle = file;
+        mus->file_info = file_info;
+        mus->file_path = file_path.string();
+        mus->normalization_gain = name == "preview" ? loaded_song_gain(file_path) : 1.0f;
 
-        mus.buffer_size = 4096; // arbitrary buffer size?
-        mus.stream_buffer = new float[mus.buffer_size * file_info.channels];
+        mus->buffer_size = 4096; // source frames per decoder read
+        mus->stream_buffer = new float[mus->buffer_size * file_info.channels];
 
         if (file_info.samplerate != target_sample_rate) {
             int error;
-            mus.resampler = src_new(SRC_SINC_FASTEST, file_info.channels, &error);
-            if (!mus.resampler) {
+            mus->resampler = src_new(SRC_SINC_FASTEST, file_info.channels, &error);
+            if (!mus->resampler) {
                 spdlog::error("Failed to create resampler for music stream {}: {}", name, src_strerror(error));
-                sf_close(file);
-                delete[] mus.stream_buffer;
-                return "";
+                return ""; // ~music closes the file
             }
 
             double ratio = target_sample_rate / (double)file_info.samplerate;
-            unsigned int resample_buffer_size = (unsigned int)(mus.buffer_size * ratio) + 256;
-            mus.resample_buffer = new float[resample_buffer_size * file_info.channels];
+            unsigned int resample_buffer_size = (unsigned int)(mus->buffer_size * ratio) + 256;
+            mus->resample_buffer = new float[resample_buffer_size * file_info.channels];
 
             spdlog::info("Music stream {} will be resampled from {} Hz to {} Hz", name, file_info.samplerate,
                          target_sample_rate);
         }
+        alloc_stream_ring(*mus, target_sample_rate);
 
-        install_music(name, std::move(mus));
+        install_music(name, mus);
 
         spdlog::debug("Loaded music stream: {} ({} frames, {} Hz, {} channels)", name, file_info.frames,
                       file_info.samplerate, file_info.channels);
@@ -1781,20 +2136,17 @@ std::string AudioEngine::load_music_stream_memory(const av::AVAudioStream& audio
             return "";
         }
 
-        // Build the struct and move it into the map BEFORE opening the sndfile
-        // handle, so that vio_cursor lives at its final stable address when
-        // sf_open_virtual stores a pointer to it.
-        music mus{};
-        mus.memory_buffer = std::make_shared<std::vector<uint8_t>>(std::move(encoded));
-        mus.file_path = "<memory:" + name + ">";
-        mus.buffer_size = 4096;
+        // the stream lives on the heap, so vio_cursor keeps the address sf_open_virtual stores
+        auto mus = std::make_shared<music>();
+        mus->memory_buffer = std::make_shared<std::vector<uint8_t>>(std::move(encoded));
+        mus->file_path = "<memory:" + name + ">";
+        mus->buffer_size = 4096;
+        mus->vio_cursor = VirtualFile{mus->memory_buffer, 0};
 
-        std::unique_lock<std::shared_mutex> guard(rw_lock);
-        unload_music_stream_from_map(music_streams, name);    // release any previous entry (handle/buffers/resampler)
-        music& stored = music_streams[name] = std::move(mus); // reference into the map – stable address
-
-        // vio_cursor now lives inside the map entry and will never move again.
-        stored.vio_cursor = VirtualFile{stored.memory_buffer, 0};
+        // a previous stream of this name goes even if this one fails to open
+        if (is_music_stream_valid(name)) {
+            unload_music_stream(name);
+        }
 
         SF_VIRTUAL_IO vio{};
         vio.get_filelen = vf_get_filelen;
@@ -1805,32 +2157,31 @@ std::string AudioEngine::load_music_stream_memory(const av::AVAudioStream& audio
 
         SF_INFO file_info{};
 
-        stored.file_handle = sf_open_virtual(&vio, SFM_READ, &file_info, &stored.vio_cursor);
-        if (!stored.file_handle) {
+        mus->file_handle = sf_open_virtual(&vio, SFM_READ, &file_info, &mus->vio_cursor);
+        if (!mus->file_handle) {
             spdlog::error("load_music_stream_memory: sf_open_virtual failed for '{}': {}", name, sf_strerror(nullptr));
-            music_streams.erase(name);
             return "";
         }
 
-        stored.file_info = file_info;
-        stored.stream_buffer = new float[stored.buffer_size * file_info.channels];
+        mus->file_info = file_info;
+        mus->stream_buffer = new float[mus->buffer_size * file_info.channels];
 
         if (file_info.samplerate != target_sample_rate) {
             int error;
-            stored.resampler = src_new(SRC_SINC_FASTEST, file_info.channels, &error);
-            if (!stored.resampler) {
+            mus->resampler = src_new(SRC_SINC_FASTEST, file_info.channels, &error);
+            if (!mus->resampler) {
                 spdlog::error("Failed to create resampler for memory stream '{}': {}", name, src_strerror(error));
-                sf_close(stored.file_handle);
-                delete[] stored.stream_buffer;
-                music_streams.erase(name);
                 return "";
             }
             double ratio = target_sample_rate / (double)file_info.samplerate;
-            unsigned int resample_buf_size = (unsigned int)(stored.buffer_size * ratio) + 256;
-            stored.resample_buffer = new float[resample_buf_size * file_info.channels];
+            unsigned int resample_buf_size = (unsigned int)(mus->buffer_size * ratio) + 256;
+            mus->resample_buffer = new float[resample_buf_size * file_info.channels];
             spdlog::info("Memory music stream '{}' will be resampled from {} Hz to {} Hz", name, file_info.samplerate,
                          target_sample_rate);
         }
+        alloc_stream_ring(*mus, target_sample_rate);
+
+        install_music(name, mus);
 
         spdlog::debug("Loaded memory music stream: '{}' ({} frames, {} Hz, {} channels)", name, file_info.frames,
                       file_info.samplerate, file_info.channels);
@@ -1844,46 +2195,42 @@ std::string AudioEngine::load_music_stream_memory(const av::AVAudioStream& audio
 #endif // __EMSCRIPTEN__
 
 void AudioEngine::play_music_stream(const std::string& name, VolumePreset volume_preset) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        music& mus = it->second;
-
-        if (volume_preset != VolumePreset::NONE) {
-            std::atomic_ref<float>(mus.volume)
-                .store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
-        }
-
-        std::atomic_ref<unsigned long long>(mus.current_frame).store(0, std::memory_order_relaxed);
-        std::atomic_ref<bool>(mus.is_playing).store(true, std::memory_order_release);
-    } else {
+    std::shared_ptr<music> mus = find_music(name);
+    if (!mus) {
         spdlog::warn("Sound {} not found", name);
+        return;
     }
+    if (volume_preset != VolumePreset::NONE) {
+        mus->volume.store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
+    }
+    if (mus->pcm_data) {
+        // the read position of a decoded stream is its current_frame: restart via the mixer
+        mus->cmd_out_frame.store(0, std::memory_order_relaxed);
+        mus->cmd_gen.fetch_add(1, std::memory_order_release);
+    }
+    mus->current_frame.store(0, std::memory_order_relaxed);
+    mus->is_playing.store(true, std::memory_order_release);
 }
 
 float AudioEngine::get_music_time_length(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        if (it->second.pcm_data) {
-            return static_cast<float>(it->second.pcm_total_frames) / static_cast<float>(target_sample_rate);
+    std::shared_ptr<music> mus = find_music(name);
+    if (mus) {
+        if (mus->pcm_data) {
+            return static_cast<float>(mus->pcm_total_frames) / static_cast<float>(target_sample_rate);
         }
         // file_info.frames/samplerate are in the source file's own rate --
         // pcm_data above is already resampled to target_sample_rate, but
         // this file-backed stream is not.
-        return static_cast<float>(it->second.file_info.frames) / static_cast<float>(it->second.file_info.samplerate);
+        return static_cast<float>(mus->file_info.frames) / static_cast<float>(mus->file_info.samplerate);
     }
     spdlog::warn("Music stream {} not found", name);
     return 0.0f;
 }
 
 float AudioEngine::get_music_time_played(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        unsigned long long frame =
-            std::atomic_ref<unsigned long long>(const_cast<unsigned long long&>(it->second.current_frame))
-                .load(std::memory_order_relaxed);
+    std::shared_ptr<music> mus = find_music(name);
+    if (mus) {
+        unsigned long long frame = mus->current_frame.load(std::memory_order_relaxed);
         return static_cast<float>(frame) / static_cast<float>(target_sample_rate);
     }
     spdlog::warn("Music stream {} not found", name);
@@ -1891,97 +2238,71 @@ float AudioEngine::get_music_time_played(const std::string& name) const {
 }
 
 void AudioEngine::set_music_volume(const std::string& name, float volume) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        std::atomic_ref<float>(it->second.volume).store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+    std::shared_ptr<music> mus = find_music(name);
+    if (mus) {
+        mus->volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
     } else {
         spdlog::warn("Sound {} not found", name);
     }
 }
 
 bool AudioEngine::is_music_stream_valid(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    return music_streams.find(name) != music_streams.end();
+    return find_music(name) != nullptr;
 }
 
 bool AudioEngine::is_music_stream_playing(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        return std::atomic_ref<bool>(const_cast<bool&>(it->second.is_playing)).load(std::memory_order_relaxed);
+    std::shared_ptr<music> mus = find_music(name);
+    if (mus) {
+        return mus->is_playing.load(std::memory_order_relaxed);
     }
     spdlog::warn("Sound {} not found", name);
     return false;
 }
 
+// Seek command: the decoder (file-backed) or the mixer (decoded) carries it out; until then the
+// stream plays nothing and its position stays at out_frame.
+static void command_seek(music& mus, long long source_frame, unsigned long long out_frame) {
+    mus.cmd_source_frame.store(source_frame, std::memory_order_relaxed);
+    mus.cmd_out_frame.store(out_frame, std::memory_order_relaxed);
+    mus.current_frame.store(out_frame, std::memory_order_relaxed);
+    mus.cmd_gen.fetch_add(1, std::memory_order_release);
+}
+
 void AudioEngine::stop_music_stream(const std::string& name) {
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        music& mus = it->second;
-        mus.is_playing = false;
-        mus.current_frame = 0;
-        mus.buffer_position = 0;
-        mus.frames_in_buffer = 0;
-
-        if (mus.file_handle) {
-            sf_seek(mus.file_handle, 0, SEEK_SET);
-            if (mus.resampler) {
-                src_reset(mus.resampler);
-            }
-        }
-    } else {
+    std::shared_ptr<music> mus = find_music(name);
+    if (!mus) {
         spdlog::warn("Music stream {} not found", name);
+        return;
     }
-}
-
-void AudioEngine::unload_music_stream(const std::string& name) {
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    unload_music_stream_from_map(music_streams, name);
-}
-
-void AudioEngine::unload_all_music() {
-    for (const auto& name : keys_of(rw_lock, music_streams)) {
-        unload_music_stream(name);
+    mus->is_playing.store(false, std::memory_order_release);
+    command_seek(*mus, 0, 0);
+    if (mus->file_handle) {
+        kick_decoder();
     }
-
-    spdlog::info("All music streams unloaded");
 }
 
 void AudioEngine::seek_music_stream(const std::string& name, float position) {
-    std::unique_lock<std::shared_mutex> guard(rw_lock);
-    auto it = music_streams.find(name);
-    if (it != music_streams.end()) {
-        music& mus = it->second;
-
-        if (mus.file_handle) {
-            sf_count_t frame_position = static_cast<sf_count_t>(position * mus.file_info.samplerate);
-
-            frame_position = std::max<sf_count_t>(frame_position, 0);
-            if (frame_position >= mus.file_info.frames) {
-                frame_position = mus.file_info.frames - 1;
-            }
-
-            sf_seek(mus.file_handle, frame_position, SEEK_SET);
-            if (mus.resampler) {
-                src_reset(mus.resampler);
-            }
-
-            mus.buffer_position = 0;
-            mus.frames_in_buffer = 0;
-            mus.current_frame =
-                static_cast<unsigned long long>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
-        } else if (mus.pcm_data) {
-            unsigned long long frame_pos =
-                static_cast<unsigned long long>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
-            frame_pos = std::min(frame_pos, static_cast<unsigned long long>(mus.pcm_total_frames));
-            std::atomic_ref<unsigned long long>(mus.current_frame).store(frame_pos, std::memory_order_relaxed);
-            mus.buffer_position = 0;
-            mus.frames_in_buffer = 0;
-        }
-    } else {
+    std::shared_ptr<music> mus = find_music(name);
+    if (!mus) {
         spdlog::warn("Music stream {} not found", name);
+        return;
+    }
+    if (mus->file_handle) {
+        sf_count_t frame_position = static_cast<sf_count_t>(position * mus->file_info.samplerate);
+
+        frame_position = std::max<sf_count_t>(frame_position, 0);
+        if (frame_position >= mus->file_info.frames) {
+            frame_position = mus->file_info.frames - 1;
+        }
+        command_seek(
+            *mus, frame_position,
+            static_cast<unsigned long long>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate)));
+        kick_decoder();
+    } else if (mus->pcm_data) {
+        unsigned long long frame_pos =
+            static_cast<unsigned long long>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
+        frame_pos = std::min(frame_pos, static_cast<unsigned long long>(mus->pcm_total_frames));
+        command_seek(*mus, 0, frame_pos);
     }
 }
 
@@ -2004,14 +2325,41 @@ void AudioEngine::dev_pause_device(bool pause) {
 #endif
 }
 
+// With the device paused (the selftest mixes on this thread): until each file-backed stream has
+// carried out its last command and filled its ring (or reached the end), so the next mix() has
+// what the old synchronous reads would have produced.
 void AudioEngine::dev_wait_streams() {
-    // the mixer reads streams synchronously: nothing to wait for
+    std::vector<std::shared_ptr<music>> streams;
+    {
+        std::lock_guard<std::mutex> g(music_lock);
+        for (auto& [name, mus] : music_streams) {
+            if (mus->file_handle) {
+                streams.push_back(mus);
+            }
+        }
+    }
+    for (auto& mp : streams) {
+        music& mus = *mp;
+        for (;;) {
+            if (mus.ring_gen.load(std::memory_order_acquire) == mus.cmd_gen.load(std::memory_order_acquire)) {
+                apply_stream_flush(mus);
+                const unsigned long long used =
+                    mus.write_pos.load(std::memory_order_acquire) - mus.read_pos.load(std::memory_order_relaxed);
+                if (mus.eof.load(std::memory_order_acquire) ||
+                    mus.ring_frames - used < stream_max_out(mus, target_sample_rate)) {
+                    break;
+                }
+            }
+            kick_decoder();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    }
 }
 
 void AudioEngine::dev_wait_decoded(const std::string& name) {
     for (;;) {
         std::shared_ptr<SoundDecodeJob> job;
-        with_entry(rw_lock, sounds, name, [&job](sound& snd) { job = snd.decode_job; });
+        with_sound(name, [&job](SoundSlot&, const sound& pcm) { job = pcm.decode_job; });
         if (!job || job->done.load(std::memory_order_acquire)) {
             return;
         }
