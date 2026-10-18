@@ -63,12 +63,17 @@ void load_skin() {
             {"zh-tw", "tw"}, {"zh_cn", "cn"}, {"zh-cn", "cn"},
         };
         const std::string& lang = global_data.config->general.language;
-        fs::path font_path = resolve_skin_path("Fonts/font_" + lang + ".ttf");
-        if (!fs::exists(font_path) && font_family.count(lang)) {
-            font_path = resolve_skin_path("Fonts/font_" + font_family.at(lang) + ".ttf");
+        std::vector<std::string> font_candidates{"Fonts/font_" + lang + ".ttf"};
+        if (auto family = font_family.find(lang); family != font_family.end()) {
+            font_candidates.push_back("Fonts/font_" + family->second + ".ttf");
         }
-        if (!fs::exists(font_path)) {
-            font_path = resolve_skin_path("Fonts/font.ttf");
+        font_candidates.push_back("Fonts/font.ttf");
+        fs::path font_path;
+        for (const std::string& candidate : font_candidates) {
+            font_path = resolve_skin_path(candidate);
+            if (fs::exists(font_path)) {
+                break;
+            }
         }
         if (!fs::exists(font_path)) {
             spdlog::error("No skin font found (tried font_{}.ttf and font.ttf) in {}", lang, root_skin_path.string());

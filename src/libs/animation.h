@@ -26,7 +26,6 @@ protected:
     double delay;
     double delay_saved;
     double start_ms;
-    double paused_at_ms;
     bool unlocked;
     bool loop;
     bool lock_input;
@@ -58,13 +57,10 @@ public:
 
     void pause();
 
-    void unpause();
-
     virtual void reset();
 
     virtual std::unique_ptr<BaseAnimation> copy() const = 0;
 
-    bool isFinished() const { return is_finished; }
     bool isStarted() const { return is_started; }
 };
 

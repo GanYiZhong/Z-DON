@@ -41,8 +41,4 @@ void set_skin_graphics_path(const fs::path& graphics_path);
 // skin roots of every ancestor of the current skin, nearest first (empty without a parent)
 std::vector<fs::path> skin_ancestor_roots();
 
-bool skin_has_parent();
-
-fs::path parent_skin_root();
-
 fs::path resolve_skin_path(const fs::path& relative_path);

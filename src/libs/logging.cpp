@@ -10,10 +10,7 @@
 #include <spdlog/sinks/android_sink.h>
 #endif
 #include <algorithm>
-#include <atomic>
-#include <cerrno>
 #include <chrono>
-#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -106,15 +103,18 @@ static void apply_flush_policy() {
     spdlog::flush_every(std::chrono::seconds(1));
 }
 
-static void setup_fallback_logging(const std::string& log_level_str) {
-    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    console_sink->set_pattern("[%^%l%$] %n: %v");
-    auto logger = std::make_shared<spdlog::logger>("", console_sink);
+static void install_logger(const std::shared_ptr<spdlog::logger>& logger, const std::string& log_level_str) {
     logger->set_level(parse_log_level(log_level_str));
     spdlog::set_default_logger(logger);
     apply_flush_policy();
 
     install_crash_handlers();
+}
+
+static void setup_fallback_logging(const std::string& log_level_str) {
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    console_sink->set_pattern("[%^%l%$] %n: %v");
+    install_logger(std::make_shared<spdlog::logger>("", console_sink), log_level_str);
 }
 
 void setup_logging(const std::string& log_level_str) {
@@ -136,13 +136,7 @@ void setup_logging(const std::string& log_level_str) {
 #else
         std::vector<spdlog::sink_ptr> sinks{console_sink, dup_filter};
 #endif
-        auto logger = std::make_shared<spdlog::logger>("", sinks.begin(), sinks.end());
-
-        logger->set_level(parse_log_level(log_level_str));
-        spdlog::set_default_logger(logger);
-        apply_flush_policy();
-
-        install_crash_handlers();
+        install_logger(std::make_shared<spdlog::logger>("", sinks.begin(), sinks.end()), log_level_str);
 
     } catch (const std::exception& ex) {
         std::cerr << "Log initialization failed: " << ex.what() << " -- falling back to console-only logging"

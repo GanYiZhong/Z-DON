@@ -61,26 +61,17 @@ struct KeysConfig {
     int restart_key = 0;
 };
 
-struct Keys1PConfig {
+// Per-player drum bindings: raylib key codes for keys, button numbers for gamepads.
+struct DrumBindings {
     std::vector<int> left_kat;
     std::vector<int> left_don;
     std::vector<int> right_don;
     std::vector<int> right_kat;
 };
 
-struct Keys2PConfig {
-    std::vector<int> left_kat;
-    std::vector<int> left_don;
-    std::vector<int> right_don;
-    std::vector<int> right_kat;
-};
-
-struct GamepadConfig {
-    std::vector<int> left_kat;
-    std::vector<int> left_don;
-    std::vector<int> right_don;
-    std::vector<int> right_kat;
-};
+using Keys1PConfig = DrumBindings;
+using Keys2PConfig = DrumBindings;
+using GamepadConfig = DrumBindings;
 
 struct MidiConfig {
     // Case-sensitive substring of the MIDI port name; empty disables MIDI.

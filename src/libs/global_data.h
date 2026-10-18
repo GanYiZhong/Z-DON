@@ -246,7 +246,6 @@ struct GlobalData {
     std::string previous_screen;
     bool in_transition = false;
     std::string title_state = "";
-    double title_state_start_ms = 0.0;
     int live_skip_count = -1;
     bool live_skip_used = false;
     bool force_auto_play = false;
@@ -266,11 +265,6 @@ struct GlobalData {
     std::vector<SessionData> session_data = std::vector<SessionData>(3);
     std::vector<int> last_difficulty = std::vector<int>(3, -1);
     std::vector<fs::path> dan_folder = std::vector<fs::path>(3);
-
-    GlobalData() {
-        // Initialize vectors with default-constructed elements
-        session_data.resize(3);
-    }
 };
 
 void reset_session();

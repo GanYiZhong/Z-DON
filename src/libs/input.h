@@ -22,10 +22,6 @@ void poll_touch_once();
 // This consumes the key press event
 bool check_key_pressed(int key, float* strength = nullptr);
 
-// Check if a key was released since the last check
-// This consumes the key release event
-bool check_key_released(int key);
-
 // Most recent controller button press, as the bare button number the
 // config stores (-1 if none since the last call, which this consumes; 0 is
 // a valid real button, so it can't double as the "no event" sentinel).

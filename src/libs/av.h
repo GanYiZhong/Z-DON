@@ -235,6 +235,17 @@ namespace av {
         ::AVPacket* packet_ = nullptr;
     };
 
+    // Returns the Nth stream (0-indexed) of the given media type, or nullptr.
+    inline ::AVStream* find_stream(::AVFormatContext* ctx, AVMediaType type, int n) {
+        int found = 0;
+        for (unsigned i = 0; i < ctx->nb_streams; ++i) {
+            if (ctx->streams[i]->codecpar->codec_type == type && found++ == n) {
+                return ctx->streams[i];
+            }
+        }
+        return nullptr;
+    }
+
     // ---------------------------------------------------------------------------
     // AVVideoStream  –  metadata wrapper for a video stream
     // ---------------------------------------------------------------------------
@@ -248,9 +259,6 @@ namespace av {
             }
             return static_cast<float>(stream_->avg_frame_rate.num) / static_cast<float>(stream_->avg_frame_rate.den);
         }
-
-        int width() const { return stream_->codecpar->width; }
-        int height() const { return stream_->codecpar->height; }
 
         int index() const { return stream_->index; }
 
@@ -292,9 +300,6 @@ namespace av {
             return s;
         }
 
-        int index() const { return stream_ ? stream_->index : -1; }
-        bool is_silent() const { return silent_; }
-
         // For real streams:   returns raw encoded packets (fed to sf_open_virtual).
         // For silent streams: returns a minimal 44100 Hz stereo 16-bit PCM WAV of silence.
         std::vector<uint8_t> encoded_bytes() const {
@@ -303,8 +308,6 @@ namespace av {
             }
             return remux_to_wav();
         }
-
-        const ::AVStream* raw() const { return stream_; }
 
     private:
         // Private default constructor used only by make_silent().
@@ -318,18 +321,12 @@ namespace av {
             check(avformat_find_stream_info(fmt_ctx, nullptr), "remux_to_wav: avformat_find_stream_info");
 
             // Find the first audio stream in this private context.
-            int audio_idx = -1;
-            for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
-                if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-                    audio_idx = static_cast<int>(i);
-                    break;
-                }
-            }
-            if (audio_idx < 0) {
+            ::AVStream* astream = find_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, 0);
+            if (!astream) {
                 avformat_close_input(&fmt_ctx);
                 return make_silence_wav(1.0);
             }
-            ::AVStream* astream = fmt_ctx->streams[audio_idx];
+            const int audio_idx = astream->index;
 
             // --- Find decoder ---
             const ::AVCodec* codec = avcodec_find_decoder(astream->codecpar->codec_id);
@@ -368,7 +365,7 @@ namespace av {
                 throw std::runtime_error("remux_to_wav: alloc failed");
             }
 
-            auto flush_decoder = [&](bool) {
+            auto flush_decoder = [&]() {
                 while (true) {
                     int ret = avcodec_receive_frame(dec_ctx, frame);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
@@ -393,12 +390,12 @@ namespace av {
             while (av_read_frame(fmt_ctx, pkt) >= 0) {
                 if (pkt->stream_index == audio_idx) {
                     avcodec_send_packet(dec_ctx, pkt);
-                    flush_decoder(false);
+                    flush_decoder();
                 }
                 av_packet_unref(pkt);
             }
             avcodec_send_packet(dec_ctx, nullptr);
-            flush_decoder(true);
+            flush_decoder();
 
             // Drain any remaining samples from swr
             while (true) {
@@ -420,12 +417,11 @@ namespace av {
             return make_pcm_wav(pcm, 44100, 2);
         }
 
-        static std::vector<uint8_t> make_pcm_wav(const std::vector<int16_t>& pcm, uint32_t sample_rate,
-                                                 uint16_t channels) {
+        // A 16-bit PCM WAV header for data_size bytes of samples, with room reserved for them.
+        static std::vector<uint8_t> wav_header(uint32_t data_size, uint32_t sample_rate, uint16_t channels) {
             constexpr uint16_t bits = 16;
             const uint16_t block_align = channels * (bits / 8);
             const uint32_t byte_rate = sample_rate * block_align;
-            const uint32_t data_size = static_cast<uint32_t>(pcm.size()) * sizeof(int16_t);
             const uint32_t chunk_size = 36 + data_size;
 
             std::vector<uint8_t> wav;
@@ -461,11 +457,16 @@ namespace av {
             write_u16(bits);
             write_cc("data");
             write_u32(data_size);
+            return wav;
+        }
 
+        static std::vector<uint8_t> make_pcm_wav(const std::vector<int16_t>& pcm, uint32_t sample_rate,
+                                                 uint16_t channels) {
+            const uint32_t data_size = static_cast<uint32_t>(pcm.size()) * sizeof(int16_t);
+            std::vector<uint8_t> wav = wav_header(data_size, sample_rate, channels);
             // Append PCM samples (already little-endian on x86/ARM)
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(pcm.data());
             wav.insert(wav.end(), bytes, bytes + data_size);
-
             return wav;
         }
 
@@ -474,53 +475,10 @@ namespace av {
         // libsndfile opens this via sf_open_virtual without complaint.
         static std::vector<uint8_t> make_silence_wav(double duration_seconds) {
             constexpr uint32_t sample_rate = 44100;
-            constexpr uint16_t channels = 2;
-            constexpr uint16_t bits = 16;
-            constexpr uint16_t block_align = channels * (bits / 8); // 4 bytes/frame
-            constexpr uint32_t byte_rate = sample_rate * block_align;
-
             const uint32_t num_samples = static_cast<uint32_t>(sample_rate * duration_seconds);
-            const uint32_t data_size = num_samples * block_align;
-            const uint32_t chunk_size = 36 + data_size;
-
-            std::vector<uint8_t> wav;
-            wav.reserve(44 + data_size);
-
-            auto write_u16 = [&](uint16_t v) {
-                wav.push_back(v & 0xFF);
-                wav.push_back((v >> 8) & 0xFF);
-            };
-            auto write_u32 = [&](uint32_t v) {
-                wav.push_back(v & 0xFF);
-                wav.push_back((v >> 8) & 0xFF);
-                wav.push_back((v >> 16) & 0xFF);
-                wav.push_back((v >> 24) & 0xFF);
-            };
-            auto write_cc = [&](const char* s) {
-                wav.push_back(s[0]);
-                wav.push_back(s[1]);
-                wav.push_back(s[2]);
-                wav.push_back(s[3]);
-            };
-
-            // RIFF header
-            write_cc("RIFF");
-            write_u32(chunk_size);
-            write_cc("WAVE");
-            // fmt  chunk (16-byte PCM)
-            write_cc("fmt ");
-            write_u32(16);
-            write_u16(1); // PCM
-            write_u16(channels);
-            write_u32(sample_rate);
-            write_u32(byte_rate);
-            write_u16(block_align);
-            write_u16(bits);
-            // data chunk – all zeros = silence
-            write_cc("data");
-            write_u32(data_size);
-            wav.resize(wav.size() + data_size, 0x00);
-
+            const uint32_t data_size = num_samples * 4; // stereo, 16-bit
+            std::vector<uint8_t> wav = wav_header(data_size, sample_rate, 2);
+            wav.resize(wav.size() + data_size, 0); // zeros in place: no second buffer
             return wav;
         }
 
@@ -539,13 +497,8 @@ namespace av {
 
         // Returns the Nth video stream (0-indexed).
         std::unique_ptr<AVVideoStream> video(int n = 0) const {
-            int found = 0;
-            for (unsigned i = 0; i < fmt_ctx_->nb_streams; ++i) {
-                if (fmt_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                    if (found++ == n) {
-                        return std::make_unique<AVVideoStream>(fmt_ctx_->streams[i]);
-                    }
-                }
+            if (::AVStream* st = find_stream(fmt_ctx_, AVMEDIA_TYPE_VIDEO, n)) {
+                return std::make_unique<AVVideoStream>(st);
             }
             throw std::runtime_error("av::AVStreamCollection::video: stream not found");
         }
@@ -554,13 +507,8 @@ namespace av {
         // If no audio stream exists, returns a silent synthetic stream sized to
         // the container duration so VideoPlayer needs no special-casing.
         std::unique_ptr<AVAudioStream> audio(int n = 0) const {
-            int found = 0;
-            for (unsigned i = 0; i < fmt_ctx_->nb_streams; ++i) {
-                if (fmt_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-                    if (found++ == n) {
-                        return std::make_unique<AVAudioStream>(fmt_ctx_->streams[i], fmt_ctx_);
-                    }
-                }
+            if (::AVStream* st = find_stream(fmt_ctx_, AVMEDIA_TYPE_AUDIO, n)) {
+                return std::make_unique<AVAudioStream>(st, fmt_ctx_);
             }
             // No audio stream found – synthesise silence for the video duration.
             double duration_seconds =
@@ -638,8 +586,6 @@ namespace av {
             return std::unique_ptr<AVAudioStream>(new AVAudioStream());
         }
         std::vector<uint8_t> encoded_bytes() const { return {}; }
-        bool is_silent() const { return true; }
-        int index() const { return -1; }
     };
 } // namespace av
 

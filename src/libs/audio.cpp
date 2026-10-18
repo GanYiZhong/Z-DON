@@ -18,10 +18,8 @@ SDL_AudioStream* g_ios_audio_stream = nullptr;
 #include "optional/nus3bank.h"
 #endif
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -236,25 +234,19 @@ static void unload_music_stream_from_map(std::unordered_map<std::string, music>&
             mus.file_handle = nullptr;
         }
 
-        if (mus.pcm_data) {
-            delete[] mus.pcm_data;
-            mus.pcm_data = nullptr;
-        }
+        delete[] mus.pcm_data;
+        mus.pcm_data = nullptr;
 
-        if (mus.stream_buffer) {
-            delete[] mus.stream_buffer;
-            mus.stream_buffer = nullptr;
-        }
+        delete[] mus.stream_buffer;
+        mus.stream_buffer = nullptr;
 
         if (mus.resampler) {
             src_delete(mus.resampler);
             mus.resampler = nullptr;
         }
 
-        if (mus.resample_buffer) {
-            delete[] mus.resample_buffer;
-            mus.resample_buffer = nullptr;
-        }
+        delete[] mus.resample_buffer;
+        mus.resample_buffer = nullptr;
 
         music_streams.erase(it);
         spdlog::debug("Unloaded music stream: {}", name);
@@ -265,48 +257,38 @@ static void unload_music_stream_from_map(std::unordered_map<std::string, music>&
 
 AudioEngine::AudioEngine() {}
 
+#if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
+struct RtApiEntry {
+    RtAudio::Api api;
+    const char* label;
+};
+
+// RtAudio backend for a config device_type (1-8), or null for the SDL3/PortAudio types.
+static const RtApiEntry* rt_api_for_type(int device_type) {
+    static const RtApiEntry kApis[] = {
+        {RtAudio::LINUX_ALSA, "ALSA"},       {RtAudio::LINUX_PULSE, "PulseAudio"}, {RtAudio::UNIX_JACK, "JACK"},
+        {RtAudio::LINUX_OSS, "OSS"},         {RtAudio::MACOSX_CORE, "CoreAudio"},  {RtAudio::WINDOWS_DS, "DirectSound"},
+        {RtAudio::WINDOWS_WASAPI, "WASAPI"}, {RtAudio::WINDOWS_ASIO, "ASIO"},
+    };
+    return device_type >= 1 && device_type <= 8 ? &kApis[device_type - 1] : nullptr;
+}
+
+static void rtaudio_error_log(RtAudioErrorType type, const std::string& errorText) {
+    if (type == RTAUDIO_WARNING) {
+        spdlog::warn("RtAudio: {}", errorText);
+    } else {
+        spdlog::error("RtAudio: {}", errorText);
+    }
+}
+#endif
+
 std::vector<std::string> enumerate_audio_devices(int device_type) {
     std::vector<std::string> names;
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
-    RtAudio::Api api = RtAudio::UNSPECIFIED;
-    switch (device_type) {
-    case 1:
-        api = RtAudio::LINUX_ALSA;
-        break;
-    case 2:
-        api = RtAudio::LINUX_PULSE;
-        break;
-    case 3:
-        api = RtAudio::UNIX_JACK;
-        break;
-    case 4:
-        api = RtAudio::LINUX_OSS;
-        break;
-    case 5:
-        api = RtAudio::MACOSX_CORE;
-        break;
-    case 6:
-        api = RtAudio::WINDOWS_DS;
-        break;
-    case 7:
-        api = RtAudio::WINDOWS_WASAPI;
-        break;
-    case 8:
-        api = RtAudio::WINDOWS_ASIO;
-        break;
-    default:
-        break;
-    }
-    if (api != RtAudio::UNSPECIFIED) {
+    if (const RtApiEntry* entry = rt_api_for_type(device_type)) {
         try {
-            RtAudio rt(api, [](RtAudioErrorType type, const std::string& errorText) {
-                if (type == RTAUDIO_WARNING) {
-                    spdlog::warn("RtAudio: {}", errorText);
-                } else {
-                    spdlog::error("RtAudio: {}", errorText);
-                }
-            });
+            RtAudio rt(entry->api, rtaudio_error_log);
             for (unsigned int id : rt.getDeviceIds()) {
                 RtAudio::DeviceInfo info = rt.getDeviceInfo(id);
                 if (info.outputChannels > 0 && !info.name.empty()) {
@@ -332,12 +314,7 @@ std::vector<std::string> enumerate_audio_devices(int device_type) {
 #endif
 
     // Default (SDL3) backend and any unrecognized type: enumerate SDL3 devices.
-    bool init_here = false;
-    if (!(SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO)) {
-        if (SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-            init_here = true;
-        }
-    }
+    const bool init_here = !(SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) && SDL_InitSubSystem(SDL_INIT_AUDIO);
     int count = 0;
     SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
     if (devices) {
@@ -357,6 +334,22 @@ std::vector<std::string> enumerate_audio_devices(int device_type) {
 
 AudioEngine::~AudioEngine() {
     close_audio_device();
+}
+
+// Splits one source frame into left/right: mono by pan, stereo attenuated on the far side.
+static inline void pan_frame(const float* src, unsigned int channels, float pan, float& left, float& right) {
+    if (channels == 1) {
+        left = src[0] * (1.0f - pan);
+        right = src[0] * pan;
+    } else {
+        left = src[0];
+        right = src[1];
+        if (pan < 0.5f) {
+            right *= (pan * 2.0f);
+        } else if (pan > 0.5f) {
+            left *= ((1.0f - pan) * 2.0f);
+        }
+    }
 }
 
 void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* engine) {
@@ -420,23 +413,9 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
                 }
             }
 
-            unsigned long src_index = src_frame * channels;
             unsigned long dst_index = output_index * 2;
             float left, right;
-
-            if (channels == 1) {
-                float sample = data_ptr[src_index];
-                left = sample * (1.0f - pan);
-                right = sample * pan;
-            } else {
-                left = data_ptr[src_index];
-                right = data_ptr[src_index + 1];
-                if (pan < 0.5f) {
-                    right *= (pan * 2.0f);
-                } else if (pan > 0.5f) {
-                    left *= ((1.0f - pan) * 2.0f);
-                }
-            }
+            pan_frame(data_ptr + src_frame * channels, channels, pan, left, right);
 
             out[dst_index] += left * volume;
             out[dst_index + 1] += right * volume;
@@ -575,24 +554,10 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
             const float* source_buffer = mus.resampler ? mus.resample_buffer : mus.stream_buffer;
 
             for (unsigned long i = 0; i < frames_to_read; i++) {
-                unsigned long src_index = (mus.buffer_position + i) * channels;
                 unsigned long dst_index = (output_index + i) * 2;
 
                 float left, right;
-
-                if (channels == 1) {
-                    float sample = source_buffer[src_index];
-                    left = sample * (1.0f - pan);
-                    right = sample * pan;
-                } else {
-                    left = source_buffer[src_index];
-                    right = source_buffer[src_index + 1];
-                    if (pan < 0.5f) {
-                        right *= (pan * 2.0f);
-                    } else if (pan > 0.5f) {
-                        left *= ((1.0f - pan) * 2.0f);
-                    }
-                }
+                pan_frame(source_buffer + (mus.buffer_position + i) * channels, channels, pan, left, right);
 
                 out[dst_index] += left * volume;
                 out[dst_index + 1] += right * volume;
@@ -667,25 +632,9 @@ int AudioEngine::rt_audio_callback(void* outputBuffer, void* /*inputBuffer*/, un
 }
 #endif
 
-#ifdef _WIN32
-int AudioEngine::pa_stream_callback(const void* /*inputBuffer*/, void* outputBuffer, unsigned long framesPerBuffer,
-                                    const PaStreamCallbackTimeInfo* /*timeInfo*/, PaStreamCallbackFlags /*statusFlags*/,
-                                    void* userData) {
-    AudioEngine* engine = static_cast<AudioEngine*>(userData);
-    mix(static_cast<float*>(outputBuffer), static_cast<unsigned int>(framesPerBuffer), engine);
-    return paContinue;
-}
-#endif
-
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
 bool AudioEngine::init_rtaudio_device(RtAudio::Api api, const char* label) {
-    rt_audio = new RtAudio(api, [](RtAudioErrorType type, const std::string& errorText) {
-        if (type == RTAUDIO_WARNING) {
-            spdlog::warn("RtAudio: {}", errorText);
-        } else {
-            spdlog::error("RtAudio: {}", errorText);
-        }
-    });
+    rt_audio = new RtAudio(api, rtaudio_error_log);
 
     if (rt_audio->getDeviceCount() == 0) {
         spdlog::error("No audio devices found for RtAudio backend: {}", label);
@@ -795,6 +744,13 @@ bool AudioEngine::init_sdl3_device() {
     spec.channels = 2;
     spec.freq = static_cast<int>(target_sample_rate);
 
+    auto quit_sdl_audio_subsystem = [this]() {
+        if (sdl_audio_subsystem_initialized) {
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+            sdl_audio_subsystem_initialized = false;
+        }
+    };
+
     SDL_AudioDeviceID device_id = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
     if (!device_name.empty()) {
         int count = 0;
@@ -817,10 +773,7 @@ bool AudioEngine::init_sdl3_device() {
     sdl_stream = SDL_OpenAudioDeviceStream(device_id, &spec, AudioEngine::sdl_audio_callback, this);
     if (!sdl_stream) {
         spdlog::error("Failed to open SDL audio device stream: {}", SDL_GetError());
-        if (sdl_audio_subsystem_initialized) {
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-            sdl_audio_subsystem_initialized = false;
-        }
+        quit_sdl_audio_subsystem();
         return false;
     }
 
@@ -832,10 +785,7 @@ bool AudioEngine::init_sdl3_device() {
         spdlog::error("Failed to start SDL audio stream: {}", SDL_GetError());
         SDL_DestroyAudioStream(sdl_stream);
         sdl_stream = nullptr;
-        if (sdl_audio_subsystem_initialized) {
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-            sdl_audio_subsystem_initialized = false;
-        }
+        quit_sdl_audio_subsystem();
         return false;
     }
 
@@ -870,25 +820,8 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     this->master_volume = 1.0f;
     try {
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
-        switch (audio_config.device_type) {
-        case 1:
-            return init_rtaudio_device(RtAudio::LINUX_ALSA, "ALSA");
-        case 2:
-            return init_rtaudio_device(RtAudio::LINUX_PULSE, "PulseAudio");
-        case 3:
-            return init_rtaudio_device(RtAudio::UNIX_JACK, "JACK");
-        case 4:
-            return init_rtaudio_device(RtAudio::LINUX_OSS, "OSS");
-        case 5:
-            return init_rtaudio_device(RtAudio::MACOSX_CORE, "CoreAudio");
-        case 6:
-            return init_rtaudio_device(RtAudio::WINDOWS_DS, "DirectSound");
-        case 7:
-            return init_rtaudio_device(RtAudio::WINDOWS_WASAPI, "WASAPI");
-        case 8:
-            return init_rtaudio_device(RtAudio::WINDOWS_ASIO, "ASIO");
-        default:
-            break;
+        if (const RtApiEntry* entry = rt_api_for_type(audio_config.device_type)) {
+            return init_rtaudio_device(entry->api, entry->label);
         }
 #endif
 #ifdef _WIN32
@@ -951,14 +884,6 @@ bool AudioEngine::is_audio_device_ready() const {
     return is_ready;
 }
 
-void AudioEngine::set_master_volume(float volume) {
-    master_volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
-}
-
-float AudioEngine::get_master_volume() {
-    return master_volume.load(std::memory_order_relaxed);
-}
-
 std::string AudioEngine::path_to_string(const fs::path& path) const {
 #ifdef _WIN32
     return win32_path_to_string(path);
@@ -972,10 +897,9 @@ std::string AudioEngine::path_to_string(const fs::path& path) const {
 // updated in place.
 static float* adopt_decoded_pcm(std::vector<float>& samples, int channels, unsigned int& frames, unsigned int& rate,
                                 double target_rate, int converter = SRC_SINC_FASTEST) {
-    float* data = new float[samples.size()];
-    std::memcpy(data, samples.data(), samples.size() * sizeof(float));
-
     if ((double)rate == target_rate) {
+        float* data = new float[samples.size()];
+        std::memcpy(data, samples.data(), samples.size() * sizeof(float));
         return data;
     }
 
@@ -983,14 +907,13 @@ static float* adopt_decoded_pcm(std::vector<float>& samples, int channels, unsig
     long out_frames = (long)(frames * ratio) + 1;
     float* resampled = new float[(size_t)out_frames * channels];
     SRC_DATA sd{};
-    sd.data_in = data;
+    sd.data_in = samples.data();
     sd.input_frames = frames;
     sd.data_out = resampled;
     sd.output_frames = out_frames;
     sd.src_ratio = ratio;
     sd.end_of_input = 1;
     int err = src_simple(&sd, converter, channels);
-    delete[] data;
     if (err) {
         delete[] resampled;
         spdlog::error("Resampling a decoded stream failed: {}", src_strerror(err));
@@ -1006,14 +929,21 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
     auto it = sounds.find(name);
     if (it != sounds.end()) {
         std::atomic_ref<bool>(it->second.is_playing).store(false, std::memory_order_relaxed);
-        stop_decode_job(it->second);
-        delete[] it->second.data;
-        if (it->second.resampler) {
-            src_delete(it->second.resampler);
-        }
-        delete[] it->second.resample_buffer;
+        free_sound(it->second);
     }
     sounds[name] = snd;
+}
+
+void AudioEngine::free_sound(sound& snd) {
+    stop_decode_job(snd);
+    delete[] snd.data;
+    snd.data = nullptr;
+    if (snd.resampler) {
+        src_delete(snd.resampler);
+        snd.resampler = nullptr;
+    }
+    delete[] snd.resample_buffer;
+    snd.resample_buffer = nullptr;
 }
 
 void AudioEngine::stop_decode_job(sound& snd) {
@@ -1153,6 +1083,26 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
     return name;
 }
 
+// Opens an audio file for reading (wide-char path first on Windows); zeroes `info` first. Null on failure.
+static SNDFILE* open_sound_file(const fs::path& file_path, SF_INFO& info) {
+    std::memset(&info, 0, sizeof(SF_INFO));
+
+    SNDFILE* file = nullptr;
+#ifdef _WIN32
+    file = sf_wchar_open(file_path.wstring().c_str(), SFM_READ, &info);
+#endif
+
+    if (!file) {
+#ifdef _WIN32
+        std::string path_str = win32_path_to_string(file_path);
+#else
+        std::string path_str = file_path.string();
+#endif
+        file = sf_open(path_str.c_str(), SFM_READ, &info);
+    }
+    return file;
+}
+
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
     try {
 #ifdef SUPPORT_FUMEN
@@ -1181,17 +1131,7 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
 #endif
 
         SF_INFO file_info;
-        std::memset(&file_info, 0, sizeof(SF_INFO));
-
-        SNDFILE* file = nullptr;
-#ifdef _WIN32
-        file = sf_wchar_open(file_path.wstring().c_str(), SFM_READ, &file_info);
-#endif
-
-        if (!file) {
-            std::string path_str = path_to_string(file_path);
-            file = sf_open(path_str.c_str(), SFM_READ, &file_info);
-        }
+        SNDFILE* file = open_sound_file(file_path, file_info);
 
         if (!file) {
 #if defined(__ANDROID__) || defined(YATAIDON_PLATFORM_IOS)
@@ -1409,22 +1349,7 @@ void AudioEngine::unload_sound(const std::string& name) {
         sound& snd = it->second;
 
         std::atomic_ref<bool>(snd.is_playing).store(false, std::memory_order_relaxed);
-        stop_decode_job(snd);
-
-        if (snd.data) {
-            delete[] snd.data;
-            snd.data = nullptr;
-        }
-
-        if (snd.resampler) {
-            src_delete(snd.resampler);
-            snd.resampler = nullptr;
-        }
-
-        if (snd.resample_buffer) {
-            delete[] snd.resample_buffer;
-            snd.resample_buffer = nullptr;
-        }
+        free_sound(snd);
 
         sounds.erase(it);
     } else {
@@ -1432,21 +1357,41 @@ void AudioEngine::unload_sound(const std::string& name) {
     }
 }
 
-void AudioEngine::unload_all_sounds() {
+// Snapshot of a map's keys under the shared lock, so entries can be unloaded one by one afterwards.
+template<class Map>
+static std::vector<std::string> keys_of(std::shared_mutex& mtx, const Map& map) {
     std::vector<std::string> names;
-    {
-        std::shared_lock<std::shared_mutex> guard(rw_lock);
-        names.reserve(sounds.size());
-        for (const auto& [name, _] : sounds) {
-            names.push_back(name);
-        }
+    std::shared_lock<std::shared_mutex> guard(mtx);
+    names.reserve(map.size());
+    for (const auto& entry : map) {
+        names.push_back(entry.first);
     }
+    return names;
+}
 
-    for (const auto& name : names) {
+void AudioEngine::unload_all_sounds() {
+    for (const auto& name : keys_of(rw_lock, sounds)) {
         unload_sound(name);
     }
 
     spdlog::info("All sounds unloaded");
+}
+
+static float preset_volume(const VolumeConfig& presets, VolumePreset preset) {
+    switch (preset) {
+    case VolumePreset::SOUND:
+        return presets.sound;
+    case VolumePreset::MUSIC:
+        return presets.music;
+    case VolumePreset::VOICE:
+        return presets.voice;
+    case VolumePreset::HITSOUND:
+        return presets.hitsound;
+    case VolumePreset::ATTRACT_MODE:
+        return presets.attract_mode;
+    default:
+        return 1.0f;
+    }
 }
 
 uint64_t AudioEngine::sound_play_count(const std::string& name) {
@@ -1466,19 +1411,8 @@ void AudioEngine::play_sound(const std::string& name, VolumePreset volume_preset
         sound& snd = it->second;
 
         if (volume_preset != VolumePreset::NONE) {
-            float volume = 1.0f;
-            if (volume_preset == VolumePreset::SOUND) {
-                volume = volume_presets.sound;
-            } else if (volume_preset == VolumePreset::MUSIC) {
-                volume = volume_presets.music;
-            } else if (volume_preset == VolumePreset::VOICE) {
-                volume = volume_presets.voice;
-            } else if (volume_preset == VolumePreset::HITSOUND) {
-                volume = volume_presets.hitsound;
-            } else if (volume_preset == VolumePreset::ATTRACT_MODE) {
-                volume = volume_presets.attract_mode;
-            }
-            std::atomic_ref<float>(snd.volume).store(volume, std::memory_order_relaxed);
+            std::atomic_ref<float>(snd.volume)
+                .store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
         }
 
         std::atomic_ref<float>(snd.playback_gain).store(std::max(gain, 0.0f), std::memory_order_relaxed);
@@ -1493,102 +1427,106 @@ bool AudioEngine::has_sound(const std::string& name) {
     return sounds.find(name) != sounds.end();
 }
 
+// Runs fn on the sound under the shared lock; false if there is no such sound.
+template<class Map, class Fn>
+static bool with_entry(std::shared_mutex& mtx, Map& map, const std::string& name, Fn&& fn) {
+    std::shared_lock<std::shared_mutex> guard(mtx);
+    auto it = map.find(name);
+    if (it == map.end()) {
+        return false;
+    }
+    fn(it->second);
+    return true;
+}
+
 void AudioEngine::stop_sound(const std::string& name) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        std::atomic_ref<bool>(it->second.is_playing).store(false, std::memory_order_relaxed);
-        std::atomic_ref<unsigned int>(it->second.current_frame).store(0, std::memory_order_relaxed);
-        std::atomic_ref<float>(it->second.frame_frac).store(0.0f, std::memory_order_relaxed);
-    } else {
+    const bool found = with_entry(rw_lock, sounds, name, [](sound& snd) {
+        std::atomic_ref<bool>(snd.is_playing).store(false, std::memory_order_relaxed);
+        std::atomic_ref<unsigned int>(snd.current_frame).store(0, std::memory_order_relaxed);
+        std::atomic_ref<float>(snd.frame_frac).store(0.0f, std::memory_order_relaxed);
+    });
+    if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
 }
 
 void AudioEngine::set_sound_loop(const std::string& name, bool loop) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        std::atomic_ref<bool>(it->second.loop).store(loop, std::memory_order_relaxed);
-    }
+    with_entry(rw_lock, sounds, name,
+               [loop](sound& snd) { std::atomic_ref<bool>(snd.loop).store(loop, std::memory_order_relaxed); });
 }
 
 bool AudioEngine::is_sound_playing(const std::string& name) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        return std::atomic_ref<bool>(it->second.is_playing).load(std::memory_order_relaxed);
+    bool playing = false;
+    const bool found = with_entry(rw_lock, sounds, name, [&playing](sound& snd) {
+        playing = std::atomic_ref<bool>(snd.is_playing).load(std::memory_order_relaxed);
+    });
+    if (!found) {
+        spdlog::warn("Sound {} not found", name);
     }
-    spdlog::warn("Sound {} not found", name);
-    return false;
+    return playing;
 }
 
 void AudioEngine::set_sound_volume(const std::string& name, float volume) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        std::atomic_ref<float>(it->second.volume).store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
-    } else {
+    const bool found = with_entry(rw_lock, sounds, name, [volume](sound& snd) {
+        std::atomic_ref<float>(snd.volume).store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+    });
+    if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
 }
 
 void AudioEngine::set_sound_pan(const std::string& name, float pan) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        std::atomic_ref<float>(it->second.pan).store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed);
-    } else {
+    const bool found = with_entry(rw_lock, sounds, name, [pan](sound& snd) {
+        std::atomic_ref<float>(snd.pan).store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed);
+    });
+    if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
 }
 
 void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        if (!std::isfinite(pitch)) {
-            pitch = 1.0f;
-        }
-        std::atomic_ref<float>(it->second.pitch).store(std::clamp(pitch, 0.01f, 16.0f), std::memory_order_relaxed);
-    } else {
+    const bool found = with_entry(rw_lock, sounds, name, [pitch](sound& snd) {
+        const float p = std::isfinite(pitch) ? pitch : 1.0f;
+        std::atomic_ref<float>(snd.pitch).store(std::clamp(p, 0.01f, 16.0f), std::memory_order_relaxed);
+    });
+    if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
 }
 
 float AudioEngine::get_sound_time_played(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        unsigned int frame = std::atomic_ref<unsigned int>(const_cast<unsigned int&>(it->second.current_frame))
-                                 .load(std::memory_order_relaxed);
-        return static_cast<float>(frame) / static_cast<float>(target_sample_rate);
+    float seconds = 0.0f;
+    const bool found = with_entry(rw_lock, sounds, name, [&](const sound& snd) {
+        unsigned int frame =
+            std::atomic_ref<unsigned int>(const_cast<unsigned int&>(snd.current_frame)).load(std::memory_order_relaxed);
+        seconds = static_cast<float>(frame) / static_cast<float>(target_sample_rate);
+    });
+    if (!found) {
+        spdlog::warn("Sound {} not found", name);
     }
-    spdlog::warn("Sound {} not found", name);
-    return 0.0f;
+    return seconds;
 }
 
 float AudioEngine::get_sound_time_length(const std::string& name) const {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        return static_cast<float>(it->second.frame_count) / static_cast<float>(target_sample_rate);
+    float seconds = 0.0f;
+    const bool found = with_entry(rw_lock, sounds, name, [&](const sound& snd) {
+        seconds = static_cast<float>(snd.frame_count) / static_cast<float>(target_sample_rate);
+    });
+    if (!found) {
+        spdlog::warn("Sound {} not found", name);
     }
-    spdlog::warn("Sound {} not found", name);
-    return 0.0f;
+    return seconds;
 }
 
 void AudioEngine::seek_sound(const std::string& name, float position) {
-    std::shared_lock<std::shared_mutex> guard(rw_lock);
-    auto it = sounds.find(name);
-    if (it != sounds.end()) {
-        sound& snd = it->second;
+    const bool found = with_entry(rw_lock, sounds, name, [&](sound& snd) {
         unsigned int frame =
             static_cast<unsigned int>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
         std::atomic_ref<unsigned int>(snd.current_frame)
             .store(std::min(frame, snd.frame_count), std::memory_order_relaxed);
         std::atomic_ref<float>(snd.frame_frac).store(0.0f, std::memory_order_relaxed);
-    } else {
+    });
+    if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
 }
@@ -1623,6 +1561,13 @@ bool AudioEngine::prepare_nus3bank_pcm(const fs::path& file_path, PreparedPCM& o
 #endif
 }
 
+// Replaces any music stream stored under name with mus.
+void AudioEngine::install_music(const std::string& name, music&& mus) {
+    unload_music_stream(name);
+    std::unique_lock<std::shared_mutex> guard(rw_lock);
+    music_streams[name] = std::move(mus);
+}
+
 std::string AudioEngine::load_music_stream_prepared(PreparedPCM&& pcm, const std::string& name) {
     if (!pcm.data || pcm.frames == 0 || pcm.channels <= 0) {
         return "";
@@ -1636,11 +1581,7 @@ std::string AudioEngine::load_music_stream_prepared(PreparedPCM&& pcm, const std
     mus.pcm_total_frames = pcm.frames;
     mus.buffer_size = 4096;
     mus.stream_buffer = new float[mus.buffer_size * pcm.channels];
-    unload_music_stream(name);
-    {
-        std::unique_lock<std::shared_mutex> guard(rw_lock);
-        music_streams[name] = mus;
-    }
+    install_music(name, std::move(mus));
     spdlog::info("Loaded music stream (G.719): {} ({} frames, {} Hz, {} ch)", name, pcm.frames, pcm.rate, pcm.channels);
     return name;
 }
@@ -1658,17 +1599,7 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
 #endif
 
         SF_INFO file_info;
-        std::memset(&file_info, 0, sizeof(SF_INFO));
-
-        SNDFILE* file = nullptr;
-#ifdef _WIN32
-        file = sf_wchar_open(file_path.wstring().c_str(), SFM_READ, &file_info);
-#endif
-
-        if (!file) {
-            std::string path_str = path_to_string(file_path);
-            file = sf_open(path_str.c_str(), SFM_READ, &file_info);
-        }
+        SNDFILE* file = open_sound_file(file_path, file_info);
 
         if (!file) {
 #if defined(__ANDROID__) || defined(YATAIDON_PLATFORM_IOS)
@@ -1713,11 +1644,7 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
             mus.pcm_total_frames = ff_frames;
             mus.buffer_size = 4096;
             mus.stream_buffer = new float[mus.buffer_size * ff_ch];
-            unload_music_stream(name);
-            {
-                std::unique_lock<std::shared_mutex> guard(rw_lock);
-                music_streams[name] = mus;
-            }
+            install_music(name, std::move(mus));
             spdlog::debug("Loaded music stream (ffmpeg): {} ({} frames, {} Hz, {} ch)", name, ff_frames, ff_rate,
                           ff_ch);
             return name;
@@ -1753,11 +1680,7 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
                          target_sample_rate);
         }
 
-        unload_music_stream(name);
-        {
-            std::unique_lock<std::shared_mutex> guard(rw_lock);
-            music_streams[name] = mus;
-        }
+        install_music(name, std::move(mus));
 
         spdlog::debug("Loaded music stream: {} ({} frames, {} Hz, {} channels)", name, file_info.frames,
                       file_info.samplerate, file_info.channels);
@@ -1802,7 +1725,6 @@ std::string AudioEngine::load_music_stream_memory(const av::AVAudioStream& audio
         vio.tell = vf_tell;
 
         SF_INFO file_info{};
-        std::memset(&file_info, 0, sizeof(SF_INFO));
 
         stored.file_handle = sf_open_virtual(&vio, SFM_READ, &file_info, &stored.vio_cursor);
         if (!stored.file_handle) {
@@ -1849,19 +1771,8 @@ void AudioEngine::play_music_stream(const std::string& name, VolumePreset volume
         music& mus = it->second;
 
         if (volume_preset != VolumePreset::NONE) {
-            float volume = 1.0f;
-            if (volume_preset == VolumePreset::SOUND) {
-                volume = volume_presets.sound;
-            } else if (volume_preset == VolumePreset::MUSIC) {
-                volume = volume_presets.music;
-            } else if (volume_preset == VolumePreset::VOICE) {
-                volume = volume_presets.voice;
-            } else if (volume_preset == VolumePreset::HITSOUND) {
-                volume = volume_presets.hitsound;
-            } else if (volume_preset == VolumePreset::ATTRACT_MODE) {
-                volume = volume_presets.attract_mode;
-            }
-            std::atomic_ref<float>(mus.volume).store(volume, std::memory_order_relaxed);
+            std::atomic_ref<float>(mus.volume)
+                .store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
         }
 
         std::atomic_ref<unsigned long long>(mus.current_frame).store(0, std::memory_order_relaxed);
@@ -1952,16 +1863,7 @@ void AudioEngine::unload_music_stream(const std::string& name) {
 }
 
 void AudioEngine::unload_all_music() {
-    std::vector<std::string> names;
-    {
-        std::shared_lock<std::shared_mutex> guard(rw_lock);
-        names.reserve(music_streams.size());
-        for (const auto& [name, _] : music_streams) {
-            names.push_back(name);
-        }
-    }
-
-    for (const auto& name : names) {
+    for (const auto& name : keys_of(rw_lock, music_streams)) {
         unload_music_stream(name);
     }
 

@@ -1,6 +1,5 @@
 #include "md5.h"
 
-#include <cassert>
 #include <cstring>
 #include <stdexcept>
 

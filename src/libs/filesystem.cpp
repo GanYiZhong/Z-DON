@@ -77,6 +77,48 @@ static bool resolve_safe_extract_path(const fs::path& base_dir, const fs::path& 
     return true;
 }
 
+// Extracts every file entry of `zip` under `base_dir`, rejecting entries that escape it. With a non-null
+// `strip_prefix`, that leading folder is removed from entry names and entries left with an empty name are
+// skipped. Returns false if any entry could not be read, was unsafe or failed to extract.
+static bool extract_zip_entries(mz_zip_archive& zip, const fs::path& base_dir, const fs::path& canonical_base_dir,
+                                const std::string* strip_prefix, const char* tag, const fs::path& archive_path) {
+    bool all_ok = true;
+    const int num_files = (int)mz_zip_reader_get_num_files(&zip);
+    for (int i = 0; i < num_files; i++) {
+        mz_zip_archive_file_stat stat;
+        if (!mz_zip_reader_file_stat(&zip, i, &stat)) {
+            all_ok = false;
+            continue;
+        }
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) {
+            continue;
+        }
+
+        std::string name = stat.m_filename;
+        if (strip_prefix) {
+            if (!strip_prefix->empty() && name.rfind(*strip_prefix, 0) == 0) {
+                name = name.substr(strip_prefix->size());
+            }
+            if (name.empty()) {
+                continue;
+            }
+        }
+
+        fs::path out_file;
+        if (!resolve_safe_extract_path(base_dir, canonical_base_dir, name, out_file)) {
+            spdlog::warn("{}: skipping unsafe entry {}", tag, stat.m_filename);
+            all_ok = false;
+            continue;
+        }
+
+        if (!mz_zip_reader_extract_to_file(&zip, i, out_file.string().c_str(), 0)) {
+            spdlog::warn("{}: failed to extract {} from {}", tag, stat.m_filename, archive_path.string());
+            all_ok = false;
+        }
+    }
+    return all_ok;
+}
+
 void extract_osz(const fs::path& osz_path) {
     fs::path out_dir = osz_path.parent_path() / osz_path.stem();
     std::error_code ec;
@@ -93,30 +135,7 @@ void extract_osz(const fs::path& osz_path) {
         return;
     }
 
-    int num_files = (int)mz_zip_reader_get_num_files(&zip);
-    bool all_ok = true;
-    for (int i = 0; i < num_files; i++) {
-        mz_zip_archive_file_stat stat;
-        if (!mz_zip_reader_file_stat(&zip, i, &stat)) {
-            all_ok = false;
-            continue;
-        }
-        if (mz_zip_reader_is_file_a_directory(&zip, i)) {
-            continue;
-        }
-
-        fs::path out_file;
-        if (!resolve_safe_extract_path(out_dir, canonical_out_dir, stat.m_filename, out_file)) {
-            spdlog::warn("extract_osz: skipping unsafe entry {}", stat.m_filename);
-            all_ok = false;
-            continue;
-        }
-
-        if (!mz_zip_reader_extract_to_file(&zip, i, out_file.string().c_str(), 0)) {
-            spdlog::warn("extract_osz: failed to extract {} from {}", stat.m_filename, osz_path.string());
-            all_ok = false;
-        }
-    }
+    const bool all_ok = extract_zip_entries(zip, out_dir, canonical_out_dir, nullptr, "extract_osz", osz_path);
 
     mz_zip_reader_end(&zip);
     if (all_ok) {
@@ -178,33 +197,7 @@ void ensure_skin_extracted(const std::string& skin_name) {
         mz_zip_reader_end(&zip);
         return;
     }
-    for (int i = 0; i < num_files; i++) {
-        mz_zip_archive_file_stat stat;
-        if (!mz_zip_reader_file_stat(&zip, i, &stat)) {
-            continue;
-        }
-        if (mz_zip_reader_is_file_a_directory(&zip, i)) {
-            continue;
-        }
-
-        std::string name = stat.m_filename;
-        if (!common_prefix.empty() && name.rfind(common_prefix, 0) == 0) {
-            name = name.substr(common_prefix.size());
-        }
-        if (name.empty()) {
-            continue;
-        }
-
-        fs::path out_file;
-        if (!resolve_safe_extract_path(skin_dir, canonical_skin_dir, name, out_file)) {
-            spdlog::warn("ensure_skin_extracted: skipping unsafe entry {}", stat.m_filename);
-            continue;
-        }
-
-        if (!mz_zip_reader_extract_to_file(&zip, i, out_file.string().c_str(), 0)) {
-            spdlog::warn("ensure_skin_extracted: failed to extract {} from {}", stat.m_filename, zip_path.string());
-        }
-    }
+    extract_zip_entries(zip, skin_dir, canonical_skin_dir, &common_prefix, "ensure_skin_extracted", zip_path);
 
     mz_zip_reader_end(&zip);
     spdlog::info("ensure_skin_extracted: extracted {} to {}", zip_path.string(), skin_dir.string());
@@ -230,6 +223,31 @@ std::vector<std::string> list_available_skins() {
     return names;
 }
 
+// True if `dir` or any of its ancestors is a folder named "fumen".
+static bool path_is_under_fumen(fs::path dir) {
+    for (; !dir.empty() && dir != dir.parent_path(); dir = dir.parent_path()) {
+        if (dir.filename() == "fumen") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Files in a "fumen" folder are only charts when they are .bin (gen3/gen4 data).
+static void add_chart_file(std::vector<fs::path>& songs, std::vector<fs::path>* osz_out, const fs::path& p,
+                           bool under_fumen) {
+    const fs::path ext = p.extension();
+    if (ext == ".tja" || ext == ".osu") {
+        songs.push_back(p);
+    } else if (ext == ".osz") {
+        if (osz_out) {
+            osz_out->push_back(p);
+        }
+    } else if (ext == ".bin" && under_fumen) {
+        songs.push_back(p);
+    }
+}
+
 #ifdef _WIN32
 // Windows walk for collect_charts_from. recursive_directory_iterator stats every entry and
 // fs::canonical stats every component of every folder, which took seconds on a library of a few
@@ -242,25 +260,13 @@ struct ChartWalk {
     // A plain folder resolves to its parent's resolved path plus its name, so only links are opened.
     std::unordered_set<std::wstring> visited_dirs;
 
-    void add(const fs::path& p, const fs::path& ext, bool under_fumen) {
-        if (ext == ".tja" || ext == ".osu") {
-            songs.push_back(p);
-        } else if (ext == ".osz") {
-            if (osz_out) {
-                osz_out->push_back(p);
-            }
-        } else if (ext == ".bin" && under_fumen) {
-            songs.push_back(p);
-        }
-    }
-
     // `entries` is the listing of `dir`; `resolved` is dir's resolved path
     void walk(const fs::path& dir, const std::wstring& resolved, const std::vector<Win32DirEntry>& entries,
               bool under_fumen) {
         for (const Win32DirEntry& e : entries) {
             fs::path p = dir / e.name;
             if (!e.is_dir) {
-                add(p, p.extension(), under_fumen);
+                add_chart_file(songs, osz_out, p, under_fumen);
                 continue;
             }
             std::wstring child_resolved = e.is_reparse ? win32_final_path(p) : resolved + L'\\' + e.name;
@@ -288,7 +294,7 @@ struct ChartWalk {
                 continue;
             }
 #endif
-            add(p, p.extension(), under_fumen);
+            add_chart_file(songs, osz_out, p, under_fumen);
             if (listed) {
                 walk(p, child_resolved, children, under_fumen || e.name == L"fumen");
             }
@@ -304,13 +310,7 @@ static void collect_charts_from(const fs::path& path, std::vector<fs::path>& son
         throw fs::filesystem_error("cannot open directory", path,
                                    std::make_error_code(std::errc::no_such_file_or_directory));
     }
-    bool under_fumen = false;
-    for (fs::path dir = path; !dir.empty() && dir != dir.parent_path(); dir = dir.parent_path()) {
-        if (dir.filename() == "fumen") {
-            under_fumen = true;
-            break;
-        }
-    }
+    const bool under_fumen = path_is_under_fumen(path);
     ChartWalk w{songs, osz_out, {}};
     std::wstring root = win32_final_path(path);
     if (root.empty()) {
@@ -366,26 +366,8 @@ static void collect_charts_from(const fs::path& path, std::vector<fs::path>& son
         }
 #endif
 
-        auto ext = entry.path().extension();
-        if (ext == ".tja" || ext == ".osu") {
-            songs.push_back(entry.path());
-        } else if (ext == ".osz") {
-            if (osz_out) {
-                osz_out->push_back(entry.path());
-            }
-        } else if (ext == ".bin") {
-            bool under_fumen = false;
-            for (fs::path dir = entry.path().parent_path(); !dir.empty() && dir != dir.parent_path();
-                 dir = dir.parent_path()) {
-                if (dir.filename() == "fumen") {
-                    under_fumen = true;
-                    break;
-                }
-            }
-            if (under_fumen) {
-                songs.push_back(entry.path());
-            }
-        }
+        add_chart_file(songs, osz_out, entry.path(),
+                       entry.path().extension() == ".bin" && path_is_under_fumen(entry.path().parent_path()));
     }
 #endif
 }
@@ -516,16 +498,11 @@ void write_song_list(const fs::path& path, const std::vector<SongListEntry>& ent
 
 namespace {
     fs::path g_skin_graphics_path;
-    fs::path g_parent_skin_graphics_path;
     std::vector<fs::path> g_skin_chain; // Graphics paths: the skin, its parent, the parent's parent ...
     std::mutex g_skin_path_mutex;
 
     fs::path skin_root(const fs::path& graphics_path) {
         return graphics_path.parent_path();
-    }
-
-    bool skin_has_parent_locked() {
-        return g_skin_graphics_path != g_parent_skin_graphics_path;
     }
 } // namespace
 
@@ -573,7 +550,6 @@ void set_skin_graphics_path(const fs::path& graphics_path) {
     std::vector<fs::path> chain = resolve_skin_chain(graphics_path);
     std::lock_guard<std::mutex> lock(g_skin_path_mutex);
     g_skin_graphics_path = graphics_path;
-    g_parent_skin_graphics_path = chain.size() > 1 ? chain[1] : graphics_path;
     g_skin_chain = chain;
 }
 
@@ -584,16 +560,6 @@ std::vector<fs::path> skin_ancestor_roots() {
         roots.push_back(skin_root(g_skin_chain[i]));
     }
     return roots;
-}
-
-bool skin_has_parent() {
-    std::lock_guard<std::mutex> lock(g_skin_path_mutex);
-    return skin_has_parent_locked();
-}
-
-fs::path parent_skin_root() {
-    std::lock_guard<std::mutex> lock(g_skin_path_mutex);
-    return skin_root(g_parent_skin_graphics_path);
 }
 
 fs::path resolve_skin_path(const fs::path& relative_path) {

@@ -29,9 +29,8 @@ void reset_input_lock() {
 }
 
 BaseAnimation::BaseAnimation(double duration, double delay, bool loop, bool lock_input)
-    : duration(duration), delay(delay), delay_saved(delay), start_ms(get_current_ms()), paused_at_ms(0.0),
-      is_finished(false), is_started(false), is_reversing(false), unlocked(true), loop(loop), lock_input(lock_input),
-      attribute(0) {
+    : duration(duration), delay(delay), delay_saved(delay), start_ms(get_current_ms()), is_finished(false),
+      is_started(false), is_reversing(false), unlocked(true), loop(loop), lock_input(lock_input), attribute(0) {
     if (loop) {
         is_started = true;
         restart();
@@ -118,22 +117,9 @@ void BaseAnimation::pause() {
         return;
     }
     is_started = false;
-    paused_at_ms = get_current_ms();
     if (lock_input && !unlocked) {
         unlocked = true;
         release_input_lock();
-    }
-}
-
-void BaseAnimation::unpause() {
-    if (is_started) {
-        return;
-    }
-    is_started = true;
-    start_ms += get_current_ms() - paused_at_ms;
-    if (lock_input && unlocked) {
-        unlocked = false;
-        input_lock_count++;
     }
 }
 
@@ -445,35 +431,23 @@ Value AnimationParser::resolveValue(const Value& ref_obj, std::set<int>& visited
     if (ref_obj.HasMember("init_val")) {
         const Value& init_val_obj = ref_obj["init_val"];
 
+        Value resolved_init;
+        const Value* init_val = &init_val_obj;
         if (init_val_obj.IsObject() && init_val_obj.HasMember("reference_id")) {
-            Value init_val = resolveValue(init_val_obj, visited);
+            resolved_init = resolveValue(init_val_obj, visited);
+            init_val = &resolved_init;
+        }
 
-            // Handle numeric addition with type coercion
-            double base_num = base_value.IsDouble()
-                                  ? base_value.GetDouble()
-                                  : (base_value.IsInt() ? static_cast<double>(base_value.GetInt()) : 0.0);
-            double init_num = init_val.IsDouble() ? init_val.GetDouble()
-                                                  : (init_val.IsInt() ? static_cast<double>(init_val.GetInt()) : 0.0);
+        // Handle numeric addition with type coercion
+        double base_num = base_value.IsDouble() ? base_value.GetDouble()
+                                                : (base_value.IsInt() ? static_cast<double>(base_value.GetInt()) : 0.0);
+        double init_num = init_val->IsDouble() ? init_val->GetDouble()
+                                               : (init_val->IsInt() ? static_cast<double>(init_val->GetInt()) : 0.0);
 
-            if (base_value.IsDouble() || init_val.IsDouble()) {
-                base_value.SetDouble(base_num + init_num);
-            } else {
-                base_value.SetInt(static_cast<int>(base_num + init_num));
-            }
+        if (base_value.IsDouble() || init_val->IsDouble()) {
+            base_value.SetDouble(base_num + init_num);
         } else {
-            // Handle numeric addition with type coercion
-            double base_num = base_value.IsDouble()
-                                  ? base_value.GetDouble()
-                                  : (base_value.IsInt() ? static_cast<double>(base_value.GetInt()) : 0.0);
-            double init_num = init_val_obj.IsDouble()
-                                  ? init_val_obj.GetDouble()
-                                  : (init_val_obj.IsInt() ? static_cast<double>(init_val_obj.GetInt()) : 0.0);
-
-            if (base_value.IsDouble() || init_val_obj.IsDouble()) {
-                base_value.SetDouble(base_num + init_num);
-            } else {
-                base_value.SetInt(static_cast<int>(base_num + init_num));
-            }
+            base_value.SetInt(static_cast<int>(base_num + init_num));
         }
     }
 
@@ -525,17 +499,6 @@ std::unique_ptr<BaseAnimation> AnimationParser::createAnimation(const Value& ani
         throw std::runtime_error("Animation of type '" + type + "' requires duration");
     }
 
-    auto get_double = [&](const char* key, double def) {
-        if (anim_obj.HasMember(key)) {
-            if (anim_obj[key].IsDouble()) {
-                return anim_obj[key].GetDouble();
-            } else if (anim_obj[key].IsInt()) {
-                return static_cast<double>(anim_obj[key].GetInt());
-            }
-        }
-        return def;
-    };
-
     auto get_int = [&](const char* key, int def) {
         return anim_obj.HasMember(key) && anim_obj[key].IsInt() ? anim_obj[key].GetInt() : def;
     };
@@ -554,6 +517,8 @@ std::unique_ptr<BaseAnimation> AnimationParser::createAnimation(const Value& ani
         }
         return std::nullopt;
     };
+
+    auto get_double = [&](const char* key, double def) { return get_double_opt(key).value_or(def); };
 
     auto get_ease_opt_from = [&](const Value& obj, const char* key) -> std::optional<EaseType> {
         if (!obj.HasMember(key) || !obj[key].IsString()) {

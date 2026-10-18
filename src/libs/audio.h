@@ -135,8 +135,6 @@ public:
                            const VolumeConfig& volume_presets);
     void close_audio_device();
     bool is_audio_device_ready() const;
-    void set_master_volume(float volume);
-    float get_master_volume();
 
     void load_screen_sounds(const std::string& screen_name);
 
@@ -195,6 +193,9 @@ private:
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
                                        const std::string& name);
     static void stop_decode_job(sound& snd);
+    // stops the decode job and frees the buffers a stored sound owns
+    static void free_sound(sound& snd);
+    void install_music(const std::string& name, music&& mus);
     double target_sample_rate;
     unsigned long buffer_size;
     std::string device_name; // Output device to open (empty = system default)
@@ -214,9 +215,6 @@ private:
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
     RtAudio* rt_audio = nullptr; // ALSA/JACK/PulseAudio/OSS/CoreAudio/DirectSound/ASIO/WASAPI
 #endif
-#ifdef _WIN32
-    PaStream* pa_stream = nullptr; // WDM-KS/MME
-#endif
 
     std::unordered_map<std::string, sound> sounds;
     std::unordered_map<std::string, music> music_streams;
@@ -226,9 +224,6 @@ private:
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
     bool init_rtaudio_device(RtAudio::Api api, const char* label);
 #endif
-#ifdef _WIN32
-    bool init_portaudio_device(PaHostApiTypeId api, const char* label);
-#endif
     bool init_sdl3_device();
 
     static void mix(float* out, unsigned int framesPerBuffer, AudioEngine* engine);
@@ -236,11 +231,6 @@ private:
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
     static int rt_audio_callback(void* outputBuffer, void* inputBuffer, unsigned int framesPerBuffer, double streamTime,
                                  unsigned int status, void* userData);
-#endif
-#ifdef _WIN32
-    static int pa_stream_callback(const void* inputBuffer, void* outputBuffer, unsigned long framesPerBuffer,
-                                  const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags,
-                                  void* userData);
 #endif
 };
 
