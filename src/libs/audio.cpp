@@ -943,8 +943,9 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
 }
 
 void AudioEngine::free_sound(sound& snd) {
-    stop_decode_job(snd);
-    delete[] snd.data;
+    if (!stop_decode_job(snd)) {
+        delete[] snd.data;
+    }
     snd.data = nullptr;
     if (snd.resampler) {
         src_delete(snd.resampler);
@@ -954,14 +955,18 @@ void AudioEngine::free_sound(sound& snd) {
     snd.resample_buffer = nullptr;
 }
 
-void AudioEngine::stop_decode_job(sound& snd) {
+bool AudioEngine::stop_decode_job(sound& snd) {
     if (!snd.decode_job) {
-        return;
+        return false;
     }
-    snd.decode_job->cancel.store(true, std::memory_order_relaxed);
-    // wait out a chunk being written; the decoder checks cancel before the next one
-    std::lock_guard<std::mutex> lock(snd.decode_job->writing);
-    snd.decode_job.reset();
+    std::shared_ptr<SoundDecodeJob> job = std::move(snd.decode_job);
+    std::lock_guard<std::mutex> lock(job->state);
+    job->cancel.store(true, std::memory_order_relaxed);
+    if (job->decoder_exited) {
+        return false; // nothing writes into the buffer any more: the caller frees it
+    }
+    job->orphaned = snd.data; // the decoder frees it when it stops (after its current chunk)
+    return true;
 }
 
 // Z-DON: a long sound (a screen's bgm: Nijiiro's song select bgm.ogg took ~210 ms warm, ~450 ms
@@ -1072,11 +1077,9 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
 
     std::thread([dec, job, finish, path = file_path.string()]() {
         const sf_count_t chunk = 1 << 15; // ~0.7 s at 44.1 kHz
-        while (true) {
-            std::lock_guard<std::mutex> lock(job->writing);
-            if (job->cancel.load(std::memory_order_relaxed)) {
-                break; // the sound was unloaded or replaced: its buffer may be gone
-            }
+        // writes only past frames_ready, which nothing else reads; an unload while this runs
+        // leaves the buffer to this thread (SoundDecodeJob::orphaned)
+        while (!job->cancel.load(std::memory_order_relaxed)) {
             const bool more = dec->step(chunk);
             job->frames_ready.store(static_cast<unsigned int>(dec->written), std::memory_order_release);
             if (!more) {
@@ -1086,6 +1089,13 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
             }
         }
         finish(*dec);
+        float* orphaned = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(job->state);
+            job->decoder_exited = true;
+            orphaned = job->orphaned;
+        }
+        delete[] orphaned;
     }).detach();
 
     spdlog::debug("Loading sound in the background: {} ({} frames ready of ~{})", name, dec->written, expected);

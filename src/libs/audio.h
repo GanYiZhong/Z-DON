@@ -71,7 +71,12 @@ struct SoundDecodeJob {
     std::atomic<unsigned int> frames_ready{0}; // frames of sound::data written so far
     std::atomic<bool> done{false};             // frames_ready is the sound's final length
     std::atomic<bool> cancel{false};
-    std::mutex writing; // held while the decoder writes into sound::data
+    // Ownership of sound::data while the decoder runs: an unload that finds the decoder still
+    // running hands the buffer over (orphaned) instead of waiting, and the decoder frees it on
+    // exit. Both sides take this lock only for these flags, never while decoding.
+    std::mutex state;
+    bool decoder_exited = false;
+    float* orphaned = nullptr;
 };
 
 struct sound {
@@ -204,7 +209,8 @@ private:
 
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
                                        const std::string& name);
-    static void stop_decode_job(sound& snd);
+    // true when the decoder took over freeing snd.data
+    static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns
     static void free_sound(sound& snd);
     void install_music(const std::string& name, music&& mus);
