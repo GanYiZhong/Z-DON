@@ -20,6 +20,12 @@
 bgm 211 / GPU 上傳 147 / 等預解碼 129 / SongSelectPlayer 41 / 釋放 image 38 / 子集掃描 24 / Lua 17。
 冷硬碟：貼圖 1.1–1.6 s ＋ 初始化 1.0–1.3 s。
 
+## 程式碼精簡
+
+- [x] 2026-10-19 全 src 精簡（haiku 審查 → sonnet 套用 → opus 驗證）：140 檔，+2191 / −4643。
+  TJA 解析新舊對拍 3043 首 / 12116 譜面全部相同（工具：scratchpad 的 tja_equiv harness，連結舊 tja.cpp 比對）。
+  順手修：TimelineObject::end_time 未初始化。
+
 ## 功能
 
 （待使用者決定）
