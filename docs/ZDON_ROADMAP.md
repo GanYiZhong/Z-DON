@@ -4,6 +4,8 @@
 
 - [x] #314、#315：上游已合併，不用搬
 - [x] 開發用鉤子（JUMP_SCREEN / DUMP_SCREEN / FAKE_KEYS / FORCE_AUTO / DUMP_CHARA），冷硬碟測試架要用
+- [x] 響度統一（上游 PR #277，Ape）、段位每項考試最佳成績（cda1702，改存到 dan_scores.exam_bests）
+- [x] Shift-JIS：上游 #292 已含
 - [ ] 其餘 wip-all 本機修正視需要挑選（`git log origin/master..yataidon-local/wip-all`）
 
 ## 效能
