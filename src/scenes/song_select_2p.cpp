@@ -143,10 +143,6 @@ std::optional<Screens> SongSelect2PScreen::update() {
     return std::nullopt;
 }
 
-void SongSelect2PScreen::draw_overlays() {
-    SongSelectScreen::draw_overlays();
-}
-
 void SongSelect2PScreen::draw() {
     navigator.draw_background();
     player->draw_background_diffs(state);

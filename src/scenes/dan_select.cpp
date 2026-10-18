@@ -31,7 +31,6 @@ void DanSelectScreen::on_screen_start() {
     state = SongSelectState::BROWSING;
     dan_transition.reset();
     confirm_index = CONFIRM_NO;
-    last_moved = 0;
     modifier_selector.reset();
 
     {
@@ -72,14 +71,7 @@ void DanSelectScreen::on_screen_start() {
     scan_ready_ms = 0;
     scan_begin_ms = screen_start_ms;
 
-    if (legacy_blocking) {
-        dan_navigator.init({dan_folder});
-        screen_start_ms = get_current_ms();
-        scan_ready = true;
-        scan_ready_ms = screen_start_ms;
-    } else {
-        dan_navigator.begin_init({dan_folder});
-    }
+    dan_navigator.begin_init({dan_folder});
 
     const bool from_entry = (global_data.previous_screen == "ENTRY");
     if (script_manager.lua) {
@@ -223,20 +215,16 @@ void DanSelectScreen::handle_input_browsing(double current_ms) {
     if (skip_left) {
         audio.play_sound("skip", VolumePreset::SOUND);
         dan_navigator.skip(-10);
-        last_moved = current_ms;
     } else if (skip_right) {
         audio.play_sound("skip", VolumePreset::SOUND);
         dan_navigator.skip(10);
-        last_moved = current_ms;
     } else if (!wheel_locked && nav_left) {
         audio.play_sound("kat", VolumePreset::SOUND);
         dan_navigator.move_left();
-        last_moved = current_ms;
         wheel_locked = true;
     } else if (!wheel_locked && nav_right) {
         audio.play_sound("kat", VolumePreset::SOUND);
         dan_navigator.move_right();
-        last_moved = current_ms;
         wheel_locked = true;
     } else if (!wheel_locked && confirm) {
         audio.play_sound("don", VolumePreset::SOUND);

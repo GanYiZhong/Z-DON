@@ -51,8 +51,6 @@ private:
     PlayerData dan_player_data;
     std::optional<ModifierSelector> modifier_selector;
 
-    double last_moved = 0;
-
     bool wheel_locked = false;
     double wheel_tick_epoch = 0;
     long long wheel_tick_seen = -1;
@@ -67,7 +65,6 @@ private:
     bool scan_ready = false;
     double scan_ready_ms = 0;
     double scan_begin_ms = 0;
-    bool legacy_blocking = false;
 
     void publish_scan_state(double current_ms);
 

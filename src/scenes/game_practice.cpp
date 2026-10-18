@@ -432,10 +432,10 @@ static ray::Rectangle get_practice_button_rect(TextureObject* tex_obj, int index
     // Convert from virtual coordinates to screen coordinates
     int screen_x = virtual_to_screen_x(x);
     int screen_y = virtual_to_screen_y(y);
-    int screen_w = static_cast<int>(w * std::min((float)ray::GetScreenWidth() / tex.screen_width,
-                                                 (float)ray::GetScreenHeight() / tex.screen_height));
-    int screen_h = static_cast<int>(h * std::min((float)ray::GetScreenWidth() / tex.screen_width,
-                                                 (float)ray::GetScreenHeight() / tex.screen_height));
+    const float screen_scale =
+        std::min((float)ray::GetScreenWidth() / tex.screen_width, (float)ray::GetScreenHeight() / tex.screen_height);
+    int screen_w = static_cast<int>(w * screen_scale);
+    int screen_h = static_cast<int>(h * screen_scale);
 
     return {static_cast<float>(screen_x), static_cast<float>(screen_y), static_cast<float>(screen_w),
             static_cast<float>(screen_h)};
@@ -459,21 +459,20 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     if (menu.open) {
         auto action = menu.handle_mouse_input(camera, mouse_pos, mouse_pressed,
                                               practice_player && practice_player->is_auto_play());
-        auto next = handle_menu_action(action);
-        if (next.has_value()) {
-            return next;
-        }
-        return std::nullopt;
+        return handle_menu_action(action);
     }
+
+    auto button_hit = [&](TextureObject* tex_obj, int index, const TextureResizeAnimation* anim) {
+        auto rect = get_practice_button_rect(tex_obj, index, anim ? (float)anim->attribute : 1.0f);
+        return point_in_rect(mouse_pos.x, mouse_pos.y, rect.x, rect.y, rect.width, rect.height);
+    };
 
     // Also check for touch input (raylib handles touch as mouse on mobile)
     // Note: touch input is already converted to virtual keys in input.cpp,
     // but we also want to allow direct clicking on the practice drums when paused
 
     // Check resume_don (index = player_idx)
-    auto resume_rect =
-        get_practice_button_rect(t_resume_don, player_idx, resume_don_anim ? (float)resume_don_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, resume_rect.x, resume_rect.y, resume_rect.width, resume_rect.height)) {
+    if (button_hit(t_resume_don, player_idx, resume_don_anim)) {
         if (mouse_pressed) {
             resume_practice();
             audio.play_sound("don", VolumePreset::SOUND);
@@ -482,9 +481,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Check skip_l_kat (index = player_idx * 2)
-    auto skip_l_rect = get_practice_button_rect(t_skip_l_kat, player_idx * 2,
-                                                skip_l_kat_anim ? (float)skip_l_kat_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, skip_l_rect.x, skip_l_rect.y, skip_l_rect.width, skip_l_rect.height)) {
+    if (button_hit(t_skip_l_kat, player_idx * 2, skip_l_kat_anim)) {
         if (mouse_pressed && !bars.empty()) {
             scrobble_step_bar(false);
         }
@@ -492,9 +489,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Check skip_r_kat (index = player_idx * 2 + 1)
-    auto skip_r_rect = get_practice_button_rect(t_skip_r_kat, player_idx * 2 + 1,
-                                                skip_r_kat_anim ? (float)skip_r_kat_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, skip_r_rect.x, skip_r_rect.y, skip_r_rect.width, skip_r_rect.height)) {
+    if (button_hit(t_skip_r_kat, player_idx * 2 + 1, skip_r_kat_anim)) {
         if (mouse_pressed && !bars.empty()) {
             scrobble_step_bar(true);
         }
@@ -502,9 +497,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Check menu_don (index = other_idx)
-    auto menu_rect =
-        get_practice_button_rect(t_menu_don, other_idx, menu_don_anim ? (float)menu_don_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, menu_rect.x, menu_rect.y, menu_rect.width, menu_rect.height)) {
+    if (button_hit(t_menu_don, other_idx, menu_don_anim)) {
         if (mouse_pressed) {
             open_practice_menu();
             audio.play_sound("don", VolumePreset::SOUND);
@@ -513,10 +506,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Check speed_l_kat (index = other_idx * 2 + 1)
-    auto speed_l_rect = get_practice_button_rect(t_speed_l_kat, other_idx * 2 + 1,
-                                                 speed_l_kat_anim ? (float)speed_l_kat_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, speed_l_rect.x, speed_l_rect.y, speed_l_rect.width,
-                      speed_l_rect.height)) {
+    if (button_hit(t_speed_l_kat, other_idx * 2 + 1, speed_l_kat_anim)) {
         if (mouse_pressed) {
             change_practice_speed(true, false);
             audio.play_sound("kat", VolumePreset::SOUND);
@@ -525,10 +515,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Check speed_r_kat (index = other_idx * 2)
-    auto speed_r_rect = get_practice_button_rect(t_speed_r_kat, other_idx * 2,
-                                                 speed_r_kat_anim ? (float)speed_r_kat_anim->attribute : 1.0f);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, speed_r_rect.x, speed_r_rect.y, speed_r_rect.width,
-                      speed_r_rect.height)) {
+    if (button_hit(t_speed_r_kat, other_idx * 2, speed_r_kat_anim)) {
         if (mouse_pressed) {
             change_practice_speed(false, true);
             audio.play_sound("kat", VolumePreset::SOUND);
@@ -538,8 +525,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
 
     // Also allow clicking on the large drums (index 0 and 1 for player)
     // Left drum (index = player_idx * 2) - DON
-    auto drum_l_rect = get_practice_button_rect(t_large_drum, player_idx * 2);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, drum_l_rect.x, drum_l_rect.y, drum_l_rect.width, drum_l_rect.height)) {
+    if (button_hit(t_large_drum, player_idx * 2, nullptr)) {
         if (mouse_pressed && practice_player) {
             practice_player->spawn_hit_effects(DrumType::DON, Side::LEFT);
             practice_player->spawn_scrobble_effect(DrumType::DON, Side::LEFT, player_idx);
@@ -549,8 +535,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     }
 
     // Right drum (index = player_idx * 2 + 1) - DON
-    auto drum_r_rect = get_practice_button_rect(t_large_drum, player_idx * 2 + 1);
-    if (point_in_rect(mouse_pos.x, mouse_pos.y, drum_r_rect.x, drum_r_rect.y, drum_r_rect.width, drum_r_rect.height)) {
+    if (button_hit(t_large_drum, player_idx * 2 + 1, nullptr)) {
         if (mouse_pressed && practice_player) {
             practice_player->spawn_hit_effects(DrumType::DON, Side::RIGHT);
             practice_player->spawn_scrobble_effect(DrumType::DON, Side::RIGHT, player_idx);
@@ -700,10 +685,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                 bool in_dialog = menu.dialog != PracticeMenu::Dialog::NONE;
                 auto action =
                     in_dialog ? menu.confirm() : menu.activate(practice_player && practice_player->is_auto_play());
-                auto next = handle_menu_action(action);
-                if (next.has_value()) {
-                    return next;
-                }
+                return handle_menu_action(action);
             }
             return std::nullopt;
         }
@@ -788,35 +770,11 @@ std::optional<Screens> PracticeGameScreen::update() {
         scrobble_move = std::make_unique<MoveAnimation>(200.0, 0);
     }
 
-    if (pause_don_anim) {
-        pause_don_anim->update(current_ms);
-    }
-    if (pause_kat_anim) {
-        pause_kat_anim->update(current_ms);
-    }
-    if (resume_don_anim) {
-        resume_don_anim->update(current_ms);
-    }
-    if (skip_l_kat_anim) {
-        skip_l_kat_anim->update(current_ms);
-    }
-    if (skip_r_kat_anim) {
-        skip_r_kat_anim->update(current_ms);
-    }
-    if (menu_don_anim) {
-        menu_don_anim->update(current_ms);
-    }
-    if (speed_l_kat_anim) {
-        speed_l_kat_anim->update(current_ms);
-    }
-    if (speed_r_kat_anim) {
-        speed_r_kat_anim->update(current_ms);
-    }
-    if (mark_action_anim) {
-        mark_action_anim->update(current_ms);
-    }
-    if (mark_finish_anim) {
-        mark_finish_anim->update(current_ms);
+    for (auto* anim : {pause_don_anim, pause_kat_anim, resume_don_anim, skip_l_kat_anim, skip_r_kat_anim, menu_don_anim,
+                       speed_l_kat_anim, speed_r_kat_anim, mark_action_anim, mark_finish_anim}) {
+        if (anim) {
+            anim->update(current_ms);
+        }
     }
     if (jump_arrow_anim) {
         jump_arrow_anim->update(current_ms);

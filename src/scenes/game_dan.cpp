@@ -6,6 +6,10 @@
 #include "../libs/script.h"
 #include "../libs/text.h"
 
+static const char* exam_bar_texture(float progress) {
+    return progress >= 1.0f ? "exam_max" : progress >= 0.5f ? "exam_gold" : "exam_red";
+}
+
 void DanGameScreen::on_screen_start() {
     Screen::on_screen_start();
     ms_from_start = 0;
@@ -320,13 +324,7 @@ DanInfoCache DanGameScreen::calculate_dan_info() {
         float bar_full_w = dan_exam_info().width;
         info.bar_width = bar_full_w * progress;
 
-        if (progress >= 1.0f) {
-            info.bar_texture = "exam_max";
-        } else if (progress >= 0.5f) {
-            info.bar_texture = "exam_gold";
-        } else {
-            info.bar_texture = "exam_red";
-        }
+        info.bar_texture = exam_bar_texture(progress);
         info.bar_state = dan_bar_state(exam_for(exam, -1), val, true, near_end, just_before_end);
 
         info.gothrough = exam.gothrough;
@@ -350,19 +348,26 @@ DanInfoCache DanGameScreen::calculate_dan_info() {
             info.counter_value = info.song_value[cur];
             info.progress = info.song_progress[cur];
             info.bar_width = bar_full_w * info.progress;
-            if (info.progress >= 1.0f) {
-                info.bar_texture = "exam_max";
-            } else if (info.progress >= 0.5f) {
-                info.bar_texture = "exam_gold";
-            } else {
-                info.bar_texture = "exam_red";
-            }
+            info.bar_texture = exam_bar_texture(info.progress);
             info.bar_state = info.song_state[cur];
         }
 
         cache.exam_data.push_back(info);
     }
     return cache;
+}
+
+DanResultSong DanGameScreen::build_song_result(const SessionData& sd) const {
+    DanResultSong song_res;
+    song_res.song_title = current_song_title;
+    song_res.genre_index = sd.selected_dan[song_index].genre_index;
+    song_res.selected_difficulty = sd.selected_dan[song_index].difficulty;
+    song_res.diff_level = sd.selected_dan[song_index].level;
+    song_res.good = players[0]->get_good() - prev_good;
+    song_res.ok = players[0]->get_ok() - prev_ok;
+    song_res.bad = players[0]->get_bad() - prev_bad;
+    song_res.drumroll = players[0]->get_total_drumroll() - prev_drumroll;
+    return song_res;
 }
 
 void DanGameScreen::check_exam_failures(bool course_finished, bool song_finished) {
@@ -383,11 +388,15 @@ void DanGameScreen::check_exam_failures(bool course_finished, bool song_finished
             continue;
         }
 
-        if (exam.range == "more" && val < exam.red) {
+        const auto mark_failed = [&]() {
             exam_failed[i] = true;
             if (!exam.gothrough && i < (int)exam_song_failed.size() && song_index < 3) {
                 exam_song_failed[i][song_index] = true;
             }
+        };
+
+        if (exam.range == "more" && val < exam.red) {
+            mark_failed();
             audio.play_sound("exam_failed", VolumePreset::SOUND);
             spdlog::info("Dan exam {} ({}) failed: {} < {} ({}) at {} ms (song ends {} ms)", i, exam.type, val,
                          exam.red, exam.gothrough ? "gothrough" : "per-song", ms_from_start,
@@ -395,10 +404,7 @@ void DanGameScreen::check_exam_failures(bool course_finished, bool song_finished
         } else if (exam.range == "less") {
             int remaining = std::max(0, exam.red - val);
             if (remaining == 0) {
-                exam_failed[i] = true;
-                if (!exam.gothrough && i < (int)exam_song_failed.size() && song_index < 3) {
-                    exam_song_failed[i][song_index] = true;
-                }
+                mark_failed();
                 audio.play_sound("dan_failed", VolumePreset::SOUND);
                 spdlog::info("Dan exam {} ({}) failed: {} of {} used up ({}) at {} ms (song ends {} ms)", i, exam.type,
                              val, exam.red, exam.gothrough ? "gothrough" : "per-song", ms_from_start,
@@ -578,15 +584,7 @@ void DanGameScreen::trigger_fail_out(double current_ms) {
 
     SessionData& sd = global_data.session_data[(int)global_data.player_num];
     if ((int)sd.dan_result_data.songs.size() <= song_index) {
-        DanResultSong song_res;
-        song_res.song_title = current_song_title;
-        song_res.genre_index = sd.selected_dan[song_index].genre_index;
-        song_res.selected_difficulty = sd.selected_dan[song_index].difficulty;
-        song_res.diff_level = sd.selected_dan[song_index].level;
-        song_res.good = players[0]->get_good() - prev_good;
-        song_res.ok = players[0]->get_ok() - prev_ok;
-        song_res.bad = players[0]->get_bad() - prev_bad;
-        song_res.drumroll = players[0]->get_total_drumroll() - prev_drumroll;
+        DanResultSong song_res = build_song_result(sd);
         sd.dan_result_data.songs.push_back(song_res);
     }
     const bool reached_every_song = song_index >= (int)sd.selected_dan.size() - 1;
@@ -669,15 +667,7 @@ std::optional<Screens> DanGameScreen::update() {
 
         // Save per-song result if not yet saved for this song
         if ((int)sd.dan_result_data.songs.size() <= song_index) {
-            DanResultSong song_res;
-            song_res.song_title = current_song_title;
-            song_res.genre_index = sd.selected_dan[song_index].genre_index;
-            song_res.selected_difficulty = sd.selected_dan[song_index].difficulty;
-            song_res.diff_level = sd.selected_dan[song_index].level;
-            song_res.good = players[0]->get_good() - prev_good;
-            song_res.ok = players[0]->get_ok() - prev_ok;
-            song_res.bad = players[0]->get_bad() - prev_bad;
-            song_res.drumroll = players[0]->get_total_drumroll() - prev_drumroll;
+            DanResultSong song_res = build_song_result(sd);
             save_song_score(song_res);
             players[0]->input_log.clear(); // each song is submitted with only its own inputs
             sd.dan_result_data.songs.push_back(song_res);

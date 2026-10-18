@@ -8,7 +8,6 @@ private:
     void handle_input_browsing(double current_ms) override;
     void handle_input_selecting() override;
     void select_song(SongBox* song) override;
-    void draw_overlays() override;
 
 protected:
     bool is_2p_screen() override { return true; }

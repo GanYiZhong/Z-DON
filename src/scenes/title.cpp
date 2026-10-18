@@ -52,38 +52,37 @@ void TitleScreen::on_screen_start() {
 #endif
 }
 
+static void scan_mp4_folder(const char* folder, std::vector<fs::path>& out) {
+    try {
+        fs::path path = resolve_skin_path(std::string("Videos/") + folder);
+        if (fs::exists(path)) {
+            for (const auto& entry : fs::recursive_directory_iterator(path)) {
+                if (entry.path().extension() == ".mp4") {
+                    out.push_back(entry.path());
+                }
+            }
+        } else {
+            spdlog::warn("{} folder not found", folder);
+        }
+    } catch (const fs::filesystem_error& e) {
+        spdlog::warn("Failed to scan {} folder: {}", folder, e.what());
+    }
+}
+
 void TitleScreen::load_videos() {
     op_video_list.clear();
     attract_video_list.clear();
-    try {
-        fs::path op_path = resolve_skin_path("Videos/op_videos");
-        if (fs::exists(op_path)) {
-            for (const auto& entry : fs::recursive_directory_iterator(op_path)) {
-                if (entry.path().extension() == ".mp4") {
-                    op_video_list.push_back(entry.path());
-                }
-            }
-        } else {
-            spdlog::warn("op_videos folder not found");
-        }
-    } catch (const fs::filesystem_error& e) {
-        spdlog::warn("Failed to scan op_videos folder: {}", e.what());
-    }
+    scan_mp4_folder("op_videos", op_video_list);
+    scan_mp4_folder("attract_videos", attract_video_list);
+}
 
-    try {
-        fs::path attract_path = resolve_skin_path("Videos/attract_videos");
-        if (fs::exists(attract_path)) {
-            for (const auto& entry : fs::recursive_directory_iterator(attract_path)) {
-                if (entry.path().extension() == ".mp4") {
-                    attract_video_list.push_back(entry.path());
-                }
-            }
-        } else {
-            spdlog::warn("attract_videos folder not found");
-        }
-    } catch (const fs::filesystem_error& e) {
-        spdlog::warn("Failed to scan attract_videos folder: {}", e.what());
-    }
+static void start_random_video(const std::vector<fs::path>& list, std::optional<VideoPlayer>& video,
+                               double current_ms) {
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<size_t> dist(0, list.size() - 1);
+    video.emplace(list[dist(rng)]);
+    video->set_volume(global_data.config->volume.attract_mode);
+    video->start(current_ms);
 }
 
 void TitleScreen::reset_attract_objects() {
@@ -96,7 +95,6 @@ void TitleScreen::reset_attract_objects() {
 Screens TitleScreen::on_screen_end(Screens next_screen) {
     reset_attract_objects();
     global_data.title_state = "";
-    global_data.title_state_start_ms = 0.0;
 
 #ifdef CARD_READER_ENABLED
     // Clean up card reader
@@ -117,12 +115,7 @@ void TitleScreen::scene_manager(double current_ms) {
                 state = TitleState::WARNING;
                 return;
             }
-            std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<size_t> dist(0, op_video_list.size() - 1);
-            fs::path chosen = op_video_list[dist(rng)];
-            op_video.emplace(chosen);
-            op_video->set_volume(global_data.config->volume.attract_mode);
-            op_video->start(current_ms);
+            start_random_video(op_video_list, op_video, current_ms);
         }
         op_video->update(current_ms);
         if (op_video->is_finished()) {
@@ -145,12 +138,7 @@ void TitleScreen::scene_manager(double current_ms) {
                 state = TitleState::ATTRACT_CAMERA;
                 return;
             }
-            std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<size_t> dist(0, attract_video_list.size() - 1);
-            fs::path chosen = attract_video_list[dist(rng)];
-            attract_video.emplace(chosen);
-            attract_video->set_volume(global_data.config->volume.attract_mode);
-            attract_video->start(current_ms);
+            start_random_video(attract_video_list, attract_video, current_ms);
         }
         attract_video->update(current_ms);
         if (attract_video->is_finished()) {
@@ -257,10 +245,11 @@ void TitleScreen::draw() {
     allnet_indicator.draw();
     entry_overlay.draw(true);
 
+    const float hit_taiko_y = font_manager.get_text_info("hit_taiko_to_start")->y;
     hit_taiko_text->draw({.x = (float)(tex.screen_width * 0.25 - hit_taiko_text->width / 2),
-                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
+                          .y = hit_taiko_y,
                           .fade = text_overlay_fade->attribute});
     hit_taiko_text->draw({.x = (float)(tex.screen_width * 0.75 - hit_taiko_text->width / 2),
-                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
+                          .y = hit_taiko_y,
                           .fade = text_overlay_fade->attribute});
 }

@@ -322,8 +322,7 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         score.bad = session_data.result_data.bad;
         score.max_combo = session_data.result_data.max_combo;
         score.drumroll = session_data.result_data.total_drumroll;
-        auto prev_score =
-            scores_manager.get_score(hash, global_data.session_data[(int)player_num].selected_difficulty, player_id);
+        auto prev_score = scores_manager.get_score(hash, session_data.selected_difficulty, player_id);
         if (prev_score.has_value()) {
             session_data.result_data.prev_score = prev_score->score;
         }

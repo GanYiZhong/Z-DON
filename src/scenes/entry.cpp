@@ -372,7 +372,6 @@ Screens EntryScreen::on_screen_end(Screens next_screen) {
         card_reader_->stop_polling();
         card_reader_->led_reset();
         card_reader_.reset();
-        card_reader_initialized_ = false;
     }
 #endif
 
@@ -606,7 +605,6 @@ std::optional<Screens> EntryScreen::update() {
                 card_reader_->start_polling();
                 card_reader_->set_led_color(255, 255, 255);
                 last_card_poll_ms_ = current_time;
-                card_reader_initialized_ = true;
             }
         }
     }
@@ -685,9 +683,8 @@ std::optional<Screens> EntryScreen::update() {
         return on_screen_end(box_manager->selected_box());
     }
     for (auto& player : players) {
-        if (player && player->is_cloud_animation_finished() &&
-            !audio.is_sound_playing("entry_start_" + std::to_string((int)global_data.player_num) + "p") &&
-            !announce_played && state != EntryState::NAME_ENTRY) {
+        if (!announce_played && state != EntryState::NAME_ENTRY && player && player->is_cloud_animation_finished() &&
+            !audio.is_sound_playing("entry_start_" + std::to_string((int)global_data.player_num) + "p")) {
             audio.play_sound("select_mode", VolumePreset::VOICE);
             announce_played = true;
         }
