@@ -16,7 +16,4 @@ namespace readahead {
     // Drops the current request (a screen starts loading: its own reads go first).
     void cancel();
 
-    // Stops the thread (at shutdown).
-    void stop();
-
 } // namespace readahead

@@ -138,6 +138,12 @@ void WebCamera::update() {
         pixels = packed.data();
     }
 
+    if (m_texture.has_value() && (rgba->w != m_width || rgba->h != m_height)) {
+        // frame geometry changed - recreate the texture
+        ray::UnloadTexture(m_texture.value());
+        m_texture.reset();
+    }
+
     if (!m_texture.has_value()) {
         m_width = rgba->w;
         m_height = rgba->h;
@@ -149,27 +155,6 @@ void WebCamera::update() {
         img.mipmaps = 1;
         img.format = ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
 
-        ray::Texture2D tex = ray::LoadTextureFromImage(img);
-        if (tex.id == 0) {
-            spdlog::error("WebCamera: failed to create texture {}x{}", m_width, m_height);
-            m_width = m_height = 0;
-            SDL_DestroySurface(rgba);
-            return;
-        }
-        ray::SetTextureFilter(tex, ray::TEXTURE_FILTER_BILINEAR);
-        m_texture = tex;
-    } else if (rgba->w != m_width || rgba->h != m_height) {
-        // frame geometry changed - recreate the texture
-        ray::UnloadTexture(m_texture.value());
-        m_texture.reset();
-        m_width = rgba->w;
-        m_height = rgba->h;
-        ray::Image img{};
-        img.data = pixels;
-        img.width = m_width;
-        img.height = m_height;
-        img.mipmaps = 1;
-        img.format = ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
         ray::Texture2D tex = ray::LoadTextureFromImage(img);
         if (tex.id == 0) {
             spdlog::error("WebCamera: failed to create texture {}x{}", m_width, m_height);

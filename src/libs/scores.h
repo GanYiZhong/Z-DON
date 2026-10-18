@@ -137,7 +137,6 @@ public:
     std::optional<fs::path> get_path_by_hash(const std::string& single_hash);
     std::optional<fs::path> get_path_by_diff_hash(const std::string& diff_hash);
     void add_song(const std::array<std::string, 5>& hash, const std::string& title, const std::string& subtitle);
-    void remap_hashes(const std::unordered_map<std::string, std::string>& old_to_new);
     // song_cache: path -> entry, current SONG_CACHE_VERSION only
     std::unordered_map<std::string, SongCacheEntry> load_song_cache();
     void store_song_cache(const std::string& path, const SongCacheEntry& entry);
@@ -155,7 +154,6 @@ public:
     void migrate_player_id(const std::string& old_id, const std::string& new_id);
     bool begin_transaction();
     bool commit();
-    void rollback();
 };
 
 // Chart hash of one dan song (path binding, else parsed from the chart).

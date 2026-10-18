@@ -19,7 +19,6 @@ public:
     void close();
     void update();
 
-    bool is_open() const { return m_camera != nullptr; }
     bool is_ready() const { return m_texture.has_value(); }
     const ray::Texture2D& get_texture() const {
         assert(m_texture.has_value() && "WebCamera::get_texture() called before is_ready()");

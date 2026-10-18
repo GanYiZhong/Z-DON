@@ -19,8 +19,6 @@ public:
 
     void start();
 
-    bool in_progress();
-
     bool finished();
 
     bool applying_updates();

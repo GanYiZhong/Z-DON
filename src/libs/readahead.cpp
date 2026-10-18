@@ -232,8 +232,4 @@ namespace readahead {
         queued.reset();
     }
 
-    void stop() {
-        shut_down();
-    }
-
 } // namespace readahead

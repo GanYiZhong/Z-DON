@@ -30,6 +30,7 @@ private:
     void rebuild_atlas(SizedFont& entry, int font_size);                                // font_mutex held
     void release_font(SizedFont& entry);                                                // font_mutex held
     void release_cache(SizedFont& entry);                                               // font_mutex held
+    void release_all_fonts();                                                           // font_mutex held
     bool register_codepoints(SizedFont& entry, int font_size, const std::string& text); // font_mutex held
 
     std::unordered_map<int, SizedFont> fonts;

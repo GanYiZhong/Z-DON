@@ -235,8 +235,6 @@ public:
     std::string skin_text(const std::string& key, const std::string& language, const std::string& fallback = "") const;
 
     fs::path skin_root() const { return graphics_path.parent_path(); }
-    fs::path parent_root() const { return parent_graphics_path.parent_path(); }
-    bool has_parent_skin() const { return parent_graphics_path != graphics_path; }
     // Graphics dirs of the skin and all its ancestors, nearest first
     std::vector<fs::path> all_graphics_roots() const {
         std::vector<fs::path> r{graphics_path};
@@ -281,10 +279,6 @@ public:
     void unload_folder(const std::string& screen_name, const std::string& subset);
 
     void load_screen_textures(const std::string& screen_name);
-
-    void control(TextureObject* tex_obj, int index = 0);
-
-    void clear_screen(const ray::Color& color);
 
     TextureObject* get_texture(const std::string& name);
 

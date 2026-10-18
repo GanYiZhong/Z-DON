@@ -276,22 +276,21 @@ void ScriptManager::index_scripts(const fs::path& script_path) {
         fs::path p = script.path();
         if (fs::is_directory(p)) {
             fs::path lua_file = p / (p.stem().string() + ".lua");
-            if (fs::exists(lua_file) && !scripts.count(p.stem().string())) {
-                scripts[p.stem().string()] = lua_file.string();
+            if (fs::exists(lua_file)) {
+                scripts.try_emplace(p.stem().string(), lua_file.string());
             }
             std::error_code sub_ec;
             for (const auto& sub : fs::directory_iterator(p, sub_ec)) {
                 fs::path sub_p = sub.path();
-                if (!fs::is_directory(sub_p) && sub_p.extension() == ".lua" && sub_p.stem() != p.stem() &&
-                    !scripts.count(sub_p.stem().string())) {
-                    scripts[sub_p.stem().string()] = sub_p.string();
+                if (!fs::is_directory(sub_p) && sub_p.extension() == ".lua" && sub_p.stem() != p.stem()) {
+                    scripts.try_emplace(sub_p.stem().string(), sub_p.string());
                 }
             }
             if (sub_ec) {
                 spdlog::warn("Unable to index scripts in {}: {}", p.string(), sub_ec.message());
             }
-        } else if (p.extension() == ".lua" && !scripts.count(p.stem().string())) {
-            scripts[p.stem().string()] = p.string();
+        } else if (p.extension() == ".lua") {
+            scripts.try_emplace(p.stem().string(), p.string());
         }
     }
 }
@@ -381,10 +380,11 @@ bool ScriptManager::has_lua_script(const std::string& script_name) const {
 }
 
 std::string ScriptManager::get_lua_script_path(const std::string& script_name) {
-    if (scripts.find(script_name) == scripts.end()) {
+    auto it = scripts.find(script_name);
+    if (it == scripts.end()) {
         throw std::runtime_error("Unable to find lua script: " + script_name);
     }
-    return scripts[script_name];
+    return it->second;
 }
 
 void ScriptManager::shutdown() {
@@ -413,26 +413,25 @@ static sol::optional<std::shared_ptr<TextureObject>> resolve_lua_texture(const s
     std::string subset_key = fs::path(subset).filename().string();
     std::string base = subset_key + "/" + texture_name;
 
-    for (const auto& v : script_manager.tex.language_variants(base + "_" + global_data.config->general.language)) {
-        if (script_manager.tex.has_texture(v)) {
-            return script_manager.tex.get_texture_shared(v);
+    auto find_loaded = [&]() -> sol::optional<std::shared_ptr<TextureObject>> {
+        for (const auto& v : script_manager.tex.language_variants(base + "_" + global_data.config->general.language)) {
+            if (script_manager.tex.has_texture(v)) {
+                return script_manager.tex.get_texture_shared(v);
+            }
         }
-    }
-    if (script_manager.tex.has_texture(base)) {
-        return script_manager.tex.get_texture_shared(base);
+        if (script_manager.tex.has_texture(base)) {
+            return script_manager.tex.get_texture_shared(base);
+        }
+        return sol::nullopt;
+    };
+
+    if (auto hit = find_loaded()) {
+        return hit;
     }
 
     script_manager.tex.load_folder(screen_name, subset);
 
-    for (const auto& v : script_manager.tex.language_variants(base + "_" + global_data.config->general.language)) {
-        if (script_manager.tex.has_texture(v)) {
-            return script_manager.tex.get_texture_shared(v);
-        }
-    }
-    if (script_manager.tex.has_texture(base)) {
-        return script_manager.tex.get_texture_shared(base);
-    }
-    return sol::nullopt;
+    return find_loaded();
 }
 
 // sol2 gives a usertype that binds member variables (or has base classes) a C __index, and
@@ -479,77 +478,80 @@ static void cache_usertype_method_lookups(lua_State* L) {
     }
 }
 
+template<typename T>
+static auto anim_call() {
+    return [](T& self, sol::variadic_args) { return &self; };
+}
+
+template<typename T>
+static auto anim_update() {
+    return [](T& self, double t) {
+        self.update(t);
+        return self.attribute;
+    };
+}
+
+static uint8_t to_u8(double v) {
+    return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255));
+}
+
+static ray::Color to_color(const std::array<double, 4>& c) {
+    return ray::Color{to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), to_u8(c[3])};
+}
+
+static ray::Rectangle virtual_rect_to_screen(float x, float y, float w, float h) {
+    int sx = virtual_to_screen_x(x);
+    int ex = virtual_to_screen_x(x + w);
+    int sy = virtual_to_screen_y(y);
+    int ey = virtual_to_screen_y(y + h);
+    return {(float)sx, (float)sy, (float)(ex - sx), (float)(ey - sy)};
+}
+
 void ScriptManager::register_lua_bindings() {
     sol::state& lua = *this->lua;
     // Calling an animation returns it: box:fade() and box.fade (a property) are the same object,
     // for skins written against either binding of the box animations.
-    lua.new_usertype<BaseAnimation>(
-        "BaseAnimation", sol::meta_function::call, [](BaseAnimation& self, sol::variadic_args) { return &self; },
-        "update",
-        [](BaseAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        },
-        "restart", &BaseAnimation::restart, "start", &BaseAnimation::start, "reset", &BaseAnimation::reset, "attribute",
-        &BaseAnimation::attribute, "duration", &BaseAnimation::duration, "is_finished", &BaseAnimation::is_finished,
-        "is_started", &BaseAnimation::is_started,
-        // tex.get_animation() returns BaseAnimation*, so a MoveAnimation's start_position
-        // must be reachable here (the C++ YellowBox does the same C-style cast).
-        "start_position", sol::property([](BaseAnimation& self) -> int {
-            if (auto* move = dynamic_cast<MoveAnimation*>(&self)) {
-                return move->start_position;
-            }
-            return 0;
-        }));
+    lua.new_usertype<BaseAnimation>("BaseAnimation", sol::meta_function::call, anim_call<BaseAnimation>(), "update",
+                                    anim_update<BaseAnimation>(), "restart", &BaseAnimation::restart, "start",
+                                    &BaseAnimation::start, "reset", &BaseAnimation::reset, "attribute",
+                                    &BaseAnimation::attribute, "duration", &BaseAnimation::duration, "is_finished",
+                                    &BaseAnimation::is_finished, "is_started", &BaseAnimation::is_started,
+                                    // tex.get_animation() returns BaseAnimation*, so a MoveAnimation's start_position
+                                    // must be reachable here (the C++ YellowBox does the same C-style cast).
+                                    "start_position", sol::property([](BaseAnimation& self) -> int {
+                                        if (auto* move = dynamic_cast<MoveAnimation*>(&self)) {
+                                            return move->start_position;
+                                        }
+                                        return 0;
+                                    }));
 
     // Fade animation bindings
-    lua.new_usertype<FadeAnimation>(
-        "FadeAnimation", sol::base_classes, sol::bases<BaseAnimation>(), sol::meta_function::call,
-        [](FadeAnimation& self, sol::variadic_args) { return &self; }, "update",
-        [](FadeAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        },
-        "restart", &FadeAnimation::restart);
+    lua.new_usertype<FadeAnimation>("FadeAnimation", sol::base_classes, sol::bases<BaseAnimation>(),
+                                    sol::meta_function::call, anim_call<FadeAnimation>(), "update",
+                                    anim_update<FadeAnimation>(), "restart", &FadeAnimation::restart);
 
     // Move animation bindings
-    lua.new_usertype<MoveAnimation>(
-        "MoveAnimation", sol::base_classes, sol::bases<BaseAnimation>(), sol::meta_function::call,
-        [](MoveAnimation& self, sol::variadic_args) { return &self; }, "update",
-        [](MoveAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        },
-        "restart", &MoveAnimation::restart, "start_position", &MoveAnimation::start_position);
+    lua.new_usertype<MoveAnimation>("MoveAnimation", sol::base_classes, sol::bases<BaseAnimation>(),
+                                    sol::meta_function::call, anim_call<MoveAnimation>(), "update",
+                                    anim_update<MoveAnimation>(), "restart", &MoveAnimation::restart, "start_position",
+                                    &MoveAnimation::start_position);
 
     // Texture change animation bindings
-    lua.new_usertype<TextureChangeAnimation>(
-        "TextureChangeAnimation", sol::base_classes, sol::bases<BaseAnimation>(), sol::meta_function::call,
-        [](TextureChangeAnimation& self, sol::variadic_args) { return &self; }, "update",
-        [](TextureChangeAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        },
-        "reset", &TextureChangeAnimation::reset);
+    lua.new_usertype<TextureChangeAnimation>("TextureChangeAnimation", sol::base_classes, sol::bases<BaseAnimation>(),
+                                             sol::meta_function::call, anim_call<TextureChangeAnimation>(), "update",
+                                             anim_update<TextureChangeAnimation>(), "reset",
+                                             &TextureChangeAnimation::reset);
 
     // Text stretch animation bindings
-    lua.new_usertype<TextStretchAnimation>(
-        "TextStretchAnimation", sol::base_classes, sol::bases<BaseAnimation>(), sol::meta_function::call,
-        [](TextStretchAnimation& self, sol::variadic_args) { return &self; }, "update",
-        [](TextStretchAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        });
+    lua.new_usertype<TextStretchAnimation>("TextStretchAnimation", sol::base_classes, sol::bases<BaseAnimation>(),
+                                           sol::meta_function::call, anim_call<TextStretchAnimation>(), "update",
+                                           anim_update<TextStretchAnimation>());
 
     // Texture resize animation bindings
-    lua.new_usertype<TextureResizeAnimation>(
-        "TextureResizeAnimation", sol::base_classes, sol::bases<BaseAnimation>(), sol::meta_function::call,
-        [](TextureResizeAnimation& self, sol::variadic_args) { return &self; }, "update",
-        [](TextureResizeAnimation& self, double t) {
-            self.update(t);
-            return self.attribute;
-        },
-        "restart", &TextureResizeAnimation::restart);
+    lua.new_usertype<TextureResizeAnimation>("TextureResizeAnimation", sol::base_classes, sol::bases<BaseAnimation>(),
+                                             sol::meta_function::call, anim_call<TextureResizeAnimation>(), "update",
+                                             anim_update<TextureResizeAnimation>(), "restart",
+                                             &TextureResizeAnimation::restart);
 
     // Animation creation helper functions
     sol::table anim = lua.create_table();
@@ -703,42 +705,28 @@ void ScriptManager::register_lua_bindings() {
 
     tex.set_function("draw_rect", [](float x, float y, float w, float h, double r, double g, double b, double a,
                                      sol::this_state state) {
-        auto to_u8 = [](double v) { return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255)); };
         if (debug_log_draws) {
             debug_draw_log.push_back({"rect", {x, y, w, h}});
             log_lua_site(debug_draw_log.back(), state);
         }
-        int sx = virtual_to_screen_x(x);
-        int ex = virtual_to_screen_x(x + w);
-        int sy = virtual_to_screen_y(y);
-        int ey = virtual_to_screen_y(y + h);
-        ray::DrawRectangle(sx, sy, ex - sx, ey - sy, ray::Color{to_u8(r), to_u8(g), to_u8(b), to_u8(a)});
+        ray::Rectangle rect = virtual_rect_to_screen(x, y, w, h);
+        ray::DrawRectangle((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height,
+                           ray::Color{to_u8(r), to_u8(g), to_u8(b), to_u8(a)});
     });
 
     // rounded rectangle with an outline; roundness is raylib's 0..1 corner factor, the outline thickness is in pixels
     tex.set_function("draw_rounded_rect", [](float x, float y, float w, float h, float roundness,
                                              std::array<double, 4> fill, double thickness, std::array<double, 4> line) {
-        auto to_u8 = [](double v) { return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255)); };
-        int sx = virtual_to_screen_x(x);
-        int ex = virtual_to_screen_x(x + w);
-        int sy = virtual_to_screen_y(y);
-        int ey = virtual_to_screen_y(y + h);
-        ray::Rectangle r{(float)sx, (float)sy, (float)(ex - sx), (float)(ey - sy)};
-        ray::DrawRectangleRounded(r, roundness, 16,
-                                  ray::Color{to_u8(fill[0]), to_u8(fill[1]), to_u8(fill[2]), to_u8(fill[3])});
+        ray::Rectangle r = virtual_rect_to_screen(x, y, w, h);
+        ray::DrawRectangleRounded(r, roundness, 16, to_color(fill));
         if (thickness > 0) {
-            ray::DrawRectangleRoundedLinesEx(
-                r, roundness, 16, (float)thickness,
-                ray::Color{to_u8(line[0]), to_u8(line[1]), to_u8(line[2]), to_u8(line[3])});
+            ray::DrawRectangleRoundedLinesEx(r, roundness, 16, (float)thickness, to_color(line));
         }
     });
 
     tex.set_function("begin_scissor", [](float x, float y, float w, float h) {
-        int sx = virtual_to_screen_x(x);
-        int ex = virtual_to_screen_x(x + w);
-        int sy = virtual_to_screen_y(y);
-        int ey = virtual_to_screen_y(y + h);
-        ray::BeginScissorMode(sx, sy, ex - sx, ey - sy);
+        ray::Rectangle rect = virtual_rect_to_screen(x, y, w, h);
+        ray::BeginScissorMode((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height);
     });
 
     tex.set_function("end_scissor", []() { ray::EndScissorMode(); });
@@ -904,19 +892,8 @@ void ScriptManager::register_lua_bindings() {
                               }
                           }
                           int font_size = cfg->font_size;
-                          auto to_u8 = [](double v) {
-                              return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255));
-                          };
-                          ray::Color color_val;
-                          color_val.r = to_u8(color[0]);
-                          color_val.g = to_u8(color[1]);
-                          color_val.b = to_u8(color[2]);
-                          color_val.a = to_u8(color[3]);
-                          ray::Color outline_color_val;
-                          outline_color_val.r = to_u8(outline_color[0]);
-                          outline_color_val.g = to_u8(outline_color[1]);
-                          outline_color_val.b = to_u8(outline_color[2]);
-                          outline_color_val.a = to_u8(outline_color[3]);
+                          ray::Color color_val = to_color(color);
+                          ray::Color outline_color_val = to_color(outline_color);
                           std::unique_ptr<OutlinedText> ptr =
                               std::make_unique<OutlinedText>(text, font_size, color_val, outline_color_val, is_vertical,
                                                              outline_thickness, spacing, 1.0f, font.value_or(""));
@@ -925,20 +902,17 @@ void ScriptManager::register_lua_bindings() {
                           return ptr;
                       });
 
-    text.set_function(
-        "create_raw_text",
-        [](const std::string& content, double font_size, std::array<double, 4> color,
-           std::array<double, 4> outline_color, bool is_vertical, sol::optional<float> thickness,
-           sol::optional<float> spacing, sol::optional<float> v_advance,
-           sol::optional<std::string> font) -> std::unique_ptr<OutlinedText> {
-            auto to_u8 = [](double v) { return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255)); };
-            ray::Color c = {to_u8(color[0]), to_u8(color[1]), to_u8(color[2]), to_u8(color[3])};
-            ray::Color oc = {to_u8(outline_color[0]), to_u8(outline_color[1]), to_u8(outline_color[2]),
-                             to_u8(outline_color[3])};
-            return std::make_unique<OutlinedText>(content, static_cast<int>(font_size), c, oc, is_vertical,
-                                                  thickness.value_or(5.0f), spacing.value_or(2.0f),
-                                                  v_advance.value_or(1.0f), font.value_or(""));
-        });
+    text.set_function("create_raw_text",
+                      [](const std::string& content, double font_size, std::array<double, 4> color,
+                         std::array<double, 4> outline_color, bool is_vertical, sol::optional<float> thickness,
+                         sol::optional<float> spacing, sol::optional<float> v_advance,
+                         sol::optional<std::string> font) -> std::unique_ptr<OutlinedText> {
+                          ray::Color c = to_color(color);
+                          ray::Color oc = to_color(outline_color);
+                          return std::make_unique<OutlinedText>(
+                              content, static_cast<int>(font_size), c, oc, is_vertical, thickness.value_or(5.0f),
+                              spacing.value_or(2.0f), v_advance.value_or(1.0f), font.value_or(""));
+                      });
 
     lua["text"] = text;
 

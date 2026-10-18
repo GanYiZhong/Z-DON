@@ -25,11 +25,7 @@ void FontManager::init(const fs::path& font_path) {
         throw std::runtime_error("Failed to load font: " + font_path.string());
     }
     this->font_path = font_path;
-    for (auto& [size, entry] : fonts) {
-        release_font(entry);
-        release_cache(entry);
-    }
-    fonts.clear();
+    release_all_fonts();
     {
         int size = 0;
         unsigned char* data = ray::LoadFileData(font_path.string().c_str(), &size);
@@ -125,11 +121,7 @@ std::string FontManager::get_text_label(const std::string& key) {
 
 void FontManager::unload() {
     std::lock_guard<std::mutex> lock(font_mutex);
-    for (auto& [size, entry] : fonts) {
-        release_font(entry);
-        release_cache(entry);
-    }
-    fonts.clear();
+    release_all_fonts();
     if (sentinel_texture.id != 0) {
         ray::UnloadTexture(sentinel_texture);
         sentinel_texture = {};
@@ -277,6 +269,14 @@ void FontManager::rebuild_atlas(SizedFont& entry, int font_size) {
 
 // Free texture/recs/glyph-struct array of a font built by rebuild_atlas. Never
 // UnloadFont(): that would free the glyph images we still own in `cache`.
+void FontManager::release_all_fonts() {
+    for (auto& [size, entry] : fonts) {
+        release_font(entry);
+        release_cache(entry);
+    }
+    fonts.clear();
+}
+
 void FontManager::release_font(SizedFont& entry) {
     if (!entry.loaded) {
         return;
@@ -733,19 +733,12 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
         pending_image = std::move(data.img);
     }
 #else
-    if (is_vertical) {
-        build_future = std::async(std::launch::async, [this, color, outline_color, spacing]() {
-            auto data = build_vertical_text(color, outline_color, spacing);
-            std::lock_guard<std::mutex> lock(pending_mutex);
-            pending_image = std::move(data.img);
-        });
-    } else {
-        build_future = std::async(std::launch::async, [this, color, outline_color, spacing]() {
-            auto data = build_horizontal_text(color, outline_color, spacing);
-            std::lock_guard<std::mutex> lock(pending_mutex);
-            pending_image = std::move(data.img);
-        });
-    }
+    auto build = is_vertical ? &OutlinedText::build_vertical_text : &OutlinedText::build_horizontal_text;
+    build_future = std::async(std::launch::async, [this, build, color, outline_color, spacing]() {
+        auto data = (this->*build)(color, outline_color, spacing);
+        std::lock_guard<std::mutex> lock(pending_mutex);
+        pending_image = std::move(data.img);
+    });
 #endif
 }
 

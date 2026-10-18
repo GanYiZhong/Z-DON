@@ -259,20 +259,6 @@ static std::string network_url(const std::string& endpoint) {
     return base + endpoint;
 }
 
-bool NetworkClient::probe_online() {
-    if (!network_enabled()) {
-        online = false;
-        return false;
-    }
-    cpr::Response r = cpr::Get(cpr::Url{network_url("/health")}, signed_headers("GET", "/health", {}),
-                               cpr::Timeout{1500} NETWORK_CA_OPT);
-    online = (r.status_code == 200);
-    if (!online) {
-        spdlog::warn("Network: server unreachable at startup (HTTP {}), skipping profile sync", r.status_code);
-    }
-    return online;
-}
-
 void NetworkClient::start_probe() {
     if (!network_enabled()) {
         online = false;
@@ -290,129 +276,6 @@ void NetworkClient::check_heartbeat() {
                                       cpr::Timeout{2000} NETWORK_CA_OPT);
 }
 
-bool NetworkClient::check_import_requested(const std::string& access_code) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    return doc.HasMember("import_requested") && doc["import_requested"].IsBool() && doc["import_requested"].GetBool();
-}
-
-bool NetworkClient::fetch_chara_colors(const std::string& access_code, ray::Color& color_1, ray::Color& color_2,
-                                       ray::Color& color_3) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_color_1") || !doc["chara_color_1"].IsString()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_color_2") || !doc["chara_color_2"].IsString()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_color_3") || !doc["chara_color_3"].IsString()) {
-        return false;
-    }
-
-    try {
-        color_1 = parse_hex_color(doc["chara_color_1"].GetString());
-        color_2 = parse_hex_color(doc["chara_color_2"].GetString());
-        color_3 = parse_hex_color(doc["chara_color_3"].GetString());
-    } catch (const std::invalid_argument&) {
-        return false;
-    }
-    return true;
-}
-
-bool NetworkClient::fetch_username(const std::string& access_code, std::string& username) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    if (!doc.HasMember("username") || !doc["username"].IsString()) {
-        return false;
-    }
-
-    username = doc["username"].GetString();
-    return true;
-}
-
-bool NetworkClient::fetch_title(const std::string& access_code, std::string& title) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    if (!doc.HasMember("title") || !doc["title"].IsString()) {
-        return false;
-    }
-
-    title = doc["title"].GetString();
-    return true;
-}
-
-bool NetworkClient::fetch_title_bg(const std::string& access_code, int& title_bg) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    if (!doc.HasMember("title_bg") || !doc["title_bg"].IsInt()) {
-        return false;
-    }
-
-    title_bg = doc["title_bg"].GetInt();
-    return true;
-}
-
 void NetworkClient::update_username(const std::string& access_code, const std::string& username) {
     if (!network_enabled()) {
         return;
@@ -425,42 +288,6 @@ void NetworkClient::update_username(const std::string& access_code, const std::s
     if (response.status_code != 200) {
         spdlog::error("Failed to update username: HTTP {} - {}", response.status_code, response.text);
     }
-}
-
-bool NetworkClient::fetch_costume(const std::string& access_code, int& head_index, int& body_index, int& cos_index,
-                                  bool& is_costume) {
-    if (!network_enabled()) {
-        return false;
-    }
-    cpr::Response response =
-        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
-                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
-    if (response.status_code != 200) {
-        return false;
-    }
-
-    rapidjson::Document doc;
-    if (doc.Parse(response.text.c_str()).HasParseError()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_head_index") || !doc["chara_head_index"].IsInt()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_body_index") || !doc["chara_body_index"].IsInt()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_cos_index") || !doc["chara_cos_index"].IsInt()) {
-        return false;
-    }
-    if (!doc.HasMember("chara_is_costume") || !doc["chara_is_costume"].IsBool()) {
-        return false;
-    }
-
-    head_index = doc["chara_head_index"].GetInt();
-    body_index = doc["chara_body_index"].GetInt();
-    cos_index = doc["chara_cos_index"].GetInt();
-    is_costume = doc["chara_is_costume"].GetBool();
-    return true;
 }
 
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_code) {
@@ -602,15 +429,17 @@ std::vector<RemoteScore> NetworkClient::fetch_scores(const std::string& access_c
             continue;
         }
 
+        auto int_or_0 = [&](const char* k) { return s.HasMember(k) && s[k].IsInt() ? s[k].GetInt() : 0; };
+
         RemoteScore rs;
         rs.hash = s["hash"].GetString();
         rs.difficulty = s["difficulty"].GetInt();
-        rs.score.score = s.HasMember("score") && s["score"].IsInt() ? s["score"].GetInt() : 0;
-        rs.score.good = s.HasMember("good") && s["good"].IsInt() ? s["good"].GetInt() : 0;
-        rs.score.ok = s.HasMember("ok") && s["ok"].IsInt() ? s["ok"].GetInt() : 0;
-        rs.score.bad = s.HasMember("bad") && s["bad"].IsInt() ? s["bad"].GetInt() : 0;
-        rs.score.drumroll = s.HasMember("drumroll") && s["drumroll"].IsInt() ? s["drumroll"].GetInt() : 0;
-        rs.score.max_combo = s.HasMember("max_combo") && s["max_combo"].IsInt() ? s["max_combo"].GetInt() : 0;
+        rs.score.score = int_or_0("score");
+        rs.score.good = int_or_0("good");
+        rs.score.ok = int_or_0("ok");
+        rs.score.bad = int_or_0("bad");
+        rs.score.drumroll = int_or_0("drumroll");
+        rs.score.max_combo = int_or_0("max_combo");
         rs.score.crown = static_cast<Crown>(s.HasMember("crown") && s["crown"].IsInt() ? s["crown"].GetInt() : 0);
         rs.score.rank = static_cast<Rank>(s.HasMember("rank") && s["rank"].IsInt() ? s["rank"].GetInt() : 0);
         result.push_back(std::move(rs));
@@ -768,10 +597,6 @@ static std::string map_to_json_impl(const std::map<double, InputLogType>& my_map
     return buffer.GetString();
 }
 
-std::string NetworkClient::map_to_json(const std::map<double, InputLogType>& my_map) {
-    return map_to_json_impl(my_map);
-}
-
 void NetworkClient::submit_score(const std::string& hash, int difficulty, const std::string& access_code,
                                  const Score& score, const std::map<double, InputLogType>& input_log, int64_t played_at,
                                  const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index) {
@@ -803,29 +628,18 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
             spdlog::error("Failed to submit score: HTTP {} - {}", response.status_code, response.text);
         }
     }
+    cpr::Parameters query{};
+    for (const char* k : {"access_code", "hash", "difficulty", "crown", "rank", "score", "good", "ok", "bad",
+                          "drumroll", "max_combo"}) {
+        query.Add({k, params.at(k)});
+    }
+    cpr::Payload form{};
+    for (const char* k : {"input_log", "played_at", "modifiers", "chara_is_costume", "chara_cos_index"}) {
+        form.Add({k, params.at(k)});
+    }
     pending_score_submit =
-        cpr::PostAsync(cpr::Url{network_url("/submit_score")}, signed_headers("POST", "/submit_score", params),
-                       cpr::Parameters{
-                           {"access_code", params["access_code"]},
-                           {"hash", params["hash"]},
-                           {"difficulty", params["difficulty"]},
-                           {"crown", params["crown"]},
-                           {"rank", params["rank"]},
-                           {"score", params["score"]},
-                           {"good", params["good"]},
-                           {"ok", params["ok"]},
-                           {"bad", params["bad"]},
-                           {"drumroll", params["drumroll"]},
-                           {"max_combo", params["max_combo"]},
-                       },
-                       cpr::Payload{
-                           {"input_log", params["input_log"]},
-                           {"played_at", params["played_at"]},
-                           {"modifiers", params["modifiers"]},
-                           {"chara_is_costume", params["chara_is_costume"]},
-                           {"chara_cos_index", params["chara_cos_index"]},
-                       },
-                       cpr::Timeout{5000} NETWORK_CA_OPT);
+        cpr::PostAsync(cpr::Url{network_url("/submit_score")}, signed_headers("POST", "/submit_score", params), query,
+                       form, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 
 void NetworkClient::poll_song_jump(const std::string& access_code) {
@@ -1047,35 +861,14 @@ void NetworkClient::shutdown() {
 
 #else
 
-bool NetworkClient::probe_online() {
-    return false;
-}
 void NetworkClient::start_probe() {}
 std::string NetworkClient::register_user(const std::string&, const std::string&) {
     return "";
 }
 void NetworkClient::submit_score(const std::string&, int, const std::string&, const Score&,
                                  const std::map<double, InputLogType>&, int64_t, const std::string&, bool, int) {}
-bool NetworkClient::check_import_requested(const std::string&) {
-    return false;
-}
 void NetworkClient::clear_import_flag(const std::string&) {}
-bool NetworkClient::fetch_chara_colors(const std::string&, ray::Color&, ray::Color&, ray::Color&) {
-    return false;
-}
-bool NetworkClient::fetch_username(const std::string&, std::string&) {
-    return false;
-}
 void NetworkClient::update_username(const std::string&, const std::string&) {}
-bool NetworkClient::fetch_title(const std::string&, std::string&) {
-    return false;
-}
-bool NetworkClient::fetch_title_bg(const std::string&, int&) {
-    return false;
-}
-bool NetworkClient::fetch_costume(const std::string&, int&, int&, int&, bool&) {
-    return false;
-}
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string&) {
     return std::nullopt;
 }

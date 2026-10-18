@@ -284,14 +284,6 @@ void VideoPlayer::stop() {
     stop_decode_thread();
     start_ms.reset();
 
-    if (is_static) {
-        if (texture.has_value()) {
-            ray::UnloadTexture(texture.value());
-            texture.reset();
-        }
-        return;
-    }
-
     if (container) {
         container->close();
         container.reset();

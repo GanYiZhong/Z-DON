@@ -379,10 +379,6 @@ void SkinUpdater::start() {
     });
 }
 
-bool SkinUpdater::in_progress() {
-    return running_.load();
-}
-
 bool SkinUpdater::finished() {
     return started_.load() && !running_.load();
 }
@@ -418,9 +414,6 @@ SkinUpdater skin_updater;
 #else // __EMSCRIPTEN__
 
 void SkinUpdater::start() {}
-bool SkinUpdater::in_progress() {
-    return false;
-}
 bool SkinUpdater::finished() {
     return true;
 }

@@ -43,6 +43,51 @@ namespace {
         return o.HasMember(key) ? json_number(o[key], fallback) : fallback;
     }
 
+    // "crop": [[x, y, w, h], ...]; malformed entries are logged and skipped
+    std::vector<ray::Rectangle> parse_crops(const Value& crop_array, const std::string& tex_name) {
+        std::vector<ray::Rectangle> crops;
+        for (SizeType j = 0; j < crop_array.Size(); j++) {
+            const Value& crop = crop_array[j];
+            if (!crop.IsArray() || crop.Size() < 4) {
+                spdlog::error("Invalid crop entry {} for texture {}", j, tex_name);
+                continue;
+            }
+            crops.push_back(
+                ray::Rectangle{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
+        }
+        return crops;
+    }
+
+    void apply_frame_order(TextureObject* tex_obj, const Value& mapping) {
+        if (!mapping.HasMember("frame_order") || !mapping["frame_order"].IsArray()) {
+            return;
+        }
+        auto* framed = dynamic_cast<FramedTexture*>(tex_obj);
+        if (!framed) {
+            return;
+        }
+        std::vector<std::shared_ptr<ray::Texture2D>> reordered;
+        for (SizeType j = 0; j < mapping["frame_order"].Size(); j++) {
+            int idx = static_cast<int>(json_number(mapping["frame_order"][j]));
+            if (idx < 0 || idx >= static_cast<int>(framed->textures.size())) {
+                spdlog::error("Invalid frame_order index {} for texture {}", idx, tex_obj->name);
+                continue;
+            }
+            reordered.push_back(framed->textures[idx]);
+        }
+        framed->textures = reordered;
+    }
+
+    // Copies src (restarting it if src is running) into dst and returns the copy
+    BaseAnimation* store_animation_copy(std::vector<std::unique_ptr<BaseAnimation>>& dst, const BaseAnimation& src) {
+        auto new_anim = src.copy();
+        if (src.isStarted()) {
+            new_anim->start();
+        }
+        dst.push_back(std::move(new_anim));
+        return dst.back().get();
+    }
+
 } // namespace
 
 std::string TextureWrapper::skin_text(const std::string& key, const std::string& language,
@@ -221,21 +266,17 @@ void TextureWrapper::unload_textures() {
 }
 
 BaseAnimation* TextureWrapper::get_animation(const int id, bool is_copy) {
-    if (animations.find(id) == animations.end()) {
+    auto anim_it = animations.find(id);
+    if (anim_it == animations.end()) {
         throw std::runtime_error("Unable to find animation: " + std::to_string(id));
     }
 
     if (is_copy) {
-        auto new_anim = animations[id]->copy();
-        if (animations[id]->isStarted()) {
-            new_anim->start();
-        }
         // Note: Returning raw pointer from unique_ptr requires careful management
-        copied_animations.push_back(std::move(new_anim));
-        return copied_animations.back().get();
+        return store_animation_copy(copied_animations, *anim_it->second);
     }
 
-    return animations[id].get();
+    return anim_it->second.get();
 }
 
 BaseAnimation* TextureWrapper::get_animation(const int id, const std::string& screen_name) {
@@ -259,12 +300,7 @@ BaseAnimation* TextureWrapper::get_animation(const int id, const std::string& sc
         throw std::runtime_error("Unable to find animation " + std::to_string(id) + " in screen: " + screen_name);
     }
 
-    auto new_anim = it->second->copy();
-    if (it->second->isStarted()) {
-        new_anim->start();
-    }
-    copied_animations.push_back(std::move(new_anim));
-    return copied_animations.back().get();
+    return store_animation_copy(copied_animations, *it->second);
 }
 
 void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* tex_obj, float scale) {
@@ -276,16 +312,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
 
         std::vector<ray::Rectangle> crops;
         if (has_crop_in_first) {
-            const Value& first_mapping = tex_mapping[0];
-            for (SizeType j = 0; j < first_mapping["crop"].Size(); j++) {
-                const Value& crop = first_mapping["crop"][j];
-                if (!crop.IsArray() || crop.Size() < 4) {
-                    spdlog::error("Invalid crop entry {} for texture {}", j, tex_obj->name);
-                    continue;
-                }
-                crops.push_back(
-                    ray::Rectangle{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
-            }
+            crops = parse_crops(tex_mapping[0]["crop"], tex_obj->name);
             if (crops.empty()) {
                 has_crop_in_first = false;
             } else {
@@ -313,22 +340,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
             tex_obj->x2[i] = x2;
             tex_obj->y2[i] = y2;
 
-            // Handle frame_order
-            if (mapping.HasMember("frame_order") && mapping["frame_order"].IsArray()) {
-                auto* framed = dynamic_cast<FramedTexture*>(tex_obj);
-                if (framed) {
-                    std::vector<std::shared_ptr<ray::Texture2D>> reordered;
-                    for (SizeType j = 0; j < mapping["frame_order"].Size(); j++) {
-                        int idx = static_cast<int>(json_number(mapping["frame_order"][j]));
-                        if (idx < 0 || idx >= static_cast<int>(framed->textures.size())) {
-                            spdlog::error("Invalid frame_order index {} for texture {}", idx, tex_obj->name);
-                            continue;
-                        }
-                        reordered.push_back(framed->textures[idx]);
-                    }
-                    framed->textures = reordered;
-                }
-            }
+            apply_frame_order(tex_obj, mapping);
 
             // Apply crop dimensions to all indices if crop exists in first mapping
             if (has_crop_in_first) {
@@ -338,16 +350,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
         }
     } else if (tex_mapping.IsObject()) {
         if (tex_mapping.HasMember("crop") && tex_mapping["crop"].IsArray() && !tex_mapping["crop"].Empty()) {
-            std::vector<ray::Rectangle> crops;
-            for (SizeType j = 0; j < tex_mapping["crop"].Size(); j++) {
-                const Value& crop = tex_mapping["crop"][j];
-                if (!crop.IsArray() || crop.Size() < 4) {
-                    spdlog::error("Invalid crop entry {} for texture {}", j, tex_obj->name);
-                    continue;
-                }
-                crops.push_back(
-                    ray::Rectangle{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
-            }
+            std::vector<ray::Rectangle> crops = parse_crops(tex_mapping["crop"], tex_obj->name);
             if (!crops.empty()) {
                 tex_obj->crop_data = crops;
                 tex_obj->width = static_cast<int>(crops[0].width);
@@ -360,22 +363,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
         tex_obj->x2 = {static_cast<int>(json_member(tex_mapping, "x2", tex_obj->width) * scale)};
         tex_obj->y2 = {static_cast<int>(json_member(tex_mapping, "y2", tex_obj->height) * scale)};
 
-        // Handle frame_order
-        if (tex_mapping.HasMember("frame_order") && tex_mapping["frame_order"].IsArray()) {
-            auto* framed = dynamic_cast<FramedTexture*>(tex_obj);
-            if (framed) {
-                std::vector<std::shared_ptr<ray::Texture2D>> reordered;
-                for (SizeType j = 0; j < tex_mapping["frame_order"].Size(); j++) {
-                    int idx = static_cast<int>(json_number(tex_mapping["frame_order"][j]));
-                    if (idx < 0 || idx >= static_cast<int>(framed->textures.size())) {
-                        spdlog::error("Invalid frame_order index {} for texture {}", idx, tex_obj->name);
-                        continue;
-                    }
-                    reordered.push_back(framed->textures[idx]);
-                }
-                framed->textures = reordered;
-            }
-        }
+        apply_frame_order(tex_obj, tex_mapping);
     }
 
     ray::TextureFilter filter = ray::TEXTURE_FILTER_BILINEAR;
@@ -1066,8 +1054,7 @@ constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
 void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     PROFILE_SCOPE();
     PROFILE_ZONE_TEXT(screen_name);
-    std::vector<fs::path> roots{graphics_path};
-    roots.insert(roots.end(), ancestor_graphics_paths.begin(), ancestor_graphics_paths.end());
+    const std::vector<fs::path> roots = all_graphics_roots();
     DirIndex dirs;
     dir_index = &dirs;
     struct ResetDirs {
@@ -1168,10 +1155,6 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     }
 
     spdlog::info("Screen textures loaded for: {}", screen_name);
-}
-
-void TextureWrapper::clear_screen(const ray::Color& color) {
-    ray::ClearBackground(color);
 }
 
 std::vector<std::string> TextureWrapper::language_variants(const std::string& name) const {
@@ -1307,11 +1290,11 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     if (frame_tex) {
         if (params.blend.has_value()) {
             ray::BeginBlendMode(params.blend.value());
-            DrawTexturePro(*frame_tex, source_rect, dest_rect, params.origin, params.rotation, final_color);
-            ray::EndBlendMode();
-            return;
         }
         DrawTexturePro(*frame_tex, source_rect, dest_rect, params.origin, params.rotation, final_color);
+        if (params.blend.has_value()) {
+            ray::EndBlendMode();
+        }
     }
 }
 

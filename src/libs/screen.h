@@ -11,34 +11,33 @@
 #include "readahead.h"
 #include "texture.h"
 
-inline int virtual_to_screen_x(float virtual_x) {
-    if (tex.screen_width <= 0 || tex.screen_height <= 0) {
-        return 0;
-    }
+// One axis of the virtual -> window mapping: dim/win_dim are the skin's and the window's size along the axis,
+// stretch is the camera's h_scale or v_scale, cam_offset the camera offset along it
+inline int virtual_to_screen_axis(float v, float dim, float win_dim, float stretch, float cam_offset) {
     int win_w = ray::GetRenderWidth();
     int win_h = ray::GetRenderHeight();
     float scale = std::min((float)win_w / tex.screen_width, (float)win_h / tex.screen_height);
     float effective_zoom = scale * global_data.camera.zoom;
-    float zoom_off = (tex.screen_width * scale * (global_data.camera.zoom - 1.0f)) * 0.5f;
-    float h_scale_off = (tex.screen_width * scale * (global_data.camera.h_scale - 1.0f)) * 0.5f;
-    float offset_x =
-        (win_w - tex.screen_width * scale) * 0.5f - zoom_off - h_scale_off + global_data.camera.offset.x * scale;
-    return static_cast<int>(virtual_x * effective_zoom + offset_x);
+    float zoom_off = (dim * scale * (global_data.camera.zoom - 1.0f)) * 0.5f;
+    float stretch_off = (dim * scale * (stretch - 1.0f)) * 0.5f;
+    float offset = (win_dim - dim * scale) * 0.5f - zoom_off - stretch_off + cam_offset * scale;
+    return static_cast<int>(v * effective_zoom + offset);
+}
+
+inline int virtual_to_screen_x(float virtual_x) {
+    if (tex.screen_width <= 0 || tex.screen_height <= 0) {
+        return 0;
+    }
+    return virtual_to_screen_axis(virtual_x, tex.screen_width, (float)ray::GetRenderWidth(), global_data.camera.h_scale,
+                                  global_data.camera.offset.x);
 }
 
 inline int virtual_to_screen_y(float virtual_y) {
     if (tex.screen_width <= 0 || tex.screen_height <= 0) {
         return 0;
     }
-    int win_w = ray::GetRenderWidth();
-    int win_h = ray::GetRenderHeight();
-    float scale = std::min((float)win_w / tex.screen_width, (float)win_h / tex.screen_height);
-    float effective_zoom = scale * global_data.camera.zoom;
-    float zoom_off = (tex.screen_height * scale * (global_data.camera.zoom - 1.0f)) * 0.5f;
-    float v_scale_off = (tex.screen_height * scale * (global_data.camera.v_scale - 1.0f)) * 0.5f;
-    float offset_y =
-        (win_h - tex.screen_height * scale) * 0.5f - zoom_off - v_scale_off + global_data.camera.offset.y * scale;
-    return static_cast<int>(virtual_y * effective_zoom + offset_y);
+    return virtual_to_screen_axis(virtual_y, tex.screen_height, (float)ray::GetRenderHeight(),
+                                  global_data.camera.v_scale, global_data.camera.offset.y);
 }
 
 enum class Screens {
@@ -102,21 +101,12 @@ public:
         screen_init = false;
         spdlog::info("{} ended, transitioning to {} screen", screen_name, next_screen);
 
-        audio.unload_all_sounds();
-        audio.unload_all_music();
-
-        tex.unload_textures();
+        unload_screen_resources();
 
         return next_screen;
     }
 
-    virtual std::optional<Screens> update() {
-        auto ret_val = _do_screen_start();
-        if (ret_val.has_value()) {
-            return ret_val;
-        }
-        return std::nullopt;
-    }
+    virtual std::optional<Screens> update() { return _do_screen_start(); }
 
     virtual void draw() {
         // Base implementation does nothing, override in derived classes
@@ -129,6 +119,12 @@ public:
     }
 
 protected:
+    static void unload_screen_resources() {
+        audio.unload_all_sounds();
+        audio.unload_all_music();
+        tex.unload_textures();
+    }
+
     std::optional<Screens> _do_screen_start() {
         if (!screen_init) {
             screen_init = true;
@@ -140,16 +136,12 @@ protected:
             } catch (const std::exception& e) {
                 spdlog::critical("{} failed to initialize: {}", screen_name, e.what());
                 screen_init = false;
-                audio.unload_all_sounds();
-                audio.unload_all_music();
-                tex.unload_textures();
+                unload_screen_resources();
                 return Screens::SONG_SELECT;
             } catch (...) {
                 spdlog::critical("{} failed to initialize: unknown exception", screen_name);
                 screen_init = false;
-                audio.unload_all_sounds();
-                audio.unload_all_music();
-                tex.unload_textures();
+                unload_screen_resources();
                 return Screens::SONG_SELECT;
             }
         }

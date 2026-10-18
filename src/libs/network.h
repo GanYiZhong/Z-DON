@@ -75,33 +75,20 @@ public:
     bool is_outdated() const { return outdated; }
 
     std::string register_user(const std::string& username, const std::string& idm = "");
-    std::string map_to_json(const std::map<double, InputLogType>& my_map);
     void submit_score(const std::string& hash, int difficulty, const std::string& access_code, const Score& score,
                       const std::map<double, InputLogType>& input_log, int64_t played_at,
                       const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index);
 
-    bool check_import_requested(const std::string& access_code);
     void clear_import_flag(const std::string& access_code);
 
-    bool fetch_chara_colors(const std::string& access_code, ray::Color& color_1, ray::Color& color_2,
-                            ray::Color& color_3);
-
-    bool fetch_username(const std::string& access_code, std::string& username);
     void update_username(const std::string& access_code, const std::string& username);
-
-    bool fetch_title(const std::string& access_code, std::string& title);
-    bool fetch_title_bg(const std::string& access_code, int& title_bg);
-
-    bool fetch_costume(const std::string& access_code, int& head_index, int& body_index, int& cos_index,
-                       bool& is_costume);
 
     // One GET /user for the whole profile. Blocking; safe to call from a worker thread
     std::optional<RemoteUser> fetch_user(const std::string& access_code);
 
     void check_and_install_android_update();
 
-    bool probe_online();
-    // Non-blocking probe_online: sends a heartbeat now; is_online() updates when it lands
+    // Non-blocking probe: sends a heartbeat now; is_online() updates when it lands
     void start_probe();
     bool probing() const { return probing_; }
     void update_costume(const std::string& access_code, int head_index, int body_index, int cos_index, bool is_costume);

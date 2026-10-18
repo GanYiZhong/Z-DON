@@ -11,24 +11,27 @@ namespace ray {
 #endif
 #include <string>
 
+#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS) || defined(__EMSCRIPTEN__)
+// GLES builds load the shaders under shader/es/
+inline std::string repath_shader(const char* p) {
+    if (!p) {
+        return "";
+    }
+    std::string s(p);
+    const std::string prefix = "shader/";
+    const std::string es_prefix = "shader/es/";
+    if (s.compare(0, es_prefix.size(), es_prefix) == 0) {
+        return s;
+    }
+    if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
+        s.insert(prefix.size(), "es/");
+    }
+    return s;
+}
+#endif
+
 inline ray::Shader load_shader(const char* vs_path, const char* fs_path) {
 #if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
-    auto repath = [](const char* p) -> std::string {
-        if (!p) {
-            return "";
-        }
-        std::string s(p);
-        const std::string prefix = "shader/";
-        const std::string es_prefix = "shader/es/";
-        if (s.compare(0, es_prefix.size(), es_prefix) == 0) {
-            return s;
-        }
-        if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
-            s.insert(prefix.size(), "es/");
-        }
-        return s;
-    };
-
     auto read_asset = [](const std::string& path) -> std::string {
         if (path.empty()) {
             return "";
@@ -51,31 +54,16 @@ inline ray::Shader load_shader(const char* vs_path, const char* fs_path) {
         return buf;
     };
 
-    std::string vs_repath = vs_path ? repath(vs_path) : std::string{};
-    std::string fs_repath = fs_path ? repath(fs_path) : std::string{};
+    std::string vs_repath = repath_shader(vs_path);
+    std::string fs_repath = repath_shader(fs_path);
     std::string vs_src = vs_path ? read_asset(vs_repath) : std::string{};
     std::string fs_src = fs_path ? read_asset(fs_repath) : std::string{};
     return ray::LoadShaderFromMemory(vs_src.empty() ? nullptr : vs_src.c_str(),
                                      fs_src.empty() ? nullptr : fs_src.c_str());
 #endif
 #ifdef __EMSCRIPTEN__
-    auto repath = [](const char* p) -> std::string {
-        if (!p) {
-            return "";
-        }
-        std::string s(p);
-        const std::string prefix = "shader/";
-        const std::string es_prefix = "shader/es/";
-        if (s.compare(0, es_prefix.size(), es_prefix) == 0) {
-            return s;
-        }
-        if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
-            s.insert(prefix.size(), "es/");
-        }
-        return s;
-    };
-    std::string vs_repath = vs_path ? repath(vs_path) : std::string{};
-    std::string fs_repath = fs_path ? repath(fs_path) : std::string{};
+    std::string vs_repath = repath_shader(vs_path);
+    std::string fs_repath = repath_shader(fs_path);
     return ray::LoadShader(vs_path ? vs_repath.c_str() : nullptr, fs_path ? fs_repath.c_str() : nullptr);
 #endif
     return ray::LoadShader(vs_path, fs_path);

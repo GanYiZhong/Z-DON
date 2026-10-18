@@ -597,11 +597,10 @@ Score ScoresManager::save_score(const std::string& hash, int difficulty, const s
     }
     sqlite3_stmt* stmt;
 
-    char query[512];
-    snprintf(query, sizeof(query),
-             "INSERT INTO scores (player_id, hash, difficulty, score, good, ok, bad, drumroll, max_combo, crown, rank, "
-             "played_at, modifiers) "
-             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+    const char* query =
+        "INSERT INTO scores (player_id, hash, difficulty, score, good, ok, bad, drumroll, max_combo, crown, rank, "
+        "played_at, modifiers) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
         spdlog::error("save_score: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
@@ -636,7 +635,11 @@ Score ScoresManager::save_score(const std::string& hash, int difficulty, const s
     bool is_better = it == score_cache.end() || score.crown > it->second.crown ||
                      (score.crown == it->second.crown && score.score > it->second.score);
     if (is_better) {
-        score_cache[key] = score;
+        if (it == score_cache.end()) {
+            score_cache.emplace(key, score);
+        } else {
+            it->second = score;
+        }
     }
 
     return score;
@@ -878,60 +881,6 @@ void ScoresManager::add_song(const std::array<std::string, 5>& hashes, const std
     sqlite3_step(stmt);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
-}
-
-void ScoresManager::remap_hashes(const std::unordered_map<std::string, std::string>& old_to_new) {
-    if (old_to_new.empty()) {
-        return;
-    }
-
-    sqlite3_exec(db_fsd, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
-
-    sqlite3_stmt* scores_stmt;
-    if (sqlite3_prepare_v2(db_fsd, "UPDATE scores SET hash = ? WHERE hash = ?;", -1, &scores_stmt, nullptr) !=
-        SQLITE_OK) {
-        spdlog::error("remap_hashes: failed to prepare scores statement: {}", sqlite3_errmsg(db_fsd));
-        sqlite3_exec(db_fsd, "ROLLBACK;", nullptr, nullptr, nullptr);
-        return;
-    }
-
-    std::array<sqlite3_stmt*, 5> song_stmts;
-    for (int i = 0; i < 5; i++) {
-        std::string q = "UPDATE songs SET hash_" + std::to_string(i) + " = ? WHERE hash_" + std::to_string(i) + " = ?;";
-        if (sqlite3_prepare_v2(db_fsd, q.c_str(), -1, &song_stmts[i], nullptr) != SQLITE_OK) {
-            spdlog::error("remap_hashes: failed to prepare song statement {}: {}", i, sqlite3_errmsg(db_fsd));
-            sqlite3_finalize(scores_stmt);
-            for (int j = 0; j < i; j++) {
-                sqlite3_finalize(song_stmts[j]);
-            }
-            sqlite3_exec(db_fsd, "ROLLBACK;", nullptr, nullptr, nullptr);
-            return;
-        }
-    }
-
-    for (const auto& [old_h, new_h] : old_to_new) {
-        sqlite3_bind_text(scores_stmt, 1, new_h.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(scores_stmt, 2, old_h.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(scores_stmt);
-        sqlite3_reset(scores_stmt);
-
-        for (int i = 0; i < 5; i++) {
-            sqlite3_bind_text(song_stmts[i], 1, new_h.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(song_stmts[i], 2, old_h.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_step(song_stmts[i]);
-            sqlite3_reset(song_stmts[i]);
-        }
-    }
-
-    sqlite3_finalize(scores_stmt);
-    for (auto& s : song_stmts) {
-        sqlite3_finalize(s);
-    }
-
-    sqlite3_exec(db_fsd, "COMMIT;", nullptr, nullptr, nullptr);
-    spdlog::info("remap_hashes: remapped {} hash pairs", old_to_new.size());
-
-    load_score_cache();
 }
 
 std::optional<PlayerData> ScoresManager::get_player_data(const std::string& player_id) {
@@ -1235,31 +1184,15 @@ void ScoresManager::migrate_player_id(const std::string& old_id, const std::stri
         sqlite3_finalize(stmt);
     }
 
-    // Update players table
-    const char* update_player = "UPDATE players SET player_id = ? WHERE player_id = ?;";
-    if (sqlite3_prepare_v2(db_fsd, update_player, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, new_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, old_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-
-    // Update scores table
-    const char* update_scores = "UPDATE scores SET player_id = ? WHERE player_id = ?;";
-    if (sqlite3_prepare_v2(db_fsd, update_scores, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, new_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, old_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-
-    // Update dan_scores table
-    const char* update_dan = "UPDATE dan_scores SET player_id = ? WHERE player_id = ?;";
-    if (sqlite3_prepare_v2(db_fsd, update_dan, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, new_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, old_id.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
+    for (const char* sql : {"UPDATE players SET player_id = ? WHERE player_id = ?;",
+                            "UPDATE scores SET player_id = ? WHERE player_id = ?;",
+                            "UPDATE dan_scores SET player_id = ? WHERE player_id = ?;"}) {
+        if (sqlite3_prepare_v2(db_fsd, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, new_id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, old_id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
     }
 }
 
@@ -1277,12 +1210,6 @@ bool ScoresManager::commit() {
         return false;
     }
     return true;
-}
-
-void ScoresManager::rollback() {
-    if (sqlite3_exec(db_fsd, "ROLLBACK;", nullptr, nullptr, nullptr) != SQLITE_OK) {
-        spdlog::error("rollback failed: {}", sqlite3_errmsg(db_fsd));
-    }
 }
 
 ScoresManager* _scores_manager_ptr = nullptr;
