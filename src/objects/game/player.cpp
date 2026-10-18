@@ -21,6 +21,10 @@ Player::Player(std::optional<SongParser>& parser_ref, PlayerNum player_num_param
     reset_chart();
     don_hitsound = "hitsound_don_" + std::to_string((int)player_num) + "p";
     kat_hitsound = "hitsound_kat_" + std::to_string((int)player_num) + "p";
+    don_hitsound_id = audio.sound_id(don_hitsound);
+    kat_hitsound_id = audio.sound_id(kat_hitsound);
+    balloon_pop_id = audio.sound_id("balloon_pop");
+    kusudama_pop_id = audio.sound_id("kusudama_pop");
 
     std::string pnum = std::to_string((int)player_num);
     lane_cover_tex_id = tex.get_texture("lane/" + pnum + "p_lane_cover");
@@ -294,7 +298,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             hit_type = DrumType::DON;
             autoplay_hit_side = autoplay_hit_side == Side::LEFT ? Side::RIGHT : Side::LEFT;
             spawn_hit_effects(hit_type, autoplay_hit_side);
-            audio.play_sound(don_hitsound, VolumePreset::HITSOUND);
+            audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
             check_note(ms_from_start, hit_type, current_ms, background);
         }
     } else {
@@ -317,7 +321,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             const size_t remaining = don_notes.size();
             hit_type = DrumType::DON;
             autoplay_hit(hit_type, don_notes.front().type == NoteType::DON_L);
-            audio.play_sound(don_hitsound, VolumePreset::HITSOUND);
+            audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
             check_note(ms_from_start, hit_type, current_ms, background);
             last_note_hit = current_ms;
             if (don_notes.size() == remaining) {
@@ -332,7 +336,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             const size_t remaining = kat_notes.size();
             hit_type = DrumType::KAT;
             autoplay_hit(hit_type, kat_notes.front().type == NoteType::KAT_L);
-            audio.play_sound(kat_hitsound, VolumePreset::HITSOUND);
+            audio.play_sound(kat_hitsound_id, VolumePreset::HITSOUND);
             check_note(ms_from_start, hit_type, current_ms, background);
             if (kat_notes.size() == remaining) {
                 break;
@@ -1452,7 +1456,7 @@ void Player::check_balloon(double current_ms, DrumType drum_type, const Note& ba
     if (curr_balloon_count == balloon.count.value()) {
         is_balloon = false;
         balloon_counter->update(current_ms, curr_balloon_count);
-        audio.play_sound("balloon_pop", VolumePreset::HITSOUND);
+        audio.play_sound(balloon_pop_id, VolumePreset::HITSOUND);
         note_correct(balloon, current_ms);
         curr_balloon_count = 0;
     }
@@ -1485,7 +1489,7 @@ void Player::check_kusudama(double current_ms, DrumType drum_type, const Note& b
     owner->kusudama_counter->update(current_ms, owner->kusudama_shared_hits);
 
     if (owner->kusudama_shared_hits == balloon.count.value()) {
-        audio.play_sound("kusudama_pop", VolumePreset::HITSOUND);
+        audio.play_sound(kusudama_pop_id, VolumePreset::HITSOUND);
 
         is_balloon = false;
         note_correct(balloon, current_ms);
@@ -1755,7 +1759,7 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
                 (log_type == InputLogType::DON_L || log_type == InputLogType::DON_R) ? DrumType::DON : DrumType::KAT;
             Side side = (log_type == InputLogType::DON_L || log_type == InputLogType::KAT_L) ? Side::LEFT : Side::RIGHT;
             spawn_hit_effects(drum_type, side);
-            audio.play_sound(drum_type == DrumType::DON ? don_hitsound : kat_hitsound, VolumePreset::HITSOUND);
+            audio.play_sound(drum_type == DrumType::DON ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
             check_note(log_ms, drum_type, current_ms, background);
             ++replay_cursor;
         }
@@ -1766,20 +1770,20 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
         bool (*check_func)(PlayerNum, float*);
         DrumType drum_type;
         Side side;
-        const std::string* sound;
+        SoundId sound;
     };
 
-    const InputCheck input_checks[] = {InputCheck{is_l_don_pressed, DrumType::DON, Side::LEFT, &don_hitsound},
-                                       InputCheck{is_r_don_pressed, DrumType::DON, Side::RIGHT, &don_hitsound},
-                                       InputCheck{is_l_kat_pressed, DrumType::KAT, Side::LEFT, &kat_hitsound},
-                                       InputCheck{is_r_kat_pressed, DrumType::KAT, Side::RIGHT, &kat_hitsound}};
+    const InputCheck input_checks[] = {InputCheck{is_l_don_pressed, DrumType::DON, Side::LEFT, don_hitsound_id},
+                                       InputCheck{is_r_don_pressed, DrumType::DON, Side::RIGHT, don_hitsound_id},
+                                       InputCheck{is_l_kat_pressed, DrumType::KAT, Side::LEFT, kat_hitsound_id},
+                                       InputCheck{is_r_kat_pressed, DrumType::KAT, Side::RIGHT, kat_hitsound_id}};
 
     for (const auto& input : input_checks) {
 
         float strength = 1.0f;
         while (input.check_func(player_num, &strength)) {
             spawn_hit_effects(input.drum_type, input.side);
-            audio.play_sound(*input.sound, VolumePreset::HITSOUND, strength);
+            audio.play_sound(input.sound, VolumePreset::HITSOUND, strength);
             InputLogType log_type;
             if (input.drum_type == DrumType::DON) {
                 log_type = input.side == Side::LEFT ? InputLogType::DON_L : InputLogType::DON_R;

@@ -228,6 +228,11 @@ private:
 
     std::string don_hitsound;
     std::string kat_hitsound;
+    // resolved once: the per-hit play_sound skips the name lookup (Z-DON)
+    SoundId don_hitsound_id = kNoSound;
+    SoundId kat_hitsound_id = kNoSound;
+    SoundId balloon_pop_id = kNoSound;
+    SoundId kusudama_pop_id = kNoSound;
 
     TextureObject* lane_cover_tex_id = nullptr;
     TextureObject* lane_icon_tex_id = nullptr;
