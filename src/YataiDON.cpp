@@ -772,6 +772,10 @@ int main(int argc, char* argv[]) {
     setup_logging(global_data.config->general.log_level);
 
     ray::InitWindow(1280, 720, "YataiDON");
+    // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way
+    if (const char* t = std::getenv("YATAIDON_TEST"); t && *t == '1') {
+        ray::MinimizeWindow();
+    }
     load_skin();
     if (dump_chara_spec && *dump_chara_spec) {
         std::exit(

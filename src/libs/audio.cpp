@@ -21,6 +21,7 @@ SDL_AudioStream* g_ios_audio_stream = nullptr;
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -823,7 +824,11 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     loudness_scanner = std::make_unique<song_loudness::Scanner>("cache/loudness");
 
     this->is_ready = false;
-    this->master_volume = 1.0f;
+    // Dev hook: YATAIDON_TEST=1 (automated test runs) plays everything at 1% volume
+    {
+        const char* t = std::getenv("YATAIDON_TEST");
+        this->master_volume = (t && *t == '1') ? 0.01f : 1.0f;
+    }
     try {
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
         if (const RtApiEntry* entry = rt_api_for_type(audio_config.device_type)) {
