@@ -3,6 +3,7 @@
 #include "loudness.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
+#include "test_mode.h"
 #ifdef YATAIDON_PLATFORM_IOS
 #include "../platform/platform_ios.h"
 #endif
@@ -825,10 +826,7 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
 
     this->is_ready = false;
     // Dev hook: YATAIDON_TEST=1 (automated test runs) plays everything at 1% volume
-    {
-        const char* t = std::getenv("YATAIDON_TEST");
-        this->master_volume = (t && *t == '1') ? 0.01f : 1.0f;
-    }
+    this->master_volume = zdon_test_mode() ? 0.01f : 1.0f;
     try {
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
         if (const RtApiEntry* entry = rt_api_for_type(audio_config.device_type)) {

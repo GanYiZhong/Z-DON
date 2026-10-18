@@ -15,6 +15,7 @@
 #include "libs/script.h"
 #include "libs/skin_updater.h"
 #include "libs/song_parser.h"
+#include "libs/test_mode.h"
 #include "libs/text.h"
 #include "libs/webcam.h"
 #include "objects/global/chara_3d.h"
@@ -772,8 +773,10 @@ int main(int argc, char* argv[]) {
     setup_logging(global_data.config->general.log_level);
 
     ray::InitWindow(1280, 720, "YataiDON");
-    // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way
-    if (const char* t = std::getenv("YATAIDON_TEST"); t && *t == '1') {
+    // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way.
+    // Not when the window is hidden (YATAIDON_DUMP_SCREEN): minimizing a hidden window stalled the
+    // main loop for over a minute.
+    if (zdon_test_mode() && !(flags & ray::FLAG_WINDOW_HIDDEN)) {
         ray::MinimizeWindow();
     }
     load_skin();

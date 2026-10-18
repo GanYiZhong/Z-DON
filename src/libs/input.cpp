@@ -13,6 +13,7 @@
 #include "animation.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
+#include "test_mode.h"
 #include "texture.h"
 #include "time.h"
 
@@ -370,7 +371,7 @@ void poll_touch_once() {
 // Scan all keyboard keys once and push press/release events.
 // Used by the polling thread on desktop and called directly per-frame on web.
 void poll_keyboard_once() {
-    if (is_input_locked()) {
+    if (is_input_locked() || zdon_test_mode()) { // test runs take only YATAIDON_FAKE_KEYS
         return;
     }
     thread_local std::vector<int> local_pressed;
@@ -529,6 +530,9 @@ namespace {
 #endif
 
     void midi_message_received(const libremidi::message& message, const MidiInput& state) {
+        if (zdon_test_mode()) {
+            return;
+        }
         const auto& bytes = message.bytes;
         if (bytes.size() != 3 || (bytes[0] & 0xf0) != 0x90 || bytes[2] == 0) {
             return;
