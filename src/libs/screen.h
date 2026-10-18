@@ -133,6 +133,7 @@ protected:
         if (!screen_init) {
             screen_init = true;
             try {
+                readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
                 on_screen_start();
                 spdlog::info("{} initialized", screen_name);
                 readahead::after_screen(screen_name);

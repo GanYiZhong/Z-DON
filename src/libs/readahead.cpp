@@ -6,6 +6,8 @@
 #include "../platform/platform_windows.h"
 #endif
 
+#include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <fstream>
@@ -85,8 +87,22 @@ namespace readahead {
 #endif
         }
 
-        // Reads the request's folders in, one after another; stops early for a newer request.
+        // How many files are read at once. A hard drive serves several outstanding reads faster than
+        // one at a time (it reorders them, NCQ), so the next screen is warm sooner.
+        // YATAIDON_READAHEAD_THREADS=<n> overrides it (1 = one file at a time).
+        size_t reader_count() {
+            static const size_t n = [] {
+                const char* v = std::getenv("YATAIDON_READAHEAD_THREADS");
+                const int k = v ? std::atoi(v) : 0;
+                return k > 0 ? static_cast<size_t>(std::min(k, 32)) : size_t{8};
+            }();
+            return n;
+        }
+
+        // Lists the request's files (in the order the screens are likely to come), then reads them in,
+        // several at a time; stops early for a newer request.
         void serve(const Request& req, uint64_t gen) {
+            std::vector<fs::path> files;
             uintmax_t total = 0;
             for (const std::string& screen : req.screens) {
                 for (const fs::path& root : req.roots) {
@@ -104,19 +120,38 @@ namespace readahead {
                                 continue;
                             }
                             const uintmax_t size = it->file_size(ec);
-                            if (ec) {
+                            if (ec || total + size > kMaxBytes) {
                                 continue;
                             }
-                            if (total + size > kMaxBytes) {
-                                return;
-                            }
                             total += size;
-                            if (!warm(it->path(), gen)) {
-                                return;
-                            }
+                            files.push_back(it->path());
                         }
                     }
                 }
+            }
+            std::atomic<size_t> next{0};
+            auto read_files = [&]() {
+                for (size_t i; (i = next.fetch_add(1)) < files.size();) {
+                    if (!warm(files[i], gen)) {
+                        return;
+                    }
+                }
+            };
+            // this thread reads too
+            const size_t helpers = files.empty() ? 0 : std::min(reader_count(), files.size()) - 1;
+            std::vector<std::thread> pool;
+            pool.reserve(helpers);
+            for (size_t k = 0; k < helpers; ++k) {
+                pool.emplace_back([&]() {
+#ifdef _WIN32
+                    win32_background_mode_thread();
+#endif
+                    read_files();
+                });
+            }
+            read_files();
+            for (std::thread& t : pool) {
+                t.join();
             }
         }
 
@@ -189,6 +224,12 @@ namespace readahead {
         }
         cv.notify_one();
 #endif
+    }
+
+    void cancel() {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++generation;
+        queued.reset();
     }
 
     void stop() {
