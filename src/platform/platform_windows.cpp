@@ -220,13 +220,17 @@ void win32_install_crash_handlers() {
     SetUnhandledExceptionFilter(crash_exception_filter);
 }
 
-bool win32_is_key_down_native(int raylib_key) {
+bool win32_app_has_focus() {
     DWORD fg_pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &fg_pid);
-    if (fg_pid != GetCurrentProcessId()) {
-        return false;
-    }
+    return fg_pid == GetCurrentProcessId();
+}
 
+bool win32_is_key_down_native(int raylib_key) {
+    return win32_app_has_focus() && win32_key_down_unchecked(raylib_key);
+}
+
+bool win32_key_down_unchecked(int raylib_key) {
     int vk_code = 0;
 
     // Letters (A-Z) and numbers (0-9) map straight to their VK codes

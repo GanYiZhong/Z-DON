@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -375,9 +377,12 @@ void poll_keyboard_once() {
     local_pressed.clear();
 
     // Only press edges are consumed downstream; releases are not tracked.
+#ifdef _WIN32
+    const bool app_focused = win32_app_has_focus(); // once per poll, not once per key
+#endif
     for (int key = 32; key < 349; key++) {
 #ifdef _WIN32
-        const bool current_state = win32_is_key_down_native(key);
+        const bool current_state = app_focused && win32_key_down_unchecked(key);
 #else
         const bool current_state = ray::IsKeyDown(key);
 #endif
@@ -717,9 +722,43 @@ void shutdown_midi_input() {
 
 void input_polling_thread() {
     PROFILE_THREAD_NAME("input");
+    // Z-DON: std::this_thread::sleep_for(500 us) overshoots to the 15.6 ms scheduler tick on
+    // Windows, so keys were sampled ~64 times a second; a high-resolution waitable timer keeps
+    // the intended ~0.5 ms. YATAIDON_INPUT_SLEEP=plain restores the old sleep (A/B);
+    // YATAIDON_INPUT_STATS=1 logs the poll interval every 2 s.
+    const char* sleep_mode = std::getenv("YATAIDON_INPUT_SLEEP");
+    const bool plain_sleep = sleep_mode && std::string_view(sleep_mode) == "plain";
+    const char* stats_env = std::getenv("YATAIDON_INPUT_STATS");
+    const bool stats = stats_env && *stats_env == '1';
+    std::vector<double> intervals;
+    auto last = std::chrono::steady_clock::now();
+    auto window_start = last;
     while (input_thread_running) {
         poll_keyboard_once();
+#ifdef _WIN32
+        if (plain_sleep || !win32_precise_sleep_us(500)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+#else
         std::this_thread::sleep_for(std::chrono::microseconds(500));
+#endif
+        if (stats) {
+            const auto now = std::chrono::steady_clock::now();
+            intervals.push_back(std::chrono::duration<double, std::milli>(now - last).count());
+            last = now;
+            if (now - window_start >= std::chrono::seconds(2) && !intervals.empty()) {
+                std::sort(intervals.begin(), intervals.end());
+                double sum = 0;
+                for (double v : intervals) {
+                    sum += v;
+                }
+                spdlog::info("[input] {} polls, interval ms: avg {:.3f} p50 {:.3f} p99 {:.3f} max {:.3f}",
+                             intervals.size(), sum / intervals.size(), intervals[intervals.size() / 2],
+                             intervals[intervals.size() * 99 / 100], intervals.back());
+                intervals.clear();
+                window_start = now;
+            }
+        }
     }
 }
 
