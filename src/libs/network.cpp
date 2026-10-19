@@ -17,6 +17,7 @@
 #include <spdlog/spdlog.h>
 
 #include "color_utils.h"
+#include "fixed_step.h"
 #include "global_data.h"
 #include "parsers/tja.h"
 #include "scores.h"
@@ -248,6 +249,10 @@ cpr::SslOptions android_ca() {
 #endif
 
 static bool network_enabled() {
+    // YATAIDON_FIXED_STEP_MS: offline, so the frames do not depend on a server's answer or timing
+    if (fixed_step::on()) {
+        return false;
+    }
     return global_data.config && global_data.config->network.online_play;
 }
 
