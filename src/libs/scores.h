@@ -113,6 +113,14 @@ constexpr int SONG_CACHE_VERSION = 3; // 3: Shift-JIS charts read as UTF-8
 
 struct RemoteScore;
 
+// Z-DON: a dan course song's note count (DanNavigator::song_note_count) for one version of its chart
+// file (the song_cache mtime and size of the session that counted it)
+struct DanNoteCount {
+    int64_t mtime = 0;
+    int64_t size = 0;
+    int notes = 0;
+};
+
 class ScoresManager {
 private:
     sqlite3* db_fsd;
@@ -158,6 +166,9 @@ public:
     // the loading screen's scan result per chart (key: UTF-8 path), for Navigator::preload
     void set_song_meta(const std::string& path, const SongCacheEntry& entry);
     std::optional<SongCacheEntry> get_song_meta(const std::string& path);
+    // Z-DON table zdon_dan_note_counts: (UTF-8 path, difficulty) -> count, current SONG_CACHE_VERSION only
+    std::map<std::pair<std::string, int>, DanNoteCount> load_dan_note_counts();
+    void store_dan_note_counts(const std::vector<std::pair<std::pair<std::string, int>, DanNoteCount>>& rows);
     // Best-of view over dan_scores for one course (course_id from dan_course_id).
     std::optional<DanRecord> get_dan_record(const std::string& player_id, const std::string& course_id);
     // Appends one attempt to dan_scores; each song links to its normal scores row (DanResultSong::score_id).

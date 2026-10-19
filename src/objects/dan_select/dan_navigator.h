@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../../libs/parsers/tja.h"
+#include "../../libs/scores.h"
 #include "../song_select/file_navigator/box_dan.h"
 
 struct DanBoxData {
@@ -102,6 +103,9 @@ private:
         std::map<fs::path, std::shared_ptr<const TJAMetadata>> metadata;
         std::map<std::pair<fs::path, int>, int> note_counts;
         std::map<fs::path, int> genres; // by box.def folder
+        // counts kept from earlier sessions, and the ones this scan made (written when it is done)
+        std::map<std::pair<std::string, int>, DanNoteCount> stored_counts;
+        std::vector<std::pair<std::pair<std::string, int>, DanNoteCount>> new_counts;
     };
     ScanMemo* memo_ = nullptr; // set while a scan runs; nullptr = read every time
     std::shared_ptr<const TJAMetadata> song_metadata(const fs::path& path);

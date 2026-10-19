@@ -52,7 +52,26 @@ int DanNavigator::song_note_count(const fs::path& path, int difficulty) {
             return it->second;
         }
     }
+    // A count made for this version of the file (the loading screen's song_cache stamp) in an earlier
+    // session is used as it is: counting parses the whole chart
+    std::optional<SongCacheEntry> stamp;
+    std::pair<std::string, int> key;
+    if (memo_) {
+        const auto u8 = path.u8string();
+        key = {std::string(u8.begin(), u8.end()), difficulty};
+        stamp = scores_manager.get_song_meta(key.first);
+        if (stamp) {
+            std::lock_guard<std::mutex> lock(memo_->mutex);
+            if (auto it = memo_->stored_counts.find(key); it != memo_->stored_counts.end() &&
+                                                          it->second.mtime == stamp->mtime &&
+                                                          it->second.size == stamp->size) {
+                memo_->note_counts.emplace(std::make_pair(path, difficulty), it->second.notes);
+                return it->second.notes;
+            }
+        }
+    }
     int total = 0;
+    bool counted = false;
     try {
         SongParser sp(path);
         auto [notes, bm, be, bn] = sp.notes_to_position(difficulty);
@@ -69,12 +88,16 @@ int DanNavigator::song_note_count(const fs::path& path, int difficulty) {
         for (auto& sec : bm) {
             total += count(sec.notes);
         }
+        counted = true;
     } catch (const std::exception& e) {
         spdlog::warn("DanNavigator::total_notes_for: failed to parse '{}': {}", path.string(), e.what());
     }
     if (memo_) {
         std::lock_guard<std::mutex> lock(memo_->mutex);
         memo_->note_counts.emplace(std::make_pair(path, difficulty), total);
+        if (counted && stamp) {
+            memo_->new_counts.emplace_back(key, DanNoteCount{stamp->mtime, stamp->size, total});
+        }
     }
     return total;
 }
@@ -224,13 +247,32 @@ std::optional<DanSongEntry> DanNavigator::load_song_entry(const rapidjson::Value
             return std::nullopt;
         }
 
-        auto meta = song_metadata(*path_opt);
-        int level = meta->course_data.count(diff) ? meta->course_data.at(diff).level : 10;
+        // The loading screen's scan has the level and the titles of every chart: parsed only when a
+        // chart is not in it (or the row predates the titles)
+        const auto u8 = path_opt->u8string();
+        std::optional<SongCacheEntry> cached = scores_manager.get_song_meta(std::string(u8.begin(), u8.end()));
+        if (cached && (diff < 0 || diff > 4 || cached->titles.empty())) {
+            cached.reset();
+        }
+        int level = 10;
+        std::map<std::string, std::string> title_map, subtitle_map;
+        if (cached) {
+            if (cached->levels[diff] != -1) {
+                level = cached->levels[diff];
+            }
+            title_map.insert(cached->titles.begin(), cached->titles.end());
+            subtitle_map.insert(cached->subtitles.begin(), cached->subtitles.end());
+        } else {
+            auto meta = song_metadata(*path_opt);
+            level = meta->course_data.count(diff) ? meta->course_data.at(diff).level : 10;
+            title_map = meta->title;
+            subtitle_map = meta->subtitle;
+        }
 
         if (titles_out && global_data.config) {
             const std::string& lang = global_data.config->general.language;
-            titles_out->first = localized_text(meta->title, lang, LocalizedTextFallback::ENGLISH);
-            titles_out->second = localized_text(meta->subtitle, lang, LocalizedTextFallback::NONE);
+            titles_out->first = localized_text(title_map, lang, LocalizedTextFallback::ENGLISH);
+            titles_out->second = localized_text(subtitle_map, lang, LocalizedTextFallback::NONE);
         }
 
         int genre = box_genre(path_opt->parent_path().parent_path());
@@ -457,6 +499,7 @@ void DanNavigator::collect_dan_jsons(const fs::path& root_path, std::vector<fs::
 // Loads the courses on a few worker threads, in the order given
 std::vector<DanBoxData> DanNavigator::load_dan_jsons(const std::vector<fs::path>& jsons) {
     ScanMemo memo;
+    memo.stored_counts = scores_manager.load_dan_note_counts();
     memo_ = &memo;
     std::vector<std::optional<DanBoxData>> loaded(jsons.size());
     std::atomic<size_t> cursor{0};
@@ -481,6 +524,7 @@ std::vector<DanBoxData> DanNavigator::load_dan_jsons(const std::vector<fs::path>
         worker.join();
     }
     memo_ = nullptr;
+    scores_manager.store_dan_note_counts(memo.new_counts);
 
     std::vector<DanBoxData> data;
     for (auto& d : loaded) {

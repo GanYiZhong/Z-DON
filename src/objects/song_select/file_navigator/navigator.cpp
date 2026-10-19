@@ -388,7 +388,11 @@ void Navigator::dump_library_if_requested() {
                 out << d.json_path.string() << " title=" << d.title << " rank=" << d.rank << " notes=" << d.total_notes
                     << " songs=";
                 for (const DanSongEntry& s : d.songs) {
-                    out << show(s.song_path) << '#' << s.difficulty << ';';
+                    out << show(s.song_path) << '#' << s.difficulty << " level=" << s.level
+                        << " genre=" << s.genre_index << ';';
+                }
+                for (const auto& [t, sub] : d.song_titles) {
+                    out << " [" << t << '|' << sub << ']';
                 }
                 out << '\n';
             }

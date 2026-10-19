@@ -791,6 +791,72 @@ std::optional<SongCacheEntry> ScoresManager::get_song_meta(const std::string& pa
     return it->second;
 }
 
+// Z-DON only (upstream does not know the table): dan song note counts, see DanNoteCount
+static void ensure_dan_note_count_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_dan_note_counts ("
+                 "path TEXT NOT NULL, difficulty INTEGER NOT NULL, version INTEGER NOT NULL, mtime INTEGER NOT NULL, "
+                 "size INTEGER NOT NULL, notes INTEGER NOT NULL, PRIMARY KEY (path, difficulty));",
+                 nullptr, nullptr, nullptr);
+}
+
+std::map<std::pair<std::string, int>, DanNoteCount> ScoresManager::load_dan_note_counts() {
+    std::map<std::pair<std::string, int>, DanNoteCount> counts;
+    ensure_dan_note_count_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "SELECT path, difficulty, mtime, size, notes FROM zdon_dan_note_counts WHERE version = ?;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("load_dan_note_counts: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return counts;
+    }
+    sqlite3_bind_int(stmt, 1, SONG_CACHE_VERSION);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char* path = sqlite3_column_text(stmt, 0);
+        if (!path) {
+            continue;
+        }
+        DanNoteCount c;
+        c.mtime = sqlite3_column_int64(stmt, 2);
+        c.size = sqlite3_column_int64(stmt, 3);
+        c.notes = sqlite3_column_int(stmt, 4);
+        counts.emplace(std::make_pair(std::string(reinterpret_cast<const char*>(path)), sqlite3_column_int(stmt, 1)),
+                       c);
+    }
+    sqlite3_finalize(stmt);
+    return counts;
+}
+
+void ScoresManager::store_dan_note_counts(
+    const std::vector<std::pair<std::pair<std::string, int>, DanNoteCount>>& rows) {
+    if (rows.empty()) {
+        return;
+    }
+    ensure_dan_note_count_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(
+            db_fsd,
+            "INSERT OR REPLACE INTO zdon_dan_note_counts (path, difficulty, version, mtime, size, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?);",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("store_dan_note_counts: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    sqlite3_exec(db_fsd, "BEGIN;", nullptr, nullptr, nullptr);
+    for (const auto& [key, c] : rows) {
+        sqlite3_bind_text(stmt, 1, key.first.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, key.second);
+        sqlite3_bind_int(stmt, 3, SONG_CACHE_VERSION);
+        sqlite3_bind_int64(stmt, 4, c.mtime);
+        sqlite3_bind_int64(stmt, 5, c.size);
+        sqlite3_bind_int(stmt, 6, c.notes);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+    sqlite3_exec(db_fsd, "COMMIT;", nullptr, nullptr, nullptr);
+    sqlite3_finalize(stmt);
+}
+
 std::unordered_map<std::string, SongCacheEntry> ScoresManager::load_song_cache() {
     std::unordered_map<std::string, SongCacheEntry> cache;
     ensure_song_cache_table(db_fsd);
