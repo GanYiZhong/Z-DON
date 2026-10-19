@@ -616,6 +616,12 @@ static void run_frame() {
         global_data.current_screen = screens_to_string(L.current_screen);
         reset_input_lock();
         script_manager.refresh_method_cache(); // sol metatables pushed lazily on the last screen
+        script_manager.full_collect();
+    } else {
+        static const bool gc_stress = std::getenv("ZDON_LUA_GC_STRESS") != nullptr;
+        if (gc_stress) {
+            script_manager.full_collect(); // dev hook: every frame, shakes out objects only Lua kept alive
+        }
     }
 
     draw_touch_drum();

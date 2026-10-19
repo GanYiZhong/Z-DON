@@ -6,6 +6,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <spdlog/spdlog.h>
@@ -1031,6 +1032,21 @@ void ScriptManager::refresh_method_cache() {
     if (lua) {
         cache_usertype_method_lookups(lua->lua_state());
     }
+}
+
+// Z-DON: on a screen change, so the last screen's Lua objects (box wrappers, script instances) are freed
+// now instead of whenever a major collection comes around. Only unreachable objects are collected:
+// what C++ still references (sol::object/sol::table handles hold registry refs) stays.
+void ScriptManager::full_collect() {
+    if (!lua) {
+        return;
+    }
+    lua_State* L = lua->lua_state();
+    const int kb_before = lua_gc(L, LUA_GCCOUNT, 0);
+    const auto t0 = std::chrono::steady_clock::now();
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    spdlog::debug("Lua full GC: {:.2f} ms, {} -> {} KB", ms, kb_before, lua_gc(L, LUA_GCCOUNT, 0));
 }
 
 ScriptManager script_manager;

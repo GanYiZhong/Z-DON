@@ -79,6 +79,8 @@ public:
     void index_scripts(const fs::path& script_path);
     void register_lua_bindings();
     void refresh_method_cache();
+    // Z-DON: a full collection (the generational GC's minor ones leave the old screen's objects behind)
+    void full_collect();
 
     bool script_executed(const std::string& script_name) const { return executed_scripts.contains(script_name); }
     void mark_script_executed(const std::string& script_name) { executed_scripts.insert(script_name); }
