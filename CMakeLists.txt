@@ -147,6 +147,41 @@ if(MINGW)
   target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
 
+# Z-DON: precompiled headers for the game's C++ files. sol2 (through script.h) is in about half of
+# them and was most of their compile time. Only standard and third-party headers, none of which
+# include <windows.h> (card_reader.cpp / loudness.cpp set NOMINMAX etc. before including it).
+option(ZDON_PCH "Precompiled headers for the game target" ON)
+if(ZDON_PCH)
+  target_precompile_headers(${PROJECT_NAME} PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:<algorithm$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<array$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<atomic$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<chrono$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<cmath$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<cstdint$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<cstring$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<deque$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<filesystem$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<fstream$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<functional$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<map$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<memory$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<mutex$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<optional$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<set$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<sstream$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<string$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<string_view$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<thread$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<unordered_map$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<unordered_set$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<utility$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<vector$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<sol/sol.hpp$<ANGLE-R>>"
+    "$<$<COMPILE_LANGUAGE:CXX>:<spdlog/spdlog.h$<ANGLE-R>>"
+  )
+endif()
+
 if(WIN32)
   foreach(_lib avformat avcodec avutil swscale swresample)
     file(GLOB _dll "${FFMPEG_LIB_DIR}/../bin/${_lib}*.dll")
