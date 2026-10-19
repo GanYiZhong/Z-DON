@@ -38,21 +38,21 @@ int32_t LibraryIndex::add_dir(const fs::path& path, std::vector<Entry> entries) 
 }
 
 bool LibraryIndex::song_list_written(const fs::path& dir) const {
-    std::lock_guard<std::mutex> lock(written_mutex_);
-    return !written_.empty() && written_.count(key(dir)) > 0;
+    std::scoped_lock lock(written_mutex_);
+    return !written_.empty() && written_.contains(key(dir));
 }
 
 void LibraryIndex::note_song_list_written(const fs::path& dir) const {
-    std::lock_guard<std::mutex> lock(written_mutex_);
+    std::scoped_lock lock(written_mutex_);
     written_.insert(key(dir));
 }
 
 std::shared_ptr<const LibraryIndex> library_index() {
-    std::lock_guard<std::mutex> lock(published_mutex);
+    std::scoped_lock lock(published_mutex);
     return published;
 }
 
 void publish_library_index(std::shared_ptr<const LibraryIndex> index) {
-    std::lock_guard<std::mutex> lock(published_mutex);
+    std::scoped_lock lock(published_mutex);
     published = std::move(index);
 }

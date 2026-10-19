@@ -1,5 +1,7 @@
 #include "player.h"
 
+#include <algorithm>
+
 #include "../../libs/audio.h"
 #include "../../libs/input.h"
 #include "../../libs/scores.h"
@@ -94,7 +96,7 @@ bool SongSelectPlayer::is_voice_playing() {
 }
 
 bool SongSelectPlayer::has_course(Difficulty d) const {
-    return std::find(curr_diffs.begin(), curr_diffs.end(), d) != curr_diffs.end();
+    return std::ranges::find(curr_diffs, d) != curr_diffs.end();
 }
 
 void SongSelectPlayer::init_diff_cursor() {
@@ -348,12 +350,7 @@ static std::string trim_search(std::string s) {
 static bool any_don_key_down(PlayerNum player_num) {
     const auto& c = *global_data.config;
     auto down = [](const std::vector<int>& keys) {
-        for (int k : keys) {
-            if (ray::IsKeyDown(k)) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::any_of(keys, [](int k) { return ray::IsKeyDown(k); });
     };
     if (player_num != PlayerNum::P2 && (down(c.keys_1p.left_don) || down(c.keys_1p.right_don))) {
         return true;
@@ -482,7 +479,7 @@ void SongSelectPlayer::navigate_difficulty_left() {
         selected_difficulty = Difficulty((int)selected_difficulty - 1);
     } else if (selected_difficulty == Difficulty::BACK) {
         // no-op
-    } else if (std::find(curr_diffs.begin(), curr_diffs.end(), selected_difficulty) == curr_diffs.end()) {
+    } else if (!std::ranges::contains(curr_diffs, selected_difficulty)) {
         prev_diff = selected_difficulty;
         diff_selector_move_1->start();
         selected_difficulty = curr_diffs.front();
@@ -493,7 +490,7 @@ void SongSelectPlayer::navigate_difficulty_left() {
     } else {
         diff_selector_move_1->start();
         prev_diff = selected_difficulty;
-        auto it = std::find(curr_diffs.begin(), curr_diffs.end(), selected_difficulty);
+        auto it = std::ranges::find(curr_diffs, selected_difficulty);
         selected_difficulty = *std::prev(it);
     }
 }
@@ -527,7 +524,7 @@ void SongSelectPlayer::navigate_difficulty_right() {
         diff_selector_move_2->start();
     } else if (selected_difficulty < curr_diffs.back()) {
         prev_diff = selected_difficulty;
-        auto it = std::find(curr_diffs.begin(), curr_diffs.end(), selected_difficulty);
+        auto it = std::ranges::find(curr_diffs, selected_difficulty);
         selected_difficulty = *std::next(it);
         diff_selector_move_1->start();
     }

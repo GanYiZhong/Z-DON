@@ -356,7 +356,7 @@ namespace song_loudness {
             } catch (const std::exception& error) {
                 spdlog::warn("Cannot read the loudness store: {}", error.what());
             }
-            std::lock_guard guard(mutex);
+            std::scoped_lock guard(mutex);
             store = std::move(rows);
             store_loaded = true;
             store_ready.notify_all();
@@ -386,7 +386,7 @@ namespace song_loudness {
                     throw std::runtime_error("Cannot write loudness store");
                 }
             }
-            std::lock_guard guard(mutex);
+            std::scoped_lock guard(mutex);
             store.insert_or_assign(key, Stored{source, measured});
         }
 
@@ -397,7 +397,7 @@ namespace song_loudness {
                 return;
             }
             {
-                std::lock_guard guard(mutex);
+                std::scoped_lock guard(mutex);
                 checks.push_back(path);
             }
             wake.notify_one();
@@ -506,7 +506,7 @@ namespace song_loudness {
                     spdlog::warn("Loudness analysis failed for {}: {}", key, error.what());
                 }
 
-                std::lock_guard guard(mutex);
+                std::scoped_lock guard(mutex);
                 auto& entry = entries.at(key);
 
                 if (entry.source == source) {

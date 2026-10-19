@@ -64,7 +64,7 @@ namespace readahead {
         } worker;
 
         bool superseded(uint64_t gen) {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::scoped_lock lock(mutex);
             return quit || generation != gen;
         }
 
@@ -135,7 +135,7 @@ namespace readahead {
                 // PNGs (a few hundred small reads, parent files the child overrides among them).
                 bool packed = false;
                 if (texture_pack::enabled() && !req.roots.empty() &&
-                    std::find(req.resident.begin(), req.resident.end(), screen) == req.resident.end()) {
+                    std::ranges::find(req.resident, screen) == req.resident.end()) {
                     const fs::path pack = texture_pack::pack_path(req.roots.front().filename(), screen);
                     std::error_code ec;
                     const uintmax_t size = fs::file_size(pack, ec);
@@ -147,8 +147,7 @@ namespace readahead {
                 }
                 for (const fs::path& root : req.roots) {
                     for (const char* kind : {"Graphics", "Sounds"}) {
-                        if (kind[0] == 'G' &&
-                            std::find(req.resident.begin(), req.resident.end(), screen) != req.resident.end()) {
+                        if (kind[0] == 'G' && std::ranges::find(req.resident, screen) != req.resident.end()) {
                             continue;
                         }
                         const fs::path dir = root / kind / screen;
@@ -225,7 +224,7 @@ namespace readahead {
 
         void shut_down() {
             {
-                std::lock_guard<std::mutex> lock(mutex);
+                std::scoped_lock lock(mutex);
                 quit = true;
                 ++generation;
             }
@@ -254,7 +253,7 @@ namespace readahead {
         const auto& map = next_screens();
         auto it = map.find(screen_name);
 
-        std::lock_guard<std::mutex> lock(mutex);
+        std::scoped_lock lock(mutex);
         ++generation; // whatever the previous screen asked for is stale now
         queued.reset();
         if (it == map.end() || !global_data.config || quit) {
@@ -289,7 +288,7 @@ namespace readahead {
     }
 
     void cancel() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::scoped_lock lock(mutex);
         ++generation;
         queued.reset();
     }

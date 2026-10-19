@@ -48,11 +48,11 @@ ModifierSelector::ModifierSelector(PlayerNum player_num, PlayerData* player) : p
 
     mod_names.assign(BASE_MOD_NAMES.begin(), BASE_MOD_NAMES.end());
     if (tex.options[SCO::OPTION_SKIP_ROW]) {
-        mod_names.push_back("skip");
+        mod_names.emplace_back("skip");
     }
     if (tex.options[SCO::OPTION_NEIRO_ROW]) {
         load_neiro_names();
-        mod_names.push_back("neiro");
+        mod_names.emplace_back("neiro");
     }
 
     blue_arrow_fade = (FadeAnimation*)tex.get_animation(29, true);
@@ -209,7 +209,7 @@ void ModifierSelector::right() {
 
 std::string ModifierSelector::row_label(const std::string& n) const {
     static constexpr std::string_view known[] = {"auto", "speed", "display", "inverse", "random", "skip", "neiro"};
-    if (std::find(std::begin(known), std::end(known), n) == std::end(known)) {
+    if (std::ranges::find(known, n) == std::end(known)) {
         return std::string();
     }
     return font_manager.get_text_label("modifier_name_" + n);

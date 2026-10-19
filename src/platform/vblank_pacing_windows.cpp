@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <print>
 #include <spdlog/spdlog.h>
 #include <string>
 #include <string_view>
@@ -65,7 +66,7 @@ namespace vblank_pacing {
             S.period_ms = period;
             S.last_query_ms = now_ms;
             if (S.log) {
-                std::fprintf(S.log, "v,%.4f,%.5f,%.3f\n", S.vblank_ms, S.period_ms, S.lead_ms);
+                std::println(S.log, "v,{:.4f},{:.5f},{:.3f}", S.vblank_ms, S.period_ms, S.lead_ms);
             }
             return true;
         }
@@ -184,7 +185,7 @@ namespace vblank_pacing {
         }
         const double now = get_current_ms();
         if (S.log) {
-            std::fprintf(S.log, "f,%.4f,%.4f,%.4f,%.4f\n", S.last_frame_ms, S.wake_ms, now, S.scheduled_ms);
+            std::println(S.log, "f,{:.4f},{:.4f},{:.4f},{:.4f}", S.last_frame_ms, S.wake_ms, now, S.scheduled_ms);
         }
         if (now - S.last_query_ms > 500.0) {
             query_grid(now);

@@ -385,7 +385,7 @@ void ScriptManager::init(fs::path script_path) {
 }
 
 bool ScriptManager::has_lua_script(const std::string& script_name) const {
-    return scripts.count(script_name) != 0;
+    return scripts.contains(script_name);
 }
 
 std::string ScriptManager::get_lua_script_path(const std::string& script_name) {
@@ -778,7 +778,7 @@ void ScriptManager::register_lua_bindings() {
         sol::table keys = script_manager.lua->create_table();
         int index = 1;
         for (const auto& [path, obj] : script_manager.tex.textures) {
-            if (path.size() > prefix.size() && path.compare(0, prefix.size(), prefix) == 0) {
+            if (path.size() > prefix.size() && path.starts_with(prefix)) {
                 keys[index] = path.substr(prefix.size());
                 ++index;
             }

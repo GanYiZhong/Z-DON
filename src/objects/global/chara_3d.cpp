@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <ranges>
 #include <rapidjson/document.h>
 
 #include "../../libs/animation.h"
@@ -31,14 +32,11 @@ static void draw_model_face_last(ray::Model& model, int face_material_index, con
     ray::Matrix matTransform = ray::MatrixMultiply(ray::MatrixScale(scale, scale, scale),
                                                    ray::MatrixTranslate(position.x, position.y, position.z));
     ray::Matrix transform = ray::MatrixMultiply(model.transform, matTransform);
-    auto is_blend = [&](int mat) {
-        return std::find(blend_materials.begin(), blend_materials.end(), mat) != blend_materials.end();
-    };
+    auto is_blend = [&](int mat) { return std::ranges::contains(blend_materials, mat); };
     // _CULLNONE materials are drawn two-sided, as the name asks.
     auto draw = [&](int i) {
         const int mat = model.meshMaterial[i];
-        const bool two_sided =
-            std::find(twosided_materials.begin(), twosided_materials.end(), mat) != twosided_materials.end();
+        const bool two_sided = std::ranges::contains(twosided_materials, mat);
         if (two_sided) {
             rlDisableBackfaceCulling();
         }
@@ -109,7 +107,7 @@ struct AnimSource {
 static const AnimSource& anim_source(const fs::path& path) {
     static std::mutex mutex;
     static std::map<fs::path, AnimSource> cache;
-    std::lock_guard<std::mutex> lock(mutex);
+    std::scoped_lock lock(mutex);
 
     std::error_code ec;
     const auto mtime = fs::last_write_time(path, ec);
@@ -271,19 +269,19 @@ static std::unordered_map<std::string, int> parse_glb_material_indices(const std
         }
         if (mat_name_raw) {
             std::string nl = name_lower(mat_name_raw);
-            if (nl.find("_aa_add") != std::string::npos) {
+            if (nl.contains("_aa_add")) {
                 additive_out.push_back(raylib_idx);
             }
             // _AT_ZERO_ / _AT_ONE_: alpha-tested, never blended
-            const bool cutout = nl.find("_color_s_cus_") != std::string::npos && nl.find("_a_ab") == std::string::npos;
+            const bool cutout = nl.contains("_color_s_cus_") && !nl.contains("_a_ab");
             const bool gltf_blend = materials[i].HasMember("alphaMode") && materials[i]["alphaMode"].IsString() &&
                                     std::string(materials[i]["alphaMode"].GetString()) == "BLEND";
             // alpha-blended: _A_AB by name, or any other glTF BLEND material that is not an
             // alpha-tested one (e.g. a plain "lambert" glint sheet) -- drawn after the face
-            if (nl.find("_a_ab") != std::string::npos || (gltf_blend && !cutout)) {
+            if (nl.contains("_a_ab") || (gltf_blend && !cutout)) {
                 blend_out.push_back(raylib_idx);
             }
-            if (nl.find("cullnone") != std::string::npos) {
+            if (nl.contains("cullnone")) {
                 twosided_out.push_back(raylib_idx);
             }
         }
@@ -428,7 +426,7 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     std::string key = make_part_pool_key(model_path, anim_path, normalize_face_scale);
     if (!key.empty()) {
         auto it =
-            std::find_if(g_part_pool.rbegin(), g_part_pool.rend(), [&](const PooledPart& p) { return p.key == key; });
+            std::ranges::find_if(std::views::reverse(g_part_pool), [&](const PooledPart& p) { return p.key == key; });
         if (it != g_part_pool.rend()) {
             PooledPart p = std::move(*it);
             g_part_pool.erase(std::next(it).base());
@@ -670,7 +668,7 @@ void Chara3D::load_face_textures(fs::path& face_dir) {
     if (paths.empty()) {
         return;
     }
-    std::sort(paths.begin(), paths.end());
+    std::ranges::sort(paths);
     ray::Image sheet = ray::LoadImage(paths[0].string().c_str());
     // Frames are square and stacked vertically; derive the size from the
     // sheet width instead of assuming 128px, so higher-resolution skins
@@ -766,7 +764,7 @@ static void apply_don_colors(ray::Model& model, int mat_idx, ray::Color body, ra
     if (new_tex.id == 0) {
         return;
     }
-    if (std::any_of(replaced.begin(), replaced.end(), [&](const auto& r) { return r.first == mat_idx; })) {
+    if (std::ranges::any_of(replaced, [&](const auto& r) { return r.first == mat_idx; })) {
         ray::UnloadTexture(map.texture);
     } else {
         replaced.emplace_back(mat_idx, map.texture);
@@ -811,7 +809,7 @@ void Chara3D::set_anim(AnimIndex idx) {
     if (i >= 0 && i < anim_count) {
         if (base == (int)AnimIndex::DON_NORMAL || base == (int)AnimIndex::DON_SABI ||
             base == (int)AnimIndex::DON_BALLOON_NOBEAT || base == (int)AnimIndex::DON_MISS6 ||
-            get_anim_name(i).find("loop") != std::string::npos) {
+            get_anim_name(i).contains("loop")) {
             is_looping = true;
         } else {
             if (is_looping) {

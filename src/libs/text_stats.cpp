@@ -27,7 +27,7 @@ namespace text_stats {
     }
 
     void record(Kind kind, double ms) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         const auto now = std::chrono::steady_clock::now();
         if (g_window == std::chrono::steady_clock::time_point{}) {
             g_window = now;

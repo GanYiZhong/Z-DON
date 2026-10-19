@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <rlgl.h>
@@ -233,7 +234,7 @@ Screens check_args(int argc, char* argv[]) {
     int selected_difficulty;
     if (difficulty.has_value()) {
         auto& course_data = tja.metadata.course_data;
-        if (course_data.find(difficulty.value()) == course_data.end()) {
+        if (!course_data.contains(difficulty.value())) {
             std::cerr << "Error: Invalid difficulty: " << difficulty.value() << ". Available: ";
             for (const auto& [key, value] : course_data) {
                 std::cerr << key << " ";
@@ -386,7 +387,7 @@ static void frame_stats_add(std::chrono::steady_clock::time_point start) {
     const auto now = std::chrono::steady_clock::now();
     work.push_back(std::chrono::duration<double, std::milli>(now - start).count());
     if (now - window >= std::chrono::seconds(2)) {
-        std::sort(work.begin(), work.end());
+        std::ranges::sort(work);
         double sum = 0;
         for (double v : work) {
             sum += v;

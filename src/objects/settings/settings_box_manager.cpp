@@ -50,7 +50,7 @@ SettingsBoxManager::SettingsBoxManager(const rapidjson::Document& tmpl)
 SettingsBoxManager::~SettingsBoxManager() = default;
 
 bool SettingsBoxManager::all_idle() const {
-    return std::all_of(boxes.begin(), boxes.end(), [](const auto& b) { return b->can_move(); });
+    return std::ranges::all_of(boxes, [](const auto& b) { return b->can_move(); });
 }
 
 void SettingsBoxManager::move_left() {

@@ -106,7 +106,7 @@ namespace texture_retain {
             std::vector<const ray::Texture2D*> out;
             for (int i = 0; i < obj.frame_count(); ++i) {
                 const ray::Texture2D* t = obj.frame_texture(i);
-                if (t && t->id != 0 && std::find(out.begin(), out.end(), t) == out.end()) {
+                if (t && t->id != 0 && std::ranges::find(out, t) == out.end()) {
                     out.push_back(t);
                 }
             }
@@ -117,7 +117,7 @@ namespace texture_retain {
         size_t new_bytes(const TextureObject& obj) {
             size_t bytes = 0;
             for (const ray::Texture2D* t : gpu_textures(obj)) {
-                if (!gpu_refs.count(t->id)) {
+                if (!gpu_refs.contains(t->id)) {
                     bytes += texture_bytes(*t);
                 }
             }
@@ -187,7 +187,7 @@ namespace texture_retain {
             // false when too much is waiting already (the caller frees it)
             bool push(void* data, size_t bytes) {
                 {
-                    std::lock_guard<std::mutex> lock(mutex);
+                    std::scoped_lock lock(mutex);
                     if (pending_bytes + bytes > kMaxPending) {
                         return false;
                     }
@@ -295,7 +295,7 @@ namespace texture_retain {
     }
 
     bool contains(const std::string& key) {
-        return entries.count(key) > 0;
+        return entries.contains(key);
     }
 
     bool screen_complete(const std::string& screen_name) {

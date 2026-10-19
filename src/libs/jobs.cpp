@@ -25,7 +25,7 @@ namespace jobs {
             }
             fn = nullptr; // drop the captures here, not wherever the last handle goes
             {
-                std::lock_guard<std::mutex> lock(mutex);
+                std::scoped_lock lock(mutex);
                 state.store(2, std::memory_order_release);
             }
             cv.notify_all();
@@ -54,7 +54,7 @@ namespace jobs {
 
             void push(std::shared_ptr<detail::Task> task) {
                 {
-                    std::lock_guard<std::mutex> lock(mutex);
+                    std::scoped_lock lock(mutex);
                     queues[static_cast<size_t>(task->priority)].push_back(std::move(task));
                 }
                 cv.notify_one();

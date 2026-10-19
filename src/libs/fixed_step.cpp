@@ -48,17 +48,17 @@ namespace fixed_step {
     } // namespace
 
     void audio_play(const std::string& name, bool music) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         g_voices[key(name, music)] = Voice{true, now_ms(), 0.0};
     }
 
     void audio_stop(const std::string& name, bool music) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         g_voices.erase(key(name, music));
     }
 
     void audio_seek(const std::string& name, bool music, float seconds) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         auto it = g_voices.find(key(name, music));
         if (it != g_voices.end()) {
             it->second.offset = std::max(0.0, (double)seconds);
@@ -67,17 +67,17 @@ namespace fixed_step {
     }
 
     void audio_set_loop(const std::string& name, bool loop) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         g_params[name].loop = loop;
     }
 
     void audio_set_pitch(const std::string& name, float pitch) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         g_params[name].pitch = pitch;
     }
 
     bool audio_playing(const std::string& name, bool music, float length) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         auto it = g_voices.find(key(name, music));
         if (it == g_voices.end() || !it->second.playing) {
             return false;
@@ -89,7 +89,7 @@ namespace fixed_step {
     }
 
     float audio_time(const std::string& name, bool music, float length) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::scoped_lock lock(g_mutex);
         auto it = g_voices.find(key(name, music));
         if (it == g_voices.end()) {
             return 0.0f;

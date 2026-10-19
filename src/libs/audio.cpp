@@ -641,11 +641,9 @@ bool AudioEngine::init_rtaudio_device(RtAudio::Api api, const char* label) {
         return false;
     }
 
-    channel_offsets.erase(
-        std::remove_if(channel_offsets.begin(), channel_offsets.end(), [](int off) { return off < 0; }),
-        channel_offsets.end());
-    std::sort(channel_offsets.begin(), channel_offsets.end());
-    channel_offsets.erase(std::unique(channel_offsets.begin(), channel_offsets.end()), channel_offsets.end());
+    std::erase_if(channel_offsets, [](int off) { return off < 0; });
+    std::ranges::sort(channel_offsets);
+    channel_offsets.erase(std::ranges::unique(channel_offsets).begin(), channel_offsets.end());
     if (channel_offsets.empty()) {
         channel_offsets.push_back(0);
     }
@@ -961,7 +959,7 @@ static float* adopt_decoded_pcm(std::vector<float>& samples, int channels, unsig
 void AudioEngine::retire(std::function<void()> free) {
     const uint64_t e = mix_epoch.load(std::memory_order_seq_cst);
     {
-        std::lock_guard<std::mutex> g(retire_lock);
+        std::scoped_lock g(retire_lock);
         retired.push_back(Retired{(e & 1) ? e + 1 : e, std::move(free)});
     }
     reclaim();
@@ -970,7 +968,7 @@ void AudioEngine::retire(std::function<void()> free) {
 void AudioEngine::reclaim(bool force) {
     std::vector<std::function<void()>> ready;
     {
-        std::lock_guard<std::mutex> g(retire_lock);
+        std::scoped_lock g(retire_lock);
         if (retired.empty()) {
             return;
         }
@@ -1093,7 +1091,7 @@ bool AudioEngine::stop_decode_job(sound& snd) {
         return false;
     }
     std::shared_ptr<SoundDecodeJob> job = std::move(snd.decode_job);
-    std::lock_guard<std::mutex> lock(job->state);
+    std::scoped_lock lock(job->state);
     job->cancel.store(true, std::memory_order_relaxed);
     if (job->decoder_exited) {
         return false; // nothing writes into the buffer any more: the caller frees it
@@ -1224,7 +1222,7 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
         finish(*dec);
         float* orphaned = nullptr;
         {
-            std::lock_guard<std::mutex> lock(job->state);
+            std::scoped_lock lock(job->state);
             job->decoder_exited = true;
             orphaned = job->orphaned;
         }
@@ -1782,7 +1780,7 @@ static void alloc_stream_ring(music& mus, double target_rate) {
 }
 
 std::shared_ptr<music> AudioEngine::find_music(const std::string& name) const {
-    std::lock_guard<std::mutex> g(music_lock);
+    std::scoped_lock g(music_lock);
     auto it = music_streams.find(name);
     return it == music_streams.end() ? nullptr : it->second;
 }
@@ -1803,7 +1801,7 @@ void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> 
     StreamList* old_list = nullptr;
     std::shared_ptr<music> replaced;
     {
-        std::lock_guard<std::mutex> g(music_lock);
+        std::scoped_lock g(music_lock);
         auto& entry = music_streams[name];
         replaced = std::move(entry); // only if another thread installed the same name meanwhile
         entry = mus;
@@ -1812,7 +1810,7 @@ void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> 
     if (mus->file_handle) {
         start_decoder();
         {
-            std::lock_guard<std::mutex> g(decoder_mutex);
+            std::scoped_lock g(decoder_mutex);
             decoder_streams.push_back(mus);
             if (replaced) {
                 std::erase(decoder_streams, replaced);
@@ -1834,7 +1832,7 @@ void AudioEngine::unload_music_stream(const std::string& name) {
     std::shared_ptr<music> old;
     StreamList* old_list = nullptr;
     {
-        std::lock_guard<std::mutex> g(music_lock);
+        std::scoped_lock g(music_lock);
         auto it = music_streams.find(name);
         if (it == music_streams.end()) {
             spdlog::warn("Music stream {} not found", name);
@@ -1846,7 +1844,7 @@ void AudioEngine::unload_music_stream(const std::string& name) {
     }
     old->is_playing.store(false, std::memory_order_relaxed);
     if (old->file_handle) {
-        std::lock_guard<std::mutex> g(decoder_mutex);
+        std::scoped_lock g(decoder_mutex);
         std::erase(decoder_streams, old);
     }
     // the decoder may still be inside a read of it: it holds its own reference until done
@@ -1860,7 +1858,7 @@ void AudioEngine::unload_music_stream(const std::string& name) {
 void AudioEngine::unload_all_music() {
     std::vector<std::string> names;
     {
-        std::lock_guard<std::mutex> g(music_lock);
+        std::scoped_lock g(music_lock);
         for (const auto& entry : music_streams) {
             names.push_back(entry.first);
         }
@@ -1874,7 +1872,7 @@ void AudioEngine::unload_all_music() {
 
 // ---- the stream decoder thread: file reads, decoding and resampling, off the callback ----
 void AudioEngine::start_decoder() {
-    std::lock_guard<std::mutex> g(decoder_mutex);
+    std::scoped_lock g(decoder_mutex);
     if (decoder_running) {
         return;
     }
@@ -1884,7 +1882,7 @@ void AudioEngine::start_decoder() {
 
 void AudioEngine::stop_decoder() {
     {
-        std::lock_guard<std::mutex> g(decoder_mutex);
+        std::scoped_lock g(decoder_mutex);
         if (!decoder_running) {
             return;
         }
@@ -1898,7 +1896,7 @@ void AudioEngine::stop_decoder() {
 
 void AudioEngine::kick_decoder() {
     {
-        std::lock_guard<std::mutex> g(decoder_mutex);
+        std::scoped_lock g(decoder_mutex);
         decoder_kick = true;
     }
     decoder_cv.notify_one();
@@ -2365,7 +2363,7 @@ void AudioEngine::dev_pause_device(bool pause) {
 void AudioEngine::dev_wait_streams() {
     std::vector<std::shared_ptr<music>> streams;
     {
-        std::lock_guard<std::mutex> g(music_lock);
+        std::scoped_lock g(music_lock);
         for (auto& [name, mus] : music_streams) {
             if (mus->file_handle) {
                 streams.push_back(mus);

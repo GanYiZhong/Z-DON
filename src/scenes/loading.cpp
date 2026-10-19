@@ -154,7 +154,7 @@ void LoadingScreen::load_song_hashes() {
                     if (cached != cache.end() && cached->second.ft_write == 0) {
                         from_cache = cached->second.mtime == stamp.mtime && cached->second.size == stamp.size;
                         if (from_cache && listing_usable) {
-                            std::lock_guard<std::mutex> lock(scores_mutex);
+                            std::scoped_lock lock(scores_mutex);
                             ft_backfill.emplace_back(path, listed.ft_write);
                         }
                     } else if (cached != cache.end() && !listing_usable) {
@@ -186,8 +186,8 @@ void LoadingScreen::load_song_hashes() {
                                 hashes[course] = parser.get_diff_hash(course);
                             }
                         }
-                        title = parser.metadata.title.count("en") ? parser.metadata.title.at("en") : "";
-                        subtitle = parser.metadata.subtitle.count("en") ? parser.metadata.subtitle.at("en") : "";
+                        title = parser.metadata.title.contains("en") ? parser.metadata.title.at("en") : "";
+                        subtitle = parser.metadata.subtitle.contains("en") ? parser.metadata.subtitle.at("en") : "";
                         stamp.hashes = hashes;
                         stamp.title = title;
                         stamp.subtitle = subtitle;
@@ -203,7 +203,7 @@ void LoadingScreen::load_song_hashes() {
                             }
                         }
                         meta = stamp;
-                        std::lock_guard<std::mutex> lock(scores_mutex);
+                        std::scoped_lock lock(scores_mutex);
                         fresh.emplace_back(path, std::move(stamp));
                     } catch (const std::exception& e) {
                         spdlog::error("Failed to parse song {}: {}", path, e.what());
@@ -212,7 +212,7 @@ void LoadingScreen::load_song_hashes() {
                 }
 
                 try {
-                    std::lock_guard<std::mutex> lock(scores_mutex);
+                    std::scoped_lock lock(scores_mutex);
                     // a cached file's songs row was written when it was parsed
                     if (!from_cache) {
                         scores_manager.add_song(hashes, title, subtitle);
@@ -281,7 +281,7 @@ void LoadingScreen::load_song_hashes() {
                 present.emplace(u8.begin(), u8.end());
             }
             for (const auto& [path, entry] : cache) {
-                if (!present.count(path)) {
+                if (!present.contains(path)) {
                     scores_manager.remove_song_cache(path);
                 }
             }

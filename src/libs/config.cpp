@@ -93,8 +93,8 @@ std::string getKeyString(int key_code) {
         std::map<int, std::string> m;
         for (const auto& [code, name] : kKeyNames) {
             std::string lower = name;
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            std::ranges::transform(lower, lower.begin(),
+                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             m.emplace(code, std::move(lower));
         }
         return m;
@@ -111,7 +111,7 @@ std::string getKeyString(int key_code) {
 static int getKeyCode(const std::string& key) {
     // Unambiguous escaped form for round-tripping key codes that have no
     // known string representation (see getKeyStringSafe).
-    if (key.rfind("code:", 0) == 0) {
+    if (key.starts_with("code:")) {
         std::string num = key.substr(5);
         try {
             std::size_t pos = 0;
@@ -132,8 +132,8 @@ static int getKeyCode(const std::string& key) {
 
     // Convert to uppercase for comparison
     std::string upper_key = key;
-    std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::ranges::transform(upper_key, upper_key.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
 
     // Map strings to raylib key codes
     for (const auto& [code, name] : kKeyNames) {
@@ -191,7 +191,7 @@ static std::vector<fs::path> parsePathArray(const toml::array& arr) {
     std::vector<fs::path> result;
     for (const auto& elem : arr) {
         if (elem.is_string()) {
-            result.push_back(fs::path(elem.as_string()->get()));
+            result.emplace_back(elem.as_string()->get());
         }
     }
     return result;
@@ -342,7 +342,7 @@ Config get_config() {
 
     // Access codes were 24 digits; the server now uses the last 20.
     for (std::string* code : {&config.network.access_code_1, &config.network.access_code_2}) {
-        if (code->size() == 24 && std::all_of(code->begin(), code->end(), ::isdigit)) {
+        if (code->size() == 24 && std::ranges::all_of(*code, ::isdigit)) {
             code->erase(0, 4);
         }
     }

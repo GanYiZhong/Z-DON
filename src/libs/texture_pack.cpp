@@ -100,7 +100,7 @@ namespace texture_pack {
         class Writer {
         public:
             void push(Job job) {
-                std::lock_guard<std::mutex> lock(mutex);
+                std::scoped_lock lock(mutex);
                 if (quit) {
                     return;
                 }
@@ -121,7 +121,7 @@ namespace texture_pack {
 
             ~Writer() {
                 {
-                    std::lock_guard<std::mutex> lock(mutex);
+                    std::scoped_lock lock(mutex);
                     quit = true;
                     queue.clear();
                 }
@@ -286,7 +286,7 @@ namespace texture_pack {
                     total += size;
                     files.push_back({it->path(), size, it->last_write_time(fec)});
                 }
-                std::sort(files.begin(), files.end(), [](const File& a, const File& b) { return a.time < b.time; });
+                std::ranges::sort(files, [](const File& a, const File& b) { return a.time < b.time; });
                 for (const File& f : files) {
                     if (total <= cache_limit_bytes()) {
                         break;
@@ -358,7 +358,7 @@ namespace texture_pack {
         : path(std::move(pack)), screen(std::move(screen_name)) {
         entries.reserve(planned.size());
         for (Planned& p : planned) {
-            if (by_key.count(p.key)) {
+            if (by_key.contains(p.key)) {
                 continue;
             }
             by_key.emplace(p.key, entries.size());
@@ -377,8 +377,7 @@ namespace texture_pack {
             return;
         }
         // entries the load did not plan: keep those that are still current (or can't be checked)
-        for (size_t i = 0; i < entries.size(); ++i) {
-            Entry& e = entries[i];
+        for (auto& e : entries) {
             if (e.planned) {
                 continue;
             }
@@ -396,8 +395,7 @@ namespace texture_pack {
                 hit_list.push_back(&e);
             }
         }
-        std::sort(hit_list.begin(), hit_list.end(),
-                  [](const Entry* a, const Entry* b) { return a->offset < b->offset; });
+        std::ranges::sort(hit_list, [](const Entry* a, const Entry* b) { return a->offset < b->offset; });
         for (Entry* e : hit_list) {
             if (spans.empty() || e->offset > spans.back()->end + kSpanGap) {
                 auto s = std::make_shared<Span>();
@@ -530,7 +528,7 @@ namespace texture_pack {
                 if (ok) {
                     done += k;
                 }
-                std::lock_guard<std::mutex> lock(mutex);
+                std::scoped_lock lock(mutex);
                 s.ready = done;
                 if (!ok) {
                     s.failed = true;
@@ -542,7 +540,7 @@ namespace texture_pack {
                 cv.notify_all();
             }
             if (!ok) {
-                std::lock_guard<std::mutex> lock(mutex);
+                std::scoped_lock lock(mutex);
                 s.failed = s.ready < n;
                 cv.notify_all();
             }
@@ -551,7 +549,7 @@ namespace texture_pack {
 
     Session::~Session() {
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::scoped_lock lock(mutex);
             stop = true;
         }
         if (reader.joinable()) {
@@ -594,7 +592,7 @@ namespace texture_pack {
     }
 
     void Session::reject(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::scoped_lock lock(mutex);
         auto it = by_key.find(key);
         if (it != by_key.end()) {
             entries[it->second].state = 3;
@@ -603,7 +601,7 @@ namespace texture_pack {
     }
 
     bool Session::wants(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::scoped_lock lock(mutex);
         auto it = by_key.find(key);
         if (it == by_key.end()) {
             return false;
@@ -613,7 +611,7 @@ namespace texture_pack {
     }
 
     void Session::put(const std::string& key, std::vector<uint8_t> bytes) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::scoped_lock lock(mutex);
         auto it = by_key.find(key);
         if (it == by_key.end()) {
             return;

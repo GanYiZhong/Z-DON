@@ -27,7 +27,7 @@ namespace {
     std::deque<fs::path> deferred_scans;
 
     void store_scan(const fs::path& path, FolderScan scan) {
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        std::scoped_lock lock(scan_cache_mutex);
         scan_cache[path] = std::move(scan);
     }
 
@@ -55,7 +55,7 @@ namespace {
                 continue;
             }
             const LibraryIndex::Dir* sub = index.child(e);
-            if (!sub || std::find(stack.begin(), stack.end(), sub) != stack.end()) {
+            if (!sub || std::ranges::find(stack, sub) != stack.end()) {
                 return false; // not listed by the walk, or a link back to a folder above
             }
             stack.push_back(sub);
@@ -100,7 +100,7 @@ namespace {
                     continue;
                 }
 
-                if (disqualified.count(diff)) {
+                if (disqualified.contains(diff)) {
                     continue;
                 }
 
@@ -185,7 +185,7 @@ namespace {
 } // namespace
 
 void FolderBox::invalidate_scan_cache() {
-    std::lock_guard<std::mutex> lock(scan_cache_mutex);
+    std::scoped_lock lock(scan_cache_mutex);
     scan_cache.clear();
 }
 
@@ -203,7 +203,7 @@ void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_
     };
     std::map<fs::path, FolderScan> cached;
     {
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        std::scoped_lock lock(scan_cache_mutex);
         cached = scan_cache;
     }
     out << "[cached folder scans]\n";
@@ -214,7 +214,7 @@ void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_
     for (const fs::path& path : scan_paths) {
         std::vector<std::string> visited;
         scan_folder_now(path, &visited);
-        std::sort(visited.begin(), visited.end());
+        std::ranges::sort(visited);
         uint64_t fnv = 1469598103934665603ull;
         for (const std::string& v : visited) {
             for (unsigned char c : v + '\n') {
@@ -222,7 +222,7 @@ void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_
             }
         }
         out << "visited=" << visited.size() << " fnv=" << fnv << ' ';
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        std::scoped_lock lock(scan_cache_mutex);
         write(path, scan_cache[path]);
     }
 }
@@ -235,7 +235,7 @@ FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def) : BaseBox(path
 
 void FolderBox::refresh_scores() {
     {
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        std::scoped_lock lock(scan_cache_mutex);
         auto it = scan_cache.find(path);
         if (it != scan_cache.end()) {
             crown = it->second.crown;
@@ -273,7 +273,7 @@ void FolderBox::refresh_scores() {
 #endif
 
     scan_pending = true;
-    std::lock_guard<std::mutex> lock(deferred_mutex);
+    std::scoped_lock lock(deferred_mutex);
     deferred_scans.push_back(path);
 }
 
@@ -284,7 +284,7 @@ void FolderBox::run_deferred_scans(std::atomic<bool>& abort_flag) {
         }
         fs::path next;
         {
-            std::lock_guard<std::mutex> lock(deferred_mutex);
+            std::scoped_lock lock(deferred_mutex);
             if (deferred_scans.empty()) {
                 return;
             }
@@ -292,8 +292,8 @@ void FolderBox::run_deferred_scans(std::atomic<bool>& abort_flag) {
             deferred_scans.pop_front();
         }
         {
-            std::lock_guard<std::mutex> lock(scan_cache_mutex);
-            if (scan_cache.count(next)) {
+            std::scoped_lock lock(scan_cache_mutex);
+            if (scan_cache.contains(next)) {
                 continue;
             }
         }
@@ -327,7 +327,7 @@ void FolderBox::load_text() {
 
 void FolderBox::update(double current_time) {
     if (scan_pending) {
-        std::lock_guard<std::mutex> lock(scan_cache_mutex);
+        std::scoped_lock lock(scan_cache_mutex);
         auto it = scan_cache.find(path);
         if (it != scan_cache.end()) {
             crown = it->second.crown;

@@ -69,7 +69,7 @@ void load_skin() {
         if (auto family = font_family.find(lang); family != font_family.end()) {
             font_candidates.push_back("Fonts/font_" + family->second + ".ttf");
         }
-        font_candidates.push_back("Fonts/font.ttf");
+        font_candidates.emplace_back("Fonts/font.ttf");
         fs::path font_path;
         for (const std::string& candidate : font_candidates) {
             font_path = resolve_skin_path(candidate);

@@ -72,11 +72,7 @@ static bool resolve_safe_extract_path(const fs::path& base_dir, const fs::path& 
         return false;
     }
     const fs::path parent_rel = canonical_parent.lexically_relative(canonical_base_dir);
-    if (parent_rel.empty() || *parent_rel.begin() == "..") {
-        return false;
-    }
-
-    return true;
+    return !(parent_rel.empty() || *parent_rel.begin() == "..");
 }
 
 // Extracts every file entry of `zip` under `base_dir`, rejecting entries that escape it. With a non-null
@@ -98,7 +94,7 @@ static bool extract_zip_entries(mz_zip_archive& zip, const fs::path& base_dir, c
 
         std::string name = stat.m_filename;
         if (strip_prefix) {
-            if (!strip_prefix->empty() && name.rfind(*strip_prefix, 0) == 0) {
+            if (!strip_prefix->empty() && name.starts_with(*strip_prefix)) {
                 name = name.substr(strip_prefix->size());
             }
             if (name.empty()) {
@@ -220,8 +216,8 @@ std::vector<std::string> list_available_skins() {
             names.push_back(e.path().stem().string());
         }
     }
-    std::sort(names.begin(), names.end());
-    names.erase(std::unique(names.begin(), names.end()), names.end());
+    std::ranges::sort(names);
+    names.erase(std::ranges::unique(names).begin(), names.end());
     return names;
 }
 
@@ -537,7 +533,7 @@ std::vector<SongListEntry> read_song_list(const fs::path& path) {
             fields.push_back(field);
         }
         if (!line.empty() && line.back() == '|') {
-            fields.push_back("");
+            fields.emplace_back("");
         }
 
         if (fields.size() < 3) {
@@ -617,7 +613,7 @@ std::vector<fs::path> resolve_skin_chain(const fs::path& graphics_path) {
         if (parent == chain.back()) {
             break;
         }
-        if (std::find(chain.begin(), chain.end(), parent) != chain.end()) {
+        if (std::ranges::contains(chain, parent)) {
             spdlog::warn("resolve_skin_chain: parent cycle at '{}'", parent.string());
             break;
         }
@@ -628,13 +624,13 @@ std::vector<fs::path> resolve_skin_chain(const fs::path& graphics_path) {
 
 void set_skin_graphics_path(const fs::path& graphics_path) {
     std::vector<fs::path> chain = resolve_skin_chain(graphics_path);
-    std::lock_guard<std::mutex> lock(g_skin_path_mutex);
+    std::scoped_lock lock(g_skin_path_mutex);
     g_skin_graphics_path = graphics_path;
     g_skin_chain = chain;
 }
 
 std::vector<fs::path> skin_ancestor_roots() {
-    std::lock_guard<std::mutex> lock(g_skin_path_mutex);
+    std::scoped_lock lock(g_skin_path_mutex);
     std::vector<fs::path> roots;
     for (size_t i = 1; i < g_skin_chain.size(); i++) {
         roots.push_back(skin_root(g_skin_chain[i]));
@@ -646,7 +642,7 @@ fs::path resolve_skin_path(const fs::path& relative_path) {
     fs::path child_root;
     std::vector<fs::path> chain;
     {
-        std::lock_guard<std::mutex> lock(g_skin_path_mutex);
+        std::scoped_lock lock(g_skin_path_mutex);
         child_root = skin_root(g_skin_graphics_path);
         chain = g_skin_chain;
     }
