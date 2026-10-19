@@ -15,6 +15,7 @@
 #include <string_view>
 #include <utility>
 
+#include "../fixed_step.h"
 #include "../md5.h"
 #include "../profiler.h"
 #include "../text.h"
@@ -1371,8 +1372,7 @@ void modifier_random(NoteList& notes, int value) {
     int percentage = (notes.notes.size() / 5) * value;
     percentage = std::min(percentage, static_cast<int>(notes.notes.size()));
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen(fixed_step::seed());
 
     std::vector<int> indices(notes.notes.size());
     std::iota(indices.begin(), indices.end(), 0);

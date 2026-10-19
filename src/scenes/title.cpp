@@ -4,6 +4,7 @@
 
 #include "../libs/config.h"
 #include "../libs/filesystem.h"
+#include "../libs/fixed_step.h"
 #include "../libs/global_data.h"
 #include "../libs/input.h"
 #include "../libs/network.h"
@@ -78,7 +79,7 @@ void TitleScreen::load_videos() {
 
 static void start_random_video(const std::vector<fs::path>& list, std::optional<VideoPlayer>& video,
                                double current_ms) {
-    std::mt19937 rng(std::random_device{}());
+    std::mt19937 rng(fixed_step::seed());
     std::uniform_int_distribution<size_t> dist(0, list.size() - 1);
     video.emplace(list[dist(rng)]);
     video->set_volume(global_data.config->volume.attract_mode);

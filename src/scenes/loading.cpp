@@ -4,6 +4,7 @@
 #include <unordered_set>
 
 #include "../libs/filesystem.h"
+#include "../libs/fixed_step.h"
 #include "../libs/global_data.h"
 #include "../libs/input.h"
 #include "../libs/library_index.h"
@@ -48,6 +49,7 @@ void LoadingScreen::on_screen_start() {
     load_song_hashes();
 #else
     loading_thread = std::thread(&LoadingScreen::load_song_hashes, this);
+    fixed_step::join(loading_thread);
 #endif
 }
 

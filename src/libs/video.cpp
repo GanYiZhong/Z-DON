@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 
 #include "audio.h"
+#include "fixed_step.h"
 #include "profiler.h"
 #include "texture.h"
 
@@ -221,19 +222,27 @@ void VideoPlayer::update(double current_ms) {
     std::optional<DecodedFrame> latest;
     bool drained_at_eof;
     bool queue_empty;
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        while (!frame_queue.empty() && frame_queue.front().index <= target_frame) {
-            if (latest.has_value()) {
-                spare_buffers.push_back(std::move(latest->bytes));
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            while (!frame_queue.empty() && frame_queue.front().index <= target_frame) {
+                if (latest.has_value()) {
+                    spare_buffers.push_back(std::move(latest->bytes));
+                }
+                latest = std::move(frame_queue.front());
+                frame_queue.pop_front();
             }
-            latest = std::move(frame_queue.front());
-            frame_queue.pop_front();
+            queue_empty = frame_queue.empty();
+            drained_at_eof = decode_eof && queue_empty;
         }
-        queue_empty = frame_queue.empty();
-        drained_at_eof = decode_eof && queue_empty;
+        queue_cv.notify_one();
+        // YATAIDON_FIXED_STEP_MS: wait for the decoder to reach the frame this clock shows
+        const int have = latest.has_value() ? latest->index : frame_index - 1;
+        if (!fixed_step::on() || drained_at_eof || !queue_empty || target_frame == INT_MAX || have >= target_frame) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    queue_cv.notify_one();
 
     if (latest.has_value()) {
         upload_frame(latest.value());

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "../libs/fixed_step.h"
 #include "../libs/input.h"
 #include "../libs/network.h"
 #include "../objects/global/practice_timer.h"
@@ -36,6 +37,7 @@ void SongSelectScreen::on_screen_start() {
     if (!global_data.config->paths.tja_path.empty()) {
         stats_future = std::async(std::launch::async,
                                   [this]() { return navigator.get_statistics(global_data.config->paths.tja_path[0]); });
+        fixed_step::wait(stats_future);
     }
 #endif
     navigator.refresh_scores();

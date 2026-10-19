@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "../../../libs/audio.h"
+#include "../../../libs/fixed_step.h"
 #include "../../../libs/text.h"
 #include "navigator.h"
 
@@ -166,6 +167,7 @@ void SongBox::update(double current_time) {
             state->ok = audio.prepare_nus3bank_pcm(wave, state->pcm, true);
             state->done.store(true, std::memory_order_release);
         });
+        fixed_step::join(preview_thread);
     }
 
     if (is_stream && yellow_box_active && box_opened && !music_playing) {

@@ -4,6 +4,7 @@
 #include "../../libs/input.h"
 #include "../../libs/scores.h"
 #include "../../libs/text.h"
+#include "../../libs/time.h"
 #include "song_select_script.h"
 
 void SongSelectPlayer::try_lua_selector(bool is_half, float fade_in, int pass) {
@@ -279,7 +280,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         BaseBox* item = navigator.get_current_item();
         if (navigator.is_directory(item) && item->collection == COLLECTIONS[5]) {
             search_guard = true;
-            search_guard_until_ms = ray::GetTime() * 1000.0 + 150.0;
+            search_guard_until_ms = get_current_ms() + 150.0;
             return SongSelectState::SEARCHING;
         }
         return select_song();
@@ -370,7 +371,7 @@ std::optional<std::string> SongSelectPlayer::handle_input_search() {
         // query. Swallow typed input for a short grace period and until every don key is up.
         while (ray::GetCharPressed() > 0) {
         }
-        if (ray::GetTime() * 1000.0 >= search_guard_until_ms && !any_don_key_down(player_num)) {
+        if (get_current_ms() >= search_guard_until_ms && !any_don_key_down(player_num)) {
             search_guard = false;
         }
         return std::nullopt;

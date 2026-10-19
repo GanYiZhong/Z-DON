@@ -3,6 +3,7 @@
 #include <climits>
 #include <tuple>
 
+#include "../../libs/fixed_step.h"
 #include "../../libs/text.h"
 #ifdef SUPPORT_FUMEN
 #include "../../libs/optional/gen3.h"
@@ -701,6 +702,9 @@ void DanNavigator::begin_init(const std::vector<fs::path>& song_paths) {
         }
         scan_done.store(true);
     });
+    while (fixed_step::on() && !scan_done.load()) { // poll_init joins it
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 bool DanNavigator::poll_init() {

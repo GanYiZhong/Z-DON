@@ -6,6 +6,7 @@
 #include "libs/audio.h"
 #include "libs/camera_utils.h"
 #include "libs/filesystem.h"
+#include "libs/fixed_step.h"
 #include "libs/global_data.h"
 #include "libs/input.h"
 #include "libs/logging.h"
@@ -348,6 +349,25 @@ void reload_skin_screens() {
     populate_screens(g_loop->screens, g_loop->current_screen);
 }
 
+// Index of the frame being rendered (0 = the first). YATAIDON_FIXED_STEP_MS (libs/fixed_step.h):
+// the frame's clock is start + index * step, and YATAIDON_JUMP_SCREEN / YATAIDON_FAKE_KEYS /
+// YATAIDON_DUMP_FRAMES count frames.
+static long long g_frame_index = -1;
+static void dev_frame_begin() {
+    g_frame_index++;
+    if (fixed_step::on()) {
+        fixed_step::begin_frame();
+    }
+}
+// the dev hooks' clock: frames in fixed-step mode, else ms since the first frame
+static double dev_hook_clock() {
+    static const auto start = std::chrono::steady_clock::now();
+    if (fixed_step::on()) {
+        return (double)g_frame_index;
+    }
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
 static bool dump_screen_tick();         // dev hook, defined below
 static bool g_dump_screen_done = false; // the dump hook's last shot is taken: leave the main loop
 
@@ -382,6 +402,7 @@ static void run_frame() {
     PROFILE_FRAME();
     PROFILE_SCOPE();
     LoopState& L = *g_loop;
+    dev_frame_begin(); // frame index; YATAIDON_FIXED_STEP_MS: this frame's clock
     const auto frame_start = std::chrono::steady_clock::now();
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
@@ -453,7 +474,7 @@ static void run_frame() {
     // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title>;<ms>" jumps there once,
     // <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
     {
-        static const auto jump_start = std::chrono::steady_clock::now();
+        const double since = dev_hook_clock(); // frames with YATAIDON_FIXED_STEP_MS
         static bool jump_done = false;
         static const char* jump = std::getenv("YATAIDON_JUMP_SCREEN");
         if (!jump_done && jump && *jump) {
@@ -461,8 +482,7 @@ static void run_frame() {
             size_t semi = j.find(';');
             double at = semi == std::string::npos ? 3000.0 : std::atof(j.substr(semi + 1).c_str());
             std::string name = j.substr(0, semi);
-            if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - jump_start).count() >=
-                at) {
+            if (since >= at) {
                 jump_done = true;
                 if (name == "entry") {
                     debug_menu.requested_screen = Screens::ENTRY;
@@ -500,11 +520,9 @@ static void run_frame() {
                 pos = comma + 1;
             }
         }
-        const double since =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - jump_start).count();
         for (auto it = fake_keys.begin(); it != fake_keys.end();) {
             if (since >= it->first) {
-                spdlog::info("[devkeys] key {} at {:.0f} ms", it->second, since);
+                spdlog::info("[devkeys] key {} at {:.0f}", it->second, since);
                 dev_inject_key(it->second);
                 it = fake_keys.erase(it);
             } else {
@@ -620,22 +638,29 @@ static void run_frame() {
 // Dev hook: YATAIDON_DUMP_SCREEN="<outdir>;<t1,t2,...>" (ms after the first frame) runs the game in a
 // hidden window, saves the frame at each listed time to <outdir>/<n>_<ms>.png and exits after the last.
 // Combine with the normal CLI ("<song.tja> <difficulty> --auto") for the game and result screens.
+// Dev hook: YATAIDON_DUMP_FRAMES="<outdir>;<f1,f2,...>" the same by frame index (0 = the first frame),
+// saved as <outdir>/<f>.png; with YATAIDON_FIXED_STEP_MS two runs of an exe give the same frames.
 static struct {
     bool active = false;
+    bool by_frame = false;
     std::string outdir;
     std::vector<double> times;
     size_t next = 0;
     double t0 = -1;
 } g_dump_screen;
 static void dump_screen_init() {
-    const char* spec = std::getenv("YATAIDON_DUMP_SCREEN");
+    const char* spec = std::getenv("YATAIDON_DUMP_FRAMES");
+    g_dump_screen.by_frame = spec && *spec;
+    if (!g_dump_screen.by_frame) {
+        spec = std::getenv("YATAIDON_DUMP_SCREEN");
+    }
     if (!spec || !*spec) {
         return;
     }
     std::string sp(spec);
     size_t semi = sp.find(';');
     if (semi == std::string::npos) {
-        spdlog::error("YATAIDON_DUMP_SCREEN: outdir;t1,t2,...");
+        spdlog::error("YATAIDON_DUMP_SCREEN / YATAIDON_DUMP_FRAMES: outdir;t1,t2,...");
         return;
     }
     g_dump_screen.outdir = sp.substr(0, semi);
@@ -659,14 +684,18 @@ static bool dump_screen_tick() {
         return false;
     }
     static const auto start = std::chrono::steady_clock::now();
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    const double ms = g_dump_screen.by_frame
+                          ? (double)g_frame_index
+                          : std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     // grab the frames in memory and write them after the last one: exporting a PNG takes several
     // frames and would stall the game (auto play hits once per frame)
     static std::vector<std::pair<std::string, ray::Image>> shots;
     bool grabbed = false;
     while (g_dump_screen.next < g_dump_screen.times.size() && ms >= g_dump_screen.times[g_dump_screen.next]) {
-        const std::string name = std::to_string(g_dump_screen.next) + "_" +
-                                 std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
+        const std::string name = g_dump_screen.by_frame
+                                     ? std::to_string((long long)g_dump_screen.times[g_dump_screen.next]) + ".png"
+                                     : std::to_string(g_dump_screen.next) + "_" +
+                                           std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
         if (!grabbed) {
             shots.emplace_back(name, ray::LoadImageFromScreen());
             grabbed = true;
@@ -763,7 +792,7 @@ int main(int argc, char* argv[]) {
     }
     init_scores_manager(global_data.config->general.score_method == ScoreMethod::GEN3);
     unsigned int flags = ray::FLAG_WINDOW_RESIZABLE;
-    if (global_data.config->video.vsync) {
+    if (global_data.config->video.vsync && !fixed_step::on()) {
         flags |= ray::FLAG_VSYNC_HINT;
         spdlog::info("VSync enabled");
     }
@@ -821,7 +850,8 @@ int main(int argc, char* argv[]) {
 #ifdef PLATFORM_ANDROID
     network.check_and_install_android_update();
 #endif
-    if (global_data.config->general.skin_updater) {
+    // YATAIDON_FIXED_STEP_MS: no skin update (a network job whose progress text shows on screen)
+    if (global_data.config->general.skin_updater && !fixed_step::on()) {
         skin_updater.start();
     }
 
@@ -839,9 +869,10 @@ int main(int argc, char* argv[]) {
 
     L.current_screen = initial_screen;
     global_data.current_screen = screens_to_string(initial_screen);
-    L.target_duration = (target_fps > 0.0) ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                                 std::chrono::duration<double>(1.0 / target_fps))
-                                           : std::chrono::steady_clock::duration::zero();
+    L.target_duration = (target_fps > 0.0 && !fixed_step::on())
+                            ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(1.0 / target_fps))
+                            : std::chrono::steady_clock::duration::zero();
 
     vblank_pacing::init(global_data.config->video.vsync, target_fps);
     populate_screens(L.screens);
