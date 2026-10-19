@@ -298,6 +298,9 @@ void ScriptManager::index_scripts(const fs::path& script_path) {
 void ScriptManager::init(fs::path script_path) {
     lua = std::make_unique<sol::state>();
     lua->open_libraries(sol::lib::base, sol::lib::package, sol::lib::string, sol::lib::math, sol::lib::table);
+    // generational GC: skins build many short-lived tables per frame (draw_texture's argument
+    // tables, box wrappers), which a minor collection frees without walking the whole heap
+    lua_gc(lua->lua_state(), LUA_GCGEN, 0, 0);
 #ifdef TRACY_ENABLE
     tracy::LuaRegister(lua->lua_state()); // tracy.ZoneBeginN / ZoneEnd / ZoneText / Message for skins
 #endif
