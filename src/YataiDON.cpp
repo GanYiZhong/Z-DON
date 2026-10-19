@@ -781,6 +781,11 @@ int main(int argc, char* argv[]) {
     ray::SetConfigFlags(flags);
     ray::SetTraceLogLevel(ray::LOG_ERROR);
     setup_logging(global_data.config->general.log_level);
+    // The library walk only reads the disk: it runs while the window opens and the skin loads, and the
+    // loading screen picks it up (not with a song on the command line, which skips that screen).
+    if (initial_screen == Screens::LOADING && !(dump_chara_spec && *dump_chara_spec)) {
+        LoadingScreen::start_library_walk_early();
+    }
 
     ray::InitWindow(1280, 720, "YataiDON");
     // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way.

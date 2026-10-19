@@ -47,6 +47,10 @@ private:
 public:
     LoadingScreen() : Screen("loading") {}
 
+    // Starts the library walk (get_song_files) on its own thread so it runs while main loads the skin;
+    // the first loading screen takes its result instead of walking again. Files only: no DB, no GL.
+    static void start_library_walk_early();
+
     ~LoadingScreen() override {
         if (loading_thread.joinable()) {
             loading_thread.join();

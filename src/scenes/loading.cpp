@@ -1,5 +1,6 @@
 #include "loading.h"
 
+#include <future>
 #include <unordered_set>
 
 #include "../libs/filesystem.h"
@@ -12,6 +13,32 @@
 #include "../libs/song_parser.h"
 #include "../objects/song_select/file_navigator/navigator.h"
 #include "../objects/song_select/song_select_script.h"
+
+namespace {
+    struct LibraryWalk {
+        std::vector<fs::path> songs;
+        std::vector<SongFileStamp> stamps;
+        std::shared_ptr<const LibraryIndex> index;
+    };
+    // Started by main, taken by the first load_song_hashes. Never freed if no loading screen runs: the
+    // process exits with it.
+    std::future<LibraryWalk>* g_early_walk = nullptr;
+
+    LibraryWalk walk_library(const std::vector<fs::path>& roots) {
+        LibraryWalk w;
+        w.songs = get_song_files(roots, &w.stamps, &w.index);
+        return w;
+    }
+} // namespace
+
+void LoadingScreen::start_library_walk_early() {
+#ifndef __EMSCRIPTEN__
+    if (!g_early_walk) {
+        g_early_walk = new std::future<LibraryWalk>(
+            std::async(std::launch::async, walk_library, global_data.config->paths.tja_path));
+    }
+#endif
+}
 
 void LoadingScreen::on_screen_start() {
     init_visuals();
@@ -66,7 +93,15 @@ void LoadingScreen::load_song_hashes() {
     try {
         // Listed here, not in on_screen_start: the screen keeps drawing while a large library is walked
         std::shared_ptr<const LibraryIndex> index;
-        songs = get_song_files(global_data.config->paths.tja_path, &song_stamps, &index);
+        if (g_early_walk) { // walked while main loaded the skin
+            std::unique_ptr<std::future<LibraryWalk>> early(std::exchange(g_early_walk, nullptr));
+            LibraryWalk w = early->get();
+            songs = std::move(w.songs);
+            song_stamps = std::move(w.stamps);
+            index = std::move(w.index);
+        } else {
+            songs = get_song_files(global_data.config->paths.tja_path, &song_stamps, &index);
+        }
         // the song select answers its folder questions from this walk (nullptr: from the disk)
         publish_library_index(std::move(index));
         std::atomic<int> songs_loaded = 0;
