@@ -398,11 +398,61 @@ static void frame_stats_add(std::chrono::steady_clock::time_point start) {
     }
 }
 
+// Dev stat YATAIDON_DRAW_STATS=1: GL work per frame from rlgl's counters (cmake/patches/raylib-lazy-blend.patch),
+// logged every 2 s: batch flushes with vertices, draw calls, blend switches, vertex-array (3D mesh) draws.
+// ZDON_EAGER_BLEND=1 switches blend modes at once like stock raylib (for comparison).
+static bool draw_stats_on() {
+    static const bool on = [] {
+        const char* e = std::getenv("ZDON_EAGER_BLEND");
+        if (e && *e == '1') {
+            rlSetBlendModeLazy(false);
+        }
+        const char* v = std::getenv("YATAIDON_DRAW_STATS");
+        return v && *v == '1';
+    }();
+    return on;
+}
+
+static void draw_stats_add(const std::string& screen_name) {
+    if (!draw_stats_on()) {
+        return;
+    }
+    static unsigned int last[4] = {};
+    static unsigned long long sum[4] = {};
+    static unsigned int peak[4] = {};
+    static unsigned int frames = 0;
+    static auto window = std::chrono::steady_clock::now();
+    unsigned int now_stats[4];
+    rlGetDrawStats(now_stats);
+    for (int i = 0; i < 4; i++) {
+        const unsigned int d = now_stats[i] - last[i];
+        last[i] = now_stats[i];
+        sum[i] += d;
+        peak[i] = std::max(peak[i], d);
+    }
+    frames++;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window >= std::chrono::seconds(2)) {
+        const double n = frames;
+        spdlog::info("[draw] {} {} frames per frame avg/max: flushes {:.1f}/{} draw calls {:.1f}/{} blend switches "
+                     "{:.1f}/{} mesh draws {:.1f}/{}",
+                     screen_name, frames, sum[0] / n, peak[0], sum[1] / n, peak[1], sum[2] / n, peak[2], sum[3] / n,
+                     peak[3]);
+        for (int i = 0; i < 4; i++) {
+            sum[i] = 0;
+            peak[i] = 0;
+        }
+        frames = 0;
+        window = now;
+    }
+}
+
 static void run_frame() {
     PROFILE_FRAME();
     PROFILE_SCOPE();
     LoopState& L = *g_loop;
     dev_frame_begin(); // frame index; YATAIDON_FIXED_STEP_MS: this frame's clock
+    draw_stats_on();   // reads ZDON_EAGER_BLEND before the first draw
     const auto frame_start = std::chrono::steady_clock::now();
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
@@ -587,6 +637,7 @@ static void run_frame() {
     {
         PROFILE_SCOPE_N("present");
         ray::EndDrawing();
+        draw_stats_add(screen->screen_name);
         if (dump_done) {
             g_dump_screen_done = true; // shut down as on a normal quit (std::exit here crashed
                                        // in static destructors with the worker threads still running)

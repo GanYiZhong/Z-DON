@@ -79,6 +79,12 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(raylib)
 FetchContent_MakeAvailable(raylib)
+# Z-DON: lazy blend mode switches in rlgl (End/BeginBlendMode around consecutive blended sprites no
+# longer flush the batch) + draw counters (rlGetDrawStats). Applied at configure time, idempotent.
+execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-lazy-blend.patch
+                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+# three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
+target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
 if(IOS)
   target_include_directories(raylib PUBLIC "${CMAKE_SOURCE_DIR}/ios/compat")
   target_link_libraries(raylib PUBLIC "-framework OpenGLES")
