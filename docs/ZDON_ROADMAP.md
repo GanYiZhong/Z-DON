@@ -47,6 +47,12 @@
 - `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`、`YATAIDON_FRAME_STATS=1`。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 
+## wip-all（YataiDON 本機分支）稽核，2026-10-19
+- wip-all HEAD 對它最後合併的上游 479816a 只剩 24 個檔案的差異（+1227/−72），逐項對照 Z-DON；另外 172 個本機 commit 全部分類。
+- 低吻合（<70%）的 123 個：84 個已在上游或 Z-DON（形式不同）、25 個在 wip-all 內被撤回/取代、11 個是撤回的 skin 文字標籤、**skin 用得到但 Z-DON 缺的 = 0**。
+- 補搬 dbc9e69：skin 更新器在 checksums 清單過期時照樣寫入完整下載（8ac153d，用假伺服器驗證）。不搬：YATAIDON_SYNC_LOG（開發用）。
+- 完整分類表在 scratchpad arch/impl_wip_port.md。
+
 ## 合併上游 bde4201 後的已知畫面差異（都是上游自己的改動）
 - 練習模式：f2e1174 起會播前奏（以前第一幀就跳過約 1 s 前奏）。純上游 f2e1174 前/後與 Z-DON 合併前/後各自 19/19 相同。
 - 練習模式按空白鍵不會暫停（上游就沒有 pause_key 處理，只有 2P 咚/咔），未改。
