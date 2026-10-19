@@ -132,6 +132,41 @@ void AudioEngine::run_selftest(const std::string& spec) {
     play_sound("st_missing", VolumePreset::HITSOUND);
     state("unloaded");
 
+    // Z-DON polyphony (ZDON_HIT_POLYPHONY; 1 = each play restarts the sound): one play mixed whole as the
+    // reference, then 8 plays 25 ms apart (a ring of 6 voices takes over the 2 oldest), then stop and
+    // unload with several voices sounding. "poly" lines log each play's start frame.
+    load_sound(sounds_path / "don.wav", "st_poly");
+    make_polyphonic(sound_id("st_poly"));
+    auto poly = [&](const char* step) {
+        log << "poly " << step << " frame=" << out.size() / 2 << " playing=" << is_sound_playing("st_poly")
+            << " count=" << sound_play_count("st_poly") << " t=" << get_sound_time_played("st_poly") << "\n";
+    };
+    poly("single");
+    play_sound("st_poly", VolumePreset::HITSOUND);
+    mix_for(1.0, 231);
+    for (int i = 0; i < 8; i++) {
+        poly("play");
+        play_sound("st_poly", VolumePreset::HITSOUND);
+        mix_for(0.025, 231);
+    }
+    mix_for(1.0, 231);
+    poly("overlap end");
+    for (int i = 0; i < 3; i++) {
+        play_sound("st_poly", VolumePreset::HITSOUND);
+        mix_for(0.03, 231);
+    }
+    poly("before stop");
+    stop_sound("st_poly");
+    mix_for(0.1, 231);
+    poly("stopped");
+    for (int i = 0; i < 3; i++) {
+        play_sound("st_poly", VolumePreset::HITSOUND);
+        mix_for(0.03, 231);
+    }
+    unload_sound("st_poly");
+    mix_for(0.1, 231);
+    poly("unloaded");
+
     unload_sound("st_don");
     unload_sound("st_long");
     unload_music_stream("st_stream");

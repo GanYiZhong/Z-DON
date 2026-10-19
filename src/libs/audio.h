@@ -108,6 +108,12 @@ struct SoundSlot {
     std::atomic<float> pitch{1.0f};
     std::atomic<uint64_t> play_count{0};
     bool in_active = false; // mixer thread only: listed in the active voices
+    // Z-DON polyphony (make_polyphonic): the slot of the name keeps the parameters and plays through a
+    // ring of `voices` extra slots (ids voice_base...), each a voice reading the name's PCM.
+    std::atomic<SoundId> owner{kNoSound}; // a ring voice: the slot whose PCM it plays
+    std::atomic<uint32_t> voices{0};      // the name's slot: ring size (0 = not polyphonic)
+    SoundId voice_base = kNoSound;
+    std::atomic<uint32_t> next_voice{0}; // the ring's next voice = the oldest one
 };
 
 // A music stream. File-backed streams are decoded on the engine's stream decoder thread into a
@@ -193,6 +199,9 @@ public:
     SoundId sound_id(const std::string& name);
     void play_sound(const std::string& name, VolumePreset volume_preset = VolumePreset::NONE, float gain = 1.0f);
     void play_sound(SoundId id, VolumePreset volume_preset = VolumePreset::NONE, float gain = 1.0f);
+    // Z-DON: successive plays of id overlap instead of restarting it, up to ZDON_HIT_POLYPHONY voices
+    // (default 6, 1 = restart as before), the oldest one taken over by a new play. Idempotent.
+    void make_polyphonic(SoundId id);
     bool has_sound(const std::string& name);
     void stop_sound(const std::string& name);
     void set_sound_loop(const std::string& name, bool loop);
@@ -279,6 +288,20 @@ private:
     std::atomic<uint32_t> slot_count{0};
     SoundSlot* slot_at(SoundId id) const {
         return &slot_chunks[id / kSlotChunk].load(std::memory_order_acquire)[id % kSlotChunk];
+    }
+    SoundId alloc_slot_locked(); // under names_lock (unique); kNoSound when full
+    // the voice of a polyphonic slot (voices > 0) that the last play started
+    SoundSlot& latest_voice(SoundSlot& s) const {
+        const uint32_t n = s.voices.load(std::memory_order_acquire);
+        return n ? *slot_at(s.voice_base + (s.next_voice.load(std::memory_order_relaxed) + n - 1) % n) : s;
+    }
+    template<class Fn>
+    void for_each_voice(SoundSlot& s, Fn&& fn) const { // the slot itself and its ring's voices
+        fn(s);
+        const uint32_t n = s.voices.load(std::memory_order_acquire);
+        for (uint32_t k = 0; k < n; k++) {
+            fn(*slot_at(s.voice_base + k));
+        }
     }
     SoundId find_sound(const std::string& name) const; // kNoSound if the name was never used
     template<class Fn>

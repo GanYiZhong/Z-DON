@@ -25,6 +25,8 @@ Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_n
     kat_hitsound = "hitsound_kat_" + std::to_string((int)player_num) + "p";
     don_hitsound_id = audio.sound_id(don_hitsound);
     kat_hitsound_id = audio.sound_id(kat_hitsound);
+    audio.make_polyphonic(don_hitsound_id); // Z-DON: hits ring out over each other (ZDON_HIT_POLYPHONY)
+    audio.make_polyphonic(kat_hitsound_id);
     balloon_pop_id = audio.sound_id("balloon_pop");
     kusudama_pop_id = audio.sound_id("kusudama_pop");
 

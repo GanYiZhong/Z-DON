@@ -396,8 +396,10 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
 
     for (size_t v = 0; v < active_voices.size();) {
         SoundSlot& snd = *slot_at(active_voices[v]);
+        const SoundId owner = snd.owner.load(std::memory_order_acquire);
+        const SoundSlot& src = owner == kNoSound ? snd : *slot_at(owner); // a ring voice plays its owner's PCM
         const sound* pcm =
-            snd.is_playing.load(std::memory_order_acquire) ? snd.pcm.load(std::memory_order_seq_cst) : nullptr;
+            snd.is_playing.load(std::memory_order_acquire) ? src.pcm.load(std::memory_order_seq_cst) : nullptr;
         if (!pcm) {
             snd.is_playing.store(false, std::memory_order_relaxed); // unloaded while playing
             snd.in_active = false;
@@ -461,7 +463,7 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
         frame = (unsigned int)frame_f;
 
         // a store_sound/unload that replaced the PCM meanwhile has reset the position already
-        if (snd.pcm.load(std::memory_order_relaxed) == pcm) {
+        if (src.pcm.load(std::memory_order_relaxed) == pcm) {
             snd.frame_frac.store((float)(frame_f - (double)frame), std::memory_order_relaxed);
             snd.current_frame.store(frame, std::memory_order_relaxed);
         }
@@ -1015,18 +1017,60 @@ SoundId AudioEngine::sound_id(const std::string& name) {
     if (it != sound_ids.end()) {
         return it->second;
     }
-    const uint32_t id = slot_count.load(std::memory_order_relaxed);
-    if (id >= kSlotChunk * kMaxSlotChunks) {
+    const SoundId id = alloc_slot_locked();
+    if (id == kNoSound) {
         static std::once_flag warned;
         std::call_once(warned, [] { spdlog::error("Too many sound names; further ones are ignored"); });
+        return kNoSound;
+    }
+    sound_ids.emplace(name, id);
+    return id;
+}
+
+SoundId AudioEngine::alloc_slot_locked() {
+    const uint32_t id = slot_count.load(std::memory_order_relaxed);
+    if (id >= kSlotChunk * kMaxSlotChunks) {
         return kNoSound;
     }
     if (id % kSlotChunk == 0) {
         slot_chunks[id / kSlotChunk].store(new SoundSlot[kSlotChunk], std::memory_order_release);
     }
     slot_count.store(id + 1, std::memory_order_release);
-    sound_ids.emplace(name, id);
     return id;
+}
+
+// ZDON_HIT_POLYPHONY: voices per polyphonic sound (the arcade mixes up to 24 at once)
+static uint32_t hit_polyphony() {
+    static const uint32_t n = [] {
+        const char* v = std::getenv("ZDON_HIT_POLYPHONY");
+        const int want = v && *v ? std::atoi(v) : 6;
+        return (uint32_t)std::clamp(want, 1, 24);
+    }();
+    return n;
+}
+
+void AudioEngine::make_polyphonic(SoundId id) {
+    const uint32_t n = hit_polyphony();
+    if (id == kNoSound || n <= 1) {
+        return;
+    }
+    std::unique_lock<std::shared_mutex> g(names_lock);
+    SoundSlot& s = *slot_at(id);
+    if (s.voices.load(std::memory_order_relaxed) != 0 || s.owner.load(std::memory_order_relaxed) != kNoSound) {
+        return;
+    }
+    if (slot_count.load(std::memory_order_relaxed) + n > kSlotChunk * kMaxSlotChunks) {
+        return;
+    }
+    const SoundId base = alloc_slot_locked();
+    slot_at(base)->owner.store(id, std::memory_order_relaxed);
+    for (uint32_t k = 1; k < n; k++) {
+        slot_at(alloc_slot_locked())->owner.store(id, std::memory_order_relaxed); // consecutive ids
+    }
+    s.voice_base = base;
+    s.is_playing.store(false, std::memory_order_relaxed); // from now on its voices play
+    s.voices.store(n, std::memory_order_release);
+    spdlog::debug("Sound {}: {} voices", id, n);
 }
 
 // Runs fn(slot, pcm) for a loaded sound, holding names_lock (shared) so the PCM stays alive;
@@ -1055,7 +1099,7 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
         return;
     }
     SoundSlot& s = *slot_at(id);
-    s.is_playing.store(false, std::memory_order_relaxed);
+    for_each_voice(s, [](SoundSlot& v) { v.is_playing.store(false, std::memory_order_relaxed); });
     sound* fresh = new sound(snd);
     s.current_frame.store(snd.current_frame, std::memory_order_relaxed);
     s.frame_frac.store(snd.frame_frac, std::memory_order_relaxed);
@@ -1516,7 +1560,7 @@ void AudioEngine::unload_sound(const std::string& name) {
         spdlog::warn("Sound {} not found", name);
         return;
     }
-    s->is_playing.store(false, std::memory_order_relaxed);
+    for_each_voice(*s, [](SoundSlot& v) { v.is_playing.store(false, std::memory_order_relaxed); });
     sound* old = s->pcm.exchange(nullptr, std::memory_order_seq_cst);
     if (old) {
         retire([old] {
@@ -1585,9 +1629,20 @@ void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain)
         snd.volume.store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
     }
     snd.playback_gain.store(std::max(gain, 0.0f), std::memory_order_relaxed);
-    snd.current_frame.store(0, std::memory_order_relaxed);
-    snd.frame_frac.store(0.0f, std::memory_order_relaxed);
-    snd.is_playing.store(true, std::memory_order_release);
+    SoundSlot* voice = &snd;
+    if (const uint32_t n = snd.voices.load(std::memory_order_acquire)) {
+        // polyphonic: the oldest voice of the ring takes this play with the sound's parameters
+        id = snd.voice_base + snd.next_voice.fetch_add(1, std::memory_order_relaxed) % n;
+        voice = slot_at(id);
+        voice->loop.store(snd.loop.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        voice->volume.store(snd.volume.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        voice->playback_gain.store(snd.playback_gain.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        voice->pan.store(snd.pan.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        voice->pitch.store(snd.pitch.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    voice->current_frame.store(0, std::memory_order_relaxed);
+    voice->frame_frac.store(0.0f, std::memory_order_relaxed);
+    voice->is_playing.store(true, std::memory_order_release);
     activate(id);
 }
 
@@ -1621,10 +1676,12 @@ void AudioEngine::stop_sound(const std::string& name) {
     if (fixed_step::on()) {
         fixed_step::audio_stop(name, false);
     }
-    const bool found = with_sound(name, [](SoundSlot& snd, const sound&) {
-        snd.is_playing.store(false, std::memory_order_relaxed);
-        snd.current_frame.store(0, std::memory_order_relaxed);
-        snd.frame_frac.store(0.0f, std::memory_order_relaxed);
+    const bool found = with_sound(name, [this](SoundSlot& snd, const sound&) {
+        for_each_voice(snd, [](SoundSlot& v) {
+            v.is_playing.store(false, std::memory_order_relaxed);
+            v.current_frame.store(0, std::memory_order_relaxed);
+            v.frame_frac.store(0.0f, std::memory_order_relaxed);
+        });
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1635,7 +1692,9 @@ void AudioEngine::set_sound_loop(const std::string& name, bool loop) {
     if (fixed_step::on()) {
         fixed_step::audio_set_loop(name, loop);
     }
-    with_sound(name, [loop](SoundSlot& snd, const sound&) { snd.loop.store(loop, std::memory_order_relaxed); });
+    with_sound(name, [this, loop](SoundSlot& snd, const sound&) {
+        for_each_voice(snd, [loop](SoundSlot& v) { v.loop.store(loop, std::memory_order_relaxed); });
+    });
 }
 
 bool AudioEngine::is_sound_playing(const std::string& name) {
@@ -1643,8 +1702,10 @@ bool AudioEngine::is_sound_playing(const std::string& name) {
         return has_sound(name) && fixed_step::audio_playing(name, false, get_sound_time_length(name));
     }
     bool playing = false;
-    const bool found = with_sound(
-        name, [&playing](SoundSlot& snd, const sound&) { playing = snd.is_playing.load(std::memory_order_relaxed); });
+    const bool found = with_sound(name, [this, &playing](SoundSlot& snd, const sound&) {
+        for_each_voice(snd,
+                       [&playing](SoundSlot& v) { playing = playing || v.is_playing.load(std::memory_order_relaxed); });
+    });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
     }
@@ -1652,8 +1713,9 @@ bool AudioEngine::is_sound_playing(const std::string& name) {
 }
 
 void AudioEngine::set_sound_volume(const std::string& name, float volume) {
-    const bool found = with_sound(name, [volume](SoundSlot& snd, const sound&) {
-        snd.volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+    const bool found = with_sound(name, [this, volume](SoundSlot& snd, const sound&) {
+        for_each_voice(
+            snd, [volume](SoundSlot& v) { v.volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed); });
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1661,8 +1723,9 @@ void AudioEngine::set_sound_volume(const std::string& name, float volume) {
 }
 
 void AudioEngine::set_sound_pan(const std::string& name, float pan) {
-    const bool found = with_sound(name, [pan](SoundSlot& snd, const sound&) {
-        snd.pan.store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed);
+    const bool found = with_sound(name, [this, pan](SoundSlot& snd, const sound&) {
+        for_each_voice(snd,
+                       [pan](SoundSlot& v) { v.pan.store(std::clamp(pan, 0.0f, 1.0f), std::memory_order_relaxed); });
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1673,9 +1736,9 @@ void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
     if (fixed_step::on()) {
         fixed_step::audio_set_pitch(name, std::isfinite(pitch) ? std::clamp(pitch, 0.01f, 16.0f) : 1.0f);
     }
-    const bool found = with_sound(name, [pitch](SoundSlot& snd, const sound&) {
-        const float p = std::isfinite(pitch) ? pitch : 1.0f;
-        snd.pitch.store(std::clamp(p, 0.01f, 16.0f), std::memory_order_relaxed);
+    const bool found = with_sound(name, [this, pitch](SoundSlot& snd, const sound&) {
+        const float p = std::clamp(std::isfinite(pitch) ? pitch : 1.0f, 0.01f, 16.0f);
+        for_each_voice(snd, [p](SoundSlot& v) { v.pitch.store(p, std::memory_order_relaxed); });
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -1688,7 +1751,7 @@ float AudioEngine::get_sound_time_played(const std::string& name) const {
     }
     float seconds = 0.0f;
     const bool found = with_sound(name, [&](SoundSlot& snd, const sound&) {
-        unsigned int frame = snd.current_frame.load(std::memory_order_relaxed);
+        unsigned int frame = latest_voice(snd).current_frame.load(std::memory_order_relaxed);
         seconds = static_cast<float>(frame) / static_cast<float>(target_sample_rate);
     });
     if (!found) {
@@ -1715,8 +1778,9 @@ void AudioEngine::seek_sound(const std::string& name, float position) {
     const bool found = with_sound(name, [&](SoundSlot& snd, const sound& pcm) {
         unsigned int frame =
             static_cast<unsigned int>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
-        snd.current_frame.store(std::min(frame, pcm.frame_count), std::memory_order_relaxed);
-        snd.frame_frac.store(0.0f, std::memory_order_relaxed);
+        SoundSlot& v = latest_voice(snd);
+        v.current_frame.store(std::min(frame, pcm.frame_count), std::memory_order_relaxed);
+        v.frame_frac.store(0.0f, std::memory_order_relaxed);
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
