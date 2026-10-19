@@ -1,6 +1,7 @@
 #pragma once
 
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -11,25 +12,44 @@
 
 #include "texture.h"
 
+// One rasterized glyph, immutable once cached. Shared by its size's cache, that size's GPU atlas and
+// every OutlinedText drawing with it, so evicting a size never frees a glyph a text still reads.
+struct CachedGlyph;
+using GlyphRef = std::shared_ptr<const CachedGlyph>;
+
+// Storage behind the ray::Font FontManager::copy_font returns: the glyph/rec arrays are owned here,
+// the glyph images alias `refs`.
+struct GlyphSubset {
+    std::vector<ray::GlyphInfo> glyphs;
+    std::vector<ray::Rectangle> recs;
+    std::vector<GlyphRef> refs;
+};
+
 class FontManager {
 private:
     fs::path font_path;
 
     struct SizedFont {
-        ray::Font font{}; // texture + recs + glyph structs; glyph images are fresh crops, not aliases of `cache`
-        std::unordered_set<int> codepoints; // only what was asked for AT THIS SIZE
-        std::vector<ray::GlyphInfo> cache;  // rasterized once per codepoint (images owned here)
-        bool atlas_dirty = false;
+        std::unordered_set<int> codepoints;    // only what was asked for AT THIS SIZE
+        std::vector<GlyphRef> cache;           // rasterized once per codepoint; append-only
+        std::unordered_map<int, size_t> index; // codepoint -> slot in `cache`
         uint64_t last_used = 0;
-        bool loaded = false;
+
+        // GPU atlas for DrawTextEx (get_font only): built on first use, then extended in place
+        ray::Font font{};                         // aliases the three below
+        std::vector<ray::GlyphInfo> atlas_glyphs; // cache[0 .. atlas_glyphs.size()) are packed
+        std::vector<ray::Rectangle> atlas_recs;
+        ray::Texture atlas_texture{};
+        ray::Image atlas_image{}; // CPU copy (GRAY_ALPHA), kept to grow the texture
+        int pen_x = 0, pen_y = 0, row_h = 0;
     };
 
     std::vector<unsigned char> font_data; // the .ttf bytes, read once
 
     bool rasterize_new(SizedFont& entry, int font_size, const std::vector<int>& cps);   // font_mutex held
-    void rebuild_atlas(SizedFont& entry, int font_size);                                // font_mutex held
-    void release_font(SizedFont& entry);                                                // font_mutex held
-    void release_cache(SizedFont& entry);                                               // font_mutex held
+    void update_atlas(SizedFont& entry, int font_size);                                 // font_mutex held
+    void reset_atlas(SizedFont& entry, int width, int height);                          // font_mutex held
+    void release_atlas(SizedFont& entry);                                               // font_mutex held
     void release_all_fonts();                                                           // font_mutex held
     bool register_codepoints(SizedFont& entry, int font_size, const std::string& text); // font_mutex held
 
@@ -49,8 +69,11 @@ public:
     FontManager();
     void init(const fs::path& font_path);
     void unload();
+    // For DrawTextEx: aliases the manager's atlas, valid until the next get_font()/copy_font() call.
     ray::Font get_font(const std::string& text, int font_size);
-    ray::Font copy_font(const std::string& text, int font_size);
+    // For measuring and CPU compositing (the texture is a 1x1 placeholder): only the glyphs `text`
+    // uses, backed by `storage` and valid as long as it is.
+    ray::Font copy_font(const std::string& text, int font_size, GlyphSubset& storage);
     void register_text(const std::string& text, int font_size);
 
     void load_text_config(const fs::path& skin_root);
@@ -99,6 +122,7 @@ private:
     float v_advance = 1.0f;
 
     ray::Font worker_font;
+    GlyphSubset worker_glyphs; // backs worker_font
 
     std::optional<ray::Image> pending_image;
     mutable std::mutex pending_mutex;
