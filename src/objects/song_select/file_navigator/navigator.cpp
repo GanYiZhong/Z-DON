@@ -132,24 +132,90 @@ static std::unique_ptr<SongBox> make_song_box(const fs::path& path, const BoxDef
     return std::make_unique<SongBox>(path, box_def, std::move(parser));
 }
 
+static std::string u8_key(const fs::path& path) {
+    auto u8 = path.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
+// Dev hook YATAIDON_BOX_RECORD_VERIFY=1: every chart a box is made from a record for is read as well,
+// and a record that differs from what the chart gives now is logged as an error.
+static bool verify_box_records() {
+    static const bool on = [] {
+        const char* v = std::getenv("YATAIDON_BOX_RECORD_VERIFY");
+        return v && *v && *v != '0';
+    }();
+    return on;
+}
+
+// The parsers of `paths` for their song boxes. A chart with a box record for the version the loading
+// screen saw gets a parser made from it (no file is read; SongParser reads the chart once something
+// needs more than the metadata), the others are read as before and their records stored for next time.
 static std::unordered_map<std::string, std::unique_ptr<SongParser>>
 parse_songs_parallel(const std::vector<fs::path>& paths, std::atomic<bool>& abort_flag,
-                     jobs::Priority priority = jobs::Priority::Critical) {
+                     jobs::Priority priority = jobs::Priority::Critical, bool verify = verify_box_records()) {
     std::vector<std::unique_ptr<SongParser>> parsed(paths.size());
+    std::vector<std::string> keys;
+    keys.reserve(paths.size());
+    for (const fs::path& p : paths) {
+        keys.push_back(u8_key(p));
+    }
+    std::vector<std::string> records = scores_manager.get_song_box_records(keys);
+    size_t from_records = 0;
+    for (size_t i = 0; i < paths.size(); i++) {
+        if (!records[i].empty()) {
+            if (auto p = SongParser::from_box_record(paths[i], records[i])) {
+                parsed[i] = std::make_unique<SongParser>(std::move(*p));
+                from_records++;
+                continue;
+            }
+        }
+        records[i].clear(); // read below; its record is stored
+    }
+    std::atomic<int> mismatches{0};
     unsigned workers = std::clamp(std::thread::hardware_concurrency(), 2u, 8u);
-    jobs::parallel_for(
-        paths.size(), priority,
-        [&](size_t i) {
-            if (abort_flag.load()) {
-                return;
+    if (from_records < paths.size() || verify) {
+        jobs::parallel_for(
+            paths.size(), priority,
+            [&](size_t i) {
+                if (abort_flag.load() || (parsed[i] && !verify)) {
+                    return;
+                }
+                try {
+                    auto full = std::make_unique<SongParser>(paths[i]);
+                    if (parsed[i]) { // verify: the record against the chart, and what was made of it
+                        const std::string now = full->box_record();
+                        if (now != records[i] || parsed[i]->box_record() != records[i]) {
+                            spdlog::error("Box record of {} differs from the chart", paths[i].string());
+                            mismatches++;
+                        }
+                        return;
+                    }
+                    records[i] = full->box_record();
+                    parsed[i] = std::move(full);
+                } catch (const std::exception& e) {
+                    if (!parsed[i]) {
+                        spdlog::warn("Failed to parse {}: {}", paths[i].string(), e.what());
+                    } else {
+                        spdlog::error("Box record of {}: the chart cannot be read: {}", paths[i].string(), e.what());
+                        mismatches++;
+                    }
+                }
+            },
+            workers);
+        std::vector<std::pair<std::string, std::string>> fresh;
+        for (size_t i = 0; i < paths.size(); i++) {
+            if (parsed[i] && parsed[i]->parsed() && !records[i].empty()) {
+                fresh.emplace_back(std::move(keys[i]), std::move(records[i]));
             }
-            try {
-                parsed[i] = std::make_unique<SongParser>(paths[i]);
-            } catch (const std::exception& e) {
-                spdlog::warn("Failed to parse {}: {}", paths[i].string(), e.what());
-            }
-        },
-        workers);
+        }
+        scores_manager.store_song_box_records(fresh);
+    }
+    if (verify) {
+        spdlog::info("Song boxes: {} charts, {} from box records, {} records differ", paths.size(), from_records,
+                     mismatches.load());
+    } else if (!paths.empty()) {
+        spdlog::debug("Song boxes: {} charts, {} from box records", paths.size(), from_records);
+    }
 
     std::unordered_map<std::string, std::unique_ptr<SongParser>> out;
     for (size_t i = 0; i < paths.size(); i++) {
@@ -168,7 +234,16 @@ static SongParser take_parser(std::unordered_map<std::string, std::unique_ptr<So
         preparsed.erase(it);
         return p;
     }
-    return SongParser(path);
+    const std::string key = u8_key(path);
+    const std::vector<std::string> record = scores_manager.get_song_box_records({key});
+    if (!record[0].empty()) {
+        if (auto p = SongParser::from_box_record(path, record[0])) {
+            return std::move(*p);
+        }
+    }
+    SongParser p(path);
+    scores_manager.store_song_box_records({{key, p.box_record()}});
+    return p;
 }
 
 // The back box closes a folder, so it carries that folder's genre: the genre
@@ -306,6 +381,7 @@ void Navigator::load_all_roots() {
             prefetch_child_folders(root);
         }
         dump_library_if_requested();
+        selftest_box_records_if_requested();
     };
 
 #ifndef __EMSCRIPTEN__
@@ -314,6 +390,35 @@ void Navigator::load_all_roots() {
 #else
     walk_roots();
 #endif
+}
+
+// Dev hook: YATAIDON_BOX_RECORD_SELFTEST=1 checks, once, the box record of every chart the loading
+// screen indexed against the chart (storing the missing records, so a second run checks them all).
+void Navigator::selftest_box_records_if_requested() {
+    static std::atomic<bool> done{false};
+    const char* on = std::getenv("YATAIDON_BOX_RECORD_SELFTEST");
+    if (!on || !*on || *on == '0' || abort_loading || done.exchange(true)) {
+        return;
+    }
+    wait_for_song_files();
+    std::vector<fs::path> paths;
+    for (const auto& [path, levels] : song_levels) {
+        paths.emplace_back(path);
+    }
+    std::sort(paths.begin(), paths.end());
+    const size_t had = [&] {
+        std::vector<std::string> keys;
+        for (const fs::path& p : paths) {
+            keys.push_back(u8_key(p));
+        }
+        size_t n = 0;
+        for (const std::string& r : scores_manager.get_song_box_records(keys)) {
+            n += !r.empty();
+        }
+        return n;
+    }();
+    auto parsed = parse_songs_parallel(paths, abort_loading, jobs::Priority::Normal, true);
+    spdlog::info("Box record selftest: {} charts, {} had a record, {} parsers", paths.size(), had, parsed.size());
 }
 
 // Dev hook: YATAIDON_LIBRARY_DUMP=<file> writes, once, after the first song select load and its
@@ -1346,7 +1451,8 @@ void Navigator::load_from_song_list(const fs::path& path, const BoxDef& box_def,
             continue;
         }
         enqueue_inline_back_every_ten(songs_added, path.parent_path());
-        auto song = make_song_box(song_path, box_def, SongParser(song_path));
+        std::unordered_map<std::string, std::unique_ptr<SongParser>> none;
+        auto song = make_song_box(song_path, box_def, take_parser(none, song_path));
         song->preserve_order = true;
         if (mark_favorite) {
             song->is_favorite = true;
@@ -1492,7 +1598,8 @@ void Navigator::load_collection_recommended(const fs::path& path, const BoxDef& 
             break;
         }
         const fs::path& song_path = all_songs[i];
-        auto song = make_song_box(song_path, box_def, SongParser(song_path));
+        std::unordered_map<std::string, std::unique_ptr<SongParser>> none;
+        auto song = make_song_box(song_path, box_def, take_parser(none, song_path));
         song->preserve_order = true;
         apply_genre_of(song_path, song.get());
         song->fade_in(266);
