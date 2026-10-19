@@ -7,6 +7,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -164,6 +166,13 @@ struct DrawLogEntry {
     int lua_defined_line = 0;
 };
 
+// Z-DON: hash for string-keyed maps that are also searched with string_views / literals (no temporary
+// std::string). Same hash values as std::hash<std::string>, so the maps iterate in the same order.
+struct TexNameHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+};
+
 inline bool debug_log_draws = false;
 inline std::vector<DrawLogEntry> debug_draw_log;
 inline std::vector<DrawLogEntry> debug_draw_log_prev;
@@ -188,7 +197,16 @@ private:
     bool read_screen_animations(const std::string& screen_name, rapidjson::Document& out);
 
 public:
-    std::unordered_map<std::string, std::shared_ptr<TextureObject>> textures;
+    std::unordered_map<std::string, std::shared_ptr<TextureObject>, TexNameHash, std::equal_to<>> textures;
+    // Z-DON: get_texture / has_texture results for names that are not in `textures` themselves (a language
+    // fallback or a miss), so a miss no longer builds the variant names and logs a warning on every call.
+    // Emptied with lua_texture_lookup, and when the language changes.
+    struct TextureFallback {
+        std::shared_ptr<TextureObject> found; // nullptr: no variant exists
+        bool warned = false;
+    };
+    std::unordered_map<std::string, TextureFallback, TexNameHash, std::equal_to<>> texture_fallbacks;
+    std::string texture_fallbacks_lang;
     // Lua tex.get_texture(path) results by the exact path string (nullptr = not found): skins call
     // it every frame. Emptied whenever `textures` changes, and when the language changes.
     std::unordered_map<std::string, std::shared_ptr<TextureObject>> lua_texture_lookup;
@@ -198,18 +216,18 @@ public:
     std::unordered_map<std::string, SkinInfo> skin_config_by_name;
     std::unordered_map<SCO, bool> options;
     Chara3DConfig chara_3d_config;
-    std::map<std::string, std::pair<float, float>> chara_positions;
-    std::map<std::string, std::pair<float, float>> nameplate_positions;
+    std::map<std::string, std::pair<float, float>, std::less<>> chara_positions;
+    std::map<std::string, std::pair<float, float>, std::less<>> nameplate_positions;
 
-    std::pair<float, float> chara_xy(const std::string& name, const std::string& fallback = "") const {
+    std::pair<float, float> chara_xy(std::string_view name, std::string_view fallback = "") const {
         return lookup_xy(chara_positions, name, fallback);
     }
 
-    std::pair<float, float> nameplate_xy(const std::string& name, const std::string& fallback = "") const {
+    std::pair<float, float> nameplate_xy(std::string_view name, std::string_view fallback = "") const {
         return lookup_xy(nameplate_positions, name, fallback);
     }
-    static std::pair<float, float> lookup_xy(const std::map<std::string, std::pair<float, float>>& m,
-                                             const std::string& name, const std::string& fallback) {
+    static std::pair<float, float> lookup_xy(const std::map<std::string, std::pair<float, float>, std::less<>>& m,
+                                             std::string_view name, std::string_view fallback) {
         auto it = m.find(name);
         if (it == m.end()) {
             it = m.find(fallback);
@@ -291,12 +309,13 @@ public:
 
     void load_screen_textures(const std::string& screen_name);
 
-    TextureObject* get_texture(const std::string& name);
+    TextureObject* get_texture(std::string_view name);
 
-    std::shared_ptr<TextureObject> get_texture_shared(const std::string& name);
-    std::vector<std::string> language_variants(const std::string& name) const;
+    std::shared_ptr<TextureObject> get_texture_shared(std::string_view name);
+    std::vector<std::string> language_variants(std::string_view name) const;
 
-    bool has_texture(const std::string& name);
+    bool has_texture(std::string_view name);
+    TextureFallback& texture_fallback(std::string_view name);
 
     void draw_texture(TextureObject* tex_obj, const DrawTextureParams& = {});
 };
