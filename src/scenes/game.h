@@ -77,6 +77,7 @@ public:
     int skip_last = -1;
     size_t skip_play_hits = 0;
     bool skipped = false;
+    std::optional<std::pair<int, bool>> skip_pushed; // (count, skipped) last given to handle_skip
     std::unique_ptr<OutlinedText> skip_text;
     void init_skip();
     void update_skip();

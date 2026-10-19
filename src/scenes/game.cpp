@@ -435,6 +435,7 @@ void GameScreen::init_skip() {
     skip_last = -1;
     skip_play_hits = 0;
     skipped = false;
+    skip_pushed.reset();
     skip_text.reset();
     global_data.live_skip_count = -1;
     global_data.live_skip_used = false;
@@ -491,6 +492,12 @@ void GameScreen::push_skip_state() {
     if (!background.has_value() || !background->wants_skip()) {
         return;
     }
+    // only on a change: the skins' handle_skip keeps the last state (and every field of it
+    // follows from count and skipped), so the same table every frame was only garbage
+    if (skip_pushed == std::pair{skip_count, skipped}) {
+        return;
+    }
+    skip_pushed = std::pair{skip_count, skipped};
 
     sol::state& lua = *script_manager.lua;
     sol::table st = lua.create_table();
