@@ -187,6 +187,27 @@ else()
       target_compile_options(${PROJECT_NAME} PRIVATE -flto=auto)
       target_link_options(${PROJECT_NAME} PRIVATE -flto=auto -O3)
     endif()
+    # Z-DON: profile-guided optimization, game target only (tools/build_pgo.sh runs the whole cycle).
+    # GEN = instrumented exe that writes .gcda files to ZDON_PGO_DIR on exit; USE = optimize with them.
+    set(ZDON_PGO "OFF" CACHE STRING "Profile-guided optimization: OFF, GEN or USE")
+    set_property(CACHE ZDON_PGO PROPERTY STRINGS OFF GEN USE)
+    set(ZDON_PGO_DIR "${CMAKE_BINARY_DIR}/pgo-data" CACHE PATH "Profile data directory for ZDON_PGO")
+    if(ZDON_PGO STREQUAL "GEN")
+      # atomic counters: the game updates them from several threads
+      set(_zdon_pgo -fprofile-generate=${ZDON_PGO_DIR} -fprofile-update=atomic)
+    elseif(ZDON_PGO STREQUAL "USE")
+      # partial training: code the training run never reached stays optimized as without a profile;
+      # a profile older than the source only warns (rerun tools/build_pgo.sh)
+      set(_zdon_pgo -fprofile-use=${ZDON_PGO_DIR} -fprofile-partial-training -Wno-missing-profile
+          -Wno-error=coverage-mismatch)
+    elseif(NOT ZDON_PGO STREQUAL "OFF")
+      message(FATAL_ERROR "ZDON_PGO must be OFF, GEN or USE")
+    endif()
+    if(DEFINED _zdon_pgo)
+      target_compile_options(${PROJECT_NAME} PRIVATE ${_zdon_pgo})
+      target_link_options(${PROJECT_NAME} PRIVATE ${_zdon_pgo})
+      message(STATUS "Z-DON PGO: ${ZDON_PGO} (${ZDON_PGO_DIR})")
+    endif()
   elseif(IOS)
     target_compile_options(${PROJECT_NAME} PRIVATE -O2 -DNDEBUG)
   elseif(APPLE)

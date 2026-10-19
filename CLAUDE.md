@@ -26,6 +26,7 @@ cd build && nice -n 10 cmake --build . -j 4
 ```
 
 - Release 預設開 LTO（完整連結數分鐘）；開發中可 `cmake . -DZDON_LTO=OFF` 加快，**量效能和交付前要切回 ON**。
+- PGO（`-DZDON_PGO=OFF|GEN|USE`，預設 OFF）：`bash tools/build_pgo.sh` 一次做完「無 LTO 插樁版 → 自動隱藏跑訓練（標題/選曲捲動/段位/3 張譜 auto 到結果，約 10 分鐘）→ LTO＋`-fprofile-use` 重建」，profile 在 `build/pgo-data`；跑完 build 目錄停在 USE，改回 `cmake -DZDON_PGO=OFF .`。2026-10-19 量測（240 fps 上限 FRAME_STATS、fixed-step 執行時間）**沒有可量到的增益**，所以交付版不用 PGO。插樁版不能開 LTO（GCC 16.2 MinGW 連結錯誤 `two or more sections for .gnu.lto___gcov_...`）。
 - 改完 `src/` 要跑 clang-format（上游 CI 用 23.1.3 `--dry-run --Werror`）：
   `"$APPDATA/Python/Python313/Scripts/clang-format.exe" -i $(cygpath -m <file>)`
 - 建置好就停，**不要自動啟動遊戲測試**（使用者可能正在玩）；需要時先 `tasklist` 確認。
