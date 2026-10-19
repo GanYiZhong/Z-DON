@@ -24,7 +24,7 @@ Z-DON 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支，**完全�
 
 ```bash
 export PATH=/c/msys64/mingw64/bin:$PATH   # 少了這行 gcc 會靜默失敗
-cd build && nice -n 10 cmake --build . -j 4
+cd build && nice -n 10 cmake --build . -j 16   # 56 logical CPUs; -j 4 made builds needlessly slow
 ```
 
 - Release 預設開 LTO（完整連結數分鐘）；開發中可 `cmake . -DZDON_LTO=OFF` 加快，**量效能和交付前要切回 ON**。
