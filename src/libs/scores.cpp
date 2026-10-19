@@ -295,6 +295,12 @@ ScoresManager::~ScoresManager() {
     if (add_song_stmt) {
         sqlite3_finalize(add_song_stmt);
     }
+    if (get_box_record_stmt) {
+        sqlite3_finalize(get_box_record_stmt);
+    }
+    if (store_box_record_stmt) {
+        sqlite3_finalize(store_box_record_stmt);
+    }
     if (store_song_cache_stmt) {
         sqlite3_finalize(store_song_cache_stmt);
     }
@@ -863,6 +869,97 @@ void ScoresManager::store_dan_note_counts(
     sqlite3_finalize(stmt);
 }
 
+// Z-DON only (upstream does not know the table): what a song select box shows of a chart, see
+// get_song_box_records. `version` is SONG_CACHE_VERSION (the record carries its own format number).
+static void ensure_box_record_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_song_box_records ("
+                 "path TEXT PRIMARY KEY, version INTEGER NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, "
+                 "ft_write INTEGER NOT NULL, record BLOB NOT NULL);",
+                 nullptr, nullptr, nullptr);
+}
+
+std::vector<std::string> ScoresManager::get_song_box_records(const std::vector<std::string>& paths) {
+    std::vector<std::string> out(paths.size());
+    std::vector<std::optional<SongCacheEntry>> seen(paths.size());
+    bool any = false;
+    for (size_t i = 0; i < paths.size(); i++) {
+        seen[i] = get_song_meta(paths[i]);
+        any |= seen[i].has_value();
+    }
+    if (!any) {
+        return out;
+    }
+    std::lock_guard<std::mutex> lock(box_record_mutex);
+    if (!get_box_record_stmt) {
+        ensure_box_record_table(db_fsd);
+        if (sqlite3_prepare_v2(db_fsd,
+                               "SELECT version, mtime, size, ft_write, record FROM zdon_song_box_records "
+                               "WHERE path = ?;",
+                               -1, &get_box_record_stmt, nullptr) != SQLITE_OK) {
+            spdlog::error("get_song_box_records: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+            get_box_record_stmt = nullptr;
+            return out;
+        }
+    }
+    sqlite3_stmt* stmt = get_box_record_stmt;
+    for (size_t i = 0; i < paths.size(); i++) {
+        if (!seen[i]) {
+            continue;
+        }
+        sqlite3_bind_text(stmt, 1, paths[i].c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == SONG_CACHE_VERSION &&
+            sqlite3_column_int64(stmt, 1) == seen[i]->mtime && sqlite3_column_int64(stmt, 2) == seen[i]->size &&
+            sqlite3_column_int64(stmt, 3) == seen[i]->ft_write) {
+            const void* blob = sqlite3_column_blob(stmt, 4);
+            const int n = sqlite3_column_bytes(stmt, 4);
+            if (blob && n > 0) {
+                out[i].assign(static_cast<const char*>(blob), static_cast<size_t>(n));
+            }
+        }
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+    }
+    return out;
+}
+
+void ScoresManager::store_song_box_records(const std::vector<std::pair<std::string, std::string>>& rows) {
+    if (rows.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(box_record_mutex);
+    if (!store_box_record_stmt) {
+        ensure_box_record_table(db_fsd);
+        if (sqlite3_prepare_v2(db_fsd,
+                               "INSERT OR REPLACE INTO zdon_song_box_records "
+                               "(path, version, mtime, size, ft_write, record) VALUES (?, ?, ?, ?, ?, ?);",
+                               -1, &store_box_record_stmt, nullptr) != SQLITE_OK) {
+            spdlog::error("store_song_box_records: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+            store_box_record_stmt = nullptr;
+            return;
+        }
+    }
+    sqlite3_stmt* stmt = store_box_record_stmt;
+    // a savepoint, not BEGIN: it nests in a transaction another thread may have open on this connection
+    sqlite3_exec(db_fsd, "SAVEPOINT zdon_box_records;", nullptr, nullptr, nullptr);
+    for (const auto& [path, record] : rows) {
+        const std::optional<SongCacheEntry> seen = get_song_meta(path);
+        if (!seen || record.empty()) {
+            continue;
+        }
+        sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, SONG_CACHE_VERSION);
+        sqlite3_bind_int64(stmt, 3, seen->mtime);
+        sqlite3_bind_int64(stmt, 4, seen->size);
+        sqlite3_bind_int64(stmt, 5, seen->ft_write);
+        sqlite3_bind_blob(stmt, 6, record.data(), static_cast<int>(record.size()), SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+    }
+    sqlite3_exec(db_fsd, "RELEASE zdon_box_records;", nullptr, nullptr, nullptr);
+}
+
 std::unordered_map<std::string, SongCacheEntry> ScoresManager::load_song_cache() {
     std::unordered_map<std::string, SongCacheEntry> cache;
     ensure_song_cache_table(db_fsd);
@@ -965,6 +1062,15 @@ void ScoresManager::remove_song_cache(const std::string& path) {
     sqlite3_step(stmt);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
+    // and its box record (a file that is gone; rare enough to prepare each time)
+    ensure_box_record_table(db_fsd);
+    sqlite3_stmt* box;
+    if (sqlite3_prepare_v2(db_fsd, "DELETE FROM zdon_song_box_records WHERE path = ?;", -1, &box, nullptr) ==
+        SQLITE_OK) {
+        sqlite3_bind_text(box, 1, path.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(box);
+        sqlite3_finalize(box);
+    }
 }
 
 void ScoresManager::add_song(const std::array<std::string, 5>& hashes, const std::string& title,

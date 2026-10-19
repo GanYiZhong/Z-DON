@@ -127,6 +127,9 @@ private:
     sqlite3_stmt* add_song_stmt = nullptr;
     sqlite3_stmt* store_song_cache_stmt = nullptr; // with the song_cache table made once
     sqlite3_stmt* remove_song_cache_stmt = nullptr;
+    std::mutex box_record_mutex; // the song select's threads read and write box records
+    sqlite3_stmt* get_box_record_stmt = nullptr;
+    sqlite3_stmt* store_box_record_stmt = nullptr;
     std::mutex song_meta_mutex;
     std::unordered_map<std::string, SongCacheEntry> song_meta;
     mutable std::mutex maps_mutex;
@@ -171,6 +174,12 @@ public:
     // Z-DON table zdon_dan_note_counts: (UTF-8 path, difficulty) -> count, current SONG_CACHE_VERSION only
     std::map<std::pair<std::string, int>, DanNoteCount> load_dan_note_counts();
     void store_dan_note_counts(const std::vector<std::pair<std::pair<std::string, int>, DanNoteCount>>& rows);
+    // Z-DON table zdon_song_box_records: (UTF-8 path) -> SongParser::box_record. A record is only returned
+    // for the version of the chart this session's loading screen saw (its get_song_meta mtime, size and
+    // listing write time), else "" (and for a path the loading screen did not see).
+    std::vector<std::string> get_song_box_records(const std::vector<std::string>& paths);
+    // stored for the version get_song_meta has (a path without one is skipped)
+    void store_song_box_records(const std::vector<std::pair<std::string, std::string>>& rows);
     // Best-of view over dan_scores for one course (course_id from dan_course_id).
     std::optional<DanRecord> get_dan_record(const std::string& player_id, const std::string& course_id);
     // Appends one attempt to dan_scores; each song links to its normal scores row (DanResultSong::score_id).

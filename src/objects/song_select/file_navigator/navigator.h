@@ -155,6 +155,7 @@ private:
     void exit_inline();
     void begin_inline_load();
     void dump_library_if_requested();
+    void selftest_box_records_if_requested();
 
 public:
     Navigator();
