@@ -103,6 +103,7 @@ struct SoundSlot {
     std::atomic<float> frame_frac{0.0f};
     std::atomic<bool> loop{false};
     std::atomic<float> volume{1.0f};
+    std::atomic<uint8_t> category{0}; // a VolumePreset: its live volume replaces `volume` (NONE: volume)
     std::atomic<float> playback_gain{1.0f};
     std::atomic<float> pan{0.5f};
     std::atomic<float> pitch{1.0f};
@@ -132,6 +133,7 @@ struct music {
     std::atomic<bool> is_playing{false};
     std::atomic<unsigned long long> current_frame{0};
     std::atomic<float> volume{1.0f};
+    std::atomic<uint8_t> category{0}; // as SoundSlot::category
     std::atomic<float> pan{0.5f};
 
     // commands, main -> mixer/decoder: a seek target, published by bumping cmd_gen
@@ -183,6 +185,8 @@ public:
                            const VolumeConfig& volume_presets);
     void close_audio_device();
     bool is_audio_device_ready() const;
+    // Z-DON: the category volumes; sounds and streams already playing follow at the next callback
+    void set_volume_presets(const VolumeConfig& presets);
 
     void queue_song_loudness(const fs::path& file_path, bool priority = false);
 
@@ -287,6 +291,11 @@ private:
     std::vector<int> channel_offsets{0};
     unsigned int rt_total_channels = 2;
     VolumeConfig volume_presets;
+    std::atomic<float> category_volume[(int)VolumePreset::ATTRACT_MODE + 1]{}; // live; the mixer reads them
+    float base_volume(uint8_t category, const std::atomic<float>& own) const {
+        return category ? category_volume[category].load(std::memory_order_relaxed)
+                        : own.load(std::memory_order_relaxed);
+    }
     bool is_ready;
     std::atomic<float> master_volume;
 

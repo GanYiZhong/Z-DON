@@ -408,7 +408,7 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
             continue;
         }
 
-        const float volume = snd.volume.load(std::memory_order_relaxed) *
+        const float volume = base_volume(snd.category.load(std::memory_order_relaxed), snd.volume) *
                              snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain;
 
         const float pan = snd.pan.load(std::memory_order_relaxed);
@@ -511,7 +511,8 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
             if (!mus.is_playing.load(std::memory_order_acquire)) {
                 continue;
             }
-            const float volume = mus.volume.load(std::memory_order_relaxed) * mus.normalization_gain;
+            const float volume =
+                base_volume(mus.category.load(std::memory_order_relaxed), mus.volume) * mus.normalization_gain;
             const float pan = mus.pan.load(std::memory_order_relaxed);
             const unsigned long long total = (unsigned long long)std::max<sf_count_t>(mus.pcm_total_frames, 0);
             unsigned long long pos = mus.current_frame.load(std::memory_order_relaxed);
@@ -549,7 +550,8 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
             continue;
         }
 
-        const float volume = mus.volume.load(std::memory_order_relaxed) * mus.normalization_gain;
+        const float volume =
+            base_volume(mus.category.load(std::memory_order_relaxed), mus.volume) * mus.normalization_gain;
         const float pan = mus.pan.load(std::memory_order_relaxed);
         const unsigned long long rp = mus.read_pos.load(std::memory_order_relaxed);
         const unsigned long long avail = mus.write_pos.load(std::memory_order_acquire) - rp;
@@ -813,7 +815,7 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     this->buffer_size = audio_config.buffer_size;
     this->device_name = audio_config.device;
     this->channel_offsets = audio_config.asio_channel.empty() ? std::vector<int>{0} : audio_config.asio_channel;
-    this->volume_presets = volume_presets;
+    set_volume_presets(volume_presets);
 
     loudness_scanner = std::make_unique<song_loudness::Scanner>("cache/loudness");
 
@@ -1111,6 +1113,7 @@ void AudioEngine::publish_sound(const std::string& name, SoundId id, sound* pcm)
     s.frame_frac.store(pcm->frame_frac, std::memory_order_relaxed);
     s.loop.store(pcm->loop, std::memory_order_relaxed);
     s.volume.store(pcm->volume, std::memory_order_relaxed);
+    s.category.store(0, std::memory_order_relaxed);
     s.playback_gain.store(pcm->playback_gain, std::memory_order_relaxed);
     s.pan.store(pcm->pan, std::memory_order_relaxed);
     s.pitch.store(pcm->pitch, std::memory_order_relaxed);
@@ -1740,6 +1743,13 @@ static float preset_volume(const VolumeConfig& presets, VolumePreset preset) {
     }
 }
 
+void AudioEngine::set_volume_presets(const VolumeConfig& presets) {
+    volume_presets = presets;
+    for (int c = 1; c <= (int)VolumePreset::ATTRACT_MODE; c++) {
+        category_volume[c].store(preset_volume(presets, (VolumePreset)c), std::memory_order_relaxed);
+    }
+}
+
 uint64_t AudioEngine::sound_play_count(const std::string& name) {
     const SoundId id = find_sound(name);
     return id == kNoSound ? 0 : slot_at(id)->play_count.load(std::memory_order_relaxed);
@@ -1762,7 +1772,7 @@ void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain)
         return;
     }
     if (volume_preset != VolumePreset::NONE) {
-        snd.volume.store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
+        snd.category.store((uint8_t)volume_preset, std::memory_order_relaxed); // the mixer applies it live
     }
     snd.playback_gain.store(std::max(gain, 0.0f), std::memory_order_relaxed);
     SoundSlot* voice = &snd;
@@ -1772,6 +1782,7 @@ void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain)
         voice = slot_at(id);
         voice->loop.store(snd.loop.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->volume.store(snd.volume.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        voice->category.store(snd.category.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->playback_gain.store(snd.playback_gain.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->pan.store(snd.pan.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->pitch.store(snd.pitch.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -1850,8 +1861,10 @@ bool AudioEngine::is_sound_playing(const std::string& name) {
 
 void AudioEngine::set_sound_volume(const std::string& name, float volume) {
     const bool found = with_sound(name, [this, volume](SoundSlot& snd, const sound&) {
-        for_each_voice(
-            snd, [volume](SoundSlot& v) { v.volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed); });
+        for_each_voice(snd, [volume](SoundSlot& v) {
+            v.volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+            v.category.store(0, std::memory_order_relaxed); // an explicit volume overrides the preset
+        });
     });
     if (!found) {
         spdlog::warn("Sound {} not found", name);
@@ -2421,7 +2434,7 @@ void AudioEngine::play_music_stream(const std::string& name, VolumePreset volume
         return;
     }
     if (volume_preset != VolumePreset::NONE) {
-        mus->volume.store(preset_volume(volume_presets, volume_preset), std::memory_order_relaxed);
+        mus->category.store((uint8_t)volume_preset, std::memory_order_relaxed); // the mixer applies it live
     }
     if (mus->pcm_data) {
         // the read position of a decoded stream is its current_frame: restart via the mixer
@@ -2464,6 +2477,7 @@ void AudioEngine::set_music_volume(const std::string& name, float volume) {
     std::shared_ptr<music> mus = find_music(name);
     if (mus) {
         mus->volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+        mus->category.store(0, std::memory_order_relaxed);
     } else {
         spdlog::warn("Sound {} not found", name);
     }

@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "../../libs/animation.h"
+#include "../../libs/audio.h"
 #include "../../libs/input.h"
 
 std::string getKeyString(int key_code);
@@ -390,6 +391,7 @@ void FloatOptionBox::rebuild_text() {
 
 void FloatOptionBox::confirm() {
     config_ref.set_float(value);
+    audio.set_volume_presets(global_data.config->volume); // Z-DON: what is playing follows at once
 }
 
 void FloatOptionBox::update(double current_time) {

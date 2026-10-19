@@ -167,6 +167,20 @@ void AudioEngine::run_selftest(const std::string& spec) {
     mix_for(0.1, 231);
     poly("unloaded");
 
+    // Z-DON live volume: halving the music category mid-play reaches the sound already playing
+    log << "live volume frame=" << out.size() / 2 << "\n";
+    play_sound("st_long", VolumePreset::MUSIC);
+    mix_for(0.2, 231);
+    const VolumeConfig saved_presets = volume_presets;
+    VolumeConfig half = saved_presets;
+    half.music *= 0.5f;
+    set_volume_presets(half);
+    mix_for(0.2, 231);
+    set_volume_presets(saved_presets);
+    mix_for(0.2, 231);
+    stop_sound("st_long");
+    log << "live volume end frame=" << out.size() / 2 << "\n";
+
     unload_sound("st_don");
     unload_sound("st_long");
     unload_music_stream("st_stream");
