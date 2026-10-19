@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <unordered_map>
@@ -89,6 +90,7 @@ namespace {
         std::string hash;
         uintmax_t size = 0;
         int64_t mtime = 0;
+        bool operator==(const HashCacheEntry&) const = default;
     };
     using HashCache = std::unordered_map<std::string, HashCacheEntry>;
 
@@ -128,6 +130,60 @@ namespace {
             for (const auto& [rel, e] : cache) {
                 out << e.hash << ' ' << e.size << ' ' << e.mtime << ' ' << rel << '\n';
             }
+            if (!out) {
+                return;
+            }
+        }
+        fs::rename(tmp, file, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+        }
+    }
+
+    // The manifest as of its last download and its ETag: a pass asks for it only if it changed
+    // (If-None-Match) and on "304 Not Modified" uses this copy. Kept in cache/skin_hashes/<skin>.manifest:
+    // the URL, the ETag and the manifest's SHA-256 on a line each, then the manifest.
+    struct SavedManifest {
+        std::string etag; // empty: none saved
+        std::string text;
+    };
+
+    fs::path manifest_cache_path(const fs::path& skin_dir) {
+        return fs::path("cache") / "skin_hashes" / (skin_dir.filename().string() + ".manifest");
+    }
+
+    // nothing unless the saved manifest is the one of `url` and is whole
+    SavedManifest load_manifest(const fs::path& skin_dir, const std::string& url) {
+        std::ifstream in(manifest_cache_path(skin_dir), std::ios::binary);
+        std::string saved_url, etag, hash;
+        if (!std::getline(in, saved_url) || !std::getline(in, etag) || !std::getline(in, hash) || saved_url != url ||
+            etag.empty()) {
+            return {};
+        }
+        std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+        if (text.empty() || text.back() != '\n' || crypto::to_hex(crypto::sha256(text)) != hash) {
+            return {};
+        }
+        return {std::move(etag), std::move(text)};
+    }
+
+    void save_manifest(const fs::path& skin_dir, const std::string& url, const std::string& etag,
+                       const std::string& text) {
+        const fs::path file = manifest_cache_path(skin_dir);
+        std::error_code ec;
+        if (etag.empty() || etag.find_first_of("\r\n") != std::string::npos ||
+            url.find_first_of("\r\n") != std::string::npos) {
+            fs::remove(file, ec); // no ETag: the next pass downloads it again
+            return;
+        }
+        const fs::path tmp = fs::path(file).concat(".tmp");
+        fs::create_directories(file.parent_path(), ec);
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                return;
+            }
+            out << url << '\n' << etag << '\n' << crypto::to_hex(crypto::sha256(text)) << '\n' << text;
             if (!out) {
                 return;
             }
@@ -195,8 +251,21 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
 
     // a whole manifest or nothing: files it doesn't list get removed below, so a truncated
     // one would delete everything past the cut (and the last line must be complete)
-    cpr::Response checksums = get_url(session, raw_url("checksums.sha256"), 60000, 5000);
-    if (!fetched(checksums) || checksums.text.empty() || checksums.text.back() != '\n') {
+    const std::string manifest_url = raw_url("checksums.sha256");
+    SavedManifest saved = load_manifest(skin_dir, manifest_url);
+    if (!saved.etag.empty()) {
+        session.SetHeader(cpr::Header{{"If-None-Match", saved.etag}});
+    }
+    cpr::Response checksums = get_url(session, manifest_url, 60000, 5000);
+    session.SetHeader(cpr::Header{});
+    std::string manifest;
+    if (!saved.etag.empty() && checksums.status_code == 304 && checksums.error.code == cpr::ErrorCode::OK) {
+        manifest = std::move(saved.text); // unchanged since the last pass
+    } else if (fetched(checksums) && !checksums.text.empty() && checksums.text.back() == '\n') {
+        manifest = std::move(checksums.text);
+        auto etag = checksums.header.find("ETag");
+        save_manifest(skin_dir, manifest_url, etag != checksums.header.end() ? etag->second : std::string(), manifest);
+    } else {
         spdlog::warn("Skin update ({}): could not fetch a complete checksums.sha256 (HTTP {}, curl error {}: {})",
                      skin_dir.filename().string(), checksums.status_code, static_cast<int>(checksums.error.code),
                      checksums.error.message);
@@ -206,7 +275,7 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
     HashCache cache = load_hash_cache(skin_dir);
     HashCache seen; // this manifest's files: entries for files it no longer lists are dropped
     std::unordered_set<std::string> listed;
-    std::istringstream lines(checksums.text);
+    std::istringstream lines(manifest);
     std::string hash, rel_path;
     int updated = 0;
     while (lines >> hash >> rel_path) {
@@ -323,7 +392,9 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
         any_updated_.store(true);
     }
 
-    save_hash_cache(skin_dir, seen);
+    if (seen != cache) {
+        save_hash_cache(skin_dir, seen);
+    }
     spdlog::info("Skin update ({}): {} file(s) updated, {} removed", skin_dir.filename().string(), updated, removed);
 }
 
