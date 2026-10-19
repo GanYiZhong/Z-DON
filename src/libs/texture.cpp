@@ -3,6 +3,7 @@
 #include <atomic>
 #include <charconv>
 #include <condition_variable>
+#include <cstring>
 #include <cwctype>
 #include <mutex>
 #include <spdlog/spdlog.h>
@@ -10,9 +11,11 @@
 
 #include "filesystem.h"
 #include "global_data.h"
+#include "png_fast.h"
 #include "profiler.h"
 #include "script.h"
 #include "text.h"
+#include "texture_pack.h"
 #include "texture_retain.h"
 
 #ifdef _WIN32
@@ -444,6 +447,92 @@ std::shared_ptr<ray::Texture2D> shared_texture(ray::Texture2D tex) {
     });
 }
 
+namespace {
+
+    // LoadImageFromMemory, through png_fast for PNGs (the same pixels, faster)
+    ray::Image image_from_memory(const fs::path& path, const uint8_t* data, size_t size) {
+        const std::string ext = path.extension().string();
+        if ((ext == ".png" || ext == ".PNG") && png_fast::enabled()) {
+            ray::Image image{};
+            if (png_fast::decode(data, size, image)) {
+                return image;
+            }
+        }
+        return ray::LoadImageFromMemory(ext.c_str(), data, static_cast<int>(size));
+    }
+
+    // ray::LoadImage(path), taking the file's bytes from the screen's texture pack when it holds them
+    // (and handing the pack the bytes it is missing)
+    ray::Image load_image_unchecked(const fs::path& path, const std::string& key, texture_pack::Session* pack) {
+        if (pack) {
+            const uint8_t* data = nullptr;
+            size_t size = 0;
+            if (pack->get(key, data, size)) {
+                ray::Image image = image_from_memory(path, data, size);
+                if (image.data) {
+                    return image;
+                }
+                pack->reject(key);
+            }
+            if (pack->wants(key)) {
+                std::vector<uint8_t> bytes;
+                if (texture_pack::read_file(path, bytes)) {
+                    ray::Image image = image_from_memory(path, bytes.data(), bytes.size());
+                    if (image.data) {
+                        pack->put(key, std::move(bytes));
+                    }
+                    return image;
+                }
+            }
+        }
+        if (png_fast::enabled()) {
+            std::vector<uint8_t> bytes;
+            if (texture_pack::read_file(path, bytes)) {
+                return image_from_memory(path, bytes.data(), bytes.size());
+            }
+        }
+        return ray::LoadImage(path.string().c_str());
+    }
+
+    // Dev hook: YATAIDON_TEXPACK_VERIFY=1 decodes every image a second time with ray::LoadImage from
+    // the skin's file and counts the ones whose pixels differ from what the pack / png_fast gave.
+    struct VerifyCounts {
+        std::atomic<size_t> checked{0};
+        std::atomic<size_t> mismatched{0};
+    } verify_counts;
+
+    bool verify_enabled() {
+        static const bool on = [] {
+            const char* v = std::getenv("YATAIDON_TEXPACK_VERIFY");
+            return v && v[0] == '1';
+        }();
+        return on;
+    }
+
+    ray::Image load_image(const fs::path& path, const std::string& key, texture_pack::Session* pack) {
+        ray::Image image = load_image_unchecked(path, key, pack);
+        if (verify_enabled()) {
+            ray::Image ref = ray::LoadImage(path.string().c_str());
+            const bool same =
+                ref.width == image.width && ref.height == image.height && ref.format == image.format &&
+                (ref.data == nullptr) == (image.data == nullptr) &&
+                (!ref.data ||
+                 std::memcmp(ref.data, image.data,
+                             static_cast<size_t>(ray::GetPixelDataSize(ref.width, ref.height, ref.format))) == 0);
+            ++verify_counts.checked;
+            if (!same) {
+                ++verify_counts.mismatched;
+                spdlog::error("Texture pack verify: {} differs from LoadImage", path.string());
+            }
+            if (ref.data) {
+                ray::UnloadImage(ref);
+            }
+        }
+        return image;
+    }
+
+} // namespace
+
 void decode_images_parallel(const std::vector<fs::path>& files, std::vector<ray::Image>& out) {
     out.assign(files.size(), ray::Image{});
     if (files.empty()) {
@@ -454,7 +543,7 @@ void decode_images_parallel(const std::vector<fs::path>& files, std::vector<ray:
     size_t workers = std::min<size_t>(files.size(), hw ? hw : 4);
     if (workers <= 1) {
         for (size_t i = 0; i < files.size(); ++i) {
-            out[i] = ray::LoadImage(files[i].string().c_str());
+            out[i] = load_image(files[i], {}, nullptr);
         }
         return;
     }
@@ -466,7 +555,7 @@ void decode_images_parallel(const std::vector<fs::path>& files, std::vector<ray:
         pool.emplace_back([&files, &out, &next]() {
             for (size_t i = next.fetch_add(1); i < files.size(); i = next.fetch_add(1)) {
                 try {
-                    out[i] = ray::LoadImage(files[i].string().c_str());
+                    out[i] = load_image(files[i], {}, nullptr);
                 } catch (const std::exception& e) {
                     spdlog::error("Failed to decode image {}: {}", files[i].string(), e.what());
                     out[i] = ray::Image{};
@@ -488,6 +577,8 @@ public:
     struct Entry {
         fs::path path;
         bool is_dir;
+        uint64_t size = 0;  // files: as listed (texture packs check it)
+        uint64_t mtime = 0; // last write, in the file system's own units
     };
 
     // the folder's entries, or nullptr when it cannot be listed
@@ -504,6 +595,25 @@ public:
         const Entry* e = find(dir, name);
         return e && !e->is_dir;
     }
+    // the listing's entry for a file path (its folder is listed if it wasn't yet)
+    const Entry* file_entry(const fs::path& file) {
+        const Entry* e = find(file.parent_path(), file.filename());
+        return e && !e->is_dir ? e : nullptr;
+    }
+    // Like file_entry without listing anything: -1 when the folder hasn't been listed, 0 when the
+    // file isn't there, 1 (and e set) when it is.
+    int peek_file(const fs::path& file, const Entry*& e) const {
+        auto it = listings.find(key(file.parent_path()));
+        if (it == listings.end() || !it->second.ok) {
+            return -1;
+        }
+        auto f = it->second.by_name.find(key(file.filename()));
+        if (f == it->second.by_name.end() || it->second.entries[f->second].is_dir) {
+            return 0;
+        }
+        e = &it->second.entries[f->second];
+        return 1;
+    }
 
 private:
     struct Listing {
@@ -517,7 +627,7 @@ private:
         fs::path::string_type k = p.native();
 #ifdef _WIN32
         for (auto& c : k) {
-            c = static_cast<wchar_t>(towlower(c));
+            c = c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c)); // one key per folder, however spelled
         }
 #endif
         return k;
@@ -533,15 +643,21 @@ private:
         std::vector<Win32DirEntry> raw;
         l.ok = win32_list_dir(dir, raw);
         for (Win32DirEntry& e : raw) {
-            l.entries.push_back({dir / e.name, e.is_dir});
+            l.entries.push_back({dir / e.name, e.is_dir, e.size, e.ft_write});
         }
 #else
         std::error_code ec;
         fs::directory_iterator iter(dir, ec);
         l.ok = !ec;
+        const bool want_stat = texture_pack::enabled();
         for (; !ec && iter != fs::directory_iterator(); iter.increment(ec)) {
             std::error_code type_ec;
-            l.entries.push_back({iter->path(), iter->is_directory(type_ec)});
+            Entry e{iter->path(), iter->is_directory(type_ec)};
+            if (want_stat && !e.is_dir) {
+                e.size = static_cast<uint64_t>(iter->file_size(type_ec));
+                e.mtime = static_cast<uint64_t>(iter->last_write_time(type_ec).time_since_epoch().count());
+            }
+            l.entries.push_back(std::move(e));
         }
 #endif
         for (size_t i = 0; i < l.entries.size(); ++i) {
@@ -626,8 +742,8 @@ std::vector<std::unordered_set<std::string>> subset_skips(DirIndex& dirs, const 
 class ImagePrefetch {
 public:
     ImagePrefetch(const std::vector<std::vector<fs::path>>& groups, const std::unordered_set<std::string>& border_keys,
-                  size_t budget_bytes)
-        : budget(budget_bytes) {
+                  size_t budget_bytes, texture_pack::Session* pack_session)
+        : budget(budget_bytes), pack(pack_session) {
         for (size_t g = 0; g < groups.size(); ++g) {
             for (const fs::path& p : groups[g]) {
                 std::string key = image_key(p);
@@ -635,7 +751,7 @@ public:
                     continue;
                 }
                 index.emplace(key, items.size());
-                items.push_back(Item{p, g});
+                items.push_back(Item{p, key, g});
                 items.back().want_border = border_keys.count(key) > 0;
             }
         }
@@ -675,7 +791,7 @@ public:
         if (it.state == State::Pending) {
             it.state = State::Taken;
             lock.unlock();
-            has_border = decode(it.path, it.want_border, image, border);
+            has_border = decode(it, image, border);
             return true;
         }
         if (it.state != State::Done) {
@@ -723,6 +839,7 @@ private:
     };
     struct Item {
         fs::path path;
+        std::string key;
         size_t group;
         State state = State::Pending;
         ray::Image image{};
@@ -733,15 +850,15 @@ private:
     };
 
     // true when border was computed
-    static bool decode(const fs::path& path, bool want_border, ray::Image& image, ray::Rectangle& border) {
+    bool decode(const Item& it, ray::Image& image, ray::Rectangle& border) {
         try {
-            image = ray::LoadImage(path.string().c_str());
+            image = load_image(it.path, it.key, pack);
         } catch (const std::exception& e) {
-            spdlog::error("Failed to decode image {}: {}", path.string(), e.what());
+            spdlog::error("Failed to decode image {}: {}", it.path.string(), e.what());
             image = ray::Image{};
         }
         border = ray::Rectangle{};
-        if (!want_border || !image.data) {
+        if (!it.want_border || !image.data) {
             return false;
         }
         border = ray::GetImageAlphaBorder(image, 0.0f);
@@ -763,7 +880,7 @@ private:
             lock.unlock();
             ray::Image image;
             ray::Rectangle border;
-            const bool has_border = decode(it.path, it.want_border, image, border);
+            const bool has_border = decode(it, image, border);
             lock.lock();
             if (finished_groups > it.group) { // its folder was loaded while this one decoded
                 if (image.data) {
@@ -792,6 +909,7 @@ private:
     size_t held = 0;
     size_t finished_groups = 0; // groups below this are done with
     const size_t budget;
+    texture_pack::Session* const pack; // may be null
     bool stop = false;
 };
 
@@ -1173,8 +1291,35 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         }
     }
 
+    // the screen's texture pack: the planned files' bytes in one file, checked against the listings
+    std::unique_ptr<texture_pack::Session> pack;
+    if (texture_pack::enabled()) {
+        std::vector<texture_pack::Session::Planned> planned;
+        for (const auto& group : groups) {
+            for (const fs::path& p : group) {
+                if (const DirIndex::Entry* e = dirs.file_entry(p)) {
+                    planned.push_back({ImagePrefetch::image_key(p), {e->size, e->mtime}});
+                }
+            }
+        }
+        auto peek = [](void* ctx, const std::string& key, texture_pack::FileStat& out) -> int {
+            const DirIndex::Entry* e = nullptr;
+            const int r = static_cast<DirIndex*>(ctx)->peek_file(fs::path(key), e);
+            if (r == 1) {
+                out = {e->size, e->mtime};
+            }
+            return r;
+        };
+        try {
+            pack = std::make_unique<texture_pack::Session>(texture_pack::pack_path(skin_root().filename(), screen_name),
+                                                           screen_name, std::move(planned), peek, &dirs);
+        } catch (const std::exception& e) {
+            spdlog::warn("Texture pack for {} not used: {}", screen_name, e.what());
+        }
+    }
+
     {
-        ImagePrefetch prefetch(groups, border_keys, kPrefetchBudgetBytes);
+        ImagePrefetch prefetch(groups, border_keys, kPrefetchBudgetBytes, pack.get());
         image_prefetch = &prefetch;
         struct Reset {
             ImagePrefetch*& p;
@@ -1184,6 +1329,13 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
             load_folder(screen_name, subsets[g]);
             prefetch.finish_group(g);
         }
+    }
+    if (pack) {
+        pack->finish();
+    }
+    if (verify_enabled()) {
+        spdlog::info("Texture pack verify for {}: {} images checked, {} differ", screen_name,
+                     verify_counts.checked.exchange(0), verify_counts.mismatched.exchange(0));
     }
 
     spdlog::info("Screen textures loaded for: {}", screen_name);

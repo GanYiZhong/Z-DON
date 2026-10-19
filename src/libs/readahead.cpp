@@ -2,6 +2,7 @@
 
 #include "filesystem.h"
 #include "global_data.h"
+#include "texture_pack.h"
 #include "texture_retain.h"
 #ifdef _WIN32
 #include "../platform/platform_windows.h"
@@ -107,6 +108,20 @@ namespace readahead {
             std::vector<fs::path> files;
             uintmax_t total = 0;
             for (const std::string& screen : req.screens) {
+                // A texture pack holds the screen's PNGs in one file: read that instead of the loose
+                // PNGs (a few hundred small reads, parent files the child overrides among them).
+                bool packed = false;
+                if (texture_pack::enabled() && !req.roots.empty() &&
+                    std::find(req.resident.begin(), req.resident.end(), screen) == req.resident.end()) {
+                    const fs::path pack = texture_pack::pack_path(req.roots.front().filename(), screen);
+                    std::error_code ec;
+                    const uintmax_t size = fs::file_size(pack, ec);
+                    if (!ec && total + size <= kMaxBytes) {
+                        total += size;
+                        files.push_back(pack);
+                        packed = true;
+                    }
+                }
                 for (const fs::path& root : req.roots) {
                     for (const char* kind : {"Graphics", "Sounds"}) {
                         if (kind[0] == 'G' &&
@@ -123,6 +138,9 @@ namespace readahead {
                                 return;
                             }
                             if (!it->is_regular_file(ec)) {
+                                continue;
+                            }
+                            if (packed && kind[0] == 'G' && it->path().extension() == ".png") {
                                 continue;
                             }
                             const uintmax_t size = it->file_size(ec);
