@@ -135,6 +135,7 @@ void AudioEngine::run_selftest(const std::string& spec) {
     // Z-DON polyphony (ZDON_HIT_POLYPHONY; 1 = each play restarts the sound): one play mixed whole as the
     // reference, then 8 plays 25 ms apart (a ring of 6 voices takes over the 2 oldest), then stop and
     // unload with several voices sounding. "poly" lines log each play's start frame.
+    mix_for(0.5, 231); // the replaced st_don's tail ends first: the reference play mixes alone
     load_sound(sounds_path / "don.wav", "st_poly");
     make_polyphonic(sound_id("st_poly"));
     auto poly = [&](const char* step) {
