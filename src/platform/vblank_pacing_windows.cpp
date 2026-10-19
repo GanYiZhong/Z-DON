@@ -168,6 +168,10 @@ namespace vblank_pacing {
         return S.active;
     }
 
+    double refresh_period_ms() {
+        return S.active ? S.period_ms : 0.0;
+    }
+
     double frame_ms(double now_ms) {
         S.wake_ms = now_ms;
         double t = now_ms;

@@ -20,6 +20,8 @@
 namespace vblank_pacing {
     void init(bool vsync, double target_fps);
     bool active();
+    // the refresh period measured from DWM while pacing is active, else 0
+    double refresh_period_ms();
     // the frame clock for a frame that starts at `now_ms` (get_current_ms timebase)
     double frame_ms(double now_ms);
     // after present: sleeps until the next frame's grid time
@@ -30,6 +32,9 @@ namespace vblank_pacing {
     inline void init(bool, double) {}
     inline bool active() {
         return false;
+    }
+    inline double refresh_period_ms() {
+        return 0.0;
     }
     inline double frame_ms(double now_ms) {
         return now_ms;

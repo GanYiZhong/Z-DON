@@ -11,6 +11,7 @@
 #include "../libs/scores.h"
 #include "../libs/script.h"
 #include "../libs/text.h"
+#include "../platform/vblank_pacing.h"
 
 void GameScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -485,8 +486,13 @@ void GameScreen::resync_song(double current_ms) {
     double audio_ms = audio.get_sound_time_played(*song_music) * 1000.0f;
     double audio_ms_adjusted = audio_ms + audio_start_ms();
 
-    clock.synchronize(current_ms, audio_ms_adjusted,
-                      [] { return ray::GetMonitorRefreshRate(ray::GetCurrentMonitor()); });
+    // Z-DON: with vblank pacing, the refresh rate DWM measures (e.g. 119.88 Hz where the mode says 120); the
+    // shown frames advance by exactly that period
+    clock.synchronize(current_ms, audio_ms_adjusted, [] {
+        const double period_ms = vblank_pacing::refresh_period_ms();
+        return period_ms > 0.0 ? 1000.0 / period_ms
+                               : static_cast<double>(ray::GetMonitorRefreshRate(ray::GetCurrentMonitor()));
+    });
 }
 
 void GameScreen::init_skip() {

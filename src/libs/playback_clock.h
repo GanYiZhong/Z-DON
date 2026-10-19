@@ -65,7 +65,7 @@ public:
         // from a whole number of refreshes (no vsync, a limiter below the refresh rate) keep the
         // measured time; the loop below absorbs any rate error against the audio.
         if (!sync.previous_ms) {
-            const int refresh_hz = get_refresh_hz();
+            const double refresh_hz = get_refresh_hz();
             sync.refresh_period_ms = refresh_hz > 0 ? 1000.0 / refresh_hz : 0.0;
         } else if (sync.refresh_period_ms > 0.0) {
             double advance = position_ms - sync.chart_ms;
