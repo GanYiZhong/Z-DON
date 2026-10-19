@@ -103,9 +103,9 @@ void PracticeGameScreen::init_tja(fs::path song) {
 void PracticeGameScreen::init_tja_practice(const fs::path& song) {
     int difficulty = global_data.session_data[(int)global_data.player_num].selected_difficulty;
     auto [notes, bm, be, bn] = parser->notes_to_position(difficulty);
-    if (auto* tja = std::get_if<TJAParser>(&parser->impl)) {
-        tja->scroll_disabled = true;
-    }
+    // This used to set the TJA parser's scroll_disabled here, after the parse. The screen's parser is never
+    // parsed again (init_tja makes a new one), and the player had its own copy, so it changed nothing. The
+    // player now shares this parser, and setting it would change the player's later re-parses.
     const Modifiers& practice_modifiers = get_player_modifiers(global_data.player_num);
     apply_modifiers(notes, practice_modifiers);
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <unordered_map>
 
 #include "../../libs/network.h"
@@ -51,8 +52,8 @@ public:
 
     std::vector<BranchDifficulty> branch_history;
 
-    Player(std::optional<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param, bool is_2p_param,
-           const Modifiers& modifiers_param);
+    Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
+           bool is_2p_param, const Modifiers& modifiers_param);
 
     std::optional<JudgeCounter> judge_counter;
     std::optional<Gauge> gauge;
@@ -116,7 +117,7 @@ public:
     }
     void set_is_dan(bool v) { is_dan = v; }
 
-    void reload_for_dan(std::optional<SongParser>& new_parser, int new_difficulty);
+    void reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int new_difficulty);
 
     void spawn_ending_anim(Background* background = nullptr);
 
@@ -150,7 +151,7 @@ private:
     int visual_offset;
     std::string score_method;
     Modifiers modifiers;
-    std::optional<SongParser> parser;
+    std::shared_ptr<SongParser> parser; // the screen's parser, shared (it used to be a full copy)
     Nameplate nameplate;
     std::unique_ptr<Chara3D> chara;
 

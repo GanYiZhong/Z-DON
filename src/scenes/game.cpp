@@ -166,7 +166,7 @@ void GameScreen::adopt_movie(bool wait) {
 
 void GameScreen::init_tja(fs::path song) {
     start_delay = (song.extension() == ".osu") ? 0 : start_delay;
-    parser = SongParser(song, start_delay);
+    parser = std::make_shared<SongParser>(song, start_delay);
     if (fs::exists(parser->metadata.bgmovie)) {
         open_movie(parser->metadata.bgmovie);
     }

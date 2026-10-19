@@ -10,7 +10,7 @@
 #include "../../libs/scores.h"
 #include "../../libs/text.h"
 
-Player::Player(std::optional<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
+Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
                bool is_2p_param, const Modifiers& modifiers_param)
     : is_2p(is_2p_param), is_dan(false), player_num(player_num_param), difficulty(difficulty_param),
       visual_offset(global_data.config->general.visual_offset), score_method(global_data.config->general.score_method),
@@ -34,7 +34,7 @@ Player::Player(std::optional<SongParser>& parser_ref, PlayerNum player_num_param
         note_tex_ids[t] = tex.has_texture(name) ? tex.get_texture(name) : nullptr;
     }
 
-    if (parser.has_value() && !parser->metadata.course_data.empty()) {
+    if (parser && !parser->metadata.course_data.empty()) {
         if (parser->metadata.course_data[difficulty].is_branching) {
             branch_indicator = BranchIndicator();
         }
@@ -202,7 +202,7 @@ void Player::spawn_ending_anim(Background* background) {
     }
 }
 
-void Player::reload_for_dan(std::optional<SongParser>& new_parser, int new_difficulty) {
+void Player::reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int new_difficulty) {
     parser = new_parser;
     difficulty = new_difficulty;
 
@@ -755,7 +755,7 @@ void Player::set_audio_end(double chart_ms) {
 }
 
 void Player::reset_chart() {
-    if (!parser.has_value()) {
+    if (!parser) {
         return;
     }
 
@@ -768,7 +768,7 @@ void Player::reset_chart() {
     end_time = 0;
     bpm = parser->metadata.bpm;
     scroll_type = notes.scroll_type;
-    tempo_map = notes.tempo_map;
+    tempo_map = std::move(notes.tempo_map);
     beat_memo_ms = std::numeric_limits<double>::quiet_NaN();
 
     for (Note& note : notes.notes) {

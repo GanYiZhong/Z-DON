@@ -228,19 +228,6 @@ struct NoteList {
     ScrollType scroll_type = ScrollType::NMSCROLL;
     TempoMap tempo_map;
 
-    NoteList operator+(const NoteList& other) const {
-        NoteList result;
-        result.scroll_type = scroll_type;
-        result.tempo_map = tempo_map;
-        result.notes = notes;
-        result.notes.insert(result.notes.end(), other.notes.begin(), other.notes.end());
-
-        result.timeline = timeline;
-        result.timeline.insert(result.timeline.end(), other.timeline.begin(), other.timeline.end());
-
-        return result;
-    }
-
     NoteList& operator+=(const NoteList& other) {
         notes.insert(notes.end(), other.notes.begin(), other.notes.end());
 

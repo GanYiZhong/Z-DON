@@ -4,7 +4,7 @@
 
 class Game2PScreen : public GameScreen {
 private:
-    std::optional<SongParser> parser_2p;
+    std::shared_ptr<SongParser> parser_2p;
 
 public:
     Game2PScreen() : GameScreen("game") {}
