@@ -465,6 +465,7 @@ void DanGameScreen::save_result_data(bool all_failed) {
     const int course_songs = std::min((int)sd.selected_dan.size(), 3);
 
     sd.dan_result_data.dan_color = dan_color;
+    sd.dan_result_data.unranked = players[0]->is_auto_play() || players[0]->is_replay();
     sd.dan_result_data.dan_rank = sd.dan_rank;
     sd.dan_result_data.dan_index = sd.dan_index;
     sd.dan_result_data.dan_index_max = sd.dan_index_max;

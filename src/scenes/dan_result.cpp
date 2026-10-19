@@ -187,6 +187,10 @@ void DanResultScreen::apply_reward() {
     congrats_due =
         shodan && rd.dan_index >= 0 && rd.dan_index_max >= 0 && rd.dan_index == rd.dan_index_max && prev_best <= 1;
 
+    if (rd.unranked) {
+        return; // auto play / replay: the result is shown but not recorded, like single songs
+    }
+
     if (shodan && rd.dan_index >= 0) {
         if (auto pd = scores_manager.get_player_data(pid)) {
             if (pd->dan <= rd.dan_index) {

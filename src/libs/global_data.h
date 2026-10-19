@@ -181,7 +181,8 @@ struct DanResultData {
     std::vector<Exam> exams;
     std::vector<DanResultExam> exam_data;
     int odai_result = -1;
-    bool skipped = false; // the player skipped out: nothing is recorded
+    bool skipped = false;  // the player skipped out: nothing is recorded
+    bool unranked = false; // auto play or a replay: shown, but not recorded (as for single songs)
 };
 
 struct ResultData {
