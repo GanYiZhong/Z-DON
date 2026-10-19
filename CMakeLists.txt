@@ -206,6 +206,16 @@ if(NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
 endif()
 
+# Z-DON: src/libs/png_fast.cpp inflates with zlib-ng when a dependency built it (cpr does, as the
+# static target "zlib"), else with the system zlib; without either it is compiled out.
+if(TARGET zlib AND NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
+  target_link_libraries(${PROJECT_NAME} PRIVATE zlib)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ZDON_HAVE_ZLIB)
+elseif(TARGET ZLIB::ZLIB)
+  target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ZDON_HAVE_ZLIB)
+endif()
+
 if(YATAIDON_PROFILER)
   target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
 endif()
