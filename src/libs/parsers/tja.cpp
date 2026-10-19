@@ -123,14 +123,16 @@ static std::string trim_view(std::string_view str) {
     return (start < end) ? std::string(start, end) : std::string();
 }
 
-int calculate_base_score(const NoteList& notes) {
+// notes_at(i) is the i-th note of the sequence that is scored, n its length
+template<typename At>
+static int base_score_of(size_t n, At notes_at) {
     int total_notes = 0;
     int balloon_count = 0;
     double drumroll_msec = 0.0f;
 
-    for (size_t i = 0; i < notes.notes.size(); i++) {
-        const Note& note = notes.notes[i];
-        const Note& next_note = notes.notes[std::min(i + 1, notes.notes.size() - 1)];
+    for (size_t i = 0; i < n; i++) {
+        const Note& note = notes_at(i);
+        const Note& next_note = notes_at(std::min(i + 1, n - 1));
 
         if (note.color.has_value()) { // is drumroll
             drumroll_msec += (next_note.hit_ms - note.hit_ms);
@@ -154,6 +156,14 @@ int calculate_base_score(const NoteList& notes) {
         (1000000.0f - (balloon_count * 100.0f) - (16.920079999994086f * drumroll_msec / 1000.0f * 100.0f)) /
         total_notes / 10.0f;
     return static_cast<int>(std::ceil(calculation)) * 10;
+}
+
+int calculate_base_score(const NoteList& notes) {
+    return base_score_of(notes.notes.size(), [&](size_t i) -> const Note& { return notes.notes[i]; });
+}
+
+int calculate_base_score(std::span<const Note* const> notes) {
+    return base_score_of(notes.size(), [&](size_t i) -> const Note& { return *notes[i]; });
 }
 
 inline std::filesystem::path get_proper_path(const std::string& path, const std::string& encoding,

@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <span>
 #include <spdlog/spdlog.h>
 #include <string>
 #include <string_view>
@@ -393,6 +394,8 @@ private:
 
 double get_ms_per_measure(double bpm_val, double time_sig);
 int calculate_base_score(const NoteList& notes);
+// the same over a sequence of notes that are not in one list
+int calculate_base_score(std::span<const Note* const> notes);
 // MD5 over the note hashes, for parsers whose notes come from a single list
 std::string hash_notes(const std::deque<Note>& notes);
 

@@ -865,12 +865,17 @@ void Player::reset_chart() {
     branch_note_count = 0;
     branch_checkpoint_index = 0;
 
-    NoteList total_notes; // all notes including master branch
-
-    std::ranges::copy_if(notes.notes, std::back_inserter(total_notes.notes),
-                         [&](const Note& n) { return !unplayable(n); });
+    // all playable notes including the master branch, in this order (scoring looks at each note's successor)
+    std::vector<const Note*> total_notes;
+    for (const Note& n : notes.notes) {
+        if (!unplayable(n)) {
+            total_notes.push_back(&n);
+        }
+    }
     for (const NoteList& section : branch_m) {
-        total_notes.notes.insert(total_notes.notes.end(), section.notes.begin(), section.notes.end());
+        for (const Note& n : section.notes) {
+            total_notes.push_back(&n);
+        }
     }
 
     // setup gauge
@@ -885,8 +890,8 @@ void Player::reset_chart() {
         stars = 10;
     }
     int gauge_total_notes = 0;
-    for (Note& note : total_notes.notes) {
-        if (note.type >= NoteType::DON && note.type <= NoteType::KAT_L) {
+    for (const Note* note : total_notes) {
+        if (note->type >= NoteType::DON && note->type <= NoteType::KAT_L) {
             gauge_total_notes++;
         }
     }
