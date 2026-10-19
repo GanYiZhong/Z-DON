@@ -279,7 +279,9 @@ private:
         sound* pcm = nullptr;
         size_t bytes = 0;
     };
-    std::mutex resident_lock; // also held across a slot's PCM exchange, so ownership stays clear
+    // also held across a slot's PCM exchange, so ownership stays clear. Lock order: resident_lock, then
+    // names_lock; never retire while holding it (reclaim takes names_lock unique)
+    std::mutex resident_lock;
     std::unordered_map<std::string, ResidentSound> resident;
     size_t resident_bytes = 0;
     bool is_resident_locked(const std::string& name, const sound* pcm) const;
