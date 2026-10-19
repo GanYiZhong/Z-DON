@@ -614,14 +614,14 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
         // later one in the listing, as a sequential scan binds them, not to whichever worker wrote last
         std::map<std::pair<std::string, std::string>, size_t> title_owner;
         auto bind_title = [&](std::pair<std::string, std::string> key, const fs::path& file, size_t i) {
-            if (fixed_step::on()) {
-                auto [it, fresh] = title_owner.try_emplace(key, i);
-                if (!fresh) {
-                    if (it->second > i) {
-                        return;
-                    }
-                    it->second = i;
+            // Z-DON: in every mode (it used to be whichever worker wrote last, so e.g. a dan course
+            // played the old or the new audio version of a same-titled song from run to run)
+            auto [it, fresh] = title_owner.try_emplace(key, i);
+            if (!fresh) {
+                if (it->second > i) {
+                    return;
                 }
+                it->second = i;
             }
             song_files[std::move(key)] = file;
         };
