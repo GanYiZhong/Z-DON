@@ -845,7 +845,7 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
     }
 #else
     auto build = is_vertical ? &OutlinedText::build_vertical_text : &OutlinedText::build_horizontal_text;
-    build_future = std::async(std::launch::async, [this, build, color, outline_color, spacing]() {
+    build_future = jobs::submit(jobs::Priority::Normal, [this, build, color, outline_color, spacing]() {
         auto data = (this->*build)(color, outline_color, spacing);
         std::lock_guard<std::mutex> lock(pending_mutex);
         pending_image = std::move(data.img);

@@ -11,6 +11,7 @@
 
 #include "filesystem.h"
 #include "global_data.h"
+#include "jobs.h"
 #include "png_fast.h"
 #include "profiler.h"
 #include "script.h"
@@ -549,24 +550,17 @@ void decode_images_parallel(const std::vector<fs::path>& files, std::vector<ray:
         return;
     }
 
-    std::atomic<size_t> next{0};
-    std::vector<std::thread> pool;
-    pool.reserve(workers);
-    for (size_t w = 0; w < workers; ++w) {
-        pool.emplace_back([&files, &out, &next]() {
-            for (size_t i = next.fetch_add(1); i < files.size(); i = next.fetch_add(1)) {
-                try {
-                    out[i] = load_image(files[i], {}, nullptr);
-                } catch (const std::exception& e) {
-                    spdlog::error("Failed to decode image {}: {}", files[i].string(), e.what());
-                    out[i] = ray::Image{};
-                }
+    jobs::parallel_for(
+        files.size(), jobs::Priority::Critical,
+        [&files, &out](size_t i) {
+            try {
+                out[i] = load_image(files[i], {}, nullptr);
+            } catch (const std::exception& e) {
+                spdlog::error("Failed to decode image {}: {}", files[i].string(), e.what());
+                out[i] = ray::Image{};
             }
-        });
-    }
-    for (auto& t : pool) {
-        t.join();
-    }
+        },
+        workers);
 }
 
 // A screen's texture folders, each listed once. Loading a screen asked the file system about

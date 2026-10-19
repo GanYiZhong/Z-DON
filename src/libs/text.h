@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "jobs.h"
 #include "texture.h"
 
 // One rasterized glyph, immutable once cached. Shared by its size's cache, that size's GPU atlas and
@@ -129,7 +130,7 @@ private:
 
     std::optional<ray::Texture> texture;
 
-    std::future<void> build_future;
+    jobs::Handle build_future; // Z-DON: a job on the shared pool (was a std::async thread per text)
 
     struct BuildData {
         ray::Image img;

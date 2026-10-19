@@ -5,6 +5,7 @@
 #include "../../../libs/filesystem.h"
 #include "../../../libs/fixed_step.h"
 #include "../../../libs/han_fold_table.h"
+#include "../../../libs/jobs.h"
 #include "../../../libs/library_index.h"
 #include "../../../libs/text.h"
 #include "../../dan_select/dan_navigator.h"
@@ -132,28 +133,23 @@ static std::unique_ptr<SongBox> make_song_box(const fs::path& path, const BoxDef
 }
 
 static std::unordered_map<std::string, std::unique_ptr<SongParser>>
-parse_songs_parallel(const std::vector<fs::path>& paths, std::atomic<bool>& abort_flag) {
+parse_songs_parallel(const std::vector<fs::path>& paths, std::atomic<bool>& abort_flag,
+                     jobs::Priority priority = jobs::Priority::Critical) {
     std::vector<std::unique_ptr<SongParser>> parsed(paths.size());
     unsigned workers = std::clamp(std::thread::hardware_concurrency(), 2u, 8u);
-    std::atomic<size_t> next{0};
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < workers && t < paths.size(); t++) {
-        pool.emplace_back([&] {
-            for (size_t i; (i = next.fetch_add(1)) < paths.size();) {
-                if (abort_flag.load()) {
-                    break;
-                }
-                try {
-                    parsed[i] = std::make_unique<SongParser>(paths[i]);
-                } catch (const std::exception& e) {
-                    spdlog::warn("Failed to parse {}: {}", paths[i].string(), e.what());
-                }
+    jobs::parallel_for(
+        paths.size(), priority,
+        [&](size_t i) {
+            if (abort_flag.load()) {
+                return;
             }
-        });
-    }
-    for (auto& th : pool) {
-        th.join();
-    }
+            try {
+                parsed[i] = std::make_unique<SongParser>(paths[i]);
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse {}: {}", paths[i].string(), e.what());
+            }
+        },
+        workers);
 
     std::unordered_map<std::string, std::unique_ptr<SongParser>> out;
     for (size_t i = 0; i < paths.size(); i++) {
@@ -508,25 +504,23 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
     song_files_thread = std::thread([this, songs_paths, listed = std::move(listed), stamps = std::move(stamps)]() {
         std::vector<fs::path> files = listed ? *listed : get_song_files(songs_paths);
         std::mutex map_mutex;
-        std::atomic<size_t> cursor{0};
         unsigned pool_size = std::max(2u, std::thread::hardware_concurrency() / 2);
-        std::vector<std::thread> pool;
-        for (unsigned t = 0; t < pool_size; t++) {
-            pool.emplace_back([&]() {
-                for (;;) {
-                    size_t i = cursor.fetch_add(1);
-                    if (i >= files.size() || abort_loading) {
-                        break;
+        jobs::parallel_for(
+            files.size(), jobs::Priority::Background,
+            [&](size_t i) {
+                {
+                    if (abort_loading) {
+                        return;
                     }
                     const fs::path& file = files[i];
                     // the listing already says which of these are files, except for a link
                     if (i < stamps.size() && stamps[i].listed && !stamps[i].is_reparse) {
                         const fs::path ext = file.extension();
                         if (stamps[i].is_dir || (ext != ".tja" && ext != ".osu")) {
-                            continue;
+                            return;
                         }
                     } else if (!is_song_file(file)) {
-                        continue;
+                        return;
                     }
                     // the loading screen already read this chart (parsed or from its cache)
                     auto u8 = file.u8string();
@@ -539,7 +533,7 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
                             song_search_text[file.string()] = search_fold(joined_titles(meta->titles, meta->subtitles));
                             song_levels[file.string()] = meta->levels;
                         }
-                        continue;
+                        return;
                     }
                     try {
                         SongParser parsed_entry = SongParser(file);
@@ -566,11 +560,8 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
                         spdlog::warn("Skipping song during scan: {}", inner.what());
                     }
                 }
-            });
-        }
-        for (std::thread& worker : pool) {
-            worker.join();
-        }
+            },
+            pool_size);
         song_files_ready = true;
     });
     fixed_step::join(song_files_thread);
@@ -1669,7 +1660,7 @@ void Navigator::start_inline_prefetch(const fs::path& path) {
     prefetch_thread = std::thread([this, pf] {
         scan_song_tree(pf->path, pf->song_paths, pf->plan);
         if (!abort_loading) {
-            pf->preparsed = parse_songs_parallel(pf->song_paths, abort_loading);
+            pf->preparsed = parse_songs_parallel(pf->song_paths, abort_loading, jobs::Priority::Normal);
         }
     });
     fixed_step::join(prefetch_thread);
@@ -1686,7 +1677,7 @@ void Navigator::start_new_songs_prefetch(const fs::path& path) {
     prefetch_thread = std::thread([this, pf] {
         pf->song_paths = find_new_songs(pf->path);
         if (!abort_loading) {
-            pf->preparsed = parse_songs_parallel(pf->song_paths, abort_loading);
+            pf->preparsed = parse_songs_parallel(pf->song_paths, abort_loading, jobs::Priority::Normal);
         }
         pf->complete = !abort_loading;
     });

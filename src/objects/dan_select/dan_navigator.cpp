@@ -4,6 +4,7 @@
 #include <tuple>
 
 #include "../../libs/fixed_step.h"
+#include "../../libs/jobs.h"
 #include "../../libs/text.h"
 #ifdef SUPPORT_FUMEN
 #include "../../libs/optional/gen3.h"
@@ -503,27 +504,20 @@ std::vector<DanBoxData> DanNavigator::load_dan_jsons(const std::vector<fs::path>
     memo.stored_counts = scores_manager.load_dan_note_counts();
     memo_ = &memo;
     std::vector<std::optional<DanBoxData>> loaded(jsons.size());
-    std::atomic<size_t> cursor{0};
     unsigned pool_size = std::max(2u, std::thread::hardware_concurrency() / 2);
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < pool_size; t++) {
-        pool.emplace_back([&]() {
-            for (;;) {
-                size_t i = cursor.fetch_add(1);
-                if (i >= jsons.size() || scan_abort.load()) {
-                    break;
-                }
-                try {
-                    loaded[i] = load_dan_box_data(jsons[i]);
-                } catch (const std::exception& ex) {
-                    spdlog::warn("DanNavigator: failed to load {}: {}", jsons[i].string(), ex.what());
-                }
+    jobs::parallel_for(
+        jsons.size(), jobs::Priority::Critical,
+        [&](size_t i) {
+            if (scan_abort.load()) {
+                return;
             }
-        });
-    }
-    for (std::thread& worker : pool) {
-        worker.join();
-    }
+            try {
+                loaded[i] = load_dan_box_data(jsons[i]);
+            } catch (const std::exception& ex) {
+                spdlog::warn("DanNavigator: failed to load {}: {}", jsons[i].string(), ex.what());
+            }
+        },
+        pool_size);
     memo_ = nullptr;
     scores_manager.store_dan_note_counts(memo.new_counts);
 
