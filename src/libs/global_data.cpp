@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "../objects/global/chara_3d.h"
 #include "../objects/global/debug_menu.h"
 #include "../objects/song_select/file_navigator/navigator.h"
 #include "audio.h"
@@ -106,6 +107,7 @@ void unload_skin() {
     tex.unload_textures();
     global_tex.unload_textures();
     texture_retain::clear(); // before the GL context goes (shutdown) or the skin changes
+    chara3d_clear_part_pool();
     script_manager.shutdown();
     font_manager.unload();
     unload_named_fonts();

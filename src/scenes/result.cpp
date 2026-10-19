@@ -42,6 +42,7 @@ Screens ResultScreen::on_screen_end(Screens next_screen) {
     if (next_screen != Screens::RETRY_GAME) {
         reset_session();
     }
+    player_1.reset(); // Z-DON: its Don's model goes back to the part pool for the next screen
     return Screen::on_screen_end(next_screen);
 }
 

@@ -402,6 +402,7 @@ Screens SongSelectScreen::on_screen_end(Screens next_screen) {
     }
     navigator.join_loader();
     ray::UnloadShader(shader);
+    player.reset(); // Z-DON: its Don's model goes back to the part pool for the next screen
     return Screen::on_screen_end(next_screen);
 }
 

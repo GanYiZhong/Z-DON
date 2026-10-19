@@ -20,6 +20,8 @@ extern "C" {
 void rlSetCullFace(int mode);
 void rlEnableBackfaceCulling(void);
 void rlDisableBackfaceCulling(void);
+unsigned int rlGetShaderIdDefault(void);
+int* rlGetShaderLocsDefault(void);
 }
 static constexpr int RL_CULL_FACE_FRONT = 0;
 static constexpr int RL_CULL_FACE_BACK = 1;
@@ -316,7 +318,140 @@ static void normalize_face_mesh_size(ray::Mesh& mesh, float target_size) {
     }
 }
 
+// Z-DON: model parts outlive their Don. Every screen with a Don (song select, game, result, ...)
+// built it from scratch: glb parse, embedded PNG decode, mesh and texture upload, the animations
+// reindexed. A part now goes into this pool when its Don is destroyed, as it was loaded (bind pose,
+// the glb's own textures, default shaders), and the next Don that loads the same file takes it.
+// A part has one owner at a time (its meshes carry that Don's pose, its materials that Don's colours
+// and shaders). Main thread only (GL). Cleared on a skin change and at shutdown.
+namespace {
+    struct PooledPart {
+        std::string key;
+        ray::Model model{};
+        std::unordered_map<std::string, int> material_indices;
+        std::vector<int> recolor_indices, blend_indices, twosided_indices;
+        int face_material_index = -1;
+        ray::ModelAnimation* anims = nullptr;
+        int anim_count = 0;
+    };
+    constexpr size_t kMaxPooledParts = 8; // a few Dons' worth (a Don is one costume or a head and a body)
+    std::vector<PooledPart> g_part_pool;  // most recently released last
+    uint64_t g_pool_generation = 1;       // bumped by a clear: parts loaded before it are not pooled
+
+    std::string make_part_pool_key(const fs::path& model_path, const fs::path& anim_path, bool normalize_face_scale) {
+        std::error_code ec;
+        std::string key;
+        for (const fs::path* p : {&model_path, &anim_path}) {
+            const auto mtime = fs::last_write_time(*p, ec);
+            if (ec) {
+                return {};
+            }
+            const auto size = fs::file_size(*p, ec);
+            if (ec) {
+                return {};
+            }
+            key +=
+                p->string() + '|' + std::to_string(mtime.time_since_epoch().count()) + '|' + std::to_string(size) + '|';
+        }
+        key += normalize_face_scale ? '1' : '0';
+        return key;
+    }
+
+    ray::Shader default_shader() {
+        return ray::Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
+    }
+
+    // The mesh buffers as LoadModel left them: no skinned copies, the bind-pose vertices on the GPU.
+    void reset_pose(ray::Model& model) {
+        for (int m = 0; m < model.meshCount; m++) {
+            ray::Mesh& mesh = model.meshes[m];
+            if (mesh.animVertices) {
+                ray::MemFree(mesh.animVertices);
+                mesh.animVertices = nullptr;
+                ray::UpdateMeshBuffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * (int)sizeof(float), 0);
+            }
+            if (mesh.animNormals) {
+                ray::MemFree(mesh.animNormals);
+                mesh.animNormals = nullptr;
+                ray::UpdateMeshBuffer(mesh, 2, mesh.normals, mesh.vertexCount * 3 * (int)sizeof(float), 0);
+            }
+        }
+        if (model.currentPose) {
+            std::memset(model.currentPose, 0, model.skeleton.boneCount * sizeof(ray::Transform));
+        }
+        if (model.boneMatrices) {
+            for (int b = 0; b < model.skeleton.boneCount; b++) {
+                model.boneMatrices[b] = ray::MatrixIdentity();
+            }
+        }
+    }
+
+    void unload_part(ray::Model& model, ray::ModelAnimation* anims, int anim_count) {
+        ray::UnloadModelAnimations(anims, anim_count);
+        ray::UnloadModel(model);
+    }
+} // namespace
+
+void chara3d_clear_part_pool() {
+    for (PooledPart& p : g_part_pool) {
+        unload_part(p.model, p.anims, p.anim_count);
+    }
+    g_part_pool.clear();
+    ++g_pool_generation;
+}
+
+// The shaders this Don's materials use (a pooled part comes back with the default shader).
+static void assign_part_shaders(ray::Model& model, int face_material_index, const ray::Shader& face_shader,
+                                const ray::Shader& cutout_shader) {
+#ifdef PLATFORM_ANDROID
+    if (face_material_index != -1 && face_shader.id != 0) {
+        model.materials[face_material_index].shader = face_shader;
+    }
+#else
+    (void)face_shader;
+#endif
+    // Alpha-tested materials: the textures are binary alpha with black RGB under the
+    // transparent texels (fins, tentacles, hair tips). Forcing alpha to 255 painted all of
+    // that solid black; blending them would need back-to-front sorting. An alpha test gives
+    // the cabinet's cutout look with plain depth writes.
+    if (cutout_shader.id != 0) {
+        for (int i = 0; i < model.materialCount; i++) {
+            if (i == face_material_index) {
+                continue;
+            }
+            model.materials[i].shader = cutout_shader;
+        }
+    }
+}
+
 void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, bool normalize_face_scale) {
+    std::string key = make_part_pool_key(model_path, anim_path, normalize_face_scale);
+    if (!key.empty()) {
+        auto it =
+            std::find_if(g_part_pool.rbegin(), g_part_pool.rend(), [&](const PooledPart& p) { return p.key == key; });
+        if (it != g_part_pool.rend()) {
+            PooledPart p = std::move(*it);
+            g_part_pool.erase(std::next(it).base());
+            assign_part_shaders(p.model, p.face_material_index, face_shader, cutout_shader);
+            parts.push_back(p.model);
+            part_material_indices.push_back(std::move(p.material_indices));
+            part_recolor_indices.push_back(std::move(p.recolor_indices));
+            part_blend_indices.push_back(std::move(p.blend_indices));
+            part_twosided_indices.push_back(std::move(p.twosided_indices));
+            part_face_material_index.push_back(p.face_material_index);
+            part_anims.push_back(p.anims);
+            part_anim_count.push_back(p.anim_count);
+            part_pool_key.push_back(std::move(key));
+            part_pool_generation.push_back(g_pool_generation);
+            part_face_original.push_back(
+                p.face_material_index != -1
+                    ? p.model.materials[p.face_material_index].maps[ray::MATERIAL_MAP_DIFFUSE].texture
+                    : ray::Texture2D{});
+            part_replaced_textures.emplace_back();
+            return;
+        }
+    }
+
     ray::Model model = ray::LoadModel(model_path.string().c_str());
     // The vertex colours stay as shipped: the main shader does not tint by them, and the black
     // line pass reads its per-vertex thickness from the green channel.
@@ -361,28 +496,12 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
             }
         }
     }
-#ifdef PLATFORM_ANDROID
-    if (face_material_index != -1 && face_shader.id != 0) {
-        model.materials[face_material_index].shader = face_shader;
-    }
-#endif
     std::erase(additive_indices, face_material_index);
     std::erase(blend_indices, face_material_index);
     for (int idx : additive_indices) {
         model.materials[idx].maps[ray::MATERIAL_MAP_DIFFUSE].color = {255, 255, 255, 255};
     }
-    // Alpha-tested materials: the textures are binary alpha with black RGB under the
-    // transparent texels (fins, tentacles, hair tips). Forcing alpha to 255 painted all of
-    // that solid black; blending them would need back-to-front sorting. An alpha test gives
-    // the cabinet's cutout look with plain depth writes.
-    if (cutout_shader.id != 0) {
-        for (int i = 0; i < model.materialCount; i++) {
-            if (i == face_material_index) {
-                continue;
-            }
-            model.materials[i].shader = cutout_shader;
-        }
-    }
+    assign_part_shaders(model, face_material_index, face_shader, cutout_shader);
 
     const AnimSource& anim_src = anim_source(anim_path);
     ray::ModelAnimation* anims = reindexed_animations(model, anim_src);
@@ -396,6 +515,12 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     part_face_material_index.push_back(face_material_index);
     part_anims.push_back(anims);
     part_anim_count.push_back(anim_count);
+    part_pool_key.push_back(std::move(key));
+    part_pool_generation.push_back(g_pool_generation);
+    part_face_original.push_back(face_material_index != -1
+                                     ? model.materials[face_material_index].maps[ray::MATERIAL_MAP_DIFFUSE].texture
+                                     : ray::Texture2D{});
+    part_replaced_textures.emplace_back();
 }
 
 static void init_shaders(ray::Shader& outline_fxaa_shader, int& outline_fxaa_size_loc, int& outline_fxaa_thickness_loc,
@@ -464,11 +589,42 @@ Chara3D::Chara3D(std::string& head_name, std::string& body_name, bool mirror, bo
 
 Chara3D::~Chara3D() {
     for (size_t p = 0; p < parts.size(); p++) {
-        if (part_face_material_index[p] != -1 && !face_textures.empty()) {
-            parts[p].materials[part_face_material_index[p]].maps[ray::MATERIAL_MAP_DIFFUSE].texture.id = 0;
+        const int face_mat = part_face_material_index[p];
+        if (part_pool_key[p].empty() || part_pool_generation[p] != g_pool_generation) {
+            if (face_mat != -1 && !face_textures.empty()) {
+                parts[p].materials[face_mat].maps[ray::MATERIAL_MAP_DIFFUSE].texture.id = 0;
+            }
+            unload_part(parts[p], part_anims[p], part_anim_count[p]);
+            continue;
         }
-        ray::UnloadModelAnimations(part_anims[p], part_anim_count[p]);
-        ray::UnloadModel(parts[p]);
+        // back into the pool as loaded: the glb's own textures, default shaders, bind pose
+        for (auto it = part_replaced_textures[p].rbegin(); it != part_replaced_textures[p].rend(); ++it) {
+            ray::Texture2D& current = parts[p].materials[it->first].maps[ray::MATERIAL_MAP_DIFFUSE].texture;
+            ray::UnloadTexture(current);
+            current = it->second;
+        }
+        if (face_mat != -1) {
+            parts[p].materials[face_mat].maps[ray::MATERIAL_MAP_DIFFUSE].texture = part_face_original[p];
+        }
+        for (int i = 0; i < parts[p].materialCount; i++) {
+            parts[p].materials[i].shader = default_shader();
+        }
+        reset_pose(parts[p]);
+        PooledPart pooled;
+        pooled.key = std::move(part_pool_key[p]);
+        pooled.model = parts[p];
+        pooled.material_indices = std::move(part_material_indices[p]);
+        pooled.recolor_indices = std::move(part_recolor_indices[p]);
+        pooled.blend_indices = std::move(part_blend_indices[p]);
+        pooled.twosided_indices = std::move(part_twosided_indices[p]);
+        pooled.face_material_index = face_mat;
+        pooled.anims = part_anims[p];
+        pooled.anim_count = part_anim_count[p];
+        g_part_pool.push_back(std::move(pooled));
+        if (g_part_pool.size() > kMaxPooledParts) {
+            unload_part(g_part_pool.front().model, g_part_pool.front().anims, g_part_pool.front().anim_count);
+            g_part_pool.erase(g_part_pool.begin());
+        }
     }
     ray::UnloadShader(null_shader);
     ray::UnloadShader(face_shader);
@@ -484,6 +640,7 @@ Chara3D::~Chara3D() {
 }
 
 void Chara3D::set_texture(fs::path& texture_path, int part_index, int material_index) {
+    part_pool_key[part_index].clear(); // its original texture goes: the part cannot go back to the pool
     ray::Texture2D old = parts[part_index].materials[material_index].maps[ray::MATERIAL_MAP_DIFFUSE].texture;
     // Face material textures are owned by face_textures (shared across parts and unloaded
     // in the destructor); unloading here would double-free / use-after-free.
@@ -595,7 +752,10 @@ static ray::Texture2D recolor_texture(ray::Image& source, ray::Color body, ray::
     return result;
 }
 
-static void apply_don_colors(ray::Model& model, int mat_idx, ray::Color body, ray::Color face, ray::Color rim) {
+// `replaced` keeps the part's original texture for each material (the pool restores it); a texture
+// this Don made itself is unloaded when replaced again
+static void apply_don_colors(ray::Model& model, int mat_idx, ray::Color body, ray::Color face, ray::Color rim,
+                             std::vector<std::pair<int, ray::Texture2D>>& replaced) {
     auto& map = model.materials[mat_idx].maps[ray::MATERIAL_MAP_DIFFUSE];
     ray::Image img = ray::LoadImageFromTexture(map.texture);
     if (!img.data) {
@@ -606,14 +766,18 @@ static void apply_don_colors(ray::Model& model, int mat_idx, ray::Color body, ra
     if (new_tex.id == 0) {
         return;
     }
-    ray::UnloadTexture(map.texture);
+    if (std::any_of(replaced.begin(), replaced.end(), [&](const auto& r) { return r.first == mat_idx; })) {
+        ray::UnloadTexture(map.texture);
+    } else {
+        replaced.emplace_back(mat_idx, map.texture);
+    }
     map.texture = new_tex;
 }
 
 void Chara3D::set_don_colors(ray::Color body, ray::Color face, ray::Color rim) {
     for (size_t p = 0; p < parts.size(); p++) {
         for (int idx : part_recolor_indices[p]) {
-            apply_don_colors(parts[p], idx, body, face, rim);
+            apply_don_colors(parts[p], idx, body, face, rim, part_replaced_textures[p]);
         }
     }
     render_dirty = true;

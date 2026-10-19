@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -78,6 +79,12 @@ private:
     std::vector<int> part_face_material_index;
     std::vector<ray::ModelAnimation*> part_anims;
     std::vector<int> part_anim_count;
+    // Z-DON part pool (see chara_3d.cpp): the key a part goes back under (empty: not poolable), and
+    // the textures this Don replaced (restored before the part goes back)
+    std::vector<std::string> part_pool_key;
+    std::vector<uint64_t> part_pool_generation;
+    std::vector<ray::Texture2D> part_face_original;
+    std::vector<std::vector<std::pair<int, ray::Texture2D>>> part_replaced_textures;
 
     void load_part(const fs::path& model_path, const fs::path& anim_path, bool normalize_face_scale = false);
 
@@ -174,6 +181,9 @@ public:
 
     void draw(float x, float y, float scale_mul = 1.0f);
 };
+
+// Unloads the model parts kept for the next Don (skin change, shutdown: needs the GL context).
+void chara3d_clear_part_pool();
 
 struct PlayerData;
 std::unique_ptr<Chara3D> make_chara_from_player_data(const PlayerData* pd, bool mirror = false,
