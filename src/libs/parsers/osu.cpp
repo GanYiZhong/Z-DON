@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 std::vector<std::string> OsuParser::read_file_lines(const fs::path& path) {

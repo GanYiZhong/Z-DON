@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <deque>
@@ -9,9 +10,9 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <regex>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -360,7 +361,6 @@ private:
     std::deque<NoteList> branch_m;
     std::deque<NoteList> branch_e;
     std::deque<NoteList> branch_n;
-    static const std::regex complex_number_regex;
 
     static std::string to_lower(const std::string& str);
     static std::string split_after_colon(const std::string& str);
@@ -368,13 +368,17 @@ private:
     static std::string trim(const std::string& str);
     static std::vector<int> parse_balloon_data(const std::string& data);
 
-    std::vector<std::vector<std::string>> data_to_notes(int diff);
+    // the bars of a course as views of `data` (and of string literals)
+    std::vector<std::vector<std::string_view>> data_to_notes(int diff);
 
     void add_tempo_point(double bpm);
 
     std::map<std::string, CommandHandler> build_command_registry();
     void register_extended_commands(std::map<std::string, CommandHandler>& registry);
     std::vector<std::pair<std::string, CommandHandler>> cached_cmds;
+    // cached_cmds indices by the command's second character (every command is '#' + a letter...), in
+    // cached_cmds order: a line can only start with the commands of its own bucket
+    std::array<std::vector<unsigned short>, 256> cmd_buckets;
 
     void handle_MEASURE(const std::string& value, ParserState& state);
     void handle_SCROLL(const std::string& value, ParserState& state);
