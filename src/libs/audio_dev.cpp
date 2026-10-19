@@ -28,6 +28,10 @@ namespace audio_dev {
             std::atomic<int64_t> max_wait_ns{0};
             std::atomic<uint64_t> underflows{0};
             std::atomic<uint64_t> stream_underruns{0};
+            std::atomic<int64_t> max_voices{0};
+            std::atomic<uint64_t> poly_plays{0};
+            std::atomic<uint64_t> poly_overlapped{0};
+            std::atomic<uint64_t> poly_stolen{0};
         };
         Stats g_stats;
 
@@ -103,6 +107,10 @@ namespace audio_dev {
             const int64_t wait = g_stats.max_wait_ns.exchange(0, std::memory_order_relaxed);
             const uint64_t uf = g_stats.underflows.exchange(0, std::memory_order_relaxed);
             const uint64_t su = g_stats.stream_underruns.exchange(0, std::memory_order_relaxed);
+            const int64_t voices = g_stats.max_voices.exchange(0, std::memory_order_relaxed);
+            const uint64_t pp = g_stats.poly_plays.exchange(0, std::memory_order_relaxed);
+            const uint64_t po = g_stats.poly_overlapped.exchange(0, std::memory_order_relaxed);
+            const uint64_t ps = g_stats.poly_stolen.exchange(0, std::memory_order_relaxed);
             int p99 = 0;
             if (n > 0) {
                 const uint64_t want = (n * 99 + 99) / 100;
@@ -116,9 +124,9 @@ namespace audio_dev {
                 }
             }
             spdlog::info("[audio-stats] callbacks={} avg_us={:.1f} p99_us={} max_us={:.1f} max_lock_wait_us={:.1f} "
-                         "underflows={} stream_underruns={}",
+                         "underflows={} stream_underruns={} max_voices={} poly_plays={} overlapped={} stolen={}",
                          n, n ? (double)sum / (double)n / 1000.0 : 0.0, p99, (double)mx / 1000.0, (double)wait / 1000.0,
-                         uf, su);
+                         uf, su, voices, pp, po, ps);
         }
     } // namespace
 
@@ -213,6 +221,16 @@ namespace audio_dev {
 
     void record_stream_underrun() {
         g_stats.stream_underruns.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void record_voices(size_t active) {
+        atomic_max(g_stats.max_voices, (int64_t)active);
+    }
+
+    void record_poly_play(bool overlapped, bool stolen) {
+        g_stats.poly_plays.fetch_add(1, std::memory_order_relaxed);
+        g_stats.poly_overlapped.fetch_add(overlapped ? 1 : 0, std::memory_order_relaxed);
+        g_stats.poly_stolen.fetch_add(stolen ? 1 : 0, std::memory_order_relaxed);
     }
 
     void capture(const float* stereo, unsigned int frames) {

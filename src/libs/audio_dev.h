@@ -6,7 +6,9 @@
 
 // Z-DON dev hooks for the mixer (all off unless the env var is set):
 //   YATAIDON_AUDIO_STATS=1        every 2 s logs the mix callback's duration (avg/p99/max, us), the longest
-//                                 time it waited for a lock and the underflows the backend reported.
+//                                 time it waited for a lock and the underflows the backend reported; also the
+//                                 most sound voices mixed in one callback and the polyphonic (hit sound) plays:
+//                                 how many overlapped another voice of their ring / took over one still sounding.
 //   YATAIDON_AUDIO_CAPTURE=<wav>  writes the mixer's output, before the master volume (YATAIDON_TEST
 //                                 plays at 1%) and the final clamp, to a 32-bit float stereo WAV.
 //   YATAIDON_AUDIO_SELFTEST=<wav>;<long sound>;<stream file>  after the device opens, pauses it and mixes a
@@ -24,6 +26,9 @@ namespace audio_dev {
     void record_callback(int64_t mix_ns, int64_t lock_wait_ns);
     void record_underflow();
     void record_stream_underrun();
+    void record_voices(size_t active);
+    // from play_sound (main thread)
+    void record_poly_play(bool overlapped, bool stolen);
     void capture(const float* stereo, unsigned int frames);
 
     inline int64_t now_ns() {

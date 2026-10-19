@@ -352,6 +352,9 @@ void AudioEngine::mix(float* out, unsigned int framesPerBuffer, AudioEngine* eng
     // No lock: what is freed elsewhere waits until this callback has left (see retire)
     engine->mix_epoch.fetch_add(1, std::memory_order_seq_cst);
     engine->mix_sounds(out, framesPerBuffer);
+    if (stats) {
+        audio_dev::record_voices(engine->active_voices.size());
+    }
     engine->mix_streams(out, framesPerBuffer);
     engine->mix_epoch.fetch_add(1, std::memory_order_seq_cst);
 
@@ -1780,6 +1783,13 @@ void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain)
         // polyphonic: the oldest voice of the ring takes this play with the sound's parameters
         id = snd.voice_base + snd.next_voice.fetch_add(1, std::memory_order_relaxed) % n;
         voice = slot_at(id);
+        if (audio_dev::stats_enabled()) {
+            bool overlapped = false;
+            for (uint32_t k = 0; k < n; k++) {
+                overlapped = overlapped || slot_at(snd.voice_base + k)->is_playing.load(std::memory_order_relaxed);
+            }
+            audio_dev::record_poly_play(overlapped, voice->is_playing.load(std::memory_order_relaxed));
+        }
         voice->loop.store(snd.loop.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->volume.store(snd.volume.load(std::memory_order_relaxed), std::memory_order_relaxed);
         voice->category.store(snd.category.load(std::memory_order_relaxed), std::memory_order_relaxed);
