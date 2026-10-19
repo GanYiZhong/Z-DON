@@ -1,7 +1,9 @@
 #include "text.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <math.h>
 #include <spdlog/spdlog.h>
 #include <vector>
@@ -129,6 +131,51 @@ void FontManager::unload() {
     }
 }
 
+struct CachedGlyph {
+    // value/offsets/advance as LoadFontData gave them; the image is GRAY_ALPHA (255, coverage), byte for
+    // byte what LoadFontEx-style atlas crops hold (Image{} when the bitmap is empty)
+    ray::GlyphInfo info{};
+    float rec_width = 0.0f; // the rasterized bitmap's size (Font::recs width/height)
+    float rec_height = 0.0f;
+
+    CachedGlyph() = default;
+    CachedGlyph(const CachedGlyph&) = delete;
+    CachedGlyph& operator=(const CachedGlyph&) = delete;
+    ~CachedGlyph() {
+        if (info.image.data) {
+            ray::UnloadImage(info.image);
+        }
+    }
+};
+
+static constexpr int GLYPH_PADDING = 4; // FONT_TTF_DEFAULT_CHARS_PADDING, same as LoadFontEx
+
+// `raw` is a LoadFontData glyph (GRAYSCALE bitmap); it is left untouched.
+static GlyphRef make_glyph(const ray::GlyphInfo& raw, int value) {
+    auto g = std::make_shared<CachedGlyph>();
+    g->info = raw;
+    g->info.value = value;
+    g->info.image = {};
+    const int w = raw.image.width, h = raw.image.height;
+    g->rec_width = (float)w;
+    g->rec_height = (float)h;
+    if (w > 0 && h > 0) {
+        auto* px = (unsigned char*)RL_MALLOC((size_t)w * h * 2);
+        const auto* src = (const unsigned char*)raw.image.data;
+        for (int i = 0; i < w * h; i++) {
+            px[i * 2] = 255;
+            px[i * 2 + 1] = src ? src[i] : 0;
+        }
+        g->info.image = ray::Image{px, w, h, 1, ray::PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA};
+    }
+    return g;
+}
+
+static void add_glyph(std::vector<GlyphRef>& cache, std::unordered_map<int, size_t>& index, GlyphRef g) {
+    index.emplace(g->info.value, cache.size()); // first one wins, like GetGlyphIndex
+    cache.push_back(std::move(g));
+}
+
 void FontManager::evict_lru(int keep_size) {
     while (fonts.size() > MAX_SIZED_FONTS) {
         auto victim = fonts.end();
@@ -143,11 +190,10 @@ void FontManager::evict_lru(int keep_size) {
         if (victim == fonts.end()) {
             break;
         }
-        spdlog::debug("font: evicting {}px atlas ({} codepoints), {} resident", victim->first,
+        spdlog::debug("font: evicting {}px ({} codepoints), {} resident", victim->first,
                       victim->second.codepoints.size(), fonts.size());
-        release_font(victim->second);
-        release_cache(victim->second);
-        fonts.erase(victim);
+        release_atlas(victim->second);
+        fonts.erase(victim); // glyphs an OutlinedText still holds stay alive through its GlyphRefs
     }
 }
 
@@ -164,11 +210,10 @@ bool FontManager::rasterize_new(SizedFont& entry, int font_size, const std::vect
     }
     std::unordered_set<int> got;
     for (int i = 0; i < count; i++) {
-        entry.cache.push_back(g[i]);
+        add_glyph(entry.cache, entry.index, make_glyph(g[i], g[i].value));
         got.insert(g[i].value);
-    } // take ownership of the glyph images
-    RL_FREE(g); // array only; images now live in `cache`
-    entry.atlas_dirty = true;
+    }
+    ray::UnloadFontData(g, count); // the cache holds converted copies
 
     std::vector<int> missing, alts;
     for (int cp : cps) {
@@ -195,25 +240,15 @@ bool FontManager::rasterize_new(SizedFont& entry, int font_size, const std::vect
     }
     std::vector<bool> assigned(alts.size(), false);
     for (int i = 0; i < alt_count; i++) {
-        bool used = false;
         for (size_t k = 0; k < alts.size(); k++) {
             if (assigned[k] || alts[k] != ag[i].value) {
                 continue;
             }
-            ray::GlyphInfo gi = ag[i];
-            gi.value = missing[k];
-            if (used) {
-                gi.image = ray::ImageCopy(ag[i].image); // two originals folding to one form
-            }
-            entry.cache.push_back(gi);
-            used = true;
+            add_glyph(entry.cache, entry.index, make_glyph(ag[i], missing[k])); // drawn as the original
             assigned[k] = true;
         }
-        if (!used) {
-            ray::UnloadImage(ag[i].image);
-        }
     }
-    RL_FREE(ag);
+    ray::UnloadFontData(ag, alt_count);
     // Any alt LoadFontData silently dropped never got assigned; retry those too.
     for (size_t k = 0; k < alts.size(); k++) {
         if (!assigned[k]) {
@@ -223,90 +258,139 @@ bool FontManager::rasterize_new(SizedFont& entry, int font_size, const std::vect
     return true;
 }
 
-// Pack the cached glyphs into a fresh atlas texture. Glyph images stay in `cache`
-// (raylib's LoadFontEx would crop them out of the atlas; nothing here reads them).
-void FontManager::rebuild_atlas(SizedFont& entry, int font_size) {
+void FontManager::reset_atlas(SizedFont& entry, int width, int height) {
+    if (entry.atlas_image.data) {
+        ray::UnloadImage(entry.atlas_image);
+    }
+    // blank texels are (255, 0) like GenImageFontAtlas's, so bilinear filtering at glyph edges blends
+    // toward the same color
+    auto* px = (unsigned char*)RL_MALLOC((size_t)width * height * 2);
+    for (size_t i = 0; i < (size_t)width * height; i++) {
+        px[i * 2] = 255;
+        px[i * 2 + 1] = 0;
+    }
+    entry.atlas_image = ray::Image{px, width, height, 1, ray::PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA};
+    entry.atlas_glyphs.clear();
+    entry.atlas_recs.clear();
+    entry.pen_x = entry.pen_y = entry.row_h = 0;
+}
+
+// Shelf-pack the cached glyphs the atlas doesn't hold yet and upload only the rows they touched; the
+// texture is recreated only when the atlas had to grow. Each glyph sits in a cell with GLYPH_PADDING
+// blank texels on every side, which DrawTextCodepoint samples along with it.
+void FontManager::update_atlas(SizedFont& entry, int font_size) {
+    const size_t n = entry.cache.size();
+    if (n == 0 || (entry.atlas_texture.id != 0 && entry.atlas_glyphs.size() == n)) {
+        return;
+    }
     text_stats::Scope stat(text_stats::ATLAS);
-    release_font(entry);
-    const int n = (int)entry.cache.size();
+    constexpr int MAX_DIM = 8192;
+    constexpr int pad = GLYPH_PADDING;
+    bool recreate = entry.atlas_texture.id == 0;
+    if (!entry.atlas_image.data) {
+        int w = 256;
+        while (w < 16 * (font_size + 2 * pad) && w < 4096) {
+            w *= 2;
+        }
+        reset_atlas(entry, w, std::max(64, w / 4));
+        recreate = true;
+    }
+    int dirty_y0 = entry.pen_y;
+    while (entry.atlas_glyphs.size() < n) {
+        const CachedGlyph& g = *entry.cache[entry.atlas_glyphs.size()];
+        const int gw = (int)g.rec_width, gh = (int)g.rec_height;
+        const int cell_w = gw + 2 * pad, cell_h = std::max(gh, font_size) + 2 * pad;
+        const int W = entry.atlas_image.width, H = entry.atlas_image.height;
+        if (entry.pen_x + cell_w > W && entry.pen_x > 0) {
+            entry.pen_x = 0;
+            entry.pen_y += entry.row_h;
+            entry.row_h = 0;
+        }
+        if (cell_w > W || entry.pen_y + cell_h > H) {
+            if (cell_w <= W && H * 2 <= MAX_DIM) { // taller: the packed rows stay where they are
+                ray::Image old = entry.atlas_image;
+                entry.atlas_image = {};
+                std::vector<ray::GlyphInfo> glyphs = std::move(entry.atlas_glyphs);
+                std::vector<ray::Rectangle> recs = std::move(entry.atlas_recs);
+                const int pen_x = entry.pen_x, pen_y = entry.pen_y, row_h = entry.row_h;
+                reset_atlas(entry, W, H * 2);
+                memcpy(entry.atlas_image.data, old.data, (size_t)W * H * 2);
+                ray::UnloadImage(old);
+                entry.atlas_glyphs = std::move(glyphs);
+                entry.atlas_recs = std::move(recs);
+                entry.pen_x = pen_x;
+                entry.pen_y = pen_y;
+                entry.row_h = row_h;
+            } else if (W * 2 <= MAX_DIM) { // wider: repack everything
+                reset_atlas(entry, W * 2, H);
+            } else {
+                spdlog::warn("font: {}px atlas full at {}x{}, {} glyphs left out", font_size, W, H,
+                             n - entry.atlas_glyphs.size());
+                break;
+            }
+            recreate = true;
+            continue;
+        }
+        const int x = entry.pen_x + pad, y = entry.pen_y + pad;
+        if (g.info.image.data) {
+            auto* dst = (unsigned char*)entry.atlas_image.data;
+            const auto* src = (const unsigned char*)g.info.image.data;
+            for (int row = 0; row < gh; row++) {
+                memcpy(dst + ((size_t)(y + row) * W + x) * 2, src + (size_t)row * gw * 2, (size_t)gw * 2);
+            }
+        }
+        ray::GlyphInfo info = g.info; // the image aliases the cached glyph (cache[i] keeps it alive)
+        entry.atlas_glyphs.push_back(info);
+        entry.atlas_recs.push_back({(float)x, (float)y, g.rec_width, g.rec_height});
+        entry.pen_x += cell_w;
+        entry.row_h = std::max(entry.row_h, cell_h);
+    }
+
+    const int W = entry.atlas_image.width, H = entry.atlas_image.height;
+    if (recreate) {
+        if (entry.atlas_texture.id != 0) {
+            ray::UnloadTexture(entry.atlas_texture);
+        }
+        entry.atlas_texture = ray::LoadTextureFromImage(entry.atlas_image);
+        ray::SetTextureFilter(entry.atlas_texture, ray::TEXTURE_FILTER_BILINEAR);
+    } else {
+        const int y1 = std::min(H, entry.pen_y + entry.row_h);
+        if (y1 > dirty_y0) {
+            ray::UpdateTextureRec(entry.atlas_texture, {0, (float)dirty_y0, (float)W, (float)(y1 - dirty_y0)},
+                                  (const unsigned char*)entry.atlas_image.data + (size_t)dirty_y0 * W * 2);
+        }
+    }
+
     ray::Font f{};
     f.baseSize = font_size;
-    f.glyphCount = n;
-    f.glyphPadding = 4; // FONT_TTF_DEFAULT_CHARS_PADDING, same as LoadFontEx
-    if (n == 0) {
-        entry.atlas_dirty = false;
-        return;
-    } // nothing to pack; keep loaded == false
-    f.glyphs = (ray::GlyphInfo*)RL_MALLOC(sizeof(ray::GlyphInfo) * n);
-    if (!f.glyphs) {
-        return;
-    }
-    for (int i = 0; i < n; i++) {
-        f.glyphs[i] = entry.cache[i];
-    }
-    ray::Image atlas = ray::GenImageFontAtlas(f.glyphs, &f.recs, n, font_size, f.glyphPadding, 0);
-    if (!atlas.data || !f.recs) {
-        if (atlas.data) {
-            ray::UnloadImage(atlas);
-        }
-        if (f.recs) {
-            RL_FREE(f.recs);
-        }
-        RL_FREE(f.glyphs);
-        return;
-    }
-    f.texture = ray::LoadTextureFromImage(atlas);
-    // Like LoadFontEx: the Font's own glyph images are GRAY_ALPHA crops of the atlas
-    // (ImageDrawTextEx / OutlinedText composite from them). The cache keeps the raw
-    // GRAYSCALE bitmaps GenImageFontAtlas needs for the next repack.
-    for (int i = 0; i < n; i++) {
-        f.glyphs[i].image = ray::ImageFromImage(atlas, f.recs[i]);
-    }
-    ray::UnloadImage(atlas);
-    ray::SetTextureFilter(f.texture, ray::TEXTURE_FILTER_BILINEAR);
+    f.glyphCount = (int)entry.atlas_glyphs.size();
+    f.glyphPadding = pad;
+    f.texture = entry.atlas_texture;
+    f.recs = entry.atlas_recs.data();
+    f.glyphs = entry.atlas_glyphs.data();
     entry.font = f;
-    entry.loaded = true;
-    entry.atlas_dirty = false;
 }
 
-// Free texture/recs/glyph-struct array of a font built by rebuild_atlas. Never
-// UnloadFont(): that would free the glyph images we still own in `cache`.
+void FontManager::release_atlas(SizedFont& entry) {
+    if (entry.atlas_texture.id != 0) {
+        ray::UnloadTexture(entry.atlas_texture);
+    }
+    if (entry.atlas_image.data) {
+        ray::UnloadImage(entry.atlas_image);
+    }
+    entry.atlas_texture = {};
+    entry.atlas_image = {};
+    entry.atlas_glyphs.clear();
+    entry.atlas_recs.clear();
+    entry.font = {};
+    entry.pen_x = entry.pen_y = entry.row_h = 0;
+}
+
 void FontManager::release_all_fonts() {
     for (auto& [size, entry] : fonts) {
-        release_font(entry);
-        release_cache(entry);
+        release_atlas(entry);
     }
     fonts.clear();
-}
-
-void FontManager::release_font(SizedFont& entry) {
-    if (!entry.loaded) {
-        return;
-    }
-    if (entry.font.texture.id != 0) {
-        ray::UnloadTexture(entry.font.texture);
-    }
-    if (entry.font.glyphs) {
-        for (int i = 0; i < entry.font.glyphCount; i++) {
-            ray::UnloadImage(entry.font.glyphs[i].image);
-        }
-    }
-    if (entry.font.recs) {
-        RL_FREE(entry.font.recs);
-    }
-    if (entry.font.glyphs) {
-        RL_FREE(entry.font.glyphs);
-    }
-    entry.font = {};
-    entry.loaded = false;
-}
-
-void FontManager::release_cache(SizedFont& entry) {
-    for (auto& g : entry.cache) {
-        ray::UnloadImage(g.image);
-    }
-    entry.cache.clear();
-    entry.codepoints.clear();
 }
 
 bool FontManager::register_codepoints(SizedFont& entry, int font_size, const std::string& text) {
@@ -351,17 +435,79 @@ void FontManager::register_text(const std::string& text, int font_size) {
 }
 
 FontManager::SizedFont& FontManager::acquire(const std::string& text, int font_size) {
-    font_size = std::max(font_size, 1);
-
     SizedFont& entry = fonts[font_size];
     register_codepoints(entry, font_size, text);
-    if (!entry.loaded || entry.atlas_dirty) {
-        rebuild_atlas(entry, font_size);
-    }
-
     entry.last_used = ++use_clock;
     evict_lru(font_size); // never evicts `font_size` itself, so `entry` stays valid
     return entry;
+}
+
+ray::Font FontManager::get_font(const std::string& text, int font_size) {
+    std::lock_guard<std::mutex> lock(font_mutex);
+    font_size = std::max(font_size, 1);
+    SizedFont& entry = acquire(text, font_size);
+    update_atlas(entry, font_size);
+    return entry.font;
+}
+
+// The glyphs `text` uses, in an order that makes GetGlyphIndex pick the same glyph it would in the
+// size's full glyph set: slot 0 first (the fallback when there is no '?'), then '?', then the rest.
+// Glyph values in the cache are unique, so a codepoint maps to the same glyph either way.
+ray::Font FontManager::copy_font(const std::string& text, int font_size, GlyphSubset& storage) {
+    std::lock_guard<std::mutex> lock(font_mutex);
+    font_size = std::max(font_size, 1);
+    SizedFont& entry = acquire(text, font_size);
+    storage.glyphs.clear();
+    storage.recs.clear();
+    storage.refs.clear();
+    if (!entry.cache.empty()) {
+        std::vector<size_t> slots;
+        std::unordered_set<size_t> seen;
+        auto add_slot = [&](size_t slot) {
+            if (seen.insert(slot).second) {
+                slots.push_back(slot);
+            }
+        };
+        auto add_cp = [&](int cp) {
+            auto it = entry.index.find(cp);
+            if (it != entry.index.end()) {
+                add_slot(it->second);
+            }
+        };
+        add_slot(0);
+        for (int cp : {'?', 'A', ' '}) {
+            add_cp(cp);
+        }
+        const char* ptr = text.c_str();
+        while (*ptr) {
+            int cp_size = 0;
+            int codepoint = ray::GetCodepointNext(ptr, &cp_size);
+            if (cp_size <= 0) {
+                break;
+            }
+            add_cp(codepoint);
+            ptr += cp_size;
+        }
+        storage.glyphs.reserve(slots.size());
+        storage.recs.reserve(slots.size());
+        storage.refs.reserve(slots.size());
+        for (size_t slot : slots) {
+            const GlyphRef& g = entry.cache[slot];
+            storage.glyphs.push_back(g->info);
+            storage.recs.push_back({0, 0, g->rec_width, g->rec_height});
+            storage.refs.push_back(g);
+        }
+    }
+    ray::Font f{};
+    if (!storage.glyphs.empty()) {
+        f.baseSize = font_size;
+        f.glyphCount = (int)storage.glyphs.size();
+        f.glyphPadding = GLYPH_PADDING;
+        f.glyphs = storage.glyphs.data();
+        f.recs = storage.recs.data();
+    }
+    f.texture = sentinel_texture;
+    return f;
 }
 
 static ray::Color clear_of(ray::Color c) {
@@ -532,46 +678,6 @@ static void stamp_outline(ray::Image* dst, const ray::Font& font, const char* te
     ray::UnloadImage(cov);
 }
 
-static ray::Font deep_copy_font(const ray::Font& src) {
-    ray::Font dst = src;
-    dst.glyphs = nullptr;
-    dst.recs = nullptr;
-    dst.glyphCount = 0;
-    if (src.glyphCount > 0 && src.glyphs && src.recs) {
-        dst.glyphCount = src.glyphCount;
-        dst.glyphs = (ray::GlyphInfo*)RL_MALLOC(src.glyphCount * sizeof(ray::GlyphInfo));
-        memcpy(dst.glyphs, src.glyphs, src.glyphCount * sizeof(ray::GlyphInfo));
-        for (int i = 0; i < src.glyphCount; i++) {
-            const ray::Image& si = src.glyphs[i].image;
-            ray::Image& di = dst.glyphs[i].image;
-            if (si.data && si.width > 0 && si.height > 0) {
-                int dataSize = ray::GetPixelDataSize(si.width, si.height, si.format);
-                di.data = RL_MALLOC(dataSize);
-                memcpy(di.data, si.data, dataSize);
-            } else {
-                di.data = nullptr;
-            }
-        }
-        dst.recs = (ray::Rectangle*)RL_MALLOC(src.glyphCount * sizeof(ray::Rectangle));
-        memcpy(dst.recs, src.recs, src.glyphCount * sizeof(ray::Rectangle));
-    }
-    return dst;
-}
-
-// NOTE: the returned Font aliases manager-owned glyphs/recs/texture; it is only valid
-// until the next acquire()/register_text() call for any size. Use copy_font() to keep it.
-ray::Font FontManager::get_font(const std::string& text, int font_size) {
-    std::lock_guard<std::mutex> lock(font_mutex);
-    return acquire(text, font_size).font;
-}
-
-ray::Font FontManager::copy_font(const std::string& text, int font_size) {
-    std::lock_guard<std::mutex> lock(font_mutex);
-    ray::Font copy = deep_copy_font(acquire(text, font_size).font);
-    copy.texture = sentinel_texture;
-    return copy;
-}
-
 // Characters placed to the right of the preceding glyph at the same y,
 // rather than stacked below it (terminal punctuation, etc.).
 static bool is_beside_prev_char(const std::string& s) {
@@ -693,7 +799,7 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
     : text(std::move(text)), font_size(static_cast<float>(font_size)),
       outline_thickness(outline_thickness * global_tex.screen_scale), v_advance(v_advance) {
     text_stats::Scope stat(text_stats::CTOR);
-    worker_font = named_font_manager(font_name).copy_font(this->text, font_size);
+    worker_font = named_font_manager(font_name).copy_font(this->text, font_size, worker_glyphs);
 
     if (is_vertical) {
         float char_height = ray::MeasureTextEx(worker_font, "A", font_size, spacing).y;
@@ -756,10 +862,6 @@ OutlinedText::~OutlinedText() {
             ray::UnloadImage(pending_image.value());
             pending_image.reset();
         }
-    }
-    if (worker_font.glyphCount > 0) {
-        worker_font.texture = {};
-        ray::UnloadFont(worker_font);
     }
     if (texture.has_value()) {
         ray::UnloadTexture(texture.value());
@@ -969,9 +1071,8 @@ bool OutlinedText::upload_pending() {
     if (build_future.valid()) {
         build_future.wait();
     }
-    worker_font.texture = {};
-    ray::UnloadFont(worker_font);
     worker_font = {};
+    worker_glyphs = {}; // drop this text's glyph references
 
     ray::Texture tex{};
     {
@@ -1046,7 +1147,8 @@ FontManager& named_font_manager(const std::string& name) {
             try {
                 fm = std::make_unique<FontManager>();
                 fm->init(p);
-                if (fm->get_font("A?", 16).glyphCount <= 0) {
+                GlyphSubset probe;
+                if (fm->copy_font("A?", 16, probe).glyphCount <= 0) {
                     throw std::runtime_error("no usable glyphs in " + p.string());
                 }
             } catch (const std::exception& e) {
