@@ -11,6 +11,7 @@
 
 #include "filesystem.h"
 #include "global_data.h"
+#include "jobs.h"
 #include "png_fast.h"
 #include "profiler.h"
 #include "script.h"
@@ -259,6 +260,7 @@ void TextureWrapper::init(const fs::path& skin_path) {
 
 void TextureWrapper::unload_textures() {
     lua_texture_lookup.clear();
+    texture_fallbacks.clear();
     textures.clear();
     loaded_subsets.clear();
     animations.clear();
@@ -548,24 +550,17 @@ void decode_images_parallel(const std::vector<fs::path>& files, std::vector<ray:
         return;
     }
 
-    std::atomic<size_t> next{0};
-    std::vector<std::thread> pool;
-    pool.reserve(workers);
-    for (size_t w = 0; w < workers; ++w) {
-        pool.emplace_back([&files, &out, &next]() {
-            for (size_t i = next.fetch_add(1); i < files.size(); i = next.fetch_add(1)) {
-                try {
-                    out[i] = load_image(files[i], {}, nullptr);
-                } catch (const std::exception& e) {
-                    spdlog::error("Failed to decode image {}: {}", files[i].string(), e.what());
-                    out[i] = ray::Image{};
-                }
+    jobs::parallel_for(
+        files.size(), jobs::Priority::Critical,
+        [&files, &out](size_t i) {
+            try {
+                out[i] = load_image(files[i], {}, nullptr);
+            } catch (const std::exception& e) {
+                spdlog::error("Failed to decode image {}: {}", files[i].string(), e.what());
+                out[i] = ray::Image{};
             }
-        });
-    }
-    for (auto& t : pool) {
-        t.join();
-    }
+        },
+        workers);
 }
 
 // A screen's texture folders, each listed once. Loading a screen asked the file system about
@@ -915,6 +910,7 @@ private:
 
 void TextureWrapper::load_folder(const std::string& screen_name, const std::string& subset) {
     lua_texture_lookup.clear();
+    texture_fallbacks.clear();
     // Subset leaf name is the key prefix used in textures[] (e.g. "notes_nijiiro" from "game/notes_nijiiro")
     const std::string subset_key = fs::path(subset).filename().string();
     const std::string dedup_key = screen_name + "/" + subset_key;
@@ -1153,6 +1149,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
 
 void TextureWrapper::unload_folder(const std::string& screen_name, const std::string& subset) {
     lua_texture_lookup.clear();
+    texture_fallbacks.clear();
     const std::string subset_key = fs::path(subset).filename().string();
     const std::string dedup_key = screen_name + "/" + subset_key;
 
@@ -1342,8 +1339,8 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     texture_retain::log_screen(screen_name);
 }
 
-std::vector<std::string> TextureWrapper::language_variants(const std::string& name) const {
-    std::vector<std::string> out{name};
+std::vector<std::string> TextureWrapper::language_variants(std::string_view name) const {
+    std::vector<std::string> out{std::string(name)};
     if (!global_data.config) {
         return out;
     }
@@ -1352,7 +1349,7 @@ std::vector<std::string> TextureWrapper::language_variants(const std::string& na
     if (name.size() <= suffix.size() || name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
         return out;
     }
-    const std::string base = name.substr(0, name.size() - suffix.size());
+    const std::string base(name.substr(0, name.size() - suffix.size()));
     for (const char* fb : {"ja", "en"}) { // the cabinet's own order: untranslated rows draw from the Japanese set
         if (lang != fb) {
             out.push_back(base + "_" + fb);
@@ -1362,7 +1359,7 @@ std::vector<std::string> TextureWrapper::language_variants(const std::string& na
     return out;
 }
 
-TextureObject* TextureWrapper::get_texture(const std::string& name) {
+TextureObject* TextureWrapper::get_texture(std::string_view name) {
     auto it = textures.find(name);
     if (it != textures.end()) {
         return it->second.get();
@@ -1370,31 +1367,48 @@ TextureObject* TextureWrapper::get_texture(const std::string& name) {
     return get_texture_shared(name).get();
 }
 
-std::shared_ptr<TextureObject> TextureWrapper::get_texture_shared(const std::string& name) {
-    if (auto hit = textures.find(name); hit != textures.end()) {
-        return hit->second;
+TextureWrapper::TextureFallback& TextureWrapper::texture_fallback(std::string_view name) {
+    static const std::string no_lang;
+    const std::string& lang = global_data.config ? global_data.config->general.language : no_lang;
+    if (texture_fallbacks_lang != lang) {
+        texture_fallbacks.clear();
+        texture_fallbacks_lang = lang;
     }
+    if (auto it = texture_fallbacks.find(name); it != texture_fallbacks.end()) {
+        return it->second;
+    }
+    TextureFallback fb;
     for (const auto& v : language_variants(name)) {
         auto it = textures.find(v);
         if (it != textures.end()) {
-            return it->second;
+            fb.found = it->second;
+            break;
         }
     }
-    spdlog::warn("Texture not found: {}", name);
+    return texture_fallbacks.emplace(std::string(name), std::move(fb)).first->second;
+}
+
+std::shared_ptr<TextureObject> TextureWrapper::get_texture_shared(std::string_view name) {
+    if (auto hit = textures.find(name); hit != textures.end()) {
+        return hit->second;
+    }
+    TextureFallback& fb = texture_fallback(name);
+    if (fb.found) {
+        return fb.found;
+    }
+    if (!fb.warned) { // once per name until the textures change (it used to log on every call)
+        fb.warned = true;
+        spdlog::warn("Texture not found: {}", name);
+    }
     auto it = textures.find("kidou/warning");
     return it != textures.end() ? it->second : nullptr;
 }
 
-bool TextureWrapper::has_texture(const std::string& name) {
+bool TextureWrapper::has_texture(std::string_view name) {
     if (textures.find(name) != textures.end()) {
         return true;
     }
-    for (const auto& v : language_variants(name)) {
-        if (textures.find(v) != textures.end()) {
-            return true;
-        }
-    }
-    return false;
+    return texture_fallback(name).found != nullptr;
 }
 
 void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParams& params) {

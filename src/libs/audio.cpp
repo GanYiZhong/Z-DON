@@ -2,6 +2,7 @@
 
 #include "audio_dev.h"
 #include "fixed_step.h"
+#include "jobs.h"
 #include "loudness.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
@@ -1501,19 +1502,9 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
             load_sound(file, name);
         }
     } else {
-        std::atomic<size_t> next{0};
-        std::vector<std::thread> pool;
-        pool.reserve(workers);
-        for (size_t w = 0; w < workers; ++w) {
-            pool.emplace_back([this, &queue, &next]() {
-                for (size_t i = next.fetch_add(1); i < queue.size(); i = next.fetch_add(1)) {
-                    load_sound(queue[i].first, queue[i].second);
-                }
-            });
-        }
-        for (auto& t : pool) {
-            t.join();
-        }
+        jobs::parallel_for(
+            queue.size(), jobs::Priority::Critical,
+            [this, &queue](size_t i) { load_sound(queue[i].first, queue[i].second); }, workers);
     }
 }
 

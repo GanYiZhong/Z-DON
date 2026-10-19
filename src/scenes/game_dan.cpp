@@ -97,7 +97,7 @@ void DanGameScreen::init_dan() {
     // Create player for first song
     const auto& first = sd.selected_dan[0];
     sd.selected_difficulty = first.difficulty;
-    parser.emplace(first.song_path, (int)start_delay);
+    parser = std::make_shared<SongParser>(first.song_path, (int)start_delay);
     if (fs::exists(parser->metadata.wave)) {
         song_music = audio.load_sound(parser->metadata.wave, "song");
     }
@@ -139,7 +139,7 @@ void DanGameScreen::change_song() {
         song_music.reset();
     }
 
-    parser.emplace(entry.song_path, (int)start_delay);
+    parser = std::make_shared<SongParser>(entry.song_path, (int)start_delay);
     if (fs::exists(parser->metadata.wave)) {
         song_music = audio.load_sound(parser->metadata.wave, "song");
     }

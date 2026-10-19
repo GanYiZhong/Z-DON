@@ -41,7 +41,7 @@ public:
     void adopt_movie(bool wait);
     bool has_movie() const { return movie || pending_movie.valid(); }
     std::optional<std::string> song_music;
-    std::optional<SongParser> parser;
+    std::shared_ptr<SongParser> parser; // shared with the players, not copied
     std::string scene_preset;
     std::vector<std::unique_ptr<Player>> players;
     SongInfo song_info;

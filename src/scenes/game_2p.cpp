@@ -8,8 +8,8 @@
 
 void Game2PScreen::init_tja(fs::path song) {
     int delay = (song.extension() == ".osu") ? 0 : start_delay;
-    parser = SongParser(song, delay, PlayerNum::P1);
-    parser_2p = SongParser(song, delay, PlayerNum::P2);
+    parser = std::make_shared<SongParser>(song, delay, PlayerNum::P1);
+    parser_2p = std::make_shared<SongParser>(song, delay, PlayerNum::P2);
 
     if (fs::exists(parser->metadata.bgmovie)) {
         open_movie(parser->metadata.bgmovie);
