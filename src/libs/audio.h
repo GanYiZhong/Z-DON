@@ -189,6 +189,11 @@ public:
     void load_screen_sounds(const std::string& screen_name);
 
     std::string load_sound(const fs::path& file_path, const std::string& name);
+    // Z-DON: load_sound whose PCM stays resident across unloads (screen changes; still stopped and
+    // gone from has_sound until loaded again): the next call with the same name and file reinstalls it
+    // without decoding, another file replaces it. ZDON_RESIDENT_SOUND_MB caps the set (default 64,
+    // 0 = off); closing the device (skin change or reload) drops it. *reused: no decode was needed.
+    std::string load_resident_sound(const fs::path& file_path, const std::string& name, bool* reused = nullptr);
     // sounds longer than this decode their tail in the background (Z-DON)
     static constexpr int kProgressiveMinSeconds = 8;
     static constexpr int kProgressiveHeadSeconds = 2;
@@ -261,6 +266,20 @@ private:
     static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns
     static void free_sound(sound& snd);
+    void publish_sound(const std::string& name, SoundId id, sound* pcm);
+    void retire_sound(sound* old); // frees it once no callback can be using it; null is a no-op
+
+    // resident sounds (load_resident_sound): name -> PCM no unload frees
+    struct ResidentSound {
+        std::string path;
+        sound* pcm = nullptr;
+        size_t bytes = 0;
+    };
+    std::mutex resident_lock; // also held across a slot's PCM exchange, so ownership stays clear
+    std::unordered_map<std::string, ResidentSound> resident;
+    size_t resident_bytes = 0;
+    bool is_resident_locked(const std::string& name, const sound* pcm) const;
+    void drop_resident_sounds();
     void install_music(const std::string& name, std::shared_ptr<music> mus);
     double target_sample_rate;
     unsigned long buffer_size;

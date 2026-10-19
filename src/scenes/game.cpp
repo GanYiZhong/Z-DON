@@ -102,16 +102,20 @@ void GameScreen::load_hitsounds() {
         {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "don.ogg"), "hitsound_don_2p"},
         {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "ka.ogg"), "hitsound_kat_2p"},
     };
+    // Z-DON: resident across screens; a later game screen with the same neiros reuses them undecoded
+    bool reused[std::size(sounds)] = {};
     std::vector<std::future<std::string>> loads;
     for (size_t i = 1; i < std::size(sounds); i++) {
-        loads.push_back(
-            std::async(std::launch::async, [&s = sounds[i]] { return audio.load_sound(s.first, s.second); }));
+        loads.push_back(std::async(std::launch::async, [&s = sounds[i], r = &reused[i]] {
+            return audio.load_resident_sound(s.first, s.second, r);
+        }));
     }
-    audio.load_sound(sounds[0].first, sounds[0].second);
+    audio.load_resident_sound(sounds[0].first, sounds[0].second, &reused[0]);
     for (auto& f : loads) {
         f.get();
     }
-    spdlog::info("Loaded ogg hit sounds for 1P and 2P");
+    spdlog::info("Loaded ogg hit sounds for 1P and 2P ({} of {} resident, not decoded again)",
+                 std::count(std::begin(reused), std::end(reused), true), std::size(sounds));
 }
 
 void GameScreen::open_movie(const fs::path& path) {

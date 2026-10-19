@@ -867,6 +867,7 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
 void AudioEngine::close_audio_device() {
     loudness_scanner.reset();
     audio_dev::stop();
+    drop_resident_sounds(); // a skin change or reload: the next skin's files may differ
 
     if (!is_ready) {
         return;
@@ -1098,22 +1099,137 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
         free_sound(lost);
         return;
     }
+    publish_sound(name, id, new sound(snd));
+}
+
+// Installs pcm as name's sound, its playback part seeding the slot (as a fresh load would), and
+// retires the PCM it replaces unless that one is resident.
+void AudioEngine::publish_sound(const std::string& name, SoundId id, sound* pcm) {
     SoundSlot& s = *slot_at(id);
     for_each_voice(s, [](SoundSlot& v) { v.is_playing.store(false, std::memory_order_relaxed); });
-    sound* fresh = new sound(snd);
-    s.current_frame.store(snd.current_frame, std::memory_order_relaxed);
-    s.frame_frac.store(snd.frame_frac, std::memory_order_relaxed);
-    s.loop.store(snd.loop, std::memory_order_relaxed);
-    s.volume.store(snd.volume, std::memory_order_relaxed);
-    s.playback_gain.store(snd.playback_gain, std::memory_order_relaxed);
-    s.pan.store(snd.pan, std::memory_order_relaxed);
-    s.pitch.store(snd.pitch, std::memory_order_relaxed);
-    sound* old = s.pcm.exchange(fresh, std::memory_order_seq_cst);
+    s.current_frame.store(pcm->current_frame, std::memory_order_relaxed);
+    s.frame_frac.store(pcm->frame_frac, std::memory_order_relaxed);
+    s.loop.store(pcm->loop, std::memory_order_relaxed);
+    s.volume.store(pcm->volume, std::memory_order_relaxed);
+    s.playback_gain.store(pcm->playback_gain, std::memory_order_relaxed);
+    s.pan.store(pcm->pan, std::memory_order_relaxed);
+    s.pitch.store(pcm->pitch, std::memory_order_relaxed);
+    sound* old = nullptr;
+    {
+        std::scoped_lock g(resident_lock); // the exchange and the residency check, as one
+        old = s.pcm.exchange(pcm, std::memory_order_seq_cst);
+        if (old == pcm || is_resident_locked(name, old)) {
+            old = nullptr;
+        }
+    }
+    retire_sound(old);
+}
+
+void AudioEngine::retire_sound(sound* old) {
     if (old) {
         retire([old] {
             free_sound(*old);
             delete old;
         });
+    }
+}
+
+bool AudioEngine::is_resident_locked(const std::string& name, const sound* pcm) const {
+    auto it = resident.find(name);
+    return pcm && it != resident.end() && it->second.pcm == pcm;
+}
+
+// ZDON_RESIDENT_SOUND_MB: PCM kept resident across screens (0 = none)
+static size_t resident_cap_bytes() {
+    static const size_t cap = [] {
+        const char* v = std::getenv("ZDON_RESIDENT_SOUND_MB");
+        const long mb = v && *v ? std::max(0L, std::atol(v)) : 64L;
+        return (size_t)mb << 20;
+    }();
+    return cap;
+}
+
+std::string AudioEngine::load_resident_sound(const fs::path& file_path, const std::string& name, bool* reused) {
+    if (reused) {
+        *reused = false;
+    }
+    if (resident_cap_bytes() == 0) {
+        return load_sound(file_path, name);
+    }
+    const std::string key = path_to_string(file_path.lexically_normal());
+    const SoundId id = sound_id(name);
+    if (id == kNoSound) {
+        return "";
+    }
+    sound* keep = nullptr;
+    sound* drop = nullptr;
+    {
+        std::scoped_lock g(resident_lock);
+        auto it = resident.find(name);
+        if (it != resident.end()) {
+            if (it->second.path == key) {
+                keep = it->second.pcm;
+            } else {
+                // another file now (another neiro): forget it; if it is installed, the slot owns it again
+                if (slot_at(id)->pcm.load(std::memory_order_acquire) != it->second.pcm) {
+                    drop = it->second.pcm;
+                }
+                resident_bytes -= it->second.bytes;
+                resident.erase(it);
+            }
+        }
+    }
+    retire_sound(drop);
+    if (keep) {
+        publish_sound(name, id, keep);
+        if (reused) {
+            *reused = true;
+        }
+        spdlog::debug("Resident sound reused: {}", name);
+        return name;
+    }
+
+    std::string loaded = load_sound(file_path, name);
+    if (loaded.empty()) {
+        return loaded;
+    }
+    std::scoped_lock g(resident_lock);
+    sound* pcm = slot_at(id)->pcm.load(std::memory_order_acquire);
+    if (!pcm || resident.contains(name)) {
+        return loaded;
+    }
+    const size_t bytes = (size_t)pcm->frame_count * pcm->channels * sizeof(float);
+    if (resident_bytes + bytes > resident_cap_bytes()) {
+        spdlog::info("Resident sounds: {} not kept, the {} MB cap is reached", name, resident_cap_bytes() >> 20);
+        return loaded;
+    }
+    resident.emplace(name, ResidentSound{key, pcm, bytes});
+    resident_bytes += bytes;
+    spdlog::debug("Resident sound kept: {} ({} KB; {} sounds, {:.1f} MB resident)", name, bytes >> 10, resident.size(),
+                  resident_bytes / 1048576.0);
+    return loaded;
+}
+
+void AudioEngine::drop_resident_sounds() {
+    std::vector<sound*> drop;
+    {
+        std::scoped_lock g(resident_lock);
+        for (auto& [name, r] : resident) {
+            const SoundId id = find_sound(name);
+            SoundSlot* s = id == kNoSound ? nullptr : slot_at(id);
+            // still installed: the slot owns it again and frees it on unload
+            if (!s || s->pcm.load(std::memory_order_acquire) != r.pcm) {
+                drop.push_back(r.pcm);
+            }
+        }
+        if (!resident.empty()) {
+            spdlog::info("Resident sounds dropped: {} ({:.1f} MB)", resident.size(), resident_bytes / 1048576.0);
+        }
+        resident.clear();
+        resident_bytes = 0;
+    }
+    for (sound* pcm : drop) {
+        retire_sound(pcm);
     }
 }
 
@@ -1465,10 +1581,15 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
 }
 
 void AudioEngine::load_screen_sounds(const std::string& screen_name) {
-    std::vector<std::pair<fs::path, std::string>> queue;
+    struct Want {
+        fs::path file;
+        std::string name;
+        bool resident; // Z-DON: kept across screens (see load_resident_sound)
+    };
+    std::vector<Want> queue;
     std::unordered_set<std::string> claimed;
 
-    auto want = [&](const fs::path& file, const std::string& name) {
+    auto want = [&](const fs::path& file, const std::string& name, bool resident = false) {
         if (!claimed.insert(name).second) {
             return;
         }
@@ -1476,10 +1597,11 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
             claimed.erase(name);
             return;
         }
-        queue.emplace_back(file, name);
+        // the balloon/kusudama pops come from the game screen's folder but are played on every hit
+        queue.push_back(Want{file, name, resident || name == "balloon_pop" || name == "kusudama_pop"});
     };
 
-    auto scan = [&](const fs::path& dir) {
+    auto scan = [&](const fs::path& dir, bool resident = false) {
         if (!fs::exists(dir)) {
             return;
         }
@@ -1487,10 +1609,10 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
             for (const auto& entry : fs::directory_iterator(dir)) {
                 if (entry.is_directory()) {
                     for (const auto& file : fs::directory_iterator(entry.path())) {
-                        want(file.path(), entry.path().stem().string() + "_" + file.path().stem().string());
+                        want(file.path(), entry.path().stem().string() + "_" + file.path().stem().string(), resident);
                     }
                 } else if (entry.is_regular_file()) {
-                    want(entry.path(), entry.path().stem().string());
+                    want(entry.path(), entry.path().stem().string(), resident);
                 }
             }
         } catch (const fs::filesystem_error& e) {
@@ -1516,13 +1638,13 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
         spdlog::warn("Sounds for screen {} not found", screen_name);
     }
 
-    want(sounds_path / "don.wav", "don");
+    want(sounds_path / "don.wav", "don", true);
     for (const fs::path& dir : ancestor_sounds) {
-        want(dir / "don.wav", "don");
+        want(dir / "don.wav", "don", true);
     }
-    want(sounds_path / "ka.wav", "kat");
+    want(sounds_path / "ka.wav", "kat", true);
     for (const fs::path& dir : ancestor_sounds) {
-        want(dir / "ka.wav", "kat");
+        want(dir / "ka.wav", "kat", true);
     }
 
     if (has_screen_sounds) {
@@ -1532,22 +1654,34 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
         }
     }
 
-    scan(sounds_path / "global");
+    scan(sounds_path / "global", true);
     for (const fs::path& dir : ancestor_sounds) {
-        scan(dir / "global");
+        scan(dir / "global", true);
     }
 
+    std::atomic<int> reused{0};
+    auto load = [this, &queue, &reused](size_t i) {
+        const Want& w = queue[i];
+        if (!w.resident) {
+            load_sound(w.file, w.name);
+            return;
+        }
+        bool r = false;
+        load_resident_sound(w.file, w.name, &r);
+        reused.fetch_add(r ? 1 : 0, std::memory_order_relaxed);
+    };
     unsigned hw = std::thread::hardware_concurrency();
     size_t workers = std::min<size_t>(queue.size(), hw ? hw : 4);
     if (workers <= 1) {
-        for (const auto& [file, name] : queue) {
-            load_sound(file, name);
+        for (size_t i = 0; i < queue.size(); i++) {
+            load(i);
         }
     } else {
-        jobs::parallel_for(
-            queue.size(), jobs::Priority::Critical,
-            [this, &queue](size_t i) { load_sound(queue[i].first, queue[i].second); }, workers);
+        jobs::parallel_for(queue.size(), jobs::Priority::Critical, load, workers);
     }
+    std::scoped_lock g(resident_lock);
+    spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB)", screen_name, queue.size(),
+                 reused.load(), resident.size(), resident_bytes / 1048576.0);
 }
 
 void AudioEngine::unload_sound(const std::string& name) {
@@ -1561,13 +1695,15 @@ void AudioEngine::unload_sound(const std::string& name) {
         return;
     }
     for_each_voice(*s, [](SoundSlot& v) { v.is_playing.store(false, std::memory_order_relaxed); });
-    sound* old = s->pcm.exchange(nullptr, std::memory_order_seq_cst);
-    if (old) {
-        retire([old] {
-            free_sound(*old);
-            delete old;
-        });
+    sound* old = nullptr;
+    {
+        std::scoped_lock g(resident_lock);
+        old = s->pcm.exchange(nullptr, std::memory_order_seq_cst);
+        if (is_resident_locked(name, old)) {
+            old = nullptr; // silent now; its PCM waits for the next load_resident_sound
+        }
     }
+    retire_sound(old);
 }
 
 void AudioEngine::unload_all_sounds() {
