@@ -127,6 +127,9 @@ namespace vblank_pacing {
         if (vsync || target_fps > 0.0) {
             return; // today's behavior: vsync or the fixed-rate limiter
         }
+        if (fixed_step::on()) {
+            return; // YATAIDON_FIXED_STEP_MS: frames run back to back
+        }
         // Off by default for now: with pacing, uncapped frames drop to about one per refresh, and hits
         // are judged at frame times. ZDON_VBLANK_PACING=auto (or =<n> frames per refresh) turns it on.
         const char* env = std::getenv("ZDON_VBLANK_PACING");

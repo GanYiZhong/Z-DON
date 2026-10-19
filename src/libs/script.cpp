@@ -1,4 +1,6 @@
 #include "script.h"
+
+#include "fixed_step.h"
 #ifdef TRACY_ENABLE
 #include <tracy/TracyLua.hpp>
 #endif
@@ -298,6 +300,9 @@ void ScriptManager::index_scripts(const fs::path& script_path) {
 void ScriptManager::init(fs::path script_path) {
     lua = std::make_unique<sol::state>();
     lua->open_libraries(sol::lib::base, sol::lib::package, sol::lib::string, sol::lib::math, sol::lib::table);
+    if (fixed_step::on()) {
+        lua->script("math.randomseed(20261019)"); // YATAIDON_FIXED_STEP_MS
+    }
     // generational GC: skins build many short-lived tables per frame (draw_texture's argument
     // tables, box wrappers), which a minor collection frees without walking the whole heap
     lua_gc(lua->lua_state(), LUA_GCGEN, 0, 0);

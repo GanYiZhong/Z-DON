@@ -206,7 +206,7 @@ private:
 
     bool is_drumroll;
     int curr_drumroll_count;
-    double last_drumroll_color_time;
+    double last_drumroll_color_time = 0.0; // was uninitialized: roll colors differed run to run
     bool is_balloon;
     int curr_balloon_count;
     int balloon_index;

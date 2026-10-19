@@ -2,11 +2,16 @@
 
 #include <chrono>
 
+#include "fixed_step.h"
+
 #ifdef YATAIDON_PLATFORM_IOS
 #include "../platform/platform_ios.h"
 #endif
 
 inline double get_current_ms() {
+    if (fixed_step::on()) {
+        return fixed_step::clock_ms.load(std::memory_order_relaxed); // YATAIDON_FIXED_STEP_MS
+    }
 #ifdef YATAIDON_PLATFORM_IOS
     return ios_game_time_ms();
 #else

@@ -1,6 +1,7 @@
 #include "audio.h"
 
 #include "audio_dev.h"
+#include "fixed_step.h"
 #include "loudness.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
@@ -1517,6 +1518,9 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
 }
 
 void AudioEngine::unload_sound(const std::string& name) {
+    if (fixed_step::on()) {
+        fixed_step::audio_stop(name, false);
+    }
     const SoundId id = find_sound(name);
     SoundSlot* s = id == kNoSound ? nullptr : slot_at(id);
     if (!s || !s->pcm.load(std::memory_order_acquire)) {
@@ -1573,6 +1577,9 @@ uint64_t AudioEngine::sound_play_count(const std::string& name) {
 }
 
 void AudioEngine::play_sound(const std::string& name, VolumePreset volume_preset, float gain) {
+    if (fixed_step::on() && has_sound(name)) {
+        fixed_step::audio_play(name, false);
+    }
     play_sound(sound_id(name), volume_preset, gain);
 }
 
@@ -1622,6 +1629,9 @@ bool AudioEngine::has_sound(const std::string& name) {
 }
 
 void AudioEngine::stop_sound(const std::string& name) {
+    if (fixed_step::on()) {
+        fixed_step::audio_stop(name, false);
+    }
     const bool found = with_sound(name, [](SoundSlot& snd, const sound&) {
         snd.is_playing.store(false, std::memory_order_relaxed);
         snd.current_frame.store(0, std::memory_order_relaxed);
@@ -1633,10 +1643,16 @@ void AudioEngine::stop_sound(const std::string& name) {
 }
 
 void AudioEngine::set_sound_loop(const std::string& name, bool loop) {
+    if (fixed_step::on()) {
+        fixed_step::audio_set_loop(name, loop);
+    }
     with_sound(name, [loop](SoundSlot& snd, const sound&) { snd.loop.store(loop, std::memory_order_relaxed); });
 }
 
 bool AudioEngine::is_sound_playing(const std::string& name) {
+    if (fixed_step::on()) {
+        return has_sound(name) && fixed_step::audio_playing(name, false, get_sound_time_length(name));
+    }
     bool playing = false;
     const bool found = with_sound(
         name, [&playing](SoundSlot& snd, const sound&) { playing = snd.is_playing.load(std::memory_order_relaxed); });
@@ -1665,6 +1681,9 @@ void AudioEngine::set_sound_pan(const std::string& name, float pan) {
 }
 
 void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
+    if (fixed_step::on()) {
+        fixed_step::audio_set_pitch(name, std::isfinite(pitch) ? std::clamp(pitch, 0.01f, 16.0f) : 1.0f);
+    }
     const bool found = with_sound(name, [pitch](SoundSlot& snd, const sound&) {
         const float p = std::isfinite(pitch) ? pitch : 1.0f;
         snd.pitch.store(std::clamp(p, 0.01f, 16.0f), std::memory_order_relaxed);
@@ -1675,6 +1694,9 @@ void AudioEngine::set_sound_pitch(const std::string& name, float pitch) {
 }
 
 float AudioEngine::get_sound_time_played(const std::string& name) const {
+    if (fixed_step::on()) {
+        return fixed_step::audio_time(name, false, get_sound_time_length(name));
+    }
     float seconds = 0.0f;
     const bool found = with_sound(name, [&](SoundSlot& snd, const sound&) {
         unsigned int frame = snd.current_frame.load(std::memory_order_relaxed);
@@ -1698,6 +1720,9 @@ float AudioEngine::get_sound_time_length(const std::string& name) const {
 }
 
 void AudioEngine::seek_sound(const std::string& name, float position) {
+    if (fixed_step::on()) {
+        fixed_step::audio_seek(name, false, position);
+    }
     const bool found = with_sound(name, [&](SoundSlot& snd, const sound& pcm) {
         unsigned int frame =
             static_cast<unsigned int>(std::max(position, 0.0f) * static_cast<float>(target_sample_rate));
@@ -1812,6 +1837,9 @@ void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> 
 }
 
 void AudioEngine::unload_music_stream(const std::string& name) {
+    if (fixed_step::on()) {
+        fixed_step::audio_stop(name, true);
+    }
     std::shared_ptr<music> old;
     StreamList* old_list = nullptr;
     {
@@ -2195,6 +2223,9 @@ std::string AudioEngine::load_music_stream_memory(const av::AVAudioStream& audio
 #endif // __EMSCRIPTEN__
 
 void AudioEngine::play_music_stream(const std::string& name, VolumePreset volume_preset) {
+    if (fixed_step::on() && is_music_stream_valid(name)) {
+        fixed_step::audio_play(name, true);
+    }
     std::shared_ptr<music> mus = find_music(name);
     if (!mus) {
         spdlog::warn("Sound {} not found", name);
@@ -2228,6 +2259,9 @@ float AudioEngine::get_music_time_length(const std::string& name) const {
 }
 
 float AudioEngine::get_music_time_played(const std::string& name) const {
+    if (fixed_step::on()) {
+        return fixed_step::audio_time(name, true, get_music_time_length(name));
+    }
     std::shared_ptr<music> mus = find_music(name);
     if (mus) {
         unsigned long long frame = mus->current_frame.load(std::memory_order_relaxed);
@@ -2251,6 +2285,9 @@ bool AudioEngine::is_music_stream_valid(const std::string& name) const {
 }
 
 bool AudioEngine::is_music_stream_playing(const std::string& name) const {
+    if (fixed_step::on()) {
+        return is_music_stream_valid(name) && fixed_step::audio_playing(name, true, get_music_time_length(name));
+    }
     std::shared_ptr<music> mus = find_music(name);
     if (mus) {
         return mus->is_playing.load(std::memory_order_relaxed);
@@ -2269,6 +2306,9 @@ static void command_seek(music& mus, long long source_frame, unsigned long long 
 }
 
 void AudioEngine::stop_music_stream(const std::string& name) {
+    if (fixed_step::on()) {
+        fixed_step::audio_stop(name, true);
+    }
     std::shared_ptr<music> mus = find_music(name);
     if (!mus) {
         spdlog::warn("Music stream {} not found", name);
@@ -2282,6 +2322,9 @@ void AudioEngine::stop_music_stream(const std::string& name) {
 }
 
 void AudioEngine::seek_music_stream(const std::string& name, float position) {
+    if (fixed_step::on()) {
+        fixed_step::audio_seek(name, true, position);
+    }
     std::shared_ptr<music> mus = find_music(name);
     if (!mus) {
         spdlog::warn("Music stream {} not found", name);

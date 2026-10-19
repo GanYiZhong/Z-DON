@@ -5,6 +5,7 @@
 
 #include "../../libs/audio.h"
 #include "../../libs/filesystem.h"
+#include "../../libs/fixed_step.h"
 #include "../../libs/input.h"
 #include "../../libs/text.h"
 #include "../../libs/texture.h"
@@ -180,7 +181,7 @@ void CostumeMenu::apply_preset(const std::string& item) {
         }
     }
 
-    static std::mt19937 rng{std::random_device{}()};
+    static std::mt19937 rng{fixed_step::seed()};
     int id = (*set)[std::uniform_int_distribution<size_t>(0, set->size() - 1)(rng)];
     if (sticky) {
         preset_rolled[item] = id;

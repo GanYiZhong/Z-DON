@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "filesystem.h"
+#include "fixed_step.h"
 #include "global_data.h"
 #include "han_fold_table.h"
 #include "script.h"
@@ -849,6 +850,7 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
         std::lock_guard<std::mutex> lock(pending_mutex);
         pending_image = std::move(data.img);
     });
+    fixed_step::wait(build_future);
 #endif
 }
 

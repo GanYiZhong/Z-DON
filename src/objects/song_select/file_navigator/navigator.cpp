@@ -3,6 +3,7 @@
 #include <cctype>
 
 #include "../../../libs/filesystem.h"
+#include "../../../libs/fixed_step.h"
 #include "../../../libs/han_fold_table.h"
 #include "../../../libs/library_index.h"
 #include "../../../libs/text.h"
@@ -313,6 +314,7 @@ void Navigator::load_all_roots() {
 
 #ifndef __EMSCRIPTEN__
     loader_thread = std::thread(walk_roots);
+    fixed_step::join(loader_thread);
 #else
     walk_roots();
 #endif
@@ -571,6 +573,7 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
         }
         song_files_ready = true;
     });
+    fixed_step::join(song_files_thread);
 #endif // !__EMSCRIPTEN__
 
     for (const fs::path& root_path : songs_paths) {
@@ -1490,7 +1493,7 @@ void Navigator::load_collection_recommended(const fs::path& path, const BoxDef& 
         all_songs.push_back(song_path);
     }
 
-    std::mt19937 rng(std::random_device{}());
+    std::mt19937 rng(fixed_step::seed());
     std::shuffle(all_songs.begin(), all_songs.end(), rng);
     int count = std::min((int)all_songs.size(), 10);
     for (int i = 0; i < count; i++) {
@@ -1669,6 +1672,7 @@ void Navigator::start_inline_prefetch(const fs::path& path) {
             pf->preparsed = parse_songs_parallel(pf->song_paths, abort_loading);
         }
     });
+    fixed_step::join(prefetch_thread);
 }
 
 // Only once the startup scan is done: the prefetch thread must not join song_files_thread (the
@@ -1686,6 +1690,7 @@ void Navigator::start_new_songs_prefetch(const fs::path& path) {
         }
         pf->complete = !abort_loading;
     });
+    fixed_step::join(prefetch_thread);
 }
 
 void Navigator::join_prefetch() {
@@ -2119,6 +2124,7 @@ void Navigator::load_current_directory(const fs::path path) {
     join_loader();
 #ifndef __EMSCRIPTEN__
     loader_thread = std::thread(&Navigator::load_current_directory_async, this, path);
+    fixed_step::join(loader_thread);
 #else
     load_current_directory_async(path);
 #endif
@@ -3007,6 +3013,7 @@ void Navigator::update(double current_ms) {
 #ifndef __EMSCRIPTEN__
             loader_thread =
                 std::thread(&Navigator::load_songs_inline_async, this, *pending_inline_path, pending_inline_box_def);
+            fixed_step::join(loader_thread);
 #else
             load_songs_inline_async(*pending_inline_path, pending_inline_box_def);
 #endif

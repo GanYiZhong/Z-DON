@@ -5,6 +5,7 @@
 
 #include "../libs/animation.h"
 #include "../libs/filesystem.h"
+#include "../libs/fixed_step.h"
 #include "../libs/input.h"
 #include "../libs/network.h"
 #include "../libs/scores.h"
@@ -183,6 +184,7 @@ void GameScreen::init_tja(fs::path song) {
     if (fs::exists(parser->metadata.wave) && !song_music.has_value() && !pending_song_load.valid()) {
         fs::path wave = parser->metadata.wave;
         pending_song_load = std::async(std::launch::async, [wave] { return audio.load_sound(wave, "song"); });
+        fixed_step::wait(pending_song_load);
     }
 
     players.push_back(std::make_unique<Player>(
@@ -405,6 +407,9 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
 }
 
 void GameScreen::resync_song(double current_ms) {
+    if (fixed_step::on()) {
+        return; // YATAIDON_FIXED_STEP_MS: the chart follows the frame clock
+    }
     if (!song_started) {
         return;
     }
