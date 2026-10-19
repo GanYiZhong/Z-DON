@@ -47,6 +47,10 @@
 - `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`、`YATAIDON_FRAME_STATS=1`。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 
+## 合併上游 bde4201 後的已知畫面差異（都是上游自己的改動）
+- 練習模式：f2e1174 起會播前奏（以前第一幀就跳過約 1 s 前奏）。純上游 f2e1174 前/後與 Z-DON 合併前/後各自 19/19 相同。
+- 練習模式按空白鍵不會暫停（上游就沒有 pause_key 處理，只有 2P 咚/咔），未改。
+
 ## 驗證工具（scratchpad，非 repo）
 - 確定性截圖套件：title / ss / dense / roll / hbs / dan / entry / settings / p2 / practice / danplay / movie，共 349 張，用 RGB 位元組比對。**不要用 Pillow 的 RGBA getbbox（只看 alpha）。**
 - TJA 對拍：連結舊/新 tja.cpp，解析全曲庫 3043 首比對每個欄位。
@@ -61,6 +65,6 @@
 - 輸入時間戳、音訊時鐘插值：會改變判定方式（使用者選擇不做）。
 
 ## 還可以做的
-- 貼圖用到時才上傳 GPU / PBO 背景上傳（第一次進畫面約 150 ms 的上傳）。
+- 貼圖用到時才上傳 GPU / PBO 背景上傳（第一次進畫面約 150 ms 的上傳）：需要共享 GL context 或分幀上傳（可能先看到貼圖空白），收益小、風險高，暫不做。
 - `PlaybackClock` 與 vblank 限幀更深的整合。
 - 譜面音符改成不用 deque（約 90 處，收益小）。
