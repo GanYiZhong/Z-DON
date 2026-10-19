@@ -734,6 +734,21 @@ static int dump_chara(const std::string& spec) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // The CRT's argv is in the ANSI code page: a song path with characters outside it (Japanese on a
+    // Chinese-locale system) came through as '?' and was "not found". Take the arguments from the
+    // wide command line as UTF-8, which path_from_arg reads.
+    std::vector<std::string> utf8_args = win32_utf8_args();
+    std::vector<char*> utf8_argv;
+    if (!utf8_args.empty()) {
+        for (std::string& a : utf8_args) {
+            utf8_argv.push_back(a.data());
+        }
+        utf8_argv.push_back(nullptr);
+        argc = static_cast<int>(utf8_args.size());
+        argv = utf8_argv.data();
+    }
+#endif
     spdlog::info("Starting YataiDON");
     set_working_directory_to_executable();
     global_data.config = new Config(get_config());

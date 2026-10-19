@@ -21,6 +21,11 @@ std::filesystem::path win32_path_from_utf8(const std::string& utf8_str);
 std::filesystem::path win32_path_from_encoded(const std::string& path_str, const std::string& encoding,
                                               const std::filesystem::path& base_path = {});
 
+// The command-line arguments (argv[0] included) as UTF-8, from the wide command line; empty on failure.
+// The CRT's argv is in the ANSI code page, which loses characters outside it (a Japanese path on a
+// Chinese-locale system).
+std::vector<std::string> win32_utf8_args();
+
 // Gets the directory containing the current executable.
 std::filesystem::path win32_get_executable_dir();
 

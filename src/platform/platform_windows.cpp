@@ -9,7 +9,8 @@
 #include <string>
 // clang-format off
 #include <windows.h>
-#include <dbghelp.h> // must follow windows.h
+#include <dbghelp.h>  // must follow windows.h
+#include <shellapi.h> // must follow windows.h
 // clang-format on
 
 namespace {
@@ -171,6 +172,27 @@ std::filesystem::path win32_path_from_encoded(const std::string& path_str, const
     std::wstring wide(wlen, 0);
     MultiByteToWideChar(codepage, 0, path_str.c_str(), -1, wide.data(), wlen);
     return base_path / wide;
+}
+
+std::vector<std::string> win32_utf8_args() {
+    std::vector<std::string> out;
+    int n = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &n);
+    if (!wargv) {
+        return out;
+    }
+    for (int i = 0; i < n; i++) {
+        const int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0) {
+            out.clear();
+            break;
+        }
+        std::string s(static_cast<size_t>(len - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), len, nullptr, nullptr);
+        out.push_back(std::move(s));
+    }
+    LocalFree(wargv);
+    return out;
 }
 
 std::filesystem::path win32_get_executable_dir() {
