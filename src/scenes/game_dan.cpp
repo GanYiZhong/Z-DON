@@ -583,7 +583,7 @@ void DanGameScreen::trigger_fail_out(double current_ms) {
         audio.stop_sound(*song_music);
         song_music.reset();
     }
-    if (movie.has_value()) {
+    if (movie) {
         movie->stop();
     }
     between.stop();

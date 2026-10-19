@@ -33,7 +33,13 @@ public:
     int pause_time;
     float bpm;
 
-    std::optional<VideoPlayer> movie;
+    std::unique_ptr<VideoPlayer> movie;
+    // Z-DON: a background video opens on a worker (container probe + the whole audio track read);
+    // movie is set when it is done (adopt_movie), at the latest when the song starts
+    std::future<std::unique_ptr<VideoPlayer>> pending_movie;
+    void open_movie(const fs::path& path);
+    void adopt_movie(bool wait);
+    bool has_movie() const { return movie || pending_movie.valid(); }
     std::optional<std::string> song_music;
     std::optional<SongParser> parser;
     std::string scene_preset;

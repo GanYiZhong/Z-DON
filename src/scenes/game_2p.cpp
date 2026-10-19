@@ -12,7 +12,7 @@ void Game2PScreen::init_tja(fs::path song) {
     parser_2p = SongParser(song, delay, PlayerNum::P2);
 
     if (fs::exists(parser->metadata.bgmovie)) {
-        movie.emplace(parser->metadata.bgmovie);
+        open_movie(parser->metadata.bgmovie);
     }
 
     auto& titles = parser->metadata.title;

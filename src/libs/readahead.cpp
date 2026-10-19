@@ -42,6 +42,7 @@ namespace readahead {
         constexpr uintmax_t kMaxBytes = uintmax_t{512} << 20;
 
         struct Request {
+            fs::path chart;              // prepare_song: the chart, read with its folder before the screens
             std::vector<fs::path> roots; // the skin's root, then its ancestors'
             std::vector<std::string> screens;
             std::vector<std::string> resident; // screens whose textures are still loaded: Sounds only
@@ -106,6 +107,28 @@ namespace readahead {
         void serve(const Request& req, uint64_t gen) {
             std::vector<fs::path> files;
             uintmax_t total = 0;
+            if (!req.chart.empty()) {
+                // the song's own folder, not recursive; of a folder of many loose charts only a few files
+                constexpr size_t kMaxSongFiles = 16;
+                std::error_code ec;
+                files.push_back(req.chart);
+                for (fs::directory_iterator it(req.chart.parent_path(), ec), end;
+                     !ec && it != end && files.size() < kMaxSongFiles; it.increment(ec)) {
+                    if (superseded(gen)) {
+                        return;
+                    }
+                    std::error_code fec;
+                    if (it->path() == req.chart || !it->is_regular_file(fec)) {
+                        continue;
+                    }
+                    const uintmax_t size = it->file_size(fec);
+                    if (fec || total + size > kMaxBytes) {
+                        continue;
+                    }
+                    total += size;
+                    files.push_back(it->path());
+                }
+            }
             for (const std::string& screen : req.screens) {
                 for (const fs::path& root : req.roots) {
                     for (const char* kind : {"Graphics", "Sounds"}) {
@@ -196,9 +219,10 @@ namespace readahead {
 
     } // namespace
 
-    void after_screen(const std::string& screen_name) {
+    static void queue_request(const std::string& screen_name, const fs::path& chart) {
 #ifdef __EMSCRIPTEN__
         (void)screen_name; // no threads, and the files are in memory already
+        (void)chart;
         return;
 #else
         // YATAIDON_NO_READAHEAD=1 turns it off (A/B timing on a cold disk)
@@ -219,6 +243,7 @@ namespace readahead {
             return;
         }
         Request req;
+        req.chart = chart;
         req.roots.push_back(fs::path("Skins") / global_data.config->paths.skin);
         for (const fs::path& r : skin_ancestor_roots()) {
             req.roots.push_back(r);
@@ -235,6 +260,14 @@ namespace readahead {
         }
         cv.notify_one();
 #endif
+    }
+
+    void after_screen(const std::string& screen_name) {
+        queue_request(screen_name, {});
+    }
+
+    void prepare_song(const std::filesystem::path& chart) {
+        queue_request("song_select", chart);
     }
 
     void cancel() {

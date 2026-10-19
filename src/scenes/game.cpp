@@ -55,7 +55,7 @@ void GameScreen::on_screen_start() {
     result_transition = ResultTransition(global_data.player_num);
     bpm = parser->metadata.bpm;
     scene_preset = parser->metadata.scene_preset;
-    if (!movie.has_value()) {
+    if (!has_movie()) {
         background.emplace(scene_player_num(), bpm, background_scene_preset());
         spdlog::info("Background initialized");
     } else {
@@ -85,7 +85,8 @@ void GameScreen::on_screen_start() {
 Screens GameScreen::on_screen_end(Screens next_screen) {
     song_started = false;
 
-    if (movie.has_value()) {
+    adopt_movie(true);
+    if (movie) {
         movie->stop();
         spdlog::info("Movie stopped");
     }
@@ -118,22 +119,55 @@ Modifiers GameScreen::get_player_modifiers(PlayerNum pn) {
 void GameScreen::load_hitsounds() {
     int neiro_p1 = scores_manager.get_player_data(get_player_id(PlayerNum::P1)).value_or(PlayerData{}).neiro_index;
     int neiro_p2 = scores_manager.get_player_data(get_player_id(PlayerNum::P2)).value_or(PlayerData{}).neiro_index;
-    audio.load_sound(resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p1) / "don.ogg"),
-                     "hitsound_don_1p");
-    audio.load_sound(resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p1) / "ka.ogg"),
-                     "hitsound_kat_1p");
-    audio.load_sound(resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "don.ogg"),
-                     "hitsound_don_2p");
-    audio.load_sound(resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "ka.ogg"),
-                     "hitsound_kat_2p");
+    // Z-DON: the four decodes run at once (audio.load_sound is thread-safe; the song loads the same way)
+    const std::pair<fs::path, const char*> sounds[] = {
+        {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p1) / "don.ogg"), "hitsound_don_1p"},
+        {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p1) / "ka.ogg"), "hitsound_kat_1p"},
+        {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "don.ogg"), "hitsound_don_2p"},
+        {resolve_skin_path(fs::path("Sounds/hit_sounds") / std::to_string(neiro_p2) / "ka.ogg"), "hitsound_kat_2p"},
+    };
+    std::vector<std::future<std::string>> loads;
+    for (size_t i = 1; i < std::size(sounds); i++) {
+        loads.push_back(
+            std::async(std::launch::async, [&s = sounds[i]] { return audio.load_sound(s.first, s.second); }));
+    }
+    audio.load_sound(sounds[0].first, sounds[0].second);
+    for (auto& f : loads) {
+        f.get();
+    }
     spdlog::info("Loaded ogg hit sounds for 1P and 2P");
+}
+
+void GameScreen::open_movie(const fs::path& path) {
+    adopt_movie(true);
+    movie.reset();
+    const std::string ext = path.extension().string();
+    if (ext == ".png" || ext == ".jpg") {
+        movie = std::make_unique<VideoPlayer>(path); // a still image: a GL texture, main thread
+        return;
+    }
+    pending_movie = std::async(std::launch::async, [path] { return std::make_unique<VideoPlayer>(path); });
+}
+
+void GameScreen::adopt_movie(bool wait) {
+    if (!pending_movie.valid()) {
+        return;
+    }
+    if (!wait && pending_movie.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return;
+    }
+    try {
+        movie = pending_movie.get();
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to open the background video: {}", e.what());
+    }
 }
 
 void GameScreen::init_tja(fs::path song) {
     start_delay = (song.extension() == ".osu") ? 0 : start_delay;
     parser = SongParser(song, start_delay);
     if (fs::exists(parser->metadata.bgmovie)) {
-        movie.emplace(parser->metadata.bgmovie);
+        open_movie(parser->metadata.bgmovie);
     }
     auto& titles = parser->metadata.title;
     auto& subtitles = parser->metadata.subtitle;
@@ -222,7 +256,8 @@ void GameScreen::start_song(double ms_from_start) {
             audio.play_sound(song_music.value(), VolumePreset::MUSIC);
             spdlog::info("Song started at {}", ms_from_start);
         }
-        if (movie.has_value()) {
+        adopt_movie(true);
+        if (movie) {
             movie->start(get_current_ms());
             movie->set_volume(0.0);
         }
@@ -288,8 +323,11 @@ std::optional<Screens> GameScreen::global_keys() {
 }
 
 void GameScreen::update_background(double current_ms) {
-    if (movie.has_value()) {
-        movie->update(current_ms);
+    if (has_movie()) {
+        adopt_movie(false);
+        if (movie) {
+            movie->update(current_ms);
+        }
     } else {
         bpm = players[0]->bpm;
         if (background.has_value()) {
@@ -573,7 +611,7 @@ void GameScreen::do_skip() {
     if (song_music.has_value()) {
         audio.stop_sound(song_music.value());
     }
-    if (movie.has_value()) {
+    if (movie) {
         movie->stop();
     }
     for (auto& player : players) {
@@ -706,8 +744,10 @@ void GameScreen::draw_players() {
 }
 
 void GameScreen::draw() {
-    if (movie.has_value()) {
+    if (movie) {
         movie->draw();
+    } else if (has_movie()) {
+        ray::ClearBackground(ray::BLACK); // what the movie draws before its first frame
     } else if (background.has_value()) {
         background->draw_back();
     } else {
