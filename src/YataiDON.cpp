@@ -19,6 +19,7 @@
 #include "libs/text.h"
 #include "libs/webcam.h"
 #include "objects/global/chara_3d.h"
+#include "platform/vblank_pacing.h"
 
 #ifdef _WIN32
 #include "platform/platform_windows.h"
@@ -383,7 +384,7 @@ static void run_frame() {
     LoopState& L = *g_loop;
     const auto frame_start = std::chrono::steady_clock::now();
 
-    g_frame_ms = get_current_ms();
+    g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
 
     ray::PollInputEvents();
 #if defined(YATAIDON_PLATFORM_IOS)
@@ -591,6 +592,7 @@ static void run_frame() {
     }
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
+    vblank_pacing::wait_next(); // no-op unless uncapped without vsync (then target_duration is 0)
     if (L.target_duration.count() > 0) {
         L.next_frame_time += L.target_duration;
         auto now = std::chrono::steady_clock::now();
@@ -821,6 +823,7 @@ int main(int argc, char* argv[]) {
                                                  std::chrono::duration<double>(1.0 / target_fps))
                                            : std::chrono::steady_clock::duration::zero();
 
+    vblank_pacing::init(global_data.config->video.vsync, target_fps);
     populate_screens(L.screens);
 
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
