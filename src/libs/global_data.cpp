@@ -108,6 +108,9 @@ void unload_skin() {
     global_tex.unload_textures();
     texture_retain::clear(); // before the GL context goes (shutdown) or the skin changes
     chara3d_clear_part_pool();
+    // the practice session's timer is a Lua object: release it while its Lua state is alive (it outlives
+    // the screens; a quit from practice mode freed it in the static destructors, after lua_close)
+    global_data.practice_timer.reset();
     script_manager.shutdown();
     font_manager.unload();
     unload_named_fonts();

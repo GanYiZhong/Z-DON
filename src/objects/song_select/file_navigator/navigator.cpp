@@ -610,6 +610,21 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
     song_files_thread = std::thread([this, songs_paths, listed = std::move(listed), stamps = std::move(stamps)]() {
         std::vector<fs::path> files = listed ? *listed : get_song_files(songs_paths);
         std::mutex map_mutex;
+        // YATAIDON_FIXED_STEP_MS: charts sharing a title and subtitle (two audio versions of a song) go to the
+        // later one in the listing, as a sequential scan binds them, not to whichever worker wrote last
+        std::map<std::pair<std::string, std::string>, size_t> title_owner;
+        auto bind_title = [&](std::pair<std::string, std::string> key, const fs::path& file, size_t i) {
+            if (fixed_step::on()) {
+                auto [it, fresh] = title_owner.try_emplace(key, i);
+                if (!fresh) {
+                    if (it->second > i) {
+                        return;
+                    }
+                    it->second = i;
+                }
+            }
+            song_files[std::move(key)] = file;
+        };
         unsigned pool_size = std::max(2u, std::thread::hardware_concurrency() / 2);
         jobs::parallel_for(
             files.size(), jobs::Priority::Background,
@@ -635,7 +650,7 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
                             std::any_of(meta->levels.begin(), meta->levels.end(), [](int lv) { return lv >= 0; });
                         if (playable) {
                             std::scoped_lock lock(map_mutex);
-                            song_files[{meta->title, meta->subtitle}] = file;
+                            bind_title({meta->title, meta->subtitle}, file, i);
                             song_search_text[file.string()] = search_fold(joined_titles(meta->titles, meta->subtitles));
                             song_levels[file.string()] = meta->levels;
                         }
@@ -649,8 +664,8 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
                                                 [](const auto& entry) { return entry.first >= 0 && entry.first <= 4; });
                         if (playable) {
                             std::scoped_lock lock(map_mutex);
-                            song_files[{parsed_entry.metadata.title["en"], parsed_entry.metadata.subtitle["en"]}] =
-                                file;
+                            bind_title({parsed_entry.metadata.title["en"], parsed_entry.metadata.subtitle["en"]}, file,
+                                       i);
                             song_search_text[file.string()] =
                                 search_fold(joined_titles(parsed_entry.metadata.title, parsed_entry.metadata.subtitle));
                             std::array<int, 5> lv;
