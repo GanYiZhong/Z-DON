@@ -84,6 +84,14 @@ public:
 
     void update(double current_time_ms) override;
 
+    // true when update(t) would change nothing: not running, or done for good at its final value
+    // (the song select skips the finished animations of every box of a big folder with it)
+    bool settled(double t) const {
+        const double elapsed = t - start_ms;
+        return !is_started || (is_finished && !loop && (!lock_input || unlocked) && !reverse_delay.has_value() &&
+                               !(elapsed <= delay) && elapsed >= delay + duration && attribute == final_opacity);
+    }
+
     std::unique_ptr<BaseAnimation> copy() const override;
 };
 
@@ -119,6 +127,14 @@ public:
     void restart() override;
 
     void update(double current_time_ms) override;
+
+    // see FadeAnimation::settled
+    bool settled(double t) const {
+        const double elapsed = t - start_ms;
+        return !is_started ||
+               (is_finished && !loop && (!lock_input || unlocked) && !reverse_delay.has_value() && !(elapsed < delay) &&
+                elapsed >= delay + duration && attribute == start_position + total_distance);
+    }
 
     std::unique_ptr<BaseAnimation> copy() const override;
 };

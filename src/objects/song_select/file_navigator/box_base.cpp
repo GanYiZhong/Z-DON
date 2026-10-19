@@ -115,11 +115,21 @@ void BaseBox::fade_out() {
 }
 
 void BaseBox::update(double current_time) {
-    open_anim->update(current_time);
-    open_fade->update(current_time);
-    fade->update(current_time);
+    // every box of the open folder comes here every frame, and almost all of them are at rest:
+    // an animation is only updated when that can change it
+    if (!open_anim->settled(current_time)) {
+        open_anim->update(current_time);
+    }
+    if (!open_fade->settled(current_time)) {
+        open_fade->update(current_time);
+    }
+    if (!fade->settled(current_time)) {
+        fade->update(current_time);
+    }
     float prev_position = move->attribute;
-    move->update(current_time);
+    if (!move->settled(current_time)) {
+        move->update(current_time);
+    }
     if (!move->is_finished) {
         position += move->attribute - prev_position;
         if (move_delta != 0.0f && cross_lead != 0.0f) {

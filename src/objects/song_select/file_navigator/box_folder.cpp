@@ -338,7 +338,9 @@ void FolderBox::update(double current_time) {
     }
 
     bool is_open_prev = yellow_box_opened;
-    enter_fade->update(current_time);
+    if (!enter_fade->settled(current_time)) {
+        enter_fade->update(current_time);
+    }
     BaseBox::update(current_time);
 
     if (!is_open_prev && yellow_box_opened) {

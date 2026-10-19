@@ -134,7 +134,9 @@ void SongBox::load_text() {
 
 void SongBox::update(double current_time) {
     BaseBox::update(current_time);
-    diff_fade_in->update(current_time);
+    if (!diff_fade_in->settled(current_time)) { // one animation shared by every song box
+        diff_fade_in->update(current_time);
+    }
 
     // update() runs every frame for every box of the list: the audio file is looked at once,
     // when this box is first opened, instead of building paths / stat-ing it every frame
@@ -150,7 +152,8 @@ void SongBox::update(double current_time) {
     const bool is_stream = wave_kind == WaveKind::STREAM;
     // The yellow-box open animation (slide-in ~133ms + left_out ~217ms) finishes in ~350ms;
     // wait that long rather than polling the animation, which the Lua skin now drives.
-    bool box_opened = get_current_ms() - bar_open_started_at > 350;
+    // (only an open box reads the clock: this runs for every box of the folder)
+    bool box_opened = yellow_box_active && get_current_ms() - bar_open_started_at > 350;
 
     if (is_bank && yellow_box_active && !music_playing && !preview_load && !preview_attempted &&
         get_current_ms() - bar_open_started_at > 250) {
