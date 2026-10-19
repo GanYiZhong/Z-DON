@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <string_view>
 #include <vector>
 // clang-format off
 #include <windows.h>
@@ -126,9 +127,11 @@ namespace vblank_pacing {
         if (vsync || target_fps > 0.0) {
             return; // today's behavior: vsync or the fixed-rate limiter
         }
+        // Off by default for now: with pacing, uncapped frames drop to about one per refresh, and hits
+        // are judged at frame times. ZDON_VBLANK_PACING=auto (or =<n> frames per refresh) turns it on.
         const char* env = std::getenv("ZDON_VBLANK_PACING");
-        const bool off = env && *env == '0';
-        if (env && *env && !off) {
+        const bool off = !env || !*env || *env == '0';
+        if (!off && std::string_view(env) != "auto") {
             S.fixed_frames = std::max(0, std::atoi(env));
         }
         HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
@@ -148,7 +151,7 @@ namespace vblank_pacing {
             S.log = std::fopen(lp, "w");
         }
         if (off) {
-            spdlog::info("vblank pacing: off (ZDON_VBLANK_PACING=0)");
+            spdlog::info("vblank pacing: off (set ZDON_VBLANK_PACING=auto to turn it on)");
             return;
         }
         S.active = true;
