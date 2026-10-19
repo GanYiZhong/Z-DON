@@ -127,8 +127,6 @@ public:
         : type(NoteType::BARLINE), hit_ms(0.0f), load_ms(0.0f), unload_ms(0.0f), bpm(0.0f), scroll_x(0.0f),
           scroll_y(0.0f), display(true), index(0), moji(0), is_branch_start(false) {}
 
-    virtual ~Note() = default;
-
     bool operator<(const Note& other) const { return hit_ms < other.hit_ms; }
     bool operator<=(const Note& other) const { return hit_ms <= other.hit_ms; }
     bool operator>(const Note& other) const { return hit_ms > other.hit_ms; }

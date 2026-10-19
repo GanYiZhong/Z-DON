@@ -273,6 +273,18 @@ private:
     std::optional<Fireworks> fireworks;
     ScrollType scroll_type = ScrollType::NMSCROLL;
     TempoMap tempo_map;
+    // tempo_map.beat_at(ms) for the last ms asked (every note on screen asks for the same one)
+    double beat_memo_ms = std::numeric_limits<double>::quiet_NaN();
+    double beat_memo = 0.0;
+    double beat_at_now(double ms) {
+        if (!(ms == beat_memo_ms)) {
+            beat_memo_ms = ms;
+            beat_memo = tempo_map.beat_at(ms);
+        }
+        return beat_memo;
+    }
+    // draw_notes: each note's screen position, computed by the first pass, read by the second
+    std::vector<std::optional<std::pair<float, float>>> note_positions;
     std::optional<double> audio_end_ms;
     std::optional<ComboAnnounce> combo_announce;
     std::optional<BranchIndicator> branch_indicator;

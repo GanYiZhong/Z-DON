@@ -160,7 +160,7 @@ void TextureWrapper::init(const fs::path& skin_path) {
 
         auto sc_it = skin_config_map.find(name);
         if (sc_it != skin_config_map.end()) {
-            skin_info[sc_it->second] = std::move(info);
+            set_skin_config(sc_it->second, std::move(info));
         }
     };
 
@@ -236,7 +236,7 @@ void TextureWrapper::init(const fs::path& skin_path) {
 
     // a skin whose chain defines no value for a required key reads as zeroes
     for (unsigned int k = 0; k < static_cast<unsigned int>(SC::OPTIONAL_KEYS); k++) {
-        skin_info.try_emplace(static_cast<SC>(k));
+        set_skin_config(static_cast<SC>(k), SkinInfo(), false);
     }
 
     if (skin_config_file.HasMember("screen") && skin_config_file["screen"].HasMember("options")) {

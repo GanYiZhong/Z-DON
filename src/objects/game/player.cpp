@@ -769,6 +769,7 @@ void Player::reset_chart() {
     bpm = parser->metadata.bpm;
     scroll_type = notes.scroll_type;
     tempo_map = notes.tempo_map;
+    beat_memo_ms = std::numeric_limits<double>::quiet_NaN();
 
     for (Note& note : notes.notes) {
         get_load_time(note);
@@ -949,7 +950,7 @@ std::optional<Note> Player::get_first_note() {
 // with the tempo and stops during a #DELAY. Otherwise: time to the note at the note's own BPM.
 float Player::get_position_x(const Note& note, double current_ms) {
     if (scroll_type != ScrollType::NMSCROLL) {
-        double beats = tempo_map.beat_at(note.hit_ms) - tempo_map.beat_at(current_ms);
+        double beats = tempo_map.beat_at(note.hit_ms) - beat_at_now(current_ms);
         return JudgePos::X + beats / 4 * note.scroll_x * (tex.screen_width - JudgePos::X);
     }
     float speedx = note.bpm / 240000 * note.scroll_x * (tex.screen_width - JudgePos::X);
@@ -958,7 +959,7 @@ float Player::get_position_x(const Note& note, double current_ms) {
 
 float Player::get_position_y(const Note& note, double current_ms) {
     if (scroll_type != ScrollType::NMSCROLL) {
-        double beats = tempo_map.beat_at(note.hit_ms) - tempo_map.beat_at(current_ms);
+        double beats = tempo_map.beat_at(note.hit_ms) - beat_at_now(current_ms);
         return beats / 4 * note.scroll_y * (tex.screen_width - JudgePos::X);
     }
     float speedy =
@@ -1962,12 +1963,16 @@ void Player::draw_notes(double current_ms, float y) {
         return std::make_pair(x_position + judge_x, y_position + judge_y + y);
     };
 
-    for (auto it = draw_note_buffer.rbegin(); it != draw_note_buffer.rend(); ++it) {
+    const float notes_y = tex.get_skin_config(SC::GAME_NOTES)->y;
+    const float moji_y = tex.get_skin_config(SC::GAME_MOJI)->y;
+    note_positions.assign(draw_note_buffer.size(), std::nullopt); // reverse order, as drawn
+    size_t slot = 0;
+    for (auto it = draw_note_buffer.rbegin(); it != draw_note_buffer.rend(); ++it, ++slot) {
         auto& note = *it;
         if (skip_note(note)) {
             continue;
         }
-        auto pos = note_position(note);
+        auto pos = note_positions[slot] = note_position(note);
         if (!pos) {
             continue;
         }
@@ -1979,16 +1984,14 @@ void Player::draw_notes(double current_ms, float y) {
             tex.draw_texture(note_tex_ids[(int)note.type], {.frame = current_eighth % 2,
                                                             .center = true,
                                                             .x = pos->first - (t_notes_9->width / 2.0f),
-                                                            .y = pos->second + tex.get_skin_config(SC::GAME_NOTES)->y});
+                                                            .y = pos->second + notes_y});
         }
     }
 
-    for (auto it = draw_note_buffer.rbegin(); it != draw_note_buffer.rend(); ++it) {
+    slot = 0;
+    for (auto it = draw_note_buffer.rbegin(); it != draw_note_buffer.rend(); ++it, ++slot) {
         auto& note = *it;
-        if (skip_note(note)) {
-            continue;
-        }
-        auto pos = note_position(note);
+        const auto& pos = note_positions[slot]; // empty for a skipped or not yet visible note
         if (!pos) {
             continue;
         }
@@ -1998,9 +2001,8 @@ void Player::draw_notes(double current_ms, float y) {
         } else if (note.type == NoteType::BALLOON_HEAD) {
             draw_balloon(current_ms, y, note, current_eighth, true);
         } else {
-            tex.draw_texture(t_moji, {.frame = note.moji,
-                                      .x = pos->first - (t_moji->width / 2.0f),
-                                      .y = tex.get_skin_config(SC::GAME_MOJI)->y + pos->second});
+            tex.draw_texture(t_moji,
+                             {.frame = note.moji, .x = pos->first - (t_moji->width / 2.0f), .y = moji_y + pos->second});
         }
     }
 }

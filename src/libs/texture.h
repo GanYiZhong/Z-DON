@@ -193,7 +193,8 @@ public:
     // it every frame. Emptied whenever `textures` changes, and when the language changes.
     std::unordered_map<std::string, std::shared_ptr<TextureObject>> lua_texture_lookup;
     std::string lua_texture_lookup_lang;
-    std::unordered_map<SC, SkinInfo> skin_info; // read through get_skin_config
+    // indexed by SC (read every frame, per note): set_skin_config / get_skin_config
+    std::vector<std::optional<SkinInfo>> skin_info;
     std::unordered_map<std::string, SkinInfo> skin_config_by_name;
     std::unordered_map<SCO, bool> options;
     Chara3DConfig chara_3d_config;
@@ -227,8 +228,18 @@ public:
     void init(const fs::path& skin_path);
 
     const SkinInfo* get_skin_config(SC key) const {
-        auto it = skin_info.find(key);
-        return it == skin_info.end() ? nullptr : &it->second;
+        const size_t k = static_cast<size_t>(key);
+        return k < skin_info.size() && skin_info[k] ? &*skin_info[k] : nullptr;
+    }
+    // overwrite = false keeps a value already set (std::map::try_emplace)
+    void set_skin_config(SC key, SkinInfo info, bool overwrite = true) {
+        const size_t k = static_cast<size_t>(key);
+        if (k >= skin_info.size()) {
+            skin_info.resize(k + 1);
+        }
+        if (overwrite || !skin_info[k]) {
+            skin_info[k] = std::move(info);
+        }
     }
 
     // text_config label for `key` in exactly `language` (see font_manager.get_text_label)
