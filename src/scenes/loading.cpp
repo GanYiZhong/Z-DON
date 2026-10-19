@@ -118,8 +118,11 @@ void LoadingScreen::load_song_hashes() {
         std::vector<std::optional<std::array<std::string, 5>>> bindings(songs.size());
         std::atomic<int> cache_hits = 0;
 
-        auto worker = [&](int start, int end) {
-            for (int i = start; i < end; i++) {
+        // every worker takes the next chart (a new song pack is a run of uncached charts: in fixed ranges
+        // one worker parsed all of it); `ranges` below only orders the path bindings
+        std::atomic<int> cursor{0};
+        auto worker = [&]() {
+            for (int i; (i = cursor.fetch_add(1)) < (int)songs.size();) {
                 auto u8 = songs[i].u8string();
                 const std::string path(u8.begin(), u8.end());
 
@@ -235,10 +238,10 @@ void LoadingScreen::load_song_hashes() {
 #endif
         scores_manager.begin_transaction();
 #ifdef __EMSCRIPTEN__
-        worker(0, songs.size());
+        worker();
 #else
-        for (const auto& [start, end] : ranges) {
-            threads.emplace_back(worker, start, end);
+        for (size_t t = 0; t < ranges.size(); t++) {
+            threads.emplace_back(worker);
         }
         for (auto& t : threads) {
             t.join();

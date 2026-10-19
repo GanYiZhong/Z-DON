@@ -125,6 +125,8 @@ class ScoresManager {
 private:
     sqlite3* db_fsd;
     sqlite3_stmt* add_song_stmt = nullptr;
+    sqlite3_stmt* store_song_cache_stmt = nullptr; // with the song_cache table made once
+    sqlite3_stmt* remove_song_cache_stmt = nullptr;
     std::mutex song_meta_mutex;
     std::unordered_map<std::string, SongCacheEntry> song_meta;
     mutable std::mutex maps_mutex;

@@ -556,6 +556,21 @@ void save_config(const Config& config) {
                                              {"target_fps", config.video.target_fps},
                                              {"vsync", config.video.vsync}});
 
+    // main saves at every start (for migrated fields): a file that already holds the same text is
+    // left alone (the same text mode read as it is written)
+    {
+        std::ostringstream rendered;
+        rendered << config_table;
+        std::ifstream current(config_path);
+        if (current) {
+            std::ostringstream existing;
+            existing << current.rdbuf();
+            if (current && existing.str() == rendered.str()) {
+                return;
+            }
+        }
+    }
+
     fs::path tmp_path = config_path;
     tmp_path += ".tmp";
     {
