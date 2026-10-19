@@ -63,6 +63,7 @@ class ScriptManager {
 private:
     std::map<std::string, std::string> scripts;
     std::set<std::string> executed_scripts;
+    std::set<std::string> instantiated_classes;
 
 public:
     TextureWrapper& tex;
@@ -81,6 +82,8 @@ public:
 
     bool script_executed(const std::string& script_name) const { return executed_scripts.count(script_name) != 0; }
     void mark_script_executed(const std::string& script_name) { executed_scripts.insert(script_name); }
+    // true the first time a script class builds an object (since the last init)
+    bool first_instance(const std::string& class_name) { return instantiated_classes.insert(class_name).second; }
 };
 
 extern ScriptManager script_manager;
@@ -133,6 +136,8 @@ bool LuaScript::load(const std::string& class_name, const std::string& script_na
     }
 
     lua_object = call_result;
-    script_manager.refresh_method_cache();
+    if (script_manager.first_instance(class_name)) {
+        script_manager.refresh_method_cache(); // not per object: a NoteArc is built on every hit
+    }
     return true;
 }

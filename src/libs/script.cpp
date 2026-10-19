@@ -304,6 +304,7 @@ void ScriptManager::init(fs::path script_path) {
 
     scripts.clear();
     executed_scripts.clear();
+    instantiated_classes.clear();
 
     // the parent's Scripts, and its parent's ..., nearest first
     std::vector<fs::path> ancestor_scripts;
@@ -392,6 +393,7 @@ void ScriptManager::shutdown() {
     // is managed by load_skin()/unload_skin() and main().
     scripts.clear();
     executed_scripts.clear();
+    instantiated_classes.clear();
     lua.reset();
 }
 
@@ -1014,7 +1016,9 @@ void ScriptManager::register_lua_bindings() {
 }
 
 // sol creates some metatables lazily (e.g. the unique_ptr variant the first time an anim.fade()
-// object is pushed), so new ones are wrapped after script loads and once a second.
+// object is pushed), so new ones are wrapped when something new can have pushed them: the first
+// object of each script class (LuaScript::load) and a screen change. A metatable that is not
+// wrapped yet still answers through sol's own __index, only without the cache.
 void ScriptManager::refresh_method_cache() {
     if (lua) {
         cache_usertype_method_lookups(lua->lua_state());
