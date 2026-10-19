@@ -12,8 +12,8 @@
 // The frame clock of a frame that woke on time is its grid time, so the shown frames advance by
 // exactly one refresh period.
 //
-// Only with vsync off and no target_fps, and only when ZDON_VBLANK_PACING=auto (automatic frames per
-// refresh) or =<n> (at most n frames per refresh); off by default.
+// Only with vsync off and no target_fps; on by default. ZDON_VBLANK_PACING=0 turns it off,
+// =<n> allows at most n frames per refresh (unset or =auto: automatic).
 // ZDON_PACING_LOG=<file> writes a per-frame CSV (frame clock, wake, present end, vblank grid).
 
 #ifdef _WIN32

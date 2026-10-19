@@ -130,11 +130,12 @@ namespace vblank_pacing {
         if (fixed_step::on()) {
             return; // YATAIDON_FIXED_STEP_MS: frames run back to back
         }
-        // Off by default for now: with pacing, uncapped frames drop to about one per refresh, and hits
-        // are judged at frame times. ZDON_VBLANK_PACING=auto (or =<n> frames per refresh) turns it on.
+        // On by default (owner's choice 2026-10-19). Trade-off: uncapped frames drop to about one per
+        // refresh, and hits are judged at frame times. ZDON_VBLANK_PACING=0 turns it off; =<n> allows at
+        // most n frames per refresh; unset or =auto picks the count automatically.
         const char* env = std::getenv("ZDON_VBLANK_PACING");
-        const bool off = !env || !*env || *env == '0';
-        if (!off && std::string_view(env) != "auto") {
+        const bool off = env && *env == '0';
+        if (env && *env && !off && std::string_view(env) != "auto") {
             S.fixed_frames = std::max(0, std::atoi(env));
         }
         HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
@@ -154,7 +155,7 @@ namespace vblank_pacing {
             S.log = std::fopen(lp, "w");
         }
         if (off) {
-            spdlog::info("vblank pacing: off (set ZDON_VBLANK_PACING=auto to turn it on)");
+            spdlog::info("vblank pacing: off (ZDON_VBLANK_PACING=0)");
             return;
         }
         S.active = true;
