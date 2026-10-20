@@ -374,18 +374,53 @@ static bool g_dump_screen_done = false; // the dump hook's last shot is taken: l
 
 // Dev hook: YATAIDON_FRAME_STATS=1 logs, every 2 s, the CPU time each frame spent before present
 // (input, update, draw submission; not the vsync / frame-limiter wait).
+// ZDON_FRAME_SPIKE_MS=<ms> (with or without FRAME_STATS) logs every single frame whose work took longer
+// than that, split into screen update / draw, and every present (EndDrawing + swap) longer than that, so
+// a hitch can be matched with the log lines around it.
+static double g_spike_update_ms = 0, g_spike_draw_ms = 0; // this frame's screen update / draw, for the spike log
+static std::string g_spike_screen;                        // copied: a skin reload may delete the screen before the log
+static uint64_t g_spike_frame_no = 0;
+static double frame_spike_ms() {
+    static const double ms = [] {
+        const char* v = std::getenv("ZDON_FRAME_SPIKE_MS");
+        return v && *v ? std::atof(v) : 0.0;
+    }();
+    return ms;
+}
+// the present (EndDrawing + swap) of a frame: where the driver waits for the work the frame queued
+static void frame_spike_present(std::chrono::steady_clock::time_point start) {
+    const double spike_ms = frame_spike_ms();
+    if (spike_ms <= 0) {
+        return;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (ms > spike_ms) {
+        spdlog::info("[spike] frame {} present {:.2f} ms on {}", g_spike_frame_no, ms, g_spike_screen);
+    }
+}
 static void frame_stats_add(std::chrono::steady_clock::time_point start) {
     static const bool on = [] {
         const char* v = std::getenv("YATAIDON_FRAME_STATS");
         return v && *v == '1';
     }();
+    const double spike_ms = frame_spike_ms();
+    if (!on && spike_ms <= 0) {
+        return;
+    }
+    uint64_t& frame_no = g_spike_frame_no;
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - start).count();
+    frame_no++;
+    if (spike_ms > 0 && ms > spike_ms) {
+        spdlog::info("[spike] frame {} work {:.2f} ms (update {:.2f}, draw {:.2f}) on {}", frame_no, ms,
+                     g_spike_update_ms, g_spike_draw_ms, g_spike_screen);
+    }
     if (!on) {
         return;
     }
     static std::vector<double> work;
     static auto window = std::chrono::steady_clock::now();
-    const auto now = std::chrono::steady_clock::now();
-    work.push_back(std::chrono::duration<double, std::milli>(now - start).count());
+    work.push_back(ms);
     if (now - window >= std::chrono::seconds(2)) {
         std::ranges::sort(work);
         double sum = 0;
@@ -518,7 +553,10 @@ static void run_frame() {
     {
         PROFILE_SCOPE_N("screen update");
         PROFILE_ZONE_TEXT(screen->screen_name);
+        const auto t0 = std::chrono::steady_clock::now();
         next_screen = screen->update();
+        g_spike_update_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        g_spike_screen = screen->screen_name;
     }
     sync_text_input();
 
@@ -589,7 +627,11 @@ static void run_frame() {
     if (screen->screen_init) {
         PROFILE_SCOPE_N("screen draw");
         PROFILE_ZONE_TEXT(screen->screen_name);
+        const auto t0 = std::chrono::steady_clock::now();
         screen->_do_draw();
+        g_spike_draw_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    } else {
+        g_spike_draw_ms = 0;
     }
     if (L.screen_fade_start > 0.0) {
         const SkinInfo* fade_cfg = tex.get_skin_config(SC::SCREEN_FADE_MS);
@@ -643,6 +685,7 @@ static void run_frame() {
     frame_stats_add(frame_start);
     {
         PROFILE_SCOPE_N("present");
+        const auto present_start = std::chrono::steady_clock::now();
         ray::EndDrawing();
         draw_stats_add(screen->screen_name);
         if (dump_done) {
@@ -653,6 +696,7 @@ static void run_frame() {
         if (!next_screen.has_value()) {
             ray::SwapScreenBuffer();
         }
+        frame_spike_present(present_start);
     }
 
     if (ray::IsKeyPressed(ray::KEY_F12)) {
