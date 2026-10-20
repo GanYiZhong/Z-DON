@@ -10,6 +10,7 @@
 // clang-format off
 #include <windows.h>
 #include <dbghelp.h>  // must follow windows.h
+#include <psapi.h>    // must follow windows.h
 #include <shellapi.h> // must follow windows.h
 // clang-format on
 
@@ -225,6 +226,22 @@ bool win32_precise_sleep_us(long long us) {
         return false;
     }
     WaitForSingleObject(timer, INFINITE);
+    return true;
+}
+
+bool win32_process_usage(double& cpu_ms, double& working_set_mb, double& private_mb) {
+    FILETIME created, exited, kernel, user;
+    PROCESS_MEMORY_COUNTERS_EX mem{};
+    mem.cb = sizeof(mem);
+    HANDLE self = GetCurrentProcess();
+    if (!GetProcessTimes(self, &created, &exited, &kernel, &user) ||
+        !K32GetProcessMemoryInfo(self, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mem), sizeof(mem))) {
+        return false;
+    }
+    auto ticks = [](const FILETIME& f) { return ((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime; };
+    cpu_ms = (double)(ticks(kernel) + ticks(user)) / 1e4; // 100 ns units
+    working_set_mb = (double)mem.WorkingSetSize / (1024.0 * 1024.0);
+    private_mb = (double)mem.PrivateUsage / (1024.0 * 1024.0);
     return true;
 }
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
+#include <format>
 #include <iostream>
 #include <rlgl.h>
 
@@ -444,6 +445,16 @@ static void frame_stats_add(std::chrono::steady_clock::time_point start) {
     }
     static std::vector<double> work;
     static auto window = std::chrono::steady_clock::now();
+    // frame start-to-start intervals over 2.08 / 4.17 / 8.33 ms (a 480 / 240 / 120 Hz refresh)
+    static std::chrono::steady_clock::time_point prev_start{};
+    static int over[3] = {};
+    if (prev_start.time_since_epoch().count() != 0) {
+        const double interval = std::chrono::duration<double, std::milli>(start - prev_start).count();
+        over[0] += interval > 2.08;
+        over[1] += interval > 4.17;
+        over[2] += interval > 8.33;
+    }
+    prev_start = start;
     work.push_back(ms);
     if (now - window >= std::chrono::seconds(2)) {
         std::ranges::sort(work);
@@ -451,9 +462,25 @@ static void frame_stats_add(std::chrono::steady_clock::time_point start) {
         for (double v : work) {
             sum += v;
         }
-        spdlog::info("[frame] {} frames, work ms: avg {:.3f} p50 {:.3f} p99 {:.3f} max {:.3f}", work.size(),
-                     sum / work.size(), work[work.size() / 2], work[work.size() * 99 / 100], work.back());
+        std::string usage;
+#ifdef _WIN32
+        // process CPU % of one core over the window, working set and private bytes
+        static double prev_cpu_ms = -1;
+        double cpu_ms = 0, ws_mb = 0, private_mb = 0;
+        if (win32_process_usage(cpu_ms, ws_mb, private_mb)) {
+            const double wall_ms = std::chrono::duration<double, std::milli>(now - window).count();
+            usage = prev_cpu_ms < 0 ? std::format("; ws {:.0f} MB private {:.0f} MB", ws_mb, private_mb)
+                                    : std::format("; cpu {:.1f}% ws {:.0f} MB private {:.0f} MB",
+                                                  100.0 * (cpu_ms - prev_cpu_ms) / wall_ms, ws_mb, private_mb);
+            prev_cpu_ms = cpu_ms;
+        }
+#endif
+        spdlog::info("[frame] {} frames, work ms: avg {:.3f} p50 {:.3f} p99 {:.3f} max {:.3f}; intervals >2.08 {} "
+                     ">4.17 {} >8.33 {}{}",
+                     work.size(), sum / work.size(), work[work.size() / 2], work[work.size() * 99 / 100], work.back(),
+                     over[0], over[1], over[2], usage);
         work.clear();
+        over[0] = over[1] = over[2] = 0;
         window = now;
     }
 }

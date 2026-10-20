@@ -50,7 +50,8 @@
 ### 開發工具
 - `YATAIDON_TEST=1`：音量 1%、最小化（隱藏視窗時不最小化）、忽略真實輸入、不寫歌單。
 - `YATAIDON_FIXED_STEP_MS=<ms>`＋`YATAIDON_DUMP_FRAMES=<dir>;<frames>`：確定性畫面（固定時間步、等背景載入、無網路），同一個 exe 跑出逐位元組相同的截圖。
-- `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`、`YATAIDON_FRAME_STATS=1`。
+- `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`。
+- `YATAIDON_FRAME_STATS=1`：每 2 s 一行 `[frame]`：幀工作時間 avg/p50/p99/max、幀間隔（開始到開始）超過 2.08 / 4.17 / 8.33 ms 的次數（480 / 240 / 120 Hz 的一格）、程序 CPU（單核 %，Windows）、working set 與 private MB。每 2 s 才查一次系統（GetProcessTimes＋GetProcessMemoryInfo），預設關。
 - `ZDON_FRAME_SPIKE_MS=<ms>`：每個超過門檻的幀記一行（update/draw 拆開），present（EndDrawing＋swap）超過門檻也另記；不需要開 FRAME_STATS。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 

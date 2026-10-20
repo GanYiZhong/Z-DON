@@ -40,6 +40,8 @@ void win32_install_crash_handlers();
 // Sleeps for about `us` microseconds on a high-resolution waitable timer (Windows 10 1803+).
 // Returns false when that timer is unavailable; the caller then falls back to a normal sleep.
 bool win32_precise_sleep_us(long long us);
+// This process's CPU time (user + kernel, ms), working set and private bytes (MB); false on failure.
+bool win32_process_usage(double& cpu_ms, double& working_set_mb, double& private_mb);
 // true while a window of this process is in the foreground
 bool win32_app_has_focus();
 // win32_is_key_down_native without its foreground check (the caller checked win32_app_has_focus)
