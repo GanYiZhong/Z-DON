@@ -24,6 +24,10 @@
 | 輸入執行緒改用高解析度計時器（原本空轉） | `YATAIDON_INPUT_SLEEP=plain` 還原、`YATAIDON_INPUT_STATS=1` | 省一整顆核心；輪詢約每 1 ms |
 | Windows Release `-O3`＋LTO | `-DZDON_LTO=OFF` 開發用 | 每幀 CPU 約 −14% |
 | 無鎖音訊 callback、串流解碼移到自己的執行緒、SoundId 打擊音 | `YATAIDON_AUDIO_STATS=1`、`_CAPTURE`、`_SELFTEST` | callback 最壞 10.6 ms → 0.3 ms，不再等鎖 |
+| 打擊音複音（咚/咔各 6 個 voice 環、共用 PCM、最舊的被搶），**預設開** | `ZDON_HIT_POLYPHONY=<n>`（1 = 舊的重播行為，上限 24）；`YATAIDON_AUDIO_STATS` 多報 max_voices/poly_plays/overlapped/stolen | **執行期驗證待做**（見下） |
+| 跨畫面常駐音效：打擊音、氣球/薬玉破裂、don/ka、Sounds/global（名稱＋路徑相同就不重解碼） | `ZDON_RESIDENT_SOUND_MB=<n>`（預設 64，0 = 關）；切 skin 時丟掉 | **執行期驗證待做** |
+| 音量類別即時生效（mixer 每次 callback 乘上類別音量，設定畫面確認即套用） | — | 音量不變時數值與以前相同；**執行期驗證待做** |
+| 換畫面時 Lua 完整 GC（debug log 記時間與 heap） | `ZDON_LUA_GC_STRESS=1`：每幀都跑（測試用） | **執行期驗證待做** |
 | 字型：共用不可變 glyph 快取、增量 atlas | `YATAIDON_TEXT_STATS=1` | 每段文字 0.64 → 0.11 ms，最壞 5–6 → 0.6 ms |
 | Lua 分代 GC、方法快取事件化、跳過提示去重 | — | 連打譜每 2 s 最慢一幀 5.4 → 2.6 ms |
 | 音符繪製精簡、已停住的歌曲框不更新、繪圖延後切換混合模式＋3 個批次緩衝 | `ZDON_EAGER_BLEND=1` 還原、`YATAIDON_DRAW_STATS=1` | 每幀 flush 10.7–12.9 → 9.7–10.0 |
@@ -73,6 +77,10 @@
 - PGO 交付（量不到增益）。
 - 紋理快取存解碼後像素（目前瓶頸是 GPU 上傳，不是解碼）。
 - 輸入時間戳、音訊時鐘插值：會改變判定方式（使用者選擇不做）。
+
+## 2026-10-20 音訊四項（5b6e2ff..）待驗證
+- 程式已提交，編譯與 LTO 連結都通過（只差寫出 exe：使用者的遊戲從 03:33 一直開著，exe 被鎖）。
+- 還沒做：確定性套件 121 張、AUDIO_SELFTEST（新增複音/搶 voice/stop/unload/即時音量段，分析腳本 scratchpad chn/check_selftest.py）、dense 譜 overlapped 統計、第二次進遊戲畫面不重載打擊音、callback 最壞時間、ZDON_LUA_GC_STRESS 套件。
 
 ## 還可以做的
 - 貼圖用到時才上傳 GPU / PBO 背景上傳（第一次進畫面約 150 ms 的上傳）：需要共享 GL context 或分幀上傳（可能先看到貼圖空白），收益小、風險高，暫不做。
