@@ -24,10 +24,10 @@
 | 輸入執行緒改用高解析度計時器（原本空轉） | `YATAIDON_INPUT_SLEEP=plain` 還原、`YATAIDON_INPUT_STATS=1` | 省一整顆核心；輪詢約每 1 ms |
 | Windows Release `-O3`＋LTO | `-DZDON_LTO=OFF` 開發用 | 每幀 CPU 約 −14% |
 | 無鎖音訊 callback、串流解碼移到自己的執行緒、SoundId 打擊音 | `YATAIDON_AUDIO_STATS=1`、`_CAPTURE`、`_SELFTEST` | callback 最壞 10.6 ms → 0.3 ms，不再等鎖 |
-| 打擊音複音（咚/咔各 6 個 voice 環、共用 PCM、最舊的被搶），**預設開** | `ZDON_HIT_POLYPHONY=<n>`（1 = 舊的重播行為，上限 24）；`YATAIDON_AUDIO_STATS` 多報 max_voices/poly_plays/overlapped/stolen | **執行期驗證待做**（見下） |
-| 跨畫面常駐音效：打擊音、氣球/薬玉破裂、don/ka、Sounds/global（名稱＋路徑相同就不重解碼） | `ZDON_RESIDENT_SOUND_MB=<n>`（預設 64，0 = 關）；切 skin 時丟掉 | **執行期驗證待做** |
-| 音量類別即時生效（mixer 每次 callback 乘上類別音量，設定畫面確認即套用） | — | 音量不變時數值與以前相同；**執行期驗證待做** |
-| 換畫面時 Lua 完整 GC（debug log 記時間與 heap） | `ZDON_LUA_GC_STRESS=1`：每幀都跑（測試用） | **執行期驗證待做** |
+| 打擊音複音（咚/咔各 6 個 voice 環、共用 PCM、最舊的被搶），**預設開** | `ZDON_HIT_POLYPHONY=<n>`（1 = 舊的重播行為，上限 24）；`YATAIDON_AUDIO_STATS` 多報 max_voices/poly_plays/overlapped/stolen | dense 譜 auto：每 2 s 約 20 次重疊、最多 12 個 voice 同時響；selftest 8 連打對模型誤差 1e-7 |
+| 跨畫面常駐音效：打擊音、氣球/薬玉破裂、don/ka、Sounds/global（名稱＋路徑相同就不重解碼） | `ZDON_RESIDENT_SOUND_MB=<n>`（預設 64，0 = 關）；切 skin 時丟掉 | 結算/選曲各直接重用 7 個（1.9 MB 常駐） |
+| 音量類別即時生效（mixer 每次 callback 乘上類別音量，設定畫面確認即套用） | — | 音量不變時數值與以前相同；selftest 播放中改音量 → 正好 ×0.5、再回 ×1.0（誤差 0） |
+| 換畫面時 Lua 完整 GC（debug log 記時間與 heap） | `ZDON_LUA_GC_STRESS=1`：每幀都跑（測試用） | 確定性套件 121/121 相同 |
 | 字型：共用不可變 glyph 快取、增量 atlas | `YATAIDON_TEXT_STATS=1` | 每段文字 0.64 → 0.11 ms，最壞 5–6 → 0.6 ms |
 | Lua 分代 GC、方法快取事件化、跳過提示去重 | — | 連打譜每 2 s 最慢一幀 5.4 → 2.6 ms |
 | 音符繪製精簡、已停住的歌曲框不更新、繪圖延後切換混合模式＋3 個批次緩衝 | `ZDON_EAGER_BLEND=1` 還原、`YATAIDON_DRAW_STATS=1` | 每幀 flush 10.7–12.9 → 9.7–10.0 |
@@ -78,9 +78,14 @@
 - 紋理快取存解碼後像素（目前瓶頸是 GPU 上傳，不是解碼）。
 - 輸入時間戳、音訊時鐘插值：會改變判定方式（使用者選擇不做）。
 
-## 2026-10-20 音訊四項（5b6e2ff..）待驗證
-- 程式已提交，編譯與 LTO 連結都通過（只差寫出 exe：使用者的遊戲從 03:33 一直開著，exe 被鎖）。
-- 還沒做：確定性套件 121 張、AUDIO_SELFTEST（新增複音/搶 voice/stop/unload/即時音量段，分析腳本 scratchpad chn/check_selftest.py）、dense 譜 overlapped 統計、第二次進遊戲畫面不重載打擊音、callback 最壞時間、ZDON_LUA_GC_STRESS 套件。
+## 2026-10-20 音訊四項驗證結果
+- 確定性套件 121/121 與合併上游後（up_5e1b）相同。
+- AUDIO_SELFTEST：舊腳本的部分與舊版逐位元相同；複音段對模型最大誤差 9.7e-8（重播模型差 0.82）；stop/unload 後全靜音；即時音量段誤差 0（長音效要用開頭就有聲音的檔，例如自產正弦波）。
+- dense 譜 auto＋AUDIO_STATS：callback 平均約 10 µs、最壞 0.25 ms，沒有 underflow。
+
+## 編譯譜面快取（分支 zdon-chartcache，不合併）
+- 正確性：全曲庫 12116 個難度序列化/還原逐欄位相同，損毀/截斷/多執行緒都測過。
+- 效能：每難度中位數 37.5 µs（解析）vs 35.4 µs（快取命中），42% 的難度命中反而較慢；光是把結果複製成 deque 就約 17 µs。快取檔整個曲庫 94 MB。收益感覺不到，不合併。
 
 ## 還可以做的
 - 貼圖用到時才上傳 GPU / PBO 背景上傳（第一次進畫面約 150 ms 的上傳）：需要共享 GL context 或分幀上傳（可能先看到貼圖空白），收益小、風險高，暫不做。
