@@ -212,6 +212,8 @@ private:
     // where load_folder puts them while it makes them; dropped with unload_textures
     std::vector<std::shared_ptr<TextureObject>> ondemand_stash;
     std::vector<std::shared_ptr<TextureObject>>* stash = nullptr;
+    // Z-DON: the images texture_lazy::evict_all freed for the textures this screen now holds
+    void refill_evicted(class ImagePrefetch& prefetch, const std::vector<fs::path>& planned);
 
     bool read_screen_animations(const std::string& screen_name, rapidjson::Document& out);
 

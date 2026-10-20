@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <cwctype>
+#include <map>
 #include <mutex>
 #include <spdlog/spdlog.h>
 #include <thread>
@@ -260,6 +262,7 @@ void TextureWrapper::init(const fs::path& skin_path) {
     }
 }
 
+static ray::Image decode_evicted(const fs::path& source);
 void TextureWrapper::unload_textures() {
     lua_texture_lookup.clear();
     texture_fallbacks.clear();
@@ -275,6 +278,9 @@ void TextureWrapper::unload_textures() {
     screen_loaded.clear();
     ondemand_stash.clear();
     texture_ondemand::flush(); // what the screen that ends loaded on demand
+    // the images of textures never drawn: the next load of a screen that holds them decodes them again
+    texture_lazy::set_decoder(decode_evicted);
+    texture_lazy::evict_all();
 }
 
 BaseAnimation* TextureWrapper::get_animation(const int id, bool is_copy) {
@@ -1066,7 +1072,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                             if (!img.data) {
                                 spdlog::error("Failed to decode image for texture {}: Frame {}", p.name, i);
                                 ok = false;
-                            } else if ((tex = texture_lazy::make(img, screen_name))) {
+                            } else if ((tex = texture_lazy::make(img, screen_name, files[fi], screen_loaded))) {
                                 gpu[fi] = tex;
                                 lazy_owned[fi] = 1;
                             } else {
@@ -1207,6 +1213,73 @@ void TextureWrapper::unload_folder(const std::string& screen_name, const std::st
     spdlog::info("Textures unloaded for folder: {}/{}", screen_name, subset);
 }
 
+static ray::Image decode_evicted(const fs::path& source) {
+    try {
+        return load_image(source, {}, nullptr);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to decode image {}: {}", source.string(), e.what());
+        return ray::Image{};
+    }
+}
+
+// Z-DON: gives the evicted textures the screen now holds (its texture map and on-demand stash) their images
+// back: from the prefetch when load_screen_textures planned them, else decoded here in parallel
+void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<fs::path>& planned) {
+    std::map<fs::path, std::vector<const ray::Texture2D*>> want; // by file
+    size_t count = 0;
+    std::unordered_set<const ray::Texture2D*> seen;
+    auto collect = [&](const std::shared_ptr<TextureObject>& obj) {
+        for (int i = 0; obj && i < obj->frame_count(); ++i) {
+            const ray::Texture2D* t = obj->frame_texture_raw(i);
+            if (texture_lazy::evicted(t) && seen.insert(t).second) {
+                want[texture_lazy::source(t)].push_back(t);
+                ++count;
+            }
+        }
+    };
+    for (const auto& [id, obj] : textures) {
+        collect(obj);
+    }
+    for (const auto& obj : ondemand_stash) {
+        collect(obj);
+    }
+    if (want.empty()) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    auto give = [](const std::vector<const ray::Texture2D*>& texs, const ray::Image& img) {
+        for (size_t i = 0; i < texs.size(); ++i) {
+            texture_lazy::refill(texs[i], i + 1 < texs.size() && img.data ? ray::ImageCopy(img) : img);
+        }
+    };
+    // in the prefetch's order, so its workers stay ahead of the takes
+    size_t from_prefetch = 0;
+    for (const fs::path& path : planned) {
+        auto it = want.find(path);
+        ray::Image img{};
+        ray::Rectangle border{};
+        bool has_border = false;
+        if (it != want.end() && prefetch.take(path, img, border, has_border)) {
+            give(it->second, img);
+            from_prefetch += it->second.size();
+            want.erase(it);
+        }
+    }
+    std::vector<fs::path> rest;
+    for (const auto& [path, texs] : want) {
+        rest.push_back(path);
+    }
+    std::vector<ray::Image> decoded;
+    decode_images_parallel(rest, decoded);
+    for (size_t i = 0; i < rest.size(); ++i) {
+        give(want[rest[i]], decoded[i]);
+    }
+    spdlog::info("Lazy texture upload: {} images freed at the last screen change decoded again for {} ({} prefetched, "
+                 "{:.1f} ms)",
+                 count, screen_loaded, from_prefetch,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+}
+
 // decoded-but-not-yet-uploaded images load_screen_textures may hold ahead of load_folder
 constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
 
@@ -1345,6 +1418,14 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         extra.push_back(f);
     }
 
+    // Z-DON: images of textures this screen made that were freed at a screen change (texture_lazy evict_all),
+    // decoded with the rest; the textures that get them are found after the folders are loaded
+    std::vector<fs::path> refill_files = texture_lazy::evicted_sources(screen_name);
+    std::ranges::sort(refill_files);
+    refill_files.erase(std::ranges::unique(refill_files).begin(), refill_files.end());
+    const size_t refill_group = groups.size();
+    groups.push_back(refill_files);
+
     // the screen's texture pack: the planned files' bytes in one file, checked against the listings
     std::unique_ptr<texture_pack::Session> pack;
     if (texture_pack::enabled()) {
@@ -1392,6 +1473,8 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
             load_folder(extra[e].screen, extra[e].subset);
             prefetch.finish_group(subsets.size() + e);
         }
+        refill_evicted(prefetch, refill_files);
+        prefetch.finish_group(refill_group);
     }
     if (pack) {
         pack->finish();

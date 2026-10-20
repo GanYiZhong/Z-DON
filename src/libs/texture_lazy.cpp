@@ -6,6 +6,7 @@
 #include <map>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
+#include <vector>
 
 #include "global_data.h"
 #include "texture_retain.h"
@@ -21,6 +22,9 @@ namespace texture_lazy {
             int wrap = -1;
             std::string screen;
             size_t bytes = 0;
+            std::filesystem::path source;
+            std::string owner;
+            bool evicted = false; // image freed at a screen change; source decodes it again
         };
 
         struct ScreenStats {
@@ -41,6 +45,7 @@ namespace texture_lazy {
             return *m;
         }
         size_t pending_bytes = 0;
+        ray::Image (*decoder)(const std::filesystem::path&) = nullptr;
 
         size_t cap_bytes() {
             static const size_t cap = [] {
@@ -53,6 +58,14 @@ namespace texture_lazy {
 
         size_t image_bytes(int width, int height, int format) {
             return static_cast<size_t>(ray::GetPixelDataSize(width, height, format));
+        }
+
+        bool evict_enabled() {
+            static const bool on = [] {
+                const char* v = std::getenv("ZDON_LAZY_EVICT");
+                return !(v && *v == '0');
+            }();
+            return on;
         }
 
         // Textures that may first be drawn in the middle of a song upload at load: there a first-use upload
@@ -68,7 +81,9 @@ namespace texture_lazy {
 
         // drops a pending entry, freeing its image
         void forget(std::unordered_map<const ray::Texture2D*, Pending>::iterator it) {
-            pending_bytes -= std::min(pending_bytes, it->second.bytes);
+            if (!it->second.evicted) {
+                pending_bytes -= std::min(pending_bytes, it->second.bytes);
+            }
             texture_retain::free_image_async(it->second.image);
             pending_map().erase(it);
         }
@@ -88,7 +103,8 @@ namespace texture_lazy {
         return on;
     }
 
-    std::shared_ptr<ray::Texture2D> make(const ray::Image& image, const std::string& screen) {
+    std::shared_ptr<ray::Texture2D> make(const ray::Image& image, const std::string& screen,
+                                         const std::filesystem::path& source, const std::string& owner) {
         if (!enabled() || !image.data || during_gameplay(screen)) {
             return nullptr;
         }
@@ -109,7 +125,7 @@ namespace texture_lazy {
         t->height = image.height;
         t->mipmaps = image.mipmaps;
         t->format = image.format;
-        pending_map().emplace(t, Pending{image, -1, -1, screen, bytes});
+        pending_map().emplace(t, Pending{image, -1, -1, screen, bytes, source, owner, false});
         pending_bytes += bytes;
         ++st.lazy;
         st.lazy_bytes += bytes;
@@ -141,6 +157,18 @@ namespace texture_lazy {
         }
         const auto start = std::chrono::steady_clock::now();
         Pending& p = it->second;
+        if (p.evicted) {
+            // drawn before a screen load gave it its image back: decode it now (a hitch, hence the log)
+            ray::Image img = decoder ? decoder(p.source) : ray::Image{};
+            refill(t, img);
+            spdlog::info("Lazy texture upload: {} decoded again on first use ({:.1f} ms)", p.source.string(),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+            if (p.evicted) {
+                spdlog::error("Lazy texture upload: {} could not be decoded again", p.source.string());
+                forget(it);
+                return;
+            }
+        }
         ray::Texture2D up = ray::LoadTextureFromImage(p.image);
         if (!ray::IsTextureValid(up)) {
             spdlog::error("Lazy texture upload failed ({}x{}, {})", p.image.width, p.image.height, p.screen);
@@ -186,6 +214,86 @@ namespace texture_lazy {
             return;
         }
         ray::SetTextureWrap(*const_cast<ray::Texture2D*>(t), wrap);
+    }
+
+    void evict_all() {
+        if (!evict_enabled()) {
+            return;
+        }
+        static const size_t keep_bytes = [] {
+            const char* v = std::getenv("ZDON_LAZY_KEEP_MB");
+            const long mb = v && *v ? std::strtol(v, nullptr, 10) : 0;
+            return mb > 0 ? static_cast<size_t>(mb) * kMB : size_t{0};
+        }();
+        std::vector<Pending*> candidates;
+        for (auto& [t, p] : pending_map()) {
+            if (!p.evicted && !p.source.empty() && p.image.data) {
+                candidates.push_back(&p);
+            }
+        }
+        // ZDON_LAZY_KEEP_MB: the smallest images stay (per MB they cost the most to decode again)
+        std::ranges::sort(candidates, {}, &Pending::bytes);
+        size_t n = 0, bytes = 0, kept = 0;
+        for (Pending* p : candidates) {
+            if (kept + p->bytes <= keep_bytes) {
+                kept += p->bytes;
+                continue;
+            }
+            texture_retain::free_image_async(p->image);
+            p->evicted = true;
+            pending_bytes -= std::min(pending_bytes, p->bytes);
+            ++n;
+            bytes += p->bytes;
+        }
+        if (n > 0) {
+            spdlog::info("Lazy texture upload: {} images of textures never drawn freed ({} MB, {} MB kept)", n,
+                         bytes / kMB, kept / kMB);
+        }
+    }
+
+    bool evicted(const ray::Texture2D* t) {
+        if (!t || t->id != 0) {
+            return false;
+        }
+        auto it = pending_map().find(t);
+        return it != pending_map().end() && it->second.evicted;
+    }
+
+    std::filesystem::path source(const ray::Texture2D* t) {
+        auto it = pending_map().find(t);
+        return it != pending_map().end() ? it->second.source : std::filesystem::path{};
+    }
+
+    std::vector<std::filesystem::path> evicted_sources(const std::string& owner) {
+        std::vector<std::filesystem::path> out;
+        for (const auto& [t, p] : pending_map()) {
+            if (p.evicted && p.owner == owner) {
+                out.push_back(p.source);
+            }
+        }
+        return out;
+    }
+
+    void refill(const ray::Texture2D* t, ray::Image image) {
+        auto it = pending_map().find(t);
+        if (it == pending_map().end() || !it->second.evicted || !image.data) {
+            texture_retain::free_image_async(image);
+            return;
+        }
+        Pending& p = it->second;
+        if (image.width != t->width || image.height != t->height || image.format != t->format) {
+            // the file changed since the texture was made: its object was set up for the old size
+            spdlog::warn("Lazy texture upload: {} changed on disk ({}x{} -> {}x{})", p.source.string(), t->width,
+                         t->height, image.width, image.height);
+        }
+        p.image = image;
+        p.bytes = image_bytes(image.width, image.height, image.format);
+        p.evicted = false;
+        pending_bytes += p.bytes;
+    }
+
+    void set_decoder(ray::Image (*decode)(const std::filesystem::path& source)) {
+        decoder = decode;
     }
 
     void log_screen(const std::string& screen_name) {
