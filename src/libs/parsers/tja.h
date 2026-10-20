@@ -359,6 +359,13 @@ private:
     static std::vector<int> parse_balloon_data(const std::string& data);
 
     // the bars of a course as views of `data` (and of string literals)
+    // The lines of the chart this player plays in a course: #START at start - 1, #END at end
+    struct ChartRange {
+        int start = -1;
+        int end = -1;
+        ScrollType scroll_type = ScrollType::NMSCROLL;
+    };
+    ChartRange find_chart(int diff);
     std::vector<std::vector<std::string_view>> data_to_notes(int diff);
 
     void add_tempo_point(double bpm);
