@@ -377,6 +377,24 @@ static bool g_dump_screen_done = false; // the dump hook's last shot is taken: l
 // ZDON_FRAME_SPIKE_MS=<ms> (with or without FRAME_STATS) logs every single frame whose work took longer
 // than that, split into screen update / draw, and every present (EndDrawing + swap) longer than that, so
 // a hitch can be matched with the log lines around it.
+// Segment marks of the current frame, for the spike log: where the time outside update/draw went.
+// `overlay` includes EndMode2D's batch flush, where a driver stall shows up (one of ~300 ms about 0.3-1 s
+// after start, before any screen loads: not ours); the PNG write of YATAIDON_DUMP_SCREEN is outside them all.
+enum SpikeSeg {
+    SEG_START,
+    SEG_INPUT,
+    SEG_PRE_UPDATE,
+    SEG_UPDATE,
+    SEG_HOOKS,
+    SEG_DRAW,
+    SEG_SWITCH,
+    SEG_OVERLAY,
+    SEG_COUNT
+};
+static std::chrono::steady_clock::time_point g_seg[SEG_COUNT];
+static void seg_mark(SpikeSeg s) {
+    g_seg[s] = std::chrono::steady_clock::now();
+}
 static double g_spike_update_ms = 0, g_spike_draw_ms = 0; // this frame's screen update / draw, for the spike log
 static std::string g_spike_screen;                        // copied: a skin reload may delete the screen before the log
 static uint64_t g_spike_frame_no = 0;
@@ -412,8 +430,14 @@ static void frame_stats_add(std::chrono::steady_clock::time_point start) {
     const double ms = std::chrono::duration<double, std::milli>(now - start).count();
     frame_no++;
     if (spike_ms > 0 && ms > spike_ms) {
-        spdlog::info("[spike] frame {} work {:.2f} ms (update {:.2f}, draw {:.2f}) on {}", frame_no, ms,
-                     g_spike_update_ms, g_spike_draw_ms, g_spike_screen);
+        auto seg = [](SpikeSeg a, SpikeSeg b) {
+            return g_seg[b] >= g_seg[a] ? std::chrono::duration<double, std::milli>(g_seg[b] - g_seg[a]).count() : -1.0;
+        };
+        spdlog::info("[spike] frame {} work {:.2f} ms (update {:.2f}, draw {:.2f}) on {}; input {:.2f} pre {:.2f} "
+                     "hooks {:.2f} switch {:.2f} overlay {:.2f}",
+                     frame_no, ms, g_spike_update_ms, g_spike_draw_ms, g_spike_screen, seg(SEG_START, SEG_INPUT),
+                     seg(SEG_INPUT, SEG_PRE_UPDATE), seg(SEG_UPDATE, SEG_HOOKS), seg(SEG_DRAW, SEG_SWITCH),
+                     seg(SEG_SWITCH, SEG_OVERLAY));
     }
     if (!on) {
         return;
@@ -490,6 +514,7 @@ static void run_frame() {
     dev_frame_begin(); // frame index; YATAIDON_FIXED_STEP_MS: this frame's clock
     draw_stats_on();   // reads ZDON_EAGER_BLEND before the first draw
     const auto frame_start = std::chrono::steady_clock::now();
+    seg_mark(SEG_START);
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
 
@@ -505,6 +530,7 @@ static void run_frame() {
     poll_touch_once();
 
     apply_queued_window_resize();
+    seg_mark(SEG_INPUT);
 
     if (check_key_pressed(global_data.config->keys.fullscreen_key)) {
         ray::ToggleFullscreen();
@@ -549,6 +575,7 @@ static void run_frame() {
     }
 
     network.update(g_frame_ms);
+    seg_mark(SEG_PRE_UPDATE);
     std::optional<Screens> next_screen;
     {
         PROFILE_SCOPE_N("screen update");
@@ -558,6 +585,7 @@ static void run_frame() {
         g_spike_update_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         g_spike_screen = screen->screen_name;
     }
+    seg_mark(SEG_UPDATE);
     sync_text_input();
 
     // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title>;<ms>" jumps there once,
@@ -624,6 +652,7 @@ static void run_frame() {
         debug_menu.requested_screen.reset();
     }
 
+    seg_mark(SEG_HOOKS);
     if (screen->screen_init) {
         PROFILE_SCOPE_N("screen draw");
         PROFILE_ZONE_TEXT(screen->screen_name);
@@ -633,6 +662,7 @@ static void run_frame() {
     } else {
         g_spike_draw_ms = 0;
     }
+    seg_mark(SEG_DRAW);
     if (L.screen_fade_start > 0.0) {
         const SkinInfo* fade_cfg = tex.get_skin_config(SC::SCREEN_FADE_MS);
         const double dur = (fade_cfg && fade_cfg->x > 0) ? fade_cfg->x : 500.0;
@@ -666,6 +696,7 @@ static void run_frame() {
         }
     }
 
+    seg_mark(SEG_SWITCH);
     draw_touch_drum();
 
     if (global_data.config->general.fps_counter) {
@@ -681,6 +712,7 @@ static void run_frame() {
 
     ray::EndBlendMode();
     ray::EndMode2D();
+    seg_mark(SEG_OVERLAY);
     const bool dump_done = dump_screen_tick();
     frame_stats_add(frame_start);
     {
