@@ -333,6 +333,7 @@ void TJAParser::get_metadata() {
     // the per-chart values of a course; level and is_branching stay the course's
     auto take_chart_values = [](CourseData& to, const CourseData& from) {
         to.balloon = from.balloon;
+        to.branch_balloon = from.branch_balloon;
         to.scoreinit = from.scoreinit;
         to.scorediff = from.scorediff;
     };
@@ -447,11 +448,11 @@ void TJAParser::get_metadata() {
             } else if (item.starts_with("STYLE")) {
                 take_chart_values(course, style_base.try_emplace(current_diff, course).first->second);
             } else if (item.starts_with("BALLOONNOR") || item.starts_with("BALLOONEXP")) {
-                const char* name = item.starts_with("BALLOONNOR") ? "BALLOONNOR" : "BALLOONEXP";
+                const bool nor = item.starts_with("BALLOONNOR");
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
-                    if (auto balloons = parse_balloons(name, balloon_data)) {
-                        course.balloon.insert(course.balloon.end(), balloons->begin(), balloons->end());
+                    if (auto balloons = parse_balloons(nor ? "BALLOONNOR" : "BALLOONEXP", balloon_data)) {
+                        course.branch_balloon[nor ? 0 : 1] = std::move(*balloons);
                     }
                 }
             } else if (item.starts_with("BALLOON")) {
@@ -463,7 +464,7 @@ void TJAParser::get_metadata() {
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
                     if (auto balloons = parse_balloons(mas ? "BALLOONMAS" : "BALLOON", balloon_data)) {
-                        course.balloon = std::move(*balloons);
+                        (mas ? course.branch_balloon[2] : course.balloon) = std::move(*balloons);
                     }
                 }
             } else if (item.starts_with("SCOREINIT")) {
@@ -547,6 +548,7 @@ TJAParser::notes_to_position(int diff) {
     ParserState state;
     state.bpm = metadata.bpm;
     state.balloons = metadata.course_data[diff].balloon;
+    state.branch_balloons = metadata.course_data[diff].branch_balloon;
     state.curr_note_list = &master_notes.notes;
     state.curr_timeline = &master_notes.timeline;
     master_notes.tempo_map.points = {{current_ms, 0.0, metadata.bpm}};
@@ -1212,6 +1214,7 @@ void TJAParser::handle_BRANCHEND(const std::string& value, ParserState& state) {
     state.curr_note_list = &master_notes.notes;
     state.curr_timeline = &master_notes.timeline;
     state.is_branching = false;
+    state.branch = -1;
 }
 
 void TJAParser::handle_LYRIC(const std::string& value, ParserState& state) {
@@ -1337,7 +1340,7 @@ void TJAParser::handle_JPOSSCROLL(const std::string& part, ParserState& state) {
 }
 
 // Starts a branch variant: a new list that begins where the branch began
-static void enter_branch(std::deque<NoteList>& branch, ParserState& state, double& current_ms) {
+static void enter_branch(std::deque<NoteList>& branch, int route, ParserState& state, double& current_ms) {
     branch.emplace_back();
     state.curr_note_list = &branch.back().notes;
     state.curr_timeline = &branch.back().timeline;
@@ -1350,18 +1353,19 @@ static void enter_branch(std::deque<NoteList>& branch, ParserState& state, doubl
     state.balloon_index = state.branch_balloon_index;
     state.balloon_cursor = state.branch_balloon_cursor;
     state.is_branching = true;
+    state.branch = route;
 }
 
 void TJAParser::handle_N(const std::string& value, ParserState& state) {
-    enter_branch(branch_n, state, current_ms);
+    enter_branch(branch_n, 0, state, current_ms);
 }
 
 void TJAParser::handle_E(const std::string& value, ParserState& state) {
-    enter_branch(branch_e, state, current_ms);
+    enter_branch(branch_e, 1, state, current_ms);
 }
 
 void TJAParser::handle_M(const std::string& value, ParserState& state) {
-    enter_branch(branch_m, state, current_ms);
+    enter_branch(branch_m, 2, state, current_ms);
 }
 
 void TJAParser::handle_SECTION(const std::string& value, ParserState& state) {
@@ -1461,7 +1465,24 @@ Note TJAParser::add_note(char item, ParserState& state) {
         note.color = 255;
     } else if (note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) {
         state.balloon_index++;
-        note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
+        // A branch's own list counts the balloons on its route; outside the branches, the
+        // normal branch's list (one note for every route). Without one, BALLOON as before.
+        const size_t route = state.branch == -1 ? 0 : static_cast<size_t>(state.branch);
+        const std::vector<int>& own = state.branch_balloons[route];
+        if (!own.empty()) {
+            const size_t i = state.branch_balloon_route_cursor[route];
+            note.count = i < own.size() ? own[i] : 1;
+        } else {
+            note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
+        }
+        // A balloon outside the branches is on every route
+        if (state.branch == -1) {
+            for (size_t& i : state.branch_balloon_route_cursor) {
+                i++;
+            }
+        } else {
+            state.branch_balloon_route_cursor[route]++;
+        }
         state.balloon_cursor++;
     }
 
