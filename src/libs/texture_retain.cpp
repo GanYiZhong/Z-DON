@@ -94,7 +94,9 @@ namespace texture_retain {
 
         std::unordered_map<std::string, Entry> entries;
         std::unordered_map<std::string, ScreenSet> screens;
-        std::unordered_map<unsigned int, size_t> gpu_refs; // GL id -> retained objects using it
+        // texture -> retained objects using it (by object, not GL id: a texture waiting for its first use,
+        // texture_lazy.h, has id 0 and counts as if uploaded)
+        std::unordered_map<const ray::Texture2D*, size_t> gpu_refs;
         size_t total_bytes = 0;
         uint64_t use_clock = 0;
 
@@ -105,8 +107,8 @@ namespace texture_retain {
         std::vector<const ray::Texture2D*> gpu_textures(const TextureObject& obj) {
             std::vector<const ray::Texture2D*> out;
             for (int i = 0; i < obj.frame_count(); ++i) {
-                const ray::Texture2D* t = obj.frame_texture(i);
-                if (t && t->id != 0 && std::ranges::find(out, t) == out.end()) {
+                const ray::Texture2D* t = obj.frame_texture_raw(i); // must not upload
+                if (t && std::ranges::find(out, t) == out.end()) {
                     out.push_back(t);
                 }
             }
@@ -117,7 +119,7 @@ namespace texture_retain {
         size_t new_bytes(const TextureObject& obj) {
             size_t bytes = 0;
             for (const ray::Texture2D* t : gpu_textures(obj)) {
-                if (!gpu_refs.contains(t->id)) {
+                if (!gpu_refs.contains(t)) {
                     bytes += texture_bytes(*t);
                 }
             }
@@ -126,7 +128,7 @@ namespace texture_retain {
 
         void release(const Entry& e) {
             for (const ray::Texture2D* t : gpu_textures(*e.obj)) {
-                auto it = gpu_refs.find(t->id);
+                auto it = gpu_refs.find(t);
                 if (it != gpu_refs.end() && --it->second == 0) {
                     gpu_refs.erase(it);
                     total_bytes -= std::min(total_bytes, texture_bytes(*t));
@@ -270,7 +272,7 @@ namespace texture_retain {
             return;
         }
         for (const ray::Texture2D* t : gpu_textures(*obj)) {
-            ++gpu_refs[t->id];
+            ++gpu_refs[t];
         }
         total_bytes += bytes;
         set.bytes += bytes;

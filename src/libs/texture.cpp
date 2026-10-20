@@ -376,9 +376,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
 
     ray::TextureFilter filter = ray::TEXTURE_FILTER_BILINEAR;
     for (int i = 0; i < tex_obj->frame_count(); i++) {
-        if (const ray::Texture2D* t = tex_obj->frame_texture(i)) {
-            SetTextureFilter(*const_cast<ray::Texture2D*>(t), filter);
-        }
+        texture_lazy::set_filter(tex_obj->frame_texture_raw(i), filter);
     }
 }
 
@@ -1024,6 +1022,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
             std::vector<char> has_border(files.size(), 0);
             std::vector<fs::path> rest;
             std::vector<size_t> rest_index;
+            std::vector<char> lazy_owned(files.size(), 0); // images now owned by a pending texture
             for (size_t i = 0; i < files.size(); ++i) {
                 bool got_border = false;
                 if (image_prefetch && image_prefetch->take(files[i], images[i], borders[i], got_border)) {
@@ -1055,12 +1054,16 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                             if (!img.data) {
                                 spdlog::error("Failed to decode image for texture {}: Frame {}", p.name, i);
                                 ok = false;
+                            } else if ((tex = texture_lazy::make(img, screen_name))) {
+                                gpu[fi] = tex;
+                                lazy_owned[fi] = 1;
                             } else {
                                 ray::Texture2D t = ray::LoadTextureFromImage(img);
                                 if (!ray::IsTextureValid(t)) {
                                     spdlog::error("Failed to load texture {}: Frame {}", p.name, i);
                                     ok = false;
                                 } else {
+                                    texture_lazy::count_eager(screen_name, t);
                                     tex = shared_texture(t);
                                     gpu[fi] = tex;
                                 }
@@ -1100,14 +1103,18 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     ++loaded_count;
                 }
             } catch (...) {
-                for (auto& img : images) {
-                    texture_retain::free_image_async(img);
+                for (size_t i = 0; i < images.size(); ++i) {
+                    if (!lazy_owned[i]) {
+                        texture_retain::free_image_async(images[i]);
+                    }
                 }
                 throw;
             }
 
-            for (auto& img : images) {
-                texture_retain::free_image_async(img);
+            for (size_t i = 0; i < images.size(); ++i) {
+                if (!lazy_owned[i]) {
+                    texture_retain::free_image_async(images[i]);
+                }
             }
 
             spdlog::debug("Textures loaded from folder: {}", folder.string());
@@ -1338,6 +1345,7 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
 
     spdlog::info("Screen textures loaded for: {}", screen_name);
     texture_retain::log_screen(screen_name);
+    texture_lazy::log_screen(screen_name);
 }
 
 std::vector<std::string> TextureWrapper::language_variants(std::string_view name) const {

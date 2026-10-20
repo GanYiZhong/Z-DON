@@ -15,6 +15,7 @@
 #include "animation.h"
 #include "ray.h" // IWYU pragma: keep
 #include "skin_config.h"
+#include "texture_lazy.h"
 
 namespace fs = std::filesystem;
 
@@ -111,7 +112,19 @@ struct TextureObject {
         return x2.empty() ? 0.0f : static_cast<float>(x2[0]);
     }
 
-    virtual const ray::Texture2D* frame_texture(int frame) const { return nullptr; }
+    // The frame's GL texture, uploaded first if it still waits for its first use (texture_lazy.h):
+    // everything that hands the texture to GL goes through here.
+    const ray::Texture2D* frame_texture(int frame) const {
+        const ray::Texture2D* t = frame_texture_raw(frame);
+        if (t && t->id == 0) {
+            texture_lazy::upload(t);
+        }
+        return t;
+    }
+
+    // The frame's texture as it is (id 0 while the upload is pending; width / height / format are set):
+    // for bookkeeping that must not upload it.
+    virtual const ray::Texture2D* frame_texture_raw(int frame) const { return nullptr; }
 
     virtual int frame_count() const { return 1; }
 };
@@ -121,10 +134,10 @@ struct SingleTexture : public TextureObject {
 
     SingleTexture(const std::string& name, std::shared_ptr<ray::Texture2D> tex)
         : TextureObject(name, tex->width, tex->height), texture(std::move(tex)) {
-        SetTextureWrap(*texture, ray::TEXTURE_WRAP_CLAMP);
+        texture_lazy::set_wrap(texture.get(), ray::TEXTURE_WRAP_CLAMP);
     }
 
-    const ray::Texture2D* frame_texture(int) const override { return texture.get(); }
+    const ray::Texture2D* frame_texture_raw(int) const override { return texture.get(); }
 };
 
 struct FramedTexture : public TextureObject {
@@ -134,13 +147,13 @@ struct FramedTexture : public TextureObject {
         : TextureObject(name, texs.empty() ? 0 : texs[0]->width, texs.empty() ? 0 : texs[0]->height),
           textures(std::move(texs)) {
         for (auto& tex : textures) {
-            SetTextureWrap(*tex, ray::TEXTURE_WRAP_CLAMP);
+            texture_lazy::set_wrap(tex.get(), ray::TEXTURE_WRAP_CLAMP);
         }
     }
 
     int frame_count() const override { return static_cast<int>(textures.size()); }
 
-    const ray::Texture2D* frame_texture(int frame) const override {
+    const ray::Texture2D* frame_texture_raw(int frame) const override {
         if (frame < 0 || frame >= static_cast<int>(textures.size())) {
             throw std::runtime_error("Frame " + std::to_string(frame) + " not available in framed texture " + name);
         }
