@@ -20,6 +20,7 @@
 #include "input.h"
 #include "screen.h"
 #include "text.h"
+#include "texture_ondemand.h"
 #include "webcam.h"
 
 namespace {
@@ -440,7 +441,18 @@ static sol::optional<std::shared_ptr<TextureObject>> resolve_lua_texture(const s
         return hit;
     }
 
+    // Z-DON: a folder of another screen loaded mid-frame; logged with its cost and remembered so the
+    // screen loads it with its own next time (texture_ondemand.h)
+    const bool was_loaded = script_manager.tex.has_folder(screen_name, subset);
+    const auto t0 = std::chrono::steady_clock::now();
     script_manager.tex.load_folder(screen_name, subset);
+    if (!was_loaded && script_manager.tex.has_folder(screen_name, subset)) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const std::string& showing = script_manager.tex.loaded_screen();
+        spdlog::info("Texture folder {}/{} loaded on demand by a script ({:.1f} ms, screen {})", screen_name, subset,
+                     ms, showing.empty() ? "none" : showing);
+        texture_ondemand::record(script_manager.tex.skin_root().filename().string(), showing, screen_name, subset);
+    }
 
     return find_loaded();
 }

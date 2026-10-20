@@ -206,6 +206,12 @@ private:
     class ImagePrefetch* image_prefetch = nullptr;
     // set while load_screen_textures runs: the skin folders' listings, read once for the screen
     class DirIndex* dir_index = nullptr;
+    // Z-DON: the screen load_screen_textures loaded last (texture_ondemand.h); empty after unload_textures
+    std::string screen_loaded;
+    // Z-DON: texture objects of the folders loaded ahead for on-demand use (load_screen_textures), and
+    // where load_folder puts them while it makes them; dropped with unload_textures
+    std::vector<std::shared_ptr<TextureObject>> ondemand_stash;
+    std::vector<std::shared_ptr<TextureObject>>* stash = nullptr;
 
     bool read_screen_animations(const std::string& screen_name, rapidjson::Document& out);
 
@@ -321,6 +327,11 @@ public:
     void unload_folder(const std::string& screen_name, const std::string& subset);
 
     void load_screen_textures(const std::string& screen_name);
+
+    const std::string& loaded_screen() const { return screen_loaded; }
+    bool has_folder(const std::string& screen_name, const std::string& subset) const {
+        return loaded_subsets.contains(screen_name + "/" + fs::path(subset).filename().string());
+    }
 
     TextureObject* get_texture(std::string_view name);
 

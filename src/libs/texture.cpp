@@ -17,6 +17,7 @@
 #include "profiler.h"
 #include "script.h"
 #include "text.h"
+#include "texture_ondemand.h"
 #include "texture_pack.h"
 #include "texture_retain.h"
 
@@ -271,6 +272,9 @@ void TextureWrapper::unload_textures() {
     tex_id_refcount.clear();
     debug_draw_log.clear();
     debug_draw_log_prev.clear();
+    screen_loaded.clear();
+    ondemand_stash.clear();
+    texture_ondemand::flush(); // what the screen that ends loaded on demand
 }
 
 BaseAnimation* TextureWrapper::get_animation(const int id, bool is_copy) {
@@ -920,6 +924,9 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
 
     int loaded_count = 0;
     std::unordered_set<std::string> ids_this_call;
+    // Z-DON: on-demand prefetch (texture_ondemand.h): make the objects missing from the caches, keep
+    // them in *stash, and leave `textures` and the folder bookkeeping alone
+    std::vector<std::shared_ptr<TextureObject>>* const stash_to = stash;
     DirIndex local_dirs;
     DirIndex& dirs = dir_index ? *dir_index : local_dirs;
 
@@ -969,7 +976,12 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 std::string tex_id = subset_key + "/" + tex_name;
 
                 std::string cache_key = (folder / tex_name).string();
-                if (auto kept = texture_retain::reuse(cache_key)) {
+                if (stash_to) {
+                    auto cit = cache.find(cache_key);
+                    if (texture_retain::contains(cache_key) || (cit != cache.end() && !cit->second.expired())) {
+                        continue; // a load finds it there
+                    }
+                } else if (auto kept = texture_retain::reuse(cache_key)) {
                     textures[tex_id] = kept;
                     ids_this_call.insert(tex_id);
                     ++loaded_count;
@@ -1004,7 +1016,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 } else if (dirs.exists(tex_file.parent_path(), tex_file.filename())) {
                     size_t first = push_file(tex_file);
                     pending.push_back({tex_id, tex_name, &m.value, cache_key, first, size_t{1}, false});
-                } else {
+                } else if (!stash_to) {
                     auto existing = textures.find(tex_id);
                     if (existing != textures.end()) {
                         read_tex_obj_data(m.value, existing->second.get(), tex_scale);
@@ -1097,8 +1109,12 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     }
 
                     texture_retain::add(screen_name, p.cache_key, obj);
-                    textures[p.id] = obj;
                     cache[p.cache_key] = obj;
+                    if (stash_to) {
+                        stash_to->push_back(std::move(obj));
+                        continue;
+                    }
+                    textures[p.id] = obj;
                     ids_this_call.insert(p.id);
                     ++loaded_count;
                 }
@@ -1144,6 +1160,9 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
         load_from_path(own_dir, 1.0f, nullptr);
     }
 
+    if (stash_to) {
+        return;
+    }
     if (loaded_count == 0) {
         spdlog::error("No textures loaded for {}/{}", screen_name, subset);
     } else {
@@ -1194,6 +1213,7 @@ constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
 void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     PROFILE_SCOPE();
     PROFILE_ZONE_TEXT(screen_name);
+    screen_loaded = screen_name;
     const std::vector<fs::path> roots = all_graphics_roots();
     DirIndex dirs;
     dir_index = &dirs;
@@ -1280,20 +1300,49 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         } catch (const std::exception&) {
         }
     };
-    for (size_t g = 0; g < subsets.size(); ++g) {
-        const fs::path own_dir = graphics_path / screen_name / subsets[g];
+    // false when no skin in the chain has <folder_screen>/<subset>/texture.json
+    auto plan_subset = [&](const std::string& folder_screen, const std::string& subset, std::vector<fs::path>& out) {
+        const fs::path own_dir = graphics_path / folder_screen / subset;
         std::vector<fs::path> ancestor_dirs;
+        bool any = dirs.is_file(own_dir, "texture.json");
         for (const fs::path& a : ancestor_graphics_paths) {
-            ancestor_dirs.push_back(a / screen_name / subsets[g]);
+            ancestor_dirs.push_back(a / folder_screen / subset);
+            any = any || dirs.is_file(ancestor_dirs.back(), "texture.json");
         }
         bool child_has_folder = false;
         const auto skips = subset_skips(dirs, own_dir, ancestor_dirs, child_has_folder);
         for (size_t i = ancestor_dirs.size(); i-- > 0;) {
-            plan_folder(ancestor_dirs[i], &skips[i], groups[g]);
+            plan_folder(ancestor_dirs[i], &skips[i], out);
         }
         if (child_has_folder) {
-            plan_folder(own_dir, nullptr, groups[g]);
+            plan_folder(own_dir, nullptr, out);
         }
+        return any;
+    };
+    for (size_t g = 0; g < subsets.size(); ++g) {
+        plan_subset(screen_name, subsets[g], groups[g]);
+    }
+
+    // Z-DON: the folders a Lua script loaded on demand the last times this screen showed
+    // (texture_ondemand.h). They are decoded with the screen's own folders and their texture objects
+    // made (lazy upload: pending until first drawn), but only kept in ondemand_stash: `textures` is
+    // left as it was, so the script's tex.get_texture still loads the folder when it asks for it, at
+    // the same moment as before (it may replace textures the screen already has), now from the stash.
+    std::vector<texture_ondemand::Folder> extra;
+    const std::string skin_name = skin_root().filename().string();
+    for (const texture_ondemand::Folder& f : texture_ondemand::folders(skin_name, screen_name)) {
+        if ((f.screen == screen_name && seen.contains(fs::path(f.subset).filename().string())) ||
+            has_folder(f.screen, f.subset)) {
+            continue;
+        }
+        std::vector<fs::path> files;
+        if (!plan_subset(f.screen, f.subset, files)) {
+            spdlog::info("On-demand prefetch for {}: {}/{} no longer exists, dropped", screen_name, f.screen, f.subset);
+            texture_ondemand::forget(skin_name, screen_name, f);
+            continue;
+        }
+        groups.push_back(std::move(files));
+        extra.push_back(f);
     }
 
     // the screen's texture pack: the planned files' bytes in one file, checked against the listings
@@ -1334,6 +1383,15 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
             load_folder(screen_name, subsets[g]);
             prefetch.finish_group(g);
         }
+        stash = &ondemand_stash;
+        struct ResetStash {
+            std::vector<std::shared_ptr<TextureObject>>*& p;
+            ~ResetStash() { p = nullptr; }
+        } reset_stash{stash};
+        for (size_t e = 0; e < extra.size(); ++e) {
+            load_folder(extra[e].screen, extra[e].subset);
+            prefetch.finish_group(subsets.size() + e);
+        }
     }
     if (pack) {
         pack->finish();
@@ -1343,6 +1401,13 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
                      verify_counts.checked.exchange(0), verify_counts.mismatched.exchange(0));
     }
 
+    if (!extra.empty()) {
+        std::string list;
+        for (const texture_ondemand::Folder& f : extra) {
+            list += (list.empty() ? "" : ", ") + f.screen + "/" + f.subset;
+        }
+        spdlog::info("On-demand prefetch for {}: {} folder(s): {}", screen_name, extra.size(), list);
+    }
     spdlog::info("Screen textures loaded for: {}", screen_name);
     texture_retain::log_screen(screen_name);
     texture_lazy::log_screen(screen_name);

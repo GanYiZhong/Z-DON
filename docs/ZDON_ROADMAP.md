@@ -14,6 +14,7 @@
 | 開資料夾用快取的 box record 建 SongBox，需要時才讀譜面 | `YATAIDON_BOX_RECORD_VERIFY=1`、`_SELFTEST=1` | — |
 | 選曲/段位選擇貼圖跨遊戲/結算常駐（VRAM 預算） | `YATAIDON_RETAIN_MB=<n>`，0 = 關 | 結算回選曲貼圖 234 → 32 ms |
 | 貼圖用到時才上傳 GPU（第一次畫到的那一幀同步上傳，不會空白；演奏中會畫到的 global/game/background 照舊載入時上傳），**預設開** | `ZDON_LAZY_UPLOAD=0` 關、`ZDON_LAZY_UPLOAD_MB=<n>`（等待中的解碼圖 RAM 上限，預設 768，超過就改回載入時上傳） | 選曲貼圖載入 238–250 → 152–157 ms，進選曲那幀 536–566 → 455–465 ms；捲動測試 525 張只上傳 39 張（456 → 85 MB）；段位選擇 92–97 → 64–66 ms；結算 178 → 144 ms（＋第一幀 draw 約 8 ms）；開難度選擇 35.6–38.7 → 33.8–34.0 ms（沒變差） |
+| 學習 Lua 臨時載入的貼圖資料夾：`resolve_lua_texture` 臨時 load_folder 時記下（目前畫面 → 資料夾），存在 `cache/ondemand/<skin>.txt`（每畫面最多 64 筆、有變才寫、換畫面時寫）；下次該畫面載入時跟自己的資料夾一起平行解碼（走 texpack、lazy upload），物件先放暫存區、不放進 `textures`，等 Lua 要時才裝上（時機和覆蓋行為都跟以前一樣），換畫面一起丟。資料夾不存在就從檔案刪掉。每次臨時載入都記一行 info（含耗時），**預設開** | `ZDON_PREFETCH_ONDEMAND=0` 關（不記也不預載） | 選曲進段位轉場那幀 32.9–34.7 → 4.1–5.0 ms（dan_select/global 臨時載入 32.0–33.7 → 1.5–1.8 ms，其餘是第一次畫到的上傳約 2.5 ms）；選曲貼圖載入 147–156 → 157–165 ms（多解一張 1080p）、進選曲那幀 463–540 → 470–493 ms（雜訊內）；確定性套件空檔/有檔各 121/121 相同 |
 | 每畫面貼圖打包快取 `cache/texpack/`、zlib-ng PNG 解碼 | `YATAIDON_TEXPACK=0`、`_TEXPACK_MB`、`_TEXPACK_VERIFY=1`、`YATAIDON_FASTPNG=0` | 冷硬碟選曲貼圖 755 → 417 ms；解碼 1.75× |
 | 3D 角色零件跨畫面重用 | — | 每個 Don 約 30 → 7 ms |
 | 選定歌曲就預讀歌曲資料夾、背景影片在背景開 | — | — |
@@ -71,6 +72,12 @@
 - 原本以為「進選曲後下一幀卡約 377 ms 是驅動在補上傳」，量下來不是：用 glFinish 夾每一段，GL 佇列在 swap 前就空了，卡住的是 `SwapScreenBuffer` 本身；而且在 loading 畫面、完全沒載貼圖時也會發生，固定在啟動後約 0.5–1 s（JUMP song_select;10 剛好落在那時）。改成啟動 5 s 後才進選曲，兩種模式下一幀都不卡。
 - 演奏中第一次畫到才上傳會掉幀（實測 2352x3810 的 game 貼圖 24 ms、背景 gogo 階段 11 ms），所以 global/game/background 與演奏中載入的資料夾維持載入時上傳；dense 譜 auto 全程開/關都沒有新的演奏中上傳。
 - 代價：沒畫到的解碼圖留在 RAM（選曲常駐那批約 370 MB 會一直留著，算在 768 MB 上限內）；常駐 VRAM 預算把等待中的貼圖當作已上傳計算。
+
+## 2026-10-20 臨時載入資料夾預載：量測備註
+- 實測（Nijiiro）記到的：選曲 → global/indicator、global/nameplate、global/timer、dan_select/global；演奏 → global/nameplate、global/result_transition、global/rainbow_transition、loading/skip_badge；結算、段位選擇 → global/*。
+- 只有 dan_select/global 真的省到：global/* 的物件 global_tex 早就做好（共用 tex_object_cache），那 1.5 ms 是列資料夾＋讀 texture.json，預載前後都一樣。要再省得讓臨時 load_folder 共用畫面載入時的目錄列表。
+- 不能直接把預載的資料夾放進 `textures`：dan_select/global 經 Green 繼承了 footer/arrow，會蓋掉選曲自己的 global/footer、global/arrow（今天是轉場那一刻才蓋），所以改成暫存區、等 Lua 要時才裝。
+- 預載的物件照原本 load_folder 的規則進 texture_retain（記在資料夾所屬畫面，例如 dan_select），之後進段位選擇照樣重用；沒用到就在換畫面時跟著丟（常駐的那份留在 retain 預算內）。
 
 ## 驗證工具（scratchpad，非 repo）
 - 確定性截圖套件：title / ss / dense / roll / hbs / dan / entry / settings / p2 / practice / danplay / movie，共 349 張，用 RGB 位元組比對。**不要用 Pillow 的 RGBA getbbox（只看 alpha）。**
