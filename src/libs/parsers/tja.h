@@ -297,6 +297,8 @@ struct ParserState {
     bool start_branch_barline = false;
     double branch_balloon_index = 0;
     std::optional<Note> section_bar;
+    bool dropped_note = false;           // an unsupported note letter was left out since the last note
+    std::array<bool, 256> warned_note{}; // note characters already warned about
 };
 
 enum class Interval {
@@ -348,6 +350,7 @@ private:
     std::deque<NoteList> branch_m;
     std::deque<NoteList> branch_e;
     std::deque<NoteList> branch_n;
+    bool warned_nextsong = false;
 
     static std::string to_lower(const std::string& str);
     static std::string split_after_colon(const std::string& str);

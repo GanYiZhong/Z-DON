@@ -113,6 +113,57 @@ namespace {
         }
         return false;
     }
+
+    // part[n] goes on with a command name ("#N" in "#NEXTSONG")
+    bool continues_name(std::string_view part, size_t n) {
+        if (n >= part.size()) {
+            return false;
+        }
+        const char c = part[n];
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+    }
+
+    // OpenTaiko note letters that play as an existing note: the digit it plays as, else 0
+    char extended_note(char c) {
+        switch (c) {
+        case 'A': // big don for two players (hands): a big don in single play
+            return '3';
+        case 'B': // big ka for two players
+            return '4';
+        case 'D': // fuse roll: a balloon that would explode if not popped; it takes a BALLOON count
+            return '7';
+        default:
+            return 0;
+        }
+    }
+
+    // The last note (not barline) of the list is a roll or balloon that an 8 ends
+    bool ends_long_note(const std::deque<Note>& notes) {
+        for (auto it = notes.rbegin(); it != notes.rend(); ++it) {
+            if (it->type == NoteType::BARLINE) {
+                continue;
+            }
+            return it->type == NoteType::ROLL_HEAD || it->type == NoteType::ROLL_HEAD_L ||
+                   it->type == NoteType::BALLOON_HEAD || it->type == NoteType::KUSUDAMA;
+        }
+        return false;
+    }
+
+    // NAME: value inside a course's notes (EXAM4: after #NEXTSONG in dan charts): not note data
+    bool is_header_line(std::string_view line) {
+        if (line.empty() || !((line[0] >= 'A' && line[0] <= 'Z') || (line[0] >= 'a' && line[0] <= 'z'))) {
+            return false;
+        }
+        for (char c : line) {
+            if (c == ':') {
+                return true;
+            }
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || is_digit(c) || c == '_')) {
+                return false;
+            }
+        }
+        return false;
+    }
 } // namespace
 
 // trim() of a part of a line without copying the part first
@@ -487,7 +538,9 @@ TJAParser::notes_to_position(int diff) {
                 const auto& bucket = cmd_buckets[part.size() > 1 ? static_cast<unsigned char>(part[1]) : 0];
                 for (unsigned short i : bucket) {
                     const auto& [cmd_prefix, handler] = cached_cmds[i];
-                    if (part.starts_with(cmd_prefix)) {
+                    // The whole name must match: #NEXTSONG / #NOTATIONOFF are not #N, #EXAM is not
+                    // #E (a value may follow without a space, as in "#SCROLL0.5")
+                    if (part.starts_with(cmd_prefix) && !continues_name(part, cmd_prefix.size())) {
                         std::string value = trim_view(std::string_view(part).substr(cmd_prefix.length()));
                         handler(value, state);
                         break;
@@ -512,18 +565,40 @@ TJAParser::notes_to_position(int diff) {
                 increment = (bar_length > 0) ? ms_per_measure / static_cast<double>(bar_length) : 0.0;
             }
 
-            // Process each note character
+            // Process each note character; every character takes its slot, whatever it is
             for (char item : part) {
+                // OpenTaiko's letters: A/B (partner big notes) play as big don/ka and D (fuse roll)
+                // as a balloon; C (mine) and E-I are left out like a 0
+                const char mapped = extended_note(item);
+                if (mapped != 0) {
+                    item = mapped;
+                } else if (item >= 'C' && item <= 'I') {
+                    if (!state.warned_note[static_cast<unsigned char>(item)]) {
+                        state.warned_note[static_cast<unsigned char>(item)] = true;
+                        spdlog::warn("Unsupported note '{}' left out in {}", item, file_path.string());
+                    }
+                    state.dropped_note = true;
+                    current_ms += increment;
+                    continue;
+                }
                 // Skip empty notes (0) and non-digits
                 const unsigned char byte = static_cast<unsigned char>(item);
                 const bool digit = (byte >= '1' && byte <= '9') || (byte >= 0x80 && std::isdigit(byte));
                 if (item == '0' || !digit) {
-                    if (item != '0') {
+                    if (item != '0' && !state.warned_note[byte]) {
+                        state.warned_note[byte] = true;
                         spdlog::warn("Unrecognized note '{}' in {}", item, file_path.string());
                     }
                     current_ms += increment;
                     continue;
                 }
+
+                // An 8 that would end a left-out note (an OpenTaiko roll) is left out with it
+                if (item == '8' && state.dropped_note && !ends_long_note(*state.curr_note_list)) {
+                    current_ms += increment;
+                    continue;
+                }
+                state.dropped_note = false;
 
                 // Skip consecutive balloon end markers (9)
                 if (item == '9' && !state.curr_note_list->empty()) {
@@ -695,6 +770,8 @@ std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
                 continue;
             }
             bar.push_back(line);
+        } else if (is_header_line(line)) {
+            continue;
         } else if (line == ",") {
             if (bar.empty() || std::ranges::all_of(bar, [](std::string_view item) { return item[0] == '#'; })) {
                 bar.emplace_back("");
@@ -862,6 +939,15 @@ void TJAParser::register_extended_commands(std::map<std::string, CommandHandler>
         ev.to = d[1];
         ev.extra = d[2];
         push(s, ev);
+    };
+    // Dan charts in one file (TJAPlayer3): each #NEXTSONG starts the next song with its own audio.
+    // Not supported (dan play uses dan.json); the songs are read on as one chart. Every other
+    // command that is not registered (#SENOTECHANGE, #LEVELHOLD, #DIRECTION, #BGAON, ...) is ignored.
+    registry["#NEXTSONG"] = [this](const std::string&, ParserState&) {
+        if (!warned_nextsong) {
+            warned_nextsong = true;
+            spdlog::warn("#NEXTSONG (dan course in one file) is not supported: {}", file_path.string());
+        }
     };
     registry["#ENABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = true; };
     registry["#DISABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = false; };
