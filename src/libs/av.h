@@ -114,6 +114,8 @@ namespace av {
 
         int width() const { return frame_->width; }
         int height() const { return frame_->height; }
+        // the decoded frame as it came from the decoder (Z-DON: its YUV planes go to the GPU as they are)
+        const ::AVFrame* raw() const { return frame_; }
 
         // Returns plane 0 of the (possibly reformatted) frame.
         // Must call reformat() first for RGB24 data.

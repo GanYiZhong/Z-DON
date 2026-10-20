@@ -91,8 +91,6 @@ void VideoPlayer::decode_loop() {
             if (!frame_generator->next(current_decoded_frame)) {
                 break; // EOF
             }
-            current_decoded_frame->reformat("rgb24");
-
             DecodedFrame frame;
             {
                 std::scoped_lock lock(queue_mutex);
@@ -101,8 +99,17 @@ void VideoPlayer::decode_loop() {
                     spare_buffers.pop_back();
                 }
             }
-            av::AVPlane plane = current_decoded_frame->plane(0);
-            frame.bytes.assign(plane.data(), plane.data() + plane.size());
+            frame.yuv =
+                video_yuv::enabled() && video_yuv::copy_planes(current_decoded_frame->raw(), frame.bytes, frame.format);
+            if (frame.yuv) {
+                if (video_yuv::check_enabled() && produced % 30 == 0) {
+                    video_yuv::reference_rgb(current_decoded_frame->raw(), frame.check_rgb);
+                }
+            } else {
+                current_decoded_frame->reformat("rgb24");
+                av::AVPlane plane = current_decoded_frame->plane(0);
+                frame.bytes.assign(plane.data(), plane.data() + plane.size());
+            }
             frame.width = current_decoded_frame->width();
             frame.height = current_decoded_frame->height();
             frame.index = produced++;
@@ -142,6 +149,17 @@ void VideoPlayer::stop_decode_thread() {
 }
 
 void VideoPlayer::upload_frame(const DecodedFrame& frame) {
+    if (frame.yuv) {
+        if (texture.has_value()) {
+            ray::UnloadTexture(texture.value());
+            texture.reset();
+        }
+        if (yuv_textures.upload(frame.format, frame.bytes.data()) && !frame.check_rgb.empty()) {
+            yuv_textures.check(frame.check_rgb, frame.index);
+        }
+        return;
+    }
+    yuv_textures.unload();
     const void* pixels_ptr = static_cast<const void*>(frame.bytes.data());
 
     if (texture.has_value() && (texture->width != frame.width || texture->height != frame.height)) {
@@ -258,13 +276,16 @@ void VideoPlayer::update(double current_ms) {
 
 void VideoPlayer::draw() {
     ray::ClearBackground(ray::BLACK);
-    if (!texture.has_value()) {
+    const bool yuv = yuv_textures.valid();
+    if (!yuv && !texture.has_value()) {
         return;
     }
+    const int tex_w = yuv ? yuv_textures.width() : texture->width;
+    const int tex_h = yuv ? yuv_textures.height() : texture->height;
 
-    ray::Rectangle source{0.f, 0.f, static_cast<float>(texture->width), static_cast<float>(texture->height)};
+    ray::Rectangle source{0.f, 0.f, static_cast<float>(tex_w), static_cast<float>(tex_h)};
 
-    float texture_aspect = static_cast<float>(texture->width) / static_cast<float>(texture->height);
+    float texture_aspect = static_cast<float>(tex_w) / static_cast<float>(tex_h);
     float screen_aspect = static_cast<float>(tex.screen_width) / static_cast<float>(tex.screen_height);
 
     float dest_width, dest_height, dest_x, dest_y;
@@ -286,7 +307,11 @@ void VideoPlayer::draw() {
     ray::Rectangle destination{dest_x, dest_y, dest_width, dest_height};
     ray::Vector2 origin{0.f, 0.f};
 
-    ray::DrawTexturePro(texture.value(), source, destination, origin, 0.f, ray::WHITE);
+    if (yuv) {
+        yuv_textures.draw(source, destination);
+    } else {
+        ray::DrawTexturePro(texture.value(), source, destination, origin, 0.f, ray::WHITE);
+    }
 }
 
 void VideoPlayer::stop() {
@@ -302,6 +327,7 @@ void VideoPlayer::stop() {
         ray::UnloadTexture(texture.value());
         texture.reset();
     }
+    yuv_textures.unload();
 
     if (!audio_s.empty()) {
         audio.stop_music_stream(audio_s);

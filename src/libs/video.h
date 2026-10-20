@@ -11,19 +11,24 @@
 
 #include "av.h"
 #include "ray.h" // IWYU pragma: keep
+#include "video_yuv.h"
 
 namespace fs = std::filesystem;
 
 class VideoPlayer {
 private:
     struct DecodedFrame {
-        std::vector<uint8_t> bytes;
+        std::vector<uint8_t> bytes; // RGB24, or the Y, U and V planes when yuv
         int width = 0;
         int height = 0;
         int index = 0;
+        bool yuv = false;
+        video_yuv::Format format;
+        std::vector<uint8_t> check_rgb; // ZDON_VIDEO_YUV_CHECK: swscale's RGB24 of this frame
     };
 
     std::optional<ray::Texture2D> texture;
+    video_yuv::Textures yuv_textures; // Z-DON: the frame as YUV planes, converted while drawing
     std::array<bool, 2> is_finished_arr = {false, false};
     bool audio_started = false;
     std::string audio_s;
