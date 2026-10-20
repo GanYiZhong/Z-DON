@@ -24,7 +24,12 @@ namespace vblank_pacing {
 
         constexpr double kSlotTargetMs = 2.0; // spacing of the extra (input) frames within a refresh
         constexpr double kOnTimeMs = 0.5;     // a wake this close after the grid time takes the grid time
-        constexpr double kSpinMs = 0.5;       // busy-wait the last part (the timer wakes up to ~0.5 ms late)
+        // The timer wakes late (here 0.03-0.6 ms, p50 0.32: a 0.5 ms tick even for high-resolution timers). A
+        // wake up to kOnTimeMs late still takes the grid time, so only the tail past that is spun away: the
+        // spin is the 99th percentile of the lateness - kOnTimeMs + kSpinMarginMs, within the limits below.
+        constexpr double kSpinMaxMs = 0.5; // also the spin until enough wakes were measured
+        constexpr double kSpinMinMs = 0.05;
+        constexpr double kSpinMarginMs = 0.1;
 
         struct State {
             bool active = false;
@@ -39,6 +44,9 @@ namespace vblank_pacing {
             double lead_ms = 2.5;
             double work_est = 1.75;   // a frame's work (start -> present end), 99.5th percentile
             std::vector<double> work; // samples for work_est and the lead
+            double spin_ms = kSpinMaxMs;
+            std::vector<double> late; // timer wake lateness samples for spin_ms
+            bool precise_timer = true;
             double scheduled_ms = -1.0;
             double shown_vblank_ms = 0.0; // the vblank whose shown frame was scheduled last
             double wake_ms = 0.0;
@@ -120,6 +128,17 @@ namespace vblank_pacing {
             } else if (want < S.lead_ms - 0.75) {
                 S.lead_ms -= 0.25;
             }
+        }
+
+        void update_spin(double late_ms) {
+            S.late.push_back(late_ms);
+            if (S.late.size() < 600) {
+                return;
+            }
+            const size_t q = S.late.size() * 99 / 100;
+            std::nth_element(S.late.begin(), S.late.begin() + q, S.late.end());
+            S.spin_ms = std::clamp(S.late[q] - kOnTimeMs + kSpinMarginMs, kSpinMinMs, kSpinMaxMs);
+            S.late.clear();
         }
 
     } // namespace
@@ -205,9 +224,15 @@ namespace vblank_pacing {
             return;
         }
         S.scheduled_ms = target;
-        const double sleep_ms = target - kSpinMs - now;
-        if (sleep_ms > 0.0) {
-            win32_precise_sleep_us((long long)(sleep_ms * 1000.0));
+        // without a high-resolution timer (before Windows 10 1803) the whole wait is spun, as before
+        const double sleep_ms = target - S.spin_ms - now;
+        if (sleep_ms > 0.0 && S.precise_timer) {
+            S.precise_timer = win32_precise_sleep_us((long long)(sleep_ms * 1000.0));
+            const double woke = get_current_ms();
+            update_spin(woke - (now + sleep_ms));
+            if (S.log) {
+                std::println(S.log, "w,{:.4f},{:.4f},{:.3f}", now + sleep_ms, woke, S.spin_ms);
+            }
         }
         while (get_current_ms() < target) {
             YieldProcessor();
