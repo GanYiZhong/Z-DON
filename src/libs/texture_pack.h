@@ -48,8 +48,9 @@ namespace texture_pack {
         // is gone, -1 = its folder was not listed (kept as it is).
         using Peek = int (*)(void* ctx, const std::string& key, FileStat& out);
 
-        Session(std::filesystem::path pack, std::string screen, std::vector<Planned> planned, Peek peek,
-                void* peek_ctx);
+        // background: the pack is read at low CPU and I/O priority (a prefill nobody waits for yet)
+        Session(std::filesystem::path pack, std::string screen, std::vector<Planned> planned, Peek peek, void* peek_ctx,
+                bool background = false);
         ~Session();
         Session(const Session&) = delete;
         Session& operator=(const Session&) = delete;

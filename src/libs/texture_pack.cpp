@@ -354,7 +354,8 @@ namespace texture_pack {
         return static_cast<bool>(in.read(reinterpret_cast<char*>(bytes.data()), n));
     }
 
-    Session::Session(fs::path pack, std::string screen_name, std::vector<Planned> planned, Peek peek, void* peek_ctx)
+    Session::Session(fs::path pack, std::string screen_name, std::vector<Planned> planned, Peek peek, void* peek_ctx,
+                     bool background)
         : path(std::move(pack)), screen(std::move(screen_name)) {
         entries.reserve(planned.size());
         for (Planned& p : planned) {
@@ -409,7 +410,16 @@ namespace texture_pack {
         }
         hits = hit_list.size();
         if (!spans.empty()) {
-            reader = std::thread([this]() { read_spans(); });
+            reader = std::thread([this, background]() {
+#ifdef _WIN32
+                if (background) {
+                    win32_background_mode_thread();
+                }
+#else
+                (void)background;
+#endif
+                read_spans();
+            });
         }
     }
 

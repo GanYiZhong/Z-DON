@@ -24,6 +24,7 @@ namespace texture_lazy {
             size_t bytes = 0;
             std::filesystem::path source;
             std::string owner;
+            uint64_t file_size = 0, file_mtime = 0;
             bool evicted = false; // image freed at a screen change; source decodes it again
         };
 
@@ -104,7 +105,8 @@ namespace texture_lazy {
     }
 
     std::shared_ptr<ray::Texture2D> make(const ray::Image& image, const std::string& screen,
-                                         const std::filesystem::path& source, const std::string& owner) {
+                                         const std::filesystem::path& source, const std::string& owner, uint64_t size,
+                                         uint64_t mtime) {
         if (!enabled() || !image.data || during_gameplay(screen)) {
             return nullptr;
         }
@@ -125,7 +127,7 @@ namespace texture_lazy {
         t->height = image.height;
         t->mipmaps = image.mipmaps;
         t->format = image.format;
-        pending_map().emplace(t, Pending{image, -1, -1, screen, bytes, source, owner, false});
+        pending_map().emplace(t, Pending{image, -1, -1, screen, bytes, source, owner, size, mtime, false});
         pending_bytes += bytes;
         ++st.lazy;
         st.lazy_bytes += bytes;
@@ -290,6 +292,59 @@ namespace texture_lazy {
         p.bytes = image_bytes(image.width, image.height, image.format);
         p.evicted = false;
         pending_bytes += p.bytes;
+    }
+
+    std::vector<EvictedFile> evicted_files(const std::string& owner) {
+        std::map<std::filesystem::path, EvictedFile> by_file;
+        for (const auto& [t, p] : pending_map()) {
+            if (p.evicted && p.owner == owner && !p.source.empty()) {
+                by_file.try_emplace(p.source, EvictedFile{p.source, p.file_size, p.file_mtime,
+                                                          image_bytes(t->width, t->height, t->format)});
+            }
+        }
+        std::vector<EvictedFile> out;
+        out.reserve(by_file.size());
+        for (auto& [path, f] : by_file) {
+            out.push_back(std::move(f));
+        }
+        return out;
+    }
+
+    size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, ray::Image>>& images) {
+        std::map<std::filesystem::path, std::vector<const ray::Texture2D*>> by_file;
+        for (const auto& [t, p] : pending_map()) {
+            if (p.evicted && p.owner == owner) {
+                by_file[p.source].push_back(t);
+            }
+        }
+        size_t n = 0;
+        for (auto& [path, image] : images) {
+            auto it = by_file.find(path);
+            if (it == by_file.end() || !image.data) {
+                texture_retain::free_image_async(image);
+                continue;
+            }
+            const auto& texs = it->second;
+            for (size_t i = 0; i < texs.size(); ++i) {
+                refill(texs[i], i + 1 < texs.size() ? ray::ImageCopy(image) : image);
+            }
+            n += texs.size();
+        }
+        images.clear();
+        return n;
+    }
+
+    size_t room_bytes() {
+        return cap_bytes() > pending_bytes ? cap_bytes() - pending_bytes : 0;
+    }
+
+    unsigned prefill_jobs() {
+        static const unsigned n = [] {
+            const char* v = std::getenv("ZDON_LAZY_PREFILL");
+            const long k = v && *v ? std::strtol(v, nullptr, 10) : 4;
+            return k > 0 ? static_cast<unsigned>(std::min(k, 16L)) : 0U;
+        }();
+        return enabled() && evict_enabled() ? n : 0;
     }
 
     void set_decoder(ray::Image (*decode)(const std::filesystem::path& source)) {
