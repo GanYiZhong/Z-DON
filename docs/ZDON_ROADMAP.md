@@ -13,6 +13,7 @@
 | 曲庫走訪和 load_skin 並行 | — | 啟動到曲庫掃描完 0.93–1.13 → 0.46–0.51 s |
 | 開資料夾用快取的 box record 建 SongBox，需要時才讀譜面 | `YATAIDON_BOX_RECORD_VERIFY=1`、`_SELFTEST=1` | — |
 | 選曲/段位選擇貼圖跨遊戲/結算常駐（VRAM 預算） | `YATAIDON_RETAIN_MB=<n>`，0 = 關 | 結算回選曲貼圖 234 → 32 ms |
+| 貼圖用到時才上傳 GPU（第一次畫到的那一幀同步上傳，不會空白；演奏中會畫到的 global/game/background 照舊載入時上傳），**預設開** | `ZDON_LAZY_UPLOAD=0` 關、`ZDON_LAZY_UPLOAD_MB=<n>`（等待中的解碼圖 RAM 上限，預設 768，超過就改回載入時上傳） | 選曲貼圖載入 238–250 → 152–157 ms，進選曲那幀 536–566 → 455–465 ms；捲動測試 525 張只上傳 39 張（456 → 85 MB）；段位選擇 92–97 → 64–66 ms；結算 178 → 144 ms（＋第一幀 draw 約 8 ms）；開難度選擇 35.6–38.7 → 33.8–34.0 ms（沒變差） |
 | 每畫面貼圖打包快取 `cache/texpack/`、zlib-ng PNG 解碼 | `YATAIDON_TEXPACK=0`、`_TEXPACK_MB`、`_TEXPACK_VERIFY=1`、`YATAIDON_FASTPNG=0` | 冷硬碟選曲貼圖 755 → 417 ms；解碼 1.75× |
 | 3D 角色零件跨畫面重用 | — | 每個 Don 約 30 → 7 ms |
 | 選定歌曲就預讀歌曲資料夾、背景影片在背景開 | — | — |
@@ -49,6 +50,7 @@
 - `YATAIDON_TEST=1`：音量 1%、最小化（隱藏視窗時不最小化）、忽略真實輸入、不寫歌單。
 - `YATAIDON_FIXED_STEP_MS=<ms>`＋`YATAIDON_DUMP_FRAMES=<dir>;<frames>`：確定性畫面（固定時間步、等背景載入、無網路），同一個 exe 跑出逐位元組相同的截圖。
 - `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`、`YATAIDON_FRAME_STATS=1`。
+- `ZDON_FRAME_SPIKE_MS=<ms>`：每個超過門檻的幀記一行（update/draw 拆開），present（EndDrawing＋swap）超過門檻也另記；不需要開 FRAME_STATS。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 
 ## wip-all（YataiDON 本機分支）稽核，2026-10-19
@@ -64,6 +66,11 @@
 ## 合併上游 5e1b04d（方向鍵全畫面、replay 時間戳改 RapidJSON、行動版 TLS）
 - 確定性套件 121/121 與合併前相同。
 - 上游 dc27b85 把一般演奏的暫停鍵（pause_key）註解掉，Z-DON 照上游（演奏中按空白鍵不再暫停）。
+
+## 2026-10-20 貼圖用到時才上傳：量測備註
+- 原本以為「進選曲後下一幀卡約 377 ms 是驅動在補上傳」，量下來不是：用 glFinish 夾每一段，GL 佇列在 swap 前就空了，卡住的是 `SwapScreenBuffer` 本身；而且在 loading 畫面、完全沒載貼圖時也會發生，固定在啟動後約 0.5–1 s（JUMP song_select;10 剛好落在那時）。改成啟動 5 s 後才進選曲，兩種模式下一幀都不卡。
+- 演奏中第一次畫到才上傳會掉幀（實測 2352x3810 的 game 貼圖 24 ms、背景 gogo 階段 11 ms），所以 global/game/background 與演奏中載入的資料夾維持載入時上傳；dense 譜 auto 全程開/關都沒有新的演奏中上傳。
+- 代價：沒畫到的解碼圖留在 RAM（選曲常駐那批約 370 MB 會一直留著，算在 768 MB 上限內）；常駐 VRAM 預算把等待中的貼圖當作已上傳計算。
 
 ## 驗證工具（scratchpad，非 repo）
 - 確定性截圖套件：title / ss / dense / roll / hbs / dan / entry / settings / p2 / practice / danplay / movie，共 349 張，用 RGB 位元組比對。**不要用 Pillow 的 RGBA getbbox（只看 alpha）。**
@@ -88,6 +95,6 @@
 - 效能：每難度中位數 37.5 µs（解析）vs 35.4 µs（快取命中），42% 的難度命中反而較慢；光是把結果複製成 deque 就約 17 µs。快取檔整個曲庫 94 MB。收益感覺不到，不合併。
 
 ## 還可以做的
-- 貼圖用到時才上傳 GPU / PBO 背景上傳（第一次進畫面約 150 ms 的上傳）：需要共享 GL context 或分幀上傳（可能先看到貼圖空白），收益小、風險高，暫不做。
+- PBO／背景執行緒上傳：用到時才上傳已做（見上表），剩下第一次畫到時的同步上傳（選曲 39 張共約 30 ms，分散在多幀）。
 - `PlaybackClock` 與 vblank 限幀：已讓 synchronize 用實測的刷新週期（02f375d）；更深的整合會改變演奏時鐘，等於判定行為改動，不做。
 - 譜面音符改成不用 deque：約 90 處參考/迭代器語意要改，每幀的迭代早已走 vector，收益小，不做。
