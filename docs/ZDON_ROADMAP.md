@@ -35,6 +35,7 @@
 | 字型：共用不可變 glyph 快取、增量 atlas | `YATAIDON_TEXT_STATS=1` | 每段文字 0.64 → 0.11 ms，最壞 5–6 → 0.6 ms |
 | Lua 分代 GC、方法快取事件化、跳過提示去重 | — | 連打譜每 2 s 最慢一幀 5.4 → 2.6 ms |
 | 音符繪製精簡、已停住的歌曲框不更新、繪圖延後切換混合模式＋3 個批次緩衝 | `ZDON_EAGER_BLEND=1` 還原、`YATAIDON_DRAW_STATS=1` | 每幀 flush 10.7–12.9 → 9.7–10.0 |
+| rlgl 每次批次 flush 少做的 GL 呼叫：只有讀 normal 的 shader 才上傳 normals（預設 2D shader 不讀）；VAO 從上傳到 draw 一路綁著（以前上傳完先解綁再重綁），flush 結束時照舊解綁（`cmake/patches/raylib-lazy-blend.patch`） | — | dense auto 不限 fps、同樣 10 次 flush/幀：GL 驅動執行緒每幀 0.640–0.687 → 0.589–0.630 ms（A 5 次、B 6 次，約 −7%）；180 Hz 一幀一刷新時差異在雜訊內（0.88–0.93 vs 0.87–0.91 ms）；確定性套件 121/121 相同 |
 | vblank 對齊限幀（vsync 關、不限 fps 時），**預設開** | `ZDON_VBLANK_PACING=0` 關、`=<n>`、`ZDON_PACING_LOG=<csv>` | 步進 >1 ms 偏差 30% → <1%；代價：165 Hz 上約 170 fps，判定粒度約 6 ms |
 | 限幀等待的空轉依實測計時器遲到量調整：高解析度計時器在這台機器遲到 0.03–0.6 ms（p50 0.32，0.5 ms tick），遲到 0.5 ms 內本來就取格點時間，所以只空轉 p99 遲到 − 0.5 + 0.1 ms（0.05–0.5 ms，每 600 次重估，實測 0.18–0.22 ms） | `ZDON_PACING_LOG` 多 `w,<要求喚醒>,<實際喚醒>,<空轉 ms>` | 空轉 40 → 8 ms/s（4.0% → 0.8% 單核）；步進 >1 ms 偏差 0.39/0.50% → 0.44/0.41%，去除卡頓 std 0.046/0.067 → 0.073/0.065 ms；確定性套件 121/121 相同 |
 | 影片以 YUV 平面上傳（Y 全尺寸、U/V 色度尺寸的 R8 貼圖），shader 轉 RGB；只支援 8-bit planar YUV（420/422/444/440/411/410 與 yuvj），其他照舊 swscale RGB24。矩陣：標 BT.709/BT.2020 才用，其餘 BT.601（舊路徑全用 601）；範圍：yuvj 或標 full 才全範圍。shader 重現舊畫法（每個影片像素用涵蓋它的色度樣本＝swscale 的最近鄰色度、轉換後夾值，再雙線性、GL_REPEAT 邊緣），**預設開** | `ZDON_VIDEO_YUV=0` 回 RGB；`ZDON_VIDEO_YUV_CHECK=1`（開發）每 30 幀把 shader 結果讀回和 swscale 比 | 對 swscale 每通道最大差 2–3（601 limited）、2–3（709）、1–2（yuvj full）、1（444），差 >2 的像素 ≤0.23%；確定性截圖 movie（720p→1080p）對舊路徑最大 3、平均 0.41，title 最大 3；165 fps 同幀數下：解碼執行緒 12.2/11.1 → 7.8/7.1%、主執行緒 15.9/15.1 → 15.0/13.0%、GL 驅動 15.2/14.0 → 12.5/12.4%、行程 48.9/45.9 → 40.4/36.7%，幀工作 avg 0.87/0.82 → 0.77/0.72 ms、p99 2.3/2.2 → 1.58/1.53 ms |
@@ -70,6 +71,15 @@
 - `YATAIDON_FRAME_STATS=1`：每 2 s 一行 `[frame]`：幀工作時間 avg/p50/p99/max、幀間隔（開始到開始）超過 2.08 / 4.17 / 8.33 ms 的次數（480 / 240 / 120 Hz 的一格）、程序 CPU（單核 %，Windows）、working set 與 private MB。每 2 s 才查一次系統（GetProcessTimes＋GetProcessMemoryInfo），預設關。
 - `ZDON_FRAME_SPIKE_MS=<ms>`：每個超過門檻的幀記一行（update/draw 拆開），present（EndDrawing＋swap）超過門檻也另記；不需要開 FRAME_STATS。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
+
+## 2026-10-22 GL 驅動執行緒與輸入卡頓：量測備註
+- 量法：dense 譜 auto、隱藏視窗、視窗模式 vsync 關不限 fps（＝vblank 限幀＋不撕裂），skin 更新器關；`thread_cpu.py` 取第 12–27 s 每個執行緒的 CPU，換算成每幀 ms。同一張譜每次啟動隨機選到的背景不同，每幀 flush 會是 10 或 16（整場固定），比較時只拿 flush 數相同的。
+- 預設（不撕裂、一刷新一幀，180 Hz）：主執行緒 14–22%、nvoglv64 驅動執行緒 15–18%（每幀約 0.85–1.0 ms）。每幀 10–16 次 flush、65–90 次 draw call、約 12.7 次混合模式切換、約 5 次 3D mesh draw。
+- 不撕裂的 vsync swap 沒有在驅動裡空轉：同樣一刷新一幀，vsync swap（`ZDON_VBLANK_PACING=1`）驅動 15.8–16.8% vs 不 vsync（再加 `ZDON_PACING_TEARFREE=0`）13.0–15.5%，差約 0.1 ms/幀。`TEARFREE=0` 自動模式一刷新兩幀（360 fps）：主 23%、驅動 20%。
+- **設定 `vsync = true`（不限 fps、限幀關）時主執行緒吃滿一核（97.6%）**：每幀 5.4 ms 的「work」全部在 screen draw 裡（第一次 flush 時驅動等前一幀翻頁，忙等），驅動執行緒 15%。不撕裂模式（限幀睡到 vblank 前才畫）沒有這個問題。要不要讓 vsync=true 也走限幀，留給使用者決定（會改變 vsync 模式的出幀時機，沒做）。
+- NVIDIA「執行緒最佳化」是驅動設定（自動）：有一次不限 fps 的量測整場沒有驅動執行緒（主 0.97 ms/幀、總 CPU 最低），其餘有（主 0.8–0.9＋驅動 0.6–0.7 ms/幀）。只回報，沒改系統設定。
+- 輸入卡頓：自動測試（隱藏視窗、沒有真實輸入）演奏中 45 s 沒有 >1 ms 的 input 段；可重現的都在視窗建立後約 2 s 內與選曲剛開時：`SDL_PumpEvents` 裡 Windows 文字服務（TSF）的 `WM_TIMER`（TimerProc 在 MSCTF.dll）每次約 5 ms CPU，加上 `SystemUserAdapterWindowClass`／`MSCTFIME UI` 視窗的訊息，第一幀 pump 45–55 ms、之後 5–15 ms。主執行緒在建立視窗前 `ImmDisableIME` 就全部消失（第一幀 4 ms、之後 ≤4 ms 且沒有訊息），但會讓搜尋框不能用輸入法打中日文，沒做。對自己的視窗 PostMessage 按鍵（每秒 15 下）：約 2% 的按鍵讓 pump 多 1–3 ms（多半在等，CPU 只 0.2–0.5 Mcycles），有無 IME 都一樣。使用者實際遊玩看到的 8–11 ms 沒有在自動測試重現，最可能也是 TSF（同樣的訊息型態），要在真實視窗用診斷版確認。
+- 限制每幀處理的訊息數不會有幫助：卡住的是單一則 WM_TIMER 的處理。
 
 ## 2026-10-21 vblank 限幀改成不撕裂（ZDON_PACING_TEARFREE）
 - 使用者回報：三種視窗模式都看到一條橫線切過音符。原因：驅動直接翻頁（independent flip／NVIDIA GL 走 DXGI）時，vsync 關的每次 swap 都會撕裂，撕裂線落在 swap 當下的掃描行；用 ZDON_PACING_LOG 換算，舊版限幀的 swap 集中在畫面高度 10–70%（音符軌道）。原設計假設 DWM 合成（只顯示每次刷新最新的一幀），不成立。
