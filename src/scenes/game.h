@@ -5,6 +5,7 @@
 #include "../libs/playback_clock.h"
 #include "../libs/screen.h"
 #include "../libs/video.h"
+#include "../objects/game/pause_menu.h"
 #include "../objects/game/player.h"
 #include "../objects/game/result_transition.h"
 #include "../objects/game/song_info.h"
@@ -43,6 +44,17 @@ protected:
     void pause_playback();
     void resume_playback(std::optional<double> chart_ms = std::nullopt);
     virtual PlayerNum restart_player_num() const { return global_data.player_num; }
+
+    // Z-DON: the pause menu (pause_menu.h); screens that handle Escape themselves turn it off
+    PauseMenu pause_menu;
+    bool window_was_focused = true;
+    virtual bool pause_menu_allowed() const { return true; }
+    bool can_pause() const;
+    void open_pause_menu();
+    // a frame while the menu or its countdown is up (everything else is frozen); back: where Back goes
+    std::optional<Screens> update_pause_menu(Screens back);
+    // the focus left the window since the last call (not in test runs, whose window is hidden)
+    bool focus_lost();
 
 public:
     GameScreen() : Screen("game") {}

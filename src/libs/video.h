@@ -75,4 +75,10 @@ public:
     void update(double current_ms);
     void draw();
     void stop();
+    // Z-DON: the pause menu held the video for ms: move its start that much later
+    void delay(double ms) {
+        if (start_ms) {
+            *start_ms += ms;
+        }
+    }
 };

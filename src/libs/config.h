@@ -24,6 +24,7 @@ struct GeneralConfig {
     bool touch_input = false;
     bool skin_updater = true;
     bool fast_transitions = false;
+    bool pause_menu = true; // Z-DON: Escape / Space open a pause menu during a song (false: Escape leaves)
 };
 
 struct LimitsConfig {

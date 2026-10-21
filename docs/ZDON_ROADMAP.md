@@ -50,6 +50,11 @@
 - 標 BT.709 的影片舊路徑用 601 解，新路徑照標記，所以畫面會變（測試片 max 109、平均 5）；未標記的照舊 601。
 - 外洩：標題畫面 attract 循環 6 分鐘（19 支影片，含 1080p 420 與 444），working set 242–310 MB、private 356–427 MB 來回、GPU dedicated 142–145 MB，沒有成長。
 
+### 功能
+| 項目 | 開關 | 結果 |
+|---|---|---|
+| 一般演奏（單人 GameScreen、2P）的暫停選單：Esc（back_key）或空白鍵（pause_key）打開；歌曲時鐘、音樂、背景影片、音符都停住（Lua 背景、Player 都不 update）。左右框（或方向鍵）移動「繼續演奏／從頭演奏／選其他歌曲」，咚（或 Enter）確定，再按 Esc／空白鍵＝繼續。繼續前倒數 3-2-1（1.8 s），倒數中按 Esc／空白鍵再暫停；暫停與倒數期間按的鍵在恢復時全部丟掉（clear_input_buffers），所以不會有免費判定；F1 照舊重來。外觀沿用 skin 練習選單的 practice/menu_panel、menu_button(_selected) 貼圖（沒有就引擎畫純色面板），文字先找 skin 的 pause_menu_*，再找練習選單的 practice_menu_restart / practice_menu_another_song，最後內建 en/ja/zh/ko；不改任何 skin。只在開場轉場結束後、歌曲結束前、沒跳過時可暫停，其他時候 Esc 照舊直接離開。視窗失焦也會打開（測試模式不會，只在「有焦點 → 失焦」那一刻）。段位（game_dan）維持原樣（考試規則下暫停有疑慮）；練習模式、輸入校正不受影響。歌曲結束時 log 一行最終判定數 | `config.toml` `[general] pause_menu = true`（預設）；`false` = Esc 直接離開、2P 空白鍵照舊單純暫停 | dense 譜 auto：暫停兩次（4.80 s、2.80 s）時鐘停在 17761.8 / 32969.0 ms 原值恢復；結果 good 999 ok 0 bad 0 drumroll 64，與沒暫停的三次（drumroll 63/64/64、其中一次 ok 1，auto 本身就會差一下）相同。混音輸出錄音：暫停期間除了選單音效全靜音，恢復後與沒暫停的錄音對齊，延遲差＝暫停時間 +11 ms、+7 ms（相關係數 0.57–0.85）。手動（非 auto）暫停＋倒數期間按 15 下咚：good 0 ok 0 bad 999，與沒按相同；恢復後按的照常判定。重來、選其他歌曲、`pause_menu = false` 都驗過。確定性套件 121/121 相同 |
+
 ### 修掉的 bug（多半上游也有）
 - 打開「歌曲資料夾還有子資料夾」的類別會當機（scan_song_tree 懸空參考）。
 - 同 hash 譜面對應的檔案隨執行緒競賽而變；同名歌曲（例如段位用的 A Cruel Angel's Thesis 新/舊音源）每次啟動選到不同檔案。
@@ -79,7 +84,7 @@
 
 ## 合併上游 5e1b04d（方向鍵全畫面、replay 時間戳改 RapidJSON、行動版 TLS）
 - 確定性套件 121/121 與合併前相同。
-- 上游 dc27b85 把一般演奏的暫停鍵（pause_key）註解掉，Z-DON 照上游（演奏中按空白鍵不再暫停）。
+- 上游 dc27b85 把一般演奏的暫停鍵（pause_key）註解掉；Z-DON 之後改成暫停選單（見「功能」）。
 
 ## 2026-10-20 貼圖用到時才上傳：量測備註
 - 原本以為「進選曲後下一幀卡約 377 ms 是驅動在補上傳」，量下來不是：用 glFinish 夾每一段，GL 佇列在 swap 前就空了，卡住的是 `SwapScreenBuffer` 本身；而且在 loading 畫面、完全沒載貼圖時也會發生，固定在啟動後約 0.5–1 s（JUMP song_select;10 剛好落在那時）。改成啟動 5 s 後才進選曲，兩種模式下一幀都不卡。

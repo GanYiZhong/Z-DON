@@ -10,6 +10,7 @@
 #include "../libs/network.h"
 #include "../libs/scores.h"
 #include "../libs/script.h"
+#include "../libs/test_mode.h"
 #include "../libs/text.h"
 #include "../platform/vblank_pacing.h"
 
@@ -360,6 +361,7 @@ void GameScreen::toggle_pause() {
 }
 
 void GameScreen::restart_song() {
+    pause_menu.reset();
     unload_song();
     initialize_chart(global_data.session_data[(int)restart_player_num()].selected_song);
 
@@ -381,13 +383,85 @@ std::optional<Screens> GameScreen::global_keys() {
     }
 
     if (check_key_pressed(global_data.config->keys.back_key)) {
+        if (can_pause()) {
+            open_pause_menu(); // Z-DON: Escape pauses (pause_menu = false: leaves at once, as before)
+            return std::nullopt;
+        }
         return on_screen_end(Screens::SONG_SELECT);
     }
 
     // if (check_key_pressed(global_data.config->keys.pause_key)) {
     //     toggle_pause();
     // }
+    // Z-DON: Space, or the window losing the focus, opens the pause menu
+    const bool lost_focus = focus_lost();
+    if (can_pause() && (check_key_pressed(global_data.config->keys.pause_key) || lost_focus)) {
+        open_pause_menu();
+    }
 
+    return std::nullopt;
+}
+
+bool GameScreen::can_pause() const {
+    if (!global_data.config->general.pause_menu || !pause_menu_allowed() || !transition || !transition->is_finished() ||
+        result_transition.is_started || score_saved || skipped || players.empty()) {
+        return false;
+    }
+    double end_time = 0.0;
+    for (const auto& player : players) {
+        end_time = std::max(end_time, player->end_time);
+    }
+    return clock.position() < end_time;
+}
+
+void GameScreen::open_pause_menu() {
+    pause_playback();
+    pause_menu.open_menu(get_current_ms());
+    spdlog::info("Pause menu opened at {:.1f} ms", clock.position());
+}
+
+bool GameScreen::focus_lost() {
+    if (zdon_test_mode()) {
+        return false;
+    }
+    const bool focused = ray::IsWindowFocused();
+    const bool lost = window_was_focused && !focused;
+    window_was_focused = focused;
+    return lost;
+}
+
+std::optional<Screens> GameScreen::update_pause_menu(Screens back) {
+    const double now = get_current_ms();
+    window_was_focused = zdon_test_mode() || ray::IsWindowFocused();
+    PauseMenu::Action action = pause_menu.update(now);
+    if (check_key_pressed(global_data.config->keys.restart_key)) {
+        action = PauseMenu::Action::RESTART;
+    }
+    switch (action) {
+    case PauseMenu::Action::RESUME: {
+        const double held = pause_menu.paused_ms(now);
+        pause_menu.reset();
+        clear_input_buffers(); // nothing pressed while paused or counting down reaches the notes
+        resume_playback();
+        if (movie) {
+            movie->delay(held);
+        }
+        spdlog::info("Pause menu: resumed at {:.1f} ms after {:.0f} ms", clock.position(), held);
+        break;
+    }
+    case PauseMenu::Action::RESTART:
+        pause_menu.reset();
+        clear_input_buffers();
+        restart_song();
+        spdlog::info("Pause menu: restart");
+        break;
+    case PauseMenu::Action::BACK:
+        pause_menu.reset();
+        spdlog::info("Pause menu: back");
+        return on_screen_end(back);
+    case PauseMenu::Action::NONE:
+        break;
+    }
     return std::nullopt;
 }
 
@@ -670,7 +744,11 @@ void GameScreen::draw_skip() {
 void GameScreen::end_song(double end_time, double transition_delay, BackgroundNotification notification) {
     if (clock.position() >= end_time + 1000 && !score_saved) {
         for (const auto& player : players) {
-            global_data.session_data[(int)player->player_num].result_data = player->get_result_score();
+            const ResultData& r = global_data.session_data[(int)player->player_num].result_data =
+                player->get_result_score();
+            // Z-DON: the final counts in the log (a pause must not change them)
+            spdlog::info("Song result for player {}: score {} good {} ok {} bad {} max combo {} drumroll {}",
+                         (int)player->player_num, r.score, r.good, r.ok, r.bad, r.max_combo, r.total_drumroll);
         }
 
         for (const auto& player : players) {
@@ -721,6 +799,9 @@ std::optional<Screens> GameScreen::update() {
 
     double current_ms = get_frame_ms();
     allnet_indicator.update(current_ms);
+    if (pause_menu.active()) {
+        return update_pause_menu(Screens::SONG_SELECT); // Z-DON: the song, its video and the notes wait
+    }
     clock.update(current_ms);
 
     transition->update(current_ms);
@@ -796,4 +877,5 @@ void GameScreen::draw() {
         background->draw_fore();
     }
     draw_overlay();
+    pause_menu.draw(get_current_ms());
 }

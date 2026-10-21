@@ -11,6 +11,7 @@ public:
     Screens on_screen_end(Screens next_screen) override;
     std::optional<Screens> update() override;
     void draw() override;
+    bool pause_menu_allowed() const override { return false; } // Z-DON: Escape leaves calibration
 
     std::vector<double> latencies;
     double average_latency = 0.0;

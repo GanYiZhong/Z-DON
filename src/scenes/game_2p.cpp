@@ -41,6 +41,9 @@ std::optional<Screens> Game2PScreen::update() {
     }
 
     double current_time = get_current_ms();
+    if (pause_menu.active()) {
+        return update_pause_menu(Screens::SONG_SELECT_2P); // Z-DON: pause menu (pause_menu.h)
+    }
     transition->update(current_time);
     clock.update(current_time);
     update_gameplay(current_time);
@@ -61,10 +64,19 @@ std::optional<Screens> Game2PScreen::update() {
         restart_song();
     }
     if (check_key_pressed(global_data.config->keys.back_key)) {
+        if (can_pause()) {
+            open_pause_menu();
+            return std::nullopt;
+        }
         return on_screen_end(Screens::SONG_SELECT_2P);
     }
-    if (check_key_pressed(global_data.config->keys.pause_key)) {
-        toggle_pause();
+    const bool lost_focus = focus_lost();
+    if (can_pause()) {
+        if (check_key_pressed(global_data.config->keys.pause_key) || lost_focus) {
+            open_pause_menu();
+        }
+    } else if (!global_data.config->general.pause_menu && check_key_pressed(global_data.config->keys.pause_key)) {
+        toggle_pause(); // pause_menu = false: the old plain pause
     }
 
     return std::nullopt;
