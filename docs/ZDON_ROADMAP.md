@@ -97,6 +97,14 @@
 - 不能直接把預載的資料夾放進 `textures`：dan_select/global 經 Green 繼承了 footer/arrow，會蓋掉選曲自己的 global/footer、global/arrow（今天是轉場那一刻才蓋），所以改成暫存區、等 Lua 要時才裝。
 - 預載的物件照原本 load_folder 的規則進 texture_retain（記在資料夾所屬畫面，例如 dan_select），之後進段位選擇照樣重用；沒用到就在換畫面時跟著丟（常駐的那份留在 retain 預算內）。
 
+## 2026-10-21 TJA 相容性（分支 zdon-tja）
+- 指令比對要整個名稱相同：以前 `#NEXTSONG`、`#NOTATIONOFF` 會被當成 `#N`（切到普通譜面分歧、時間倒回分歧起點），之後的音符全跑到分歧清單裡。曲庫 49 首受影響：48 首段位 TJA（COURSE:Dan，選曲本來就不顯示）和 promise.tja（Oni 主譜 311 → 585 個物件，第 77 小節後的音符回來了）。名稱後直接接數值（`#SCROLL0.5`）照舊。
+- 譜面中間的 `NAME:值` 行（段位 TJA 在 `#NEXTSONG` 後的 `EXAM4:`）不再當成音符資料（以前每行冒出 4–5 個假音符）。
+- `#NEXTSONG`：不支援（段位走 dan.json），每份譜面警告一次，各首歌接著讀成一張譜。其他沒註冊的指令（`#SENOTECHANGE`、`#LEVELHOLD`、`#DIRECTION`、`#BGAON`/`#BGAOFF`、`#SPLITLANE`、`#GAMETYPE`、`#OBJ*`…）照舊忽略。
+- OpenTaiko 音符字母：`A`/`B`（雙人大音符）＝大咚/大咔，`D`（導火線連打）＝氣球（吃 BALLOON 次數，沒有爆炸懲罰）；`C`（炸彈）與 `E`–`I` 當空白（佔原本的格子），被略掉的音符後面那個結尾 `8`（前面沒有開著的連打/氣球時）一起略掉。不明字元每份譜面每個字元只警告一次（以前每個字元一行）。
+- 驗證：全曲庫 3043 首新舊對拍，只有上述 49 首不同、其餘逐欄位相同；合成測試譜（字母、指令、分歧、格式錯誤）在 scratchpad tja_compat/synth。
+- 沒做、留給使用者決定（會動到判定/分數/魂條或分歧）：炸彈/導火線爆炸、`SCOREMODE`、`LIFE`、`EXAM`、`#LEVELHOLD`、`BALLOONNOR/EXP/MAS` 分歧各自的氣球次數（現在 MAS 會整個蓋掉 NOR/EXP）、`STYLE:Double` 段的 BALLOON/SCOREINIT/SCOREDIFF 會蓋掉單人段的值（150 首裡 348 處 SCOREINIT）。
+
 ## 驗證工具（scratchpad，非 repo）
 - 確定性截圖套件：title / ss / dense / roll / hbs / dan / entry / settings / p2 / practice / danplay / movie，共 349 張，用 RGB 位元組比對。**不要用 Pillow 的 RGBA getbbox（只看 alpha）。**
 - TJA 對拍：連結舊/新 tja.cpp，解析全曲庫 3043 首比對每個欄位。

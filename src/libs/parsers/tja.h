@@ -239,6 +239,9 @@ struct NoteList {
 struct CourseData {
     double level = 0;
     std::vector<int> balloon;
+    // BALLOONNOR / BALLOONEXP / BALLOONMAS: the balloons of one branch's route through the chart,
+    // in order (the parts before and after the branches included); empty: BALLOON is used
+    std::array<std::vector<int>, 3> branch_balloon;
     std::vector<int> scoreinit;
     double scorediff = 0;
     bool is_branching = false;
@@ -280,6 +283,9 @@ struct ParserState {
     size_t balloon_cursor = 0;
     double balloon_index = 0;
     size_t branch_balloon_cursor = 0;
+    std::array<std::vector<int>, 3> branch_balloons; // normal, expert, master
+    std::array<size_t, 3> branch_balloon_route_cursor{};
+    int branch = -1; // 0 #N, 1 #E, 2 #M; -1 outside the branches
     bool barline_added = false;
     double sudden_appear = 0.0f;
     double sudden_moving = 0.0f;
@@ -297,6 +303,8 @@ struct ParserState {
     bool start_branch_barline = false;
     double branch_balloon_index = 0;
     std::optional<Note> section_bar;
+    bool dropped_note = false;           // an unsupported note letter was left out since the last note
+    std::array<bool, 256> warned_note{}; // note characters already warned about
 };
 
 enum class Interval {
@@ -348,6 +356,7 @@ private:
     std::deque<NoteList> branch_m;
     std::deque<NoteList> branch_e;
     std::deque<NoteList> branch_n;
+    bool warned_nextsong = false;
 
     static std::string to_lower(const std::string& str);
     static std::string split_after_colon(const std::string& str);
@@ -356,6 +365,13 @@ private:
     static std::vector<int> parse_balloon_data(const std::string& data);
 
     // the bars of a course as views of `data` (and of string literals)
+    // The lines of the chart this player plays in a course: #START at start - 1, #END at end
+    struct ChartRange {
+        int start = -1;
+        int end = -1;
+        ScrollType scroll_type = ScrollType::NMSCROLL;
+    };
+    ChartRange find_chart(int diff);
     std::vector<std::vector<std::string_view>> data_to_notes(int diff);
 
     void add_tempo_point(double bpm);

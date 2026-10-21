@@ -113,6 +113,57 @@ namespace {
         }
         return false;
     }
+
+    // part[n] goes on with a command name ("#N" in "#NEXTSONG")
+    bool continues_name(std::string_view part, size_t n) {
+        if (n >= part.size()) {
+            return false;
+        }
+        const char c = part[n];
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+    }
+
+    // OpenTaiko note letters that play as an existing note: the digit it plays as, else 0
+    char extended_note(char c) {
+        switch (c) {
+        case 'A': // big don for two players (hands): a big don in single play
+            return '3';
+        case 'B': // big ka for two players
+            return '4';
+        case 'D': // fuse roll: a balloon that would explode if not popped; it takes a BALLOON count
+            return '7';
+        default:
+            return 0;
+        }
+    }
+
+    // The last note (not barline) of the list is a roll or balloon that an 8 ends
+    bool ends_long_note(const std::deque<Note>& notes) {
+        for (auto it = notes.rbegin(); it != notes.rend(); ++it) {
+            if (it->type == NoteType::BARLINE) {
+                continue;
+            }
+            return it->type == NoteType::ROLL_HEAD || it->type == NoteType::ROLL_HEAD_L ||
+                   it->type == NoteType::BALLOON_HEAD || it->type == NoteType::KUSUDAMA;
+        }
+        return false;
+    }
+
+    // NAME: value inside a course's notes (EXAM4: after #NEXTSONG in dan charts): not note data
+    bool is_header_line(std::string_view line) {
+        if (line.empty() || !((line[0] >= 'A' && line[0] <= 'Z') || (line[0] >= 'a' && line[0] <= 'z'))) {
+            return false;
+        }
+        for (char c : line) {
+            if (c == ':') {
+                return true;
+            }
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || is_digit(c) || c == '_')) {
+                return false;
+            }
+        }
+        return false;
+    }
 } // namespace
 
 // trim() of a part of a line without copying the part first
@@ -269,8 +320,29 @@ static double float_field_or_zero(const std::string& data_str, const char* name,
 
 void TJAParser::get_metadata() {
     int current_diff = -1;
+    // A course can hold one chart per STYLE (Single / Double), each with its own BALLOON,
+    // SCOREINIT and SCOREDIFF. A chart uses the values in effect at its #START, where a STYLE
+    // section starts again from the course's values before the first STYLE line (TJAPlayer3
+    // drops the STYLE sections it does not play).
+    struct StartValues {
+        int diff;
+        CourseData values;
+    };
+    std::map<size_t, StartValues> start_values;
+    std::map<int, CourseData> style_base;
+    // the per-chart values of a course; level and is_branching stay the course's
+    auto take_chart_values = [](CourseData& to, const CourseData& from) {
+        to.balloon = from.balloon;
+        to.branch_balloon = from.branch_balloon;
+        to.scoreinit = from.scoreinit;
+        to.scorediff = from.scorediff;
+    };
 
-    for (const auto& item : data) {
+    for (size_t i = 0; i < data.size(); i++) {
+        const std::string& item = data[i];
+        if (item.starts_with("#START") && current_diff != -1) {
+            start_values[i] = {current_diff, metadata.course_data[current_diff]};
+        }
         if (item.starts_with("#BRANCH") && current_diff != -1) {
             metadata.course_data[current_diff].is_branching = true;
         } else if (item[0] == '#' || std::isdigit(static_cast<unsigned char>(item[0]))) {
@@ -356,6 +428,7 @@ void TJAParser::get_metadata() {
 
             if (current_diff != -1) {
                 metadata.course_data[current_diff] = CourseData();
+                style_base.erase(current_diff);
             }
         } else if (current_diff != -1) {
             CourseData& course = metadata.course_data[current_diff];
@@ -372,12 +445,14 @@ void TJAParser::get_metadata() {
             if (item.starts_with("LEVEL")) {
                 course.level =
                     static_cast<int>(float_field_or_zero(split_after_colon(item), "LEVEL", file_path.string()));
+            } else if (item.starts_with("STYLE")) {
+                take_chart_values(course, style_base.try_emplace(current_diff, course).first->second);
             } else if (item.starts_with("BALLOONNOR") || item.starts_with("BALLOONEXP")) {
-                const char* name = item.starts_with("BALLOONNOR") ? "BALLOONNOR" : "BALLOONEXP";
+                const bool nor = item.starts_with("BALLOONNOR");
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
-                    if (auto balloons = parse_balloons(name, balloon_data)) {
-                        course.balloon.insert(course.balloon.end(), balloons->begin(), balloons->end());
+                    if (auto balloons = parse_balloons(nor ? "BALLOONNOR" : "BALLOONEXP", balloon_data)) {
+                        course.branch_balloon[nor ? 0 : 1] = std::move(*balloons);
                     }
                 }
             } else if (item.starts_with("BALLOON")) {
@@ -389,7 +464,7 @@ void TJAParser::get_metadata() {
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
                     if (auto balloons = parse_balloons(mas ? "BALLOONMAS" : "BALLOON", balloon_data)) {
-                        course.balloon = std::move(*balloons);
+                        (mas ? course.branch_balloon[2] : course.balloon) = std::move(*balloons);
                     }
                 }
             } else if (item.starts_with("SCOREINIT")) {
@@ -412,6 +487,16 @@ void TJAParser::get_metadata() {
                     }
                 }
             }
+        }
+    }
+
+    // The values of the chart this player plays, not of a later STYLE section or of header
+    // lines between its notes
+    for (auto& [diff, course] : metadata.course_data) {
+        const int start = find_chart(diff).start;
+        auto it = start > 0 ? start_values.find(static_cast<size_t>(start - 1)) : start_values.end();
+        if (it != start_values.end() && it->second.diff == diff) {
+            take_chart_values(course, it->second.values);
         }
     }
 
@@ -463,6 +548,7 @@ TJAParser::notes_to_position(int diff) {
     ParserState state;
     state.bpm = metadata.bpm;
     state.balloons = metadata.course_data[diff].balloon;
+    state.branch_balloons = metadata.course_data[diff].branch_balloon;
     state.curr_note_list = &master_notes.notes;
     state.curr_timeline = &master_notes.timeline;
     master_notes.tempo_map.points = {{current_ms, 0.0, metadata.bpm}};
@@ -487,7 +573,9 @@ TJAParser::notes_to_position(int diff) {
                 const auto& bucket = cmd_buckets[part.size() > 1 ? static_cast<unsigned char>(part[1]) : 0];
                 for (unsigned short i : bucket) {
                     const auto& [cmd_prefix, handler] = cached_cmds[i];
-                    if (part.starts_with(cmd_prefix)) {
+                    // The whole name must match: #NEXTSONG / #NOTATIONOFF are not #N, #EXAM is not
+                    // #E (a value may follow without a space, as in "#SCROLL0.5")
+                    if (part.starts_with(cmd_prefix) && !continues_name(part, cmd_prefix.size())) {
                         std::string value = trim_view(std::string_view(part).substr(cmd_prefix.length()));
                         handler(value, state);
                         break;
@@ -512,18 +600,40 @@ TJAParser::notes_to_position(int diff) {
                 increment = (bar_length > 0) ? ms_per_measure / static_cast<double>(bar_length) : 0.0;
             }
 
-            // Process each note character
+            // Process each note character; every character takes its slot, whatever it is
             for (char item : part) {
+                // OpenTaiko's letters: A/B (partner big notes) play as big don/ka and D (fuse roll)
+                // as a balloon; C (mine) and E-I are left out like a 0
+                const char mapped = extended_note(item);
+                if (mapped != 0) {
+                    item = mapped;
+                } else if (item >= 'C' && item <= 'I') {
+                    if (!state.warned_note[static_cast<unsigned char>(item)]) {
+                        state.warned_note[static_cast<unsigned char>(item)] = true;
+                        spdlog::warn("Unsupported note '{}' left out in {}", item, file_path.string());
+                    }
+                    state.dropped_note = true;
+                    current_ms += increment;
+                    continue;
+                }
                 // Skip empty notes (0) and non-digits
                 const unsigned char byte = static_cast<unsigned char>(item);
                 const bool digit = (byte >= '1' && byte <= '9') || (byte >= 0x80 && std::isdigit(byte));
                 if (item == '0' || !digit) {
-                    if (item != '0') {
+                    if (item != '0' && !state.warned_note[byte]) {
+                        state.warned_note[byte] = true;
                         spdlog::warn("Unrecognized note '{}' in {}", item, file_path.string());
                     }
                     current_ms += increment;
                     continue;
                 }
+
+                // An 8 that would end a left-out note (an OpenTaiko roll) is left out with it
+                if (item == '8' && state.dropped_note && !ends_long_note(*state.curr_note_list)) {
+                    current_ms += increment;
+                    continue;
+                }
+                state.dropped_note = false;
 
                 // Skip consecutive balloon end markers (9)
                 if (item == '9' && !state.curr_note_list->empty()) {
@@ -602,7 +712,7 @@ std::vector<int> TJAParser::parse_balloon_data(const std::string& data) {
     return result;
 }
 
-std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
+TJAParser::ChartRange TJAParser::find_chart(int diff) {
     std::string diff_name;
     auto it = DIFFS.find(diff);
     if (it != DIFFS.end()) {
@@ -663,7 +773,10 @@ std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
         note_start = p1_start != -1 ? p1_start : p2_start;
     }
 
-    if (note_start != -1 && note_end == -1) {
+    // The chart ends at the first #END after its #START: a P1/P2 chart can come before the #START
+    // whose #END stopped the search above
+    if (note_start != -1) {
+        note_end = -1;
         for (size_t i = note_start; i < data.size(); i++) {
             if (data[i] == "#END") {
                 note_end = i;
@@ -675,6 +788,17 @@ std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
     if (note_start == -1 || note_end == -1) {
         return {};
     }
+    return {note_start, note_end, scroll_type};
+}
+
+std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
+    const ChartRange range = find_chart(diff);
+    if (range.start == -1 || range.end == -1) {
+        return {};
+    }
+    const int note_start = range.start;
+    const int note_end = range.end;
+    const ScrollType scroll_type = range.scroll_type;
 
     std::vector<std::vector<std::string_view>> notes;
     std::vector<std::string_view> bar;
@@ -695,6 +819,8 @@ std::vector<std::vector<std::string_view>> TJAParser::data_to_notes(int diff) {
                 continue;
             }
             bar.push_back(line);
+        } else if (is_header_line(line)) {
+            continue;
         } else if (line == ",") {
             if (bar.empty() || std::ranges::all_of(bar, [](std::string_view item) { return item[0] == '#'; })) {
                 bar.emplace_back("");
@@ -862,6 +988,15 @@ void TJAParser::register_extended_commands(std::map<std::string, CommandHandler>
         ev.to = d[1];
         ev.extra = d[2];
         push(s, ev);
+    };
+    // Dan charts in one file (TJAPlayer3): each #NEXTSONG starts the next song with its own audio.
+    // Not supported (dan play uses dan.json); the songs are read on as one chart. Every other
+    // command that is not registered (#SENOTECHANGE, #LEVELHOLD, #DIRECTION, #BGAON, ...) is ignored.
+    registry["#NEXTSONG"] = [this](const std::string&, ParserState&) {
+        if (!warned_nextsong) {
+            warned_nextsong = true;
+            spdlog::warn("#NEXTSONG (dan course in one file) is not supported: {}", file_path.string());
+        }
     };
     registry["#ENABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = true; };
     registry["#DISABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = false; };
@@ -1079,6 +1214,7 @@ void TJAParser::handle_BRANCHEND(const std::string& value, ParserState& state) {
     state.curr_note_list = &master_notes.notes;
     state.curr_timeline = &master_notes.timeline;
     state.is_branching = false;
+    state.branch = -1;
 }
 
 void TJAParser::handle_LYRIC(const std::string& value, ParserState& state) {
@@ -1204,7 +1340,7 @@ void TJAParser::handle_JPOSSCROLL(const std::string& part, ParserState& state) {
 }
 
 // Starts a branch variant: a new list that begins where the branch began
-static void enter_branch(std::deque<NoteList>& branch, ParserState& state, double& current_ms) {
+static void enter_branch(std::deque<NoteList>& branch, int route, ParserState& state, double& current_ms) {
     branch.emplace_back();
     state.curr_note_list = &branch.back().notes;
     state.curr_timeline = &branch.back().timeline;
@@ -1217,18 +1353,19 @@ static void enter_branch(std::deque<NoteList>& branch, ParserState& state, doubl
     state.balloon_index = state.branch_balloon_index;
     state.balloon_cursor = state.branch_balloon_cursor;
     state.is_branching = true;
+    state.branch = route;
 }
 
 void TJAParser::handle_N(const std::string& value, ParserState& state) {
-    enter_branch(branch_n, state, current_ms);
+    enter_branch(branch_n, 0, state, current_ms);
 }
 
 void TJAParser::handle_E(const std::string& value, ParserState& state) {
-    enter_branch(branch_e, state, current_ms);
+    enter_branch(branch_e, 1, state, current_ms);
 }
 
 void TJAParser::handle_M(const std::string& value, ParserState& state) {
-    enter_branch(branch_m, state, current_ms);
+    enter_branch(branch_m, 2, state, current_ms);
 }
 
 void TJAParser::handle_SECTION(const std::string& value, ParserState& state) {
@@ -1328,7 +1465,24 @@ Note TJAParser::add_note(char item, ParserState& state) {
         note.color = 255;
     } else if (note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) {
         state.balloon_index++;
-        note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
+        // A branch's own list counts the balloons on its route; outside the branches, the
+        // normal branch's list (one note for every route). Without one, BALLOON as before.
+        const size_t route = state.branch == -1 ? 0 : static_cast<size_t>(state.branch);
+        const std::vector<int>& own = state.branch_balloons[route];
+        if (!own.empty()) {
+            const size_t i = state.branch_balloon_route_cursor[route];
+            note.count = i < own.size() ? own[i] : 1;
+        } else {
+            note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
+        }
+        // A balloon outside the branches is on every route
+        if (state.branch == -1) {
+            for (size_t& i : state.branch_balloon_route_cursor) {
+                i++;
+            }
+        } else {
+            state.branch_balloon_route_cursor[route]++;
+        }
         state.balloon_cursor++;
     }
 
