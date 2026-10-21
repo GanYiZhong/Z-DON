@@ -42,6 +42,7 @@
 | 共用工作池取代臨時執行緒、玩家共用 SongParser、貼圖查名不建字串 | — | — |
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
+| 演奏畫面（GAME/GAME_2P/GAME_DAN/GAME_PRACTICE/AI_GAME/RETRY_GAME）關掉 Windows 文字服務（TSF）：進畫面時對主執行緒的 `ITfThreadMgr` 拿掉 IMM32 建視窗時給的那次 activation（`Deactivate`，TSF 是計次的），離開時用原本的旗標 `ActivateEx` 還回去；選曲搜尋框等其他地方照常可用輸入法（`src/platform/gameplay_ime_windows.cpp`），**預設開** | `ZDON_GAMEPLAY_IME=1` 不關 | 直接開譜進演奏（視窗建立的 TSF 爆發落在演奏前 5 s）、視窗在前景、各 3 次：pump 合計 74–77 → 24–25 ms、最慢一次 49–51 → 5.5–6.9 ms、TSF 訊息 18–23 → 6–9、MSCTF 計時器 6–8 → 2（`ImmDisableIME` 參考：19 ms、3.2 ms、0）。穩定演奏中三者都是 0 則 TSF 訊息（自動測試沒有真實按鍵，玩家看到的 8–11 ms 沒能重現）。代價：關 32–37 ms、開 56–64 ms，各一幀（換畫面那幀）；回選曲後 2 s 內 TSF 計時器 7 → 10。回選曲後 `SDL_StartTextInput` 重新接上 IMC 與同一個 TSF document manager、注音 TIP 仍是 active、對自己視窗送的 WM_CHAR（含中文字）照樣變成 SDL 文字事件。確定性套件 121/121 相同 |
 
 ## 2026-10-21 資源用量四項：量測備註
 - 限幀空轉：直接寫 console 小程式量 `CreateWaitableTimerExW(HIGH_RESOLUTION)`，遲到 p50 0.33、p99 0.61 ms；提高執行緒優先權或 `NtSetTimerResolution(0.5 ms)` 都一樣（看起來是 0.5 ms 的 tick），所以縮到 0.1 ms 的固定空轉會讓 2.4% 的喚醒超過 0.5 ms、步進 std 0.069 → 0.14 ms；改成依 p99 調整。原本估的 8% 單核實際是 4%（timer 平均已遲到 0.32 ms，只剩一半要空轉）。主執行緒 CPU 量起來雜訊太大（同版本 22–31%），所以用 log 直接算空轉時間。
@@ -78,8 +79,15 @@
 - 不撕裂的 vsync swap 沒有在驅動裡空轉：同樣一刷新一幀，vsync swap（`ZDON_VBLANK_PACING=1`）驅動 15.8–16.8% vs 不 vsync（再加 `ZDON_PACING_TEARFREE=0`）13.0–15.5%，差約 0.1 ms/幀。`TEARFREE=0` 自動模式一刷新兩幀（360 fps）：主 23%、驅動 20%。
 - **設定 `vsync = true`（不限 fps、限幀關）時主執行緒吃滿一核（97.6%）**：每幀 5.4 ms 的「work」全部在 screen draw 裡（第一次 flush 時驅動等前一幀翻頁，忙等），驅動執行緒 15%。不撕裂模式（限幀睡到 vblank 前才畫）沒有這個問題。要不要讓 vsync=true 也走限幀，留給使用者決定（會改變 vsync 模式的出幀時機，沒做）。
 - NVIDIA「執行緒最佳化」是驅動設定（自動）：有一次不限 fps 的量測整場沒有驅動執行緒（主 0.97 ms/幀、總 CPU 最低），其餘有（主 0.8–0.9＋驅動 0.6–0.7 ms/幀）。只回報，沒改系統設定。
-- 輸入卡頓：自動測試（隱藏視窗、沒有真實輸入）演奏中 45 s 沒有 >1 ms 的 input 段；可重現的都在視窗建立後約 2 s 內與選曲剛開時：`SDL_PumpEvents` 裡 Windows 文字服務（TSF）的 `WM_TIMER`（TimerProc 在 MSCTF.dll）每次約 5 ms CPU，加上 `SystemUserAdapterWindowClass`／`MSCTFIME UI` 視窗的訊息，第一幀 pump 45–55 ms、之後 5–15 ms。主執行緒在建立視窗前 `ImmDisableIME` 就全部消失（第一幀 4 ms、之後 ≤4 ms 且沒有訊息），但會讓搜尋框不能用輸入法打中日文，沒做。對自己的視窗 PostMessage 按鍵（每秒 15 下）：約 2% 的按鍵讓 pump 多 1–3 ms（多半在等，CPU 只 0.2–0.5 Mcycles），有無 IME 都一樣。使用者實際遊玩看到的 8–11 ms 沒有在自動測試重現，最可能也是 TSF（同樣的訊息型態），要在真實視窗用診斷版確認。
+- 輸入卡頓：自動測試（隱藏視窗、沒有真實輸入）演奏中 45 s 沒有 >1 ms 的 input 段；可重現的都在視窗建立後約 2 s 內與選曲剛開時：`SDL_PumpEvents` 裡 Windows 文字服務（TSF）的 `WM_TIMER`（TimerProc 在 MSCTF.dll）每次約 5 ms CPU，加上 `SystemUserAdapterWindowClass`／`MSCTFIME UI` 視窗的訊息，第一幀 pump 45–55 ms、之後 5–15 ms。主執行緒在建立視窗前 `ImmDisableIME` 就全部消失（第一幀 4 ms、之後 ≤4 ms 且沒有訊息），但會讓搜尋框不能用輸入法打中日文，沒做；改成只在演奏畫面關 TSF（見下節）。對自己的視窗 PostMessage 按鍵（每秒 15 下）：約 2% 的按鍵讓 pump 多 1–3 ms（多半在等，CPU 只 0.2–0.5 Mcycles），有無 IME 都一樣。使用者實際遊玩看到的 8–11 ms 沒有在自動測試重現，最可能也是 TSF（同樣的訊息型態），要在真實視窗用診斷版確認。
 - 限制每幀處理的訊息數不會有幫助：卡住的是單一則 WM_TIMER 的處理。
+
+## 2026-10-22 演奏中關 TSF：試過的做法
+- SDL 3.4.14 在 text input 停止時已經 `ImmAssociateContext(hwnd, NULL)`，而 Z-DON 只在文字欄位開 text input，所以演奏中 IMC 本來就是 NULL、TSF focus document manager 也是 NULL：`ImmAssociateContextEx(hwnd, NULL, 0)` 和 `ITfThreadMgr::AssociateFocus(hwnd, NULL)` 狀態上都沒改變任何東西，開局爆發照樣有（imm 30 ms/17 則、AssociateFocus 23 ms/13 則）。
+- `ITfThreadMgr2::SuspendKeystrokeHandling` 只影響按鍵處理，計時器照樣（61 ms/19 則）；`ImmDisableTextFrameService` 在 TSF 已啟用後沒有效果（旗標仍 activated），而且不能再開回來。
+- 只有 `Deactivate` 讓 `GetActiveFlags` 的 TF_TMF_ACTIVATED 消失；`Activate` 與 `ActivateEx(原旗標)` 都能接回（hr 0），採用後者。
+- 也試過 LTO 下自己宣告的 C++ COM 介面（匿名 namespace、沒有實作類別）：GCC 把虛擬呼叫去虛擬化成呼叫 0，程式當掉；要用 C 式 vtable 或 MinGW 標頭的介面。
+- 沒驗到：真的用注音輸入法在搜尋框打字（只能驗 IMC/TSF 重新接上與 SDL 文字事件）；有真實按鍵、前景視窗時演奏中的 8–11 ms 卡頓是否消失，要使用者實際玩確認。
 
 ## 2026-10-22 vsync 開也用 vblank 限幀
 - vsync 開（config `vsync = true`、沒有 target_fps）時，NVIDIA GL 驅動在下一幀第一次 flush 時忙等翻頁：主執行緒吃 95.6% 單核、每幀 work 5.46 ms（180 Hz 一個刷新 5.56 ms）。
