@@ -779,7 +779,7 @@ static void run_frame() {
     }
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
-    vblank_pacing::wait_next(); // no-op unless uncapped without vsync (then target_duration is 0)
+    vblank_pacing::wait_next(); // no-op unless pacing is on (no target_fps; then target_duration is 0)
     if (L.target_duration.count() > 0) {
         L.next_frame_time += L.target_duration;
         auto now = std::chrono::steady_clock::now();

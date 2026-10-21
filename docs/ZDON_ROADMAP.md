@@ -81,6 +81,11 @@
 - 輸入卡頓：自動測試（隱藏視窗、沒有真實輸入）演奏中 45 s 沒有 >1 ms 的 input 段；可重現的都在視窗建立後約 2 s 內與選曲剛開時：`SDL_PumpEvents` 裡 Windows 文字服務（TSF）的 `WM_TIMER`（TimerProc 在 MSCTF.dll）每次約 5 ms CPU，加上 `SystemUserAdapterWindowClass`／`MSCTFIME UI` 視窗的訊息，第一幀 pump 45–55 ms、之後 5–15 ms。主執行緒在建立視窗前 `ImmDisableIME` 就全部消失（第一幀 4 ms、之後 ≤4 ms 且沒有訊息），但會讓搜尋框不能用輸入法打中日文，沒做。對自己的視窗 PostMessage 按鍵（每秒 15 下）：約 2% 的按鍵讓 pump 多 1–3 ms（多半在等，CPU 只 0.2–0.5 Mcycles），有無 IME 都一樣。使用者實際遊玩看到的 8–11 ms 沒有在自動測試重現，最可能也是 TSF（同樣的訊息型態），要在真實視窗用診斷版確認。
 - 限制每幀處理的訊息數不會有幫助：卡住的是單一則 WM_TIMER 的處理。
 
+## 2026-10-22 vsync 開也用 vblank 限幀
+- vsync 開（config `vsync = true`、沒有 target_fps）時，NVIDIA GL 驅動在下一幀第一次 flush 時忙等翻頁：主執行緒吃 95.6% 單核、每幀 work 5.46 ms（180 Hz 一個刷新 5.56 ms）。
+- 改成 vsync 開也啟用限幀：每次刷新一幀（同一般 vsync），先睡到刷新前才開始畫、swap 用驅動 vsync（不撕裂）。`ZDON_VBLANK_PACING=0` 回舊行為。
+- 量測（dense auto、180 Hz、隱藏視窗）：主執行緒 95.6% → 20.8%、程序 113% → 36%；180 fps 不變；幀步偏差 >1 ms 0.04%、40 s 錯過刷新 2 次。確定性套件 121/121。
+
 ## 2026-10-21 vblank 限幀改成不撕裂（ZDON_PACING_TEARFREE）
 - 使用者回報：三種視窗模式都看到一條橫線切過音符。原因：驅動直接翻頁（independent flip／NVIDIA GL 走 DXGI）時，vsync 關的每次 swap 都會撕裂，撕裂線落在 swap 當下的掃描行；用 ZDON_PACING_LOG 換算，舊版限幀的 swap 集中在畫面高度 10–70%（音符軌道）。原設計假設 DWM 合成（只顯示每次刷新最新的一幀），不成立。
 - 改法（預設開，`ZDON_PACING_TEARFREE=0` 回舊行為）：限幀啟用時打開驅動 vsync；每次刷新只有要顯示的那一幀 swap，額外的（輸入）幀照跑輸入/update/判定/繪圖但不 swap；work 量到 swap 之前為止（vsync 等待不算 work，不然 lead 會一直長）。

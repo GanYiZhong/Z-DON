@@ -151,8 +151,8 @@ namespace vblank_pacing {
     } // namespace
 
     void init(bool vsync, double target_fps) {
-        if (vsync || target_fps > 0.0) {
-            return; // today's behavior: vsync or the fixed-rate limiter
+        if (target_fps > 0.0) {
+            return; // the fixed-rate limiter
         }
         if (fixed_step::on()) {
             return; // YATAIDON_FIXED_STEP_MS: frames run back to back
@@ -160,10 +160,16 @@ namespace vblank_pacing {
         // On by default (owner's choice 2026-10-19). Trade-off: uncapped frames drop to about one per
         // refresh, and hits are judged at frame times. ZDON_VBLANK_PACING=0 turns it off; =<n> allows at
         // most n frames per refresh; unset or =auto picks the count automatically.
+        // With vsync on (owner's choice 2026-10-22) it paces too, one frame per refresh as plain vsync:
+        // NVIDIA's GL driver busy-waits for the flip at the next frame's first flush, so without pacing
+        // the main thread spun a whole core (measured 95.6%, 5.46 ms of each 5.56 ms refresh). Pacing
+        // sleeps until shortly before the vblank instead, which also starts each frame later (less lag).
         const char* env = std::getenv("ZDON_VBLANK_PACING");
         const bool off = env && *env == '0';
         if (env && *env && !off && std::string_view(env) != "auto") {
             S.fixed_frames = std::max(0, std::atoi(env));
+        } else if (vsync) {
+            S.fixed_frames = 1;
         }
         HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
         if (dwm) {
@@ -187,7 +193,7 @@ namespace vblank_pacing {
         }
         S.active = true;
         const char* tf = std::getenv("ZDON_PACING_TEARFREE");
-        S.tear_free = !(tf && *tf == '0');
+        S.tear_free = vsync || !(tf && *tf == '0'); // vsync on always presents with the driver's vsync
         spdlog::info("vblank pacing: on, refresh {:.3f} ms, frames per refresh {}, {}", S.period_ms,
                      S.fixed_frames > 0 ? std::to_string(S.fixed_frames) : std::string("auto"),
                      S.tear_free ? "tear-free (only the shown frame is presented, with vsync)"
