@@ -26,6 +26,7 @@
 #include <cmath>
 #include <fstream>
 #include <random>
+#include <ranges>
 #include <sstream>
 #include <thread>
 
@@ -403,12 +404,14 @@ void Navigator::selftest_box_records_if_requested() {
     }
     wait_for_song_files();
     std::vector<fs::path> paths;
+    paths.reserve(song_levels.size());
     for (const auto& [path, levels] : song_levels) {
         paths.emplace_back(path);
     }
     std::ranges::sort(paths);
     const size_t had = [&] {
         std::vector<std::string> keys;
+        keys.reserve(paths.size());
         for (const fs::path& p : paths) {
             keys.push_back(u8_key(p));
         }
@@ -548,6 +551,7 @@ void Navigator::dump_library_if_requested() {
             out << "  " << p.string() << '\n';
         }
         std::vector<std::string> keys;
+        keys.reserve(plan.size());
         for (const auto& [key, entries] : plan) {
             keys.push_back(key);
         }
@@ -607,7 +611,7 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
 
 #ifndef __EMSCRIPTEN__
     song_files_ready = false;
-    song_files_thread = std::thread([this, songs_paths, listed = std::move(listed), stamps = std::move(stamps)]() {
+    song_files_thread = std::thread([this, songs_paths, listed = std::move(listed), stamps = std::move(stamps)] {
         std::vector<fs::path> files = listed ? *listed : get_song_files(songs_paths);
         std::mutex map_mutex;
         // YATAIDON_FIXED_STEP_MS: charts sharing a title and subtitle (two audio versions of a song) go to the
@@ -1763,7 +1767,7 @@ void Navigator::scan_song_tree(const fs::path& path, std::vector<fs::path>& song
     }
     for (size_t i = 0; i < work.size() && !abort_loading; i++) {
         // a copy: scan_dir appends to `work`, which can move the element a reference would point at
-        const Work item = work[i];
+        const Work item = work[i]; // NOLINT(performance-unnecessary-copy-initialization)
         scan_dir(item.dir, item.key, item.listing);
     }
 }
@@ -1841,13 +1845,19 @@ void Navigator::load_songs_inline_async(const fs::path path, BoxDef box_def) {
     if (box_def.collection == "RECOMMENDED") {
         run_collection("recommended", [&] { load_collection_recommended(path, box_def); });
         return;
-    } else if (box_def.collection == "FAVORITE") {
+    }
+
+    if (box_def.collection == "FAVORITE") {
         run_collection("favorite", [&] { load_from_song_list(path, box_def, true); });
         return;
-    } else if (box_def.collection == "RECENT") {
+    }
+
+    if (box_def.collection == "RECENT") {
         run_collection("recent", [&] { load_from_song_list(path, box_def, false); });
         return;
-    } else if (box_def.collection == "DIFFICULTY") {
+    }
+
+    if (box_def.collection == "DIFFICULTY") {
         if (diff_sort_filter) {
             try {
                 load_collection_difficulty(path, box_def, (*diff_sort_filter)[0], (*diff_sort_filter)[1],
@@ -1859,10 +1869,14 @@ void Navigator::load_songs_inline_async(const fs::path path, BoxDef box_def) {
         }
         loading_complete = true;
         return;
-    } else if (box_def.collection == "NEW") {
+    }
+
+    if (box_def.collection == "NEW") {
         run_collection("new", [&] { load_collection_new(path, box_def); });
         return;
-    } else if (box_def.collection == "SEARCH") {
+    }
+
+    if (box_def.collection == "SEARCH") {
         run_collection("search", [&] { load_collection_search(path, box_def); });
         return;
     }
@@ -3150,6 +3164,7 @@ void Navigator::update(double current_ms) {
             open_index = state.folder_index;
             inline_state.reset();
             std::vector<float> before;
+            before.reserve(items.size());
             for (const auto& box : items) {
                 before.push_back(box->position);
             }
@@ -3159,14 +3174,15 @@ void Navigator::update(double current_ms) {
             // their side instead (not from where they were: the list wraps, so that can be the far side)
             if (!vertical_gallery) {
                 const float center = items[open_index]->position;
-                for (size_t i = 0; i < items.size(); i++) {
-                    const float to = items[i]->position;
-                    const bool was_off = before[i] > tex.screen_width || before[i] < -100.0f;
-                    if (to == before[i] || !was_off || to < -100.0f || to > tex.screen_width) {
+                for (const auto& [box, previous] : std::views::zip(items, before)) {
+                    const float to = box->position;
+                    const bool was_off = previous > tex.screen_width || previous < -100.0f;
+                    if (to == previous || !was_off || to < -100.0f || to > tex.screen_width) {
                         continue;
                     }
-                    items[i]->set_position(to > center ? tex.screen_width + 100.0f : -200.0f);
-                    items[i]->move_box(to, 500);
+
+                    box->set_position(to > center ? tex.screen_width + 100.0f : -200.0f);
+                    box->move_box(to, 500);
                 }
             }
             items[open_index]->exit_box();

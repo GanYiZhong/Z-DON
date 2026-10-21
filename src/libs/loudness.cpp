@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -70,13 +71,15 @@ namespace song_loudness {
     namespace {
         struct Fingerprint {
             uintmax_t size;
-            std::filesystem::file_time_type::rep modified;
+            std::int64_t modified;
             bool operator==(const Fingerprint&) const = default;
         };
 
         Fingerprint fingerprint(const std::filesystem::path& path) {
-            return {std::filesystem::file_size(path),
-                    std::filesystem::last_write_time(path).time_since_epoch().count()};
+            const auto modified = std::chrono::duration_cast<std::chrono::duration<std::int64_t, std::nano>>(
+                std::filesystem::last_write_time(path).time_since_epoch());
+
+            return {std::filesystem::file_size(path), modified.count()};
         }
 
         std::string path_key(const std::filesystem::path& path) {
@@ -221,34 +224,17 @@ namespace song_loudness {
             std::optional<std::list<std::string>::iterator> queued;
         };
 
-        // one row of the store: what a measurement was taken of, and the result
-        struct Stored {
-            Fingerprint source;
-            Measurement measured;
-        };
-
-        static constexpr const char* store_header = "YATAIDON_LOUDNESS_STORE_V1";
-
         std::filesystem::path directory;
-        // Every measurement in one file (one line each, appended as songs are measured; a later line for
-        // the same song wins). It replaced a file per song, which cost an open per song box. The per-song
-        // files of older builds are read into it once, the first time it is missing.
-        std::filesystem::path store_path;
         const std::string temporary_suffix = "." + std::to_string(std::random_device{}()) + ".tmp";
         std::mutex mutex;
         std::condition_variable wake;
-        std::condition_variable store_ready;
         std::atomic<bool> stopping{false};
-        bool store_loaded = false;
-        std::unordered_map<std::string, Stored> store;
         std::list<std::string> jobs;
-        // song boxes' paths waiting for the worker to look at them (enqueue without priority)
-        std::list<std::filesystem::path> checks;
         std::unordered_map<std::string, Entry> entries;
         std::thread worker;
 
         explicit Impl(const std::filesystem::path& cache_directory)
-            : directory(std::filesystem::absolute(cache_directory)), store_path(directory / "loudness_store.txt") {
+            : directory(std::filesystem::absolute(cache_directory)) {
             worker = std::thread([this] { run(); });
         }
 
@@ -260,147 +246,49 @@ namespace song_loudness {
             }
         }
 
-        static std::string record(const std::string& key, const Fingerprint& source, const Measurement& measured) {
-            std::ostringstream line;
-            line.imbue(std::locale::classic());
-            line << std::quoted(key) << ' ' << source.size << ' ' << source.modified << ' ' << std::setprecision(17)
-                 << measured.integrated_lufs << ' ' << measured.true_peak_dbtp << '\n';
-            return line.str();
-        }
-
-        // An older build's file for one song, as its load() read it: nullopt unless it is that build's
-        // file for `name` with a valid measurement.
-        static std::optional<std::pair<std::string, Stored>> read_song_file(const std::filesystem::path& file) {
-            std::ifstream input(file);
+        std::optional<Measurement> load(const std::string& key, const Fingerprint& source) {
+            std::ifstream input(directory / cache_name(key));
             input.imbue(std::locale::classic());
             std::string version, stored_key;
-            Stored stored{};
+            Fingerprint stored{};
+            Measurement measured{};
 
-            if (!(input >> version >> std::quoted(stored_key) >> stored.source.size >> stored.source.modified >>
-                  stored.measured.integrated_lufs >> stored.measured.true_peak_dbtp) ||
-                version != "YATAIDON_LOUDNESS_V1" || !valid(stored.measured)) {
+            if (!(input >> version >> std::quoted(stored_key) >> stored.size >> stored.modified >>
+                  measured.integrated_lufs >> measured.true_peak_dbtp) ||
+                version != "YATAIDON_LOUDNESS_V1" || stored_key != key || stored != source || !valid(measured)) {
                 return std::nullopt;
             }
-            // load() only ever opened the file named after its key
-            const auto name = file.filename().u8string();
-            if (std::string(name.begin(), name.end()) != cache_name(stored_key)) {
-                return std::nullopt;
-            }
-            return std::make_pair(std::move(stored_key), stored);
-        }
 
-        void write_store(const std::unordered_map<std::string, Stored>& rows) {
-            std::filesystem::create_directories(directory);
-            auto temporary = store_path;
-            temporary += temporary_suffix;
-            {
-                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-                output << store_header << '\n';
-                for (const auto& [key, row] : rows) {
-                    output << record(key, row.source, row.measured);
-                }
-                output.close();
-                if (!output) {
-                    throw std::runtime_error("Cannot write loudness store");
-                }
-            }
-#ifdef _WIN32
-            if (!MoveFileExW(temporary.c_str(), store_path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                throw std::runtime_error("Cannot replace loudness store");
-            }
-#else
-            std::filesystem::rename(temporary, store_path);
-#endif
-        }
-
-        // Reads the store, or builds it from the per-song files when there is none
-        void load_store() {
-            std::unordered_map<std::string, Stored> rows;
-            try {
-                size_t lines = 0;
-                std::ifstream input(store_path, std::ios::binary);
-                if (input) {
-                    std::string line;
-                    if (std::getline(input, line) && line.starts_with(store_header)) {
-                        while (std::getline(input, line)) {
-                            std::istringstream fields(line);
-                            fields.imbue(std::locale::classic());
-                            std::string key;
-                            Stored row{};
-                            if (fields >> std::quoted(key) >> row.source.size >> row.source.modified >>
-                                row.measured.integrated_lufs >> row.measured.true_peak_dbtp) {
-                                rows.insert_or_assign(std::move(key), row);
-                                lines++;
-                            }
-                        }
-                    }
-                    // superseded lines pile up as songs change: written again without them
-                    if (lines > rows.size() * 2 + 64) {
-                        write_store(rows);
-                    }
-                } else {
-                    std::error_code ec;
-                    for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end;
-                         it.increment(ec)) {
-                        if (it->path().extension() == ".loudness") {
-                            if (auto song = read_song_file(it->path())) {
-                                rows.insert_or_assign(std::move(song->first), song->second);
-                            }
-                        }
-                    }
-                    if (!rows.empty()) {
-                        write_store(rows);
-                        spdlog::info("Loudness cache: {} songs moved into {}", rows.size(), store_path.string());
-                    }
-                }
-            } catch (const std::exception& error) {
-                spdlog::warn("Cannot read the loudness store: {}", error.what());
-            }
-            std::scoped_lock guard(mutex);
-            store = std::move(rows);
-            store_loaded = true;
-            store_ready.notify_all();
-        }
-
-        // called with `mutex` held
-        std::optional<Measurement> load(const std::string& key, const Fingerprint& source) {
-            auto it = store.find(key);
-            if (it == store.end() || it->second.source != source || !valid(it->second.measured)) {
-                return std::nullopt;
-            }
-            return it->second.measured;
+            return measured;
         }
 
         void save(const std::string& key, const Fingerprint& source, const Measurement& measured) {
             std::filesystem::create_directories(directory);
+            const auto path = directory / cache_name(key);
+            auto temporary = path;
+            temporary += temporary_suffix;
             {
-                std::error_code ec;
-                const auto size = std::filesystem::file_size(store_path, ec);
-                std::ofstream output(store_path, std::ios::binary | std::ios::app);
-                if (ec || size == 0) {
-                    output << store_header << '\n';
-                }
-                output << record(key, source, measured);
+                std::ofstream output(temporary, std::ios::trunc);
+                output.imbue(std::locale::classic());
+
+                output << "YATAIDON_LOUDNESS_V1\n"
+                       << std::quoted(key) << '\n'
+                       << source.size << ' ' << source.modified << '\n'
+                       << std::setprecision(17) << measured.integrated_lufs << ' ' << measured.true_peak_dbtp << '\n';
+
                 output.close();
                 if (!output) {
-                    throw std::runtime_error("Cannot write loudness store");
+                    throw std::runtime_error("Cannot write loudness cache");
                 }
             }
-            std::scoped_lock guard(mutex);
-            store.insert_or_assign(key, Stored{source, measured});
-        }
 
-        // enqueue without priority: the song box only needs the measurement to be started, so the stat
-        // calls and the lookup happen on the worker
-        void defer(const std::filesystem::path& path) {
-            if (path.empty()) {
-                return;
+#ifdef _WIN32
+            if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                throw std::runtime_error("Cannot replace loudness cache");
             }
-            {
-                std::scoped_lock guard(mutex);
-                checks.push_back(path);
-            }
-            wake.notify_one();
+#else
+            std::filesystem::rename(temporary, path);
+#endif
         }
 
         float request(const std::filesystem::path& path, bool priority) {
@@ -412,7 +300,6 @@ namespace song_loudness {
                 const auto key = path_key(path);
                 const auto source = fingerprint(path);
                 std::unique_lock guard(mutex);
-                store_ready.wait(guard, [this] { return store_loaded; });
                 auto [position, inserted] = entries.try_emplace(key, Entry{source, {}, false, false, {}});
                 auto& entry = position->second;
 
@@ -451,22 +338,14 @@ namespace song_loudness {
 #elif defined(__APPLE__)
             pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
 #endif
-            load_store();
             while (!stopping) {
                 std::string key;
                 Fingerprint source{};
                 {
                     std::unique_lock lock(mutex);
-                    wake.wait(lock, [this] { return stopping || !jobs.empty() || !checks.empty(); });
+                    wake.wait(lock, [this] { return stopping || !jobs.empty(); });
                     if (stopping) {
                         return;
-                    }
-                    if (!checks.empty()) { // quick, and they may queue measurements
-                        const std::filesystem::path path = std::move(checks.front());
-                        checks.pop_front();
-                        lock.unlock();
-                        request(path, false);
-                        continue;
                     }
                     key = jobs.front();
                     jobs.pop_front();
@@ -522,11 +401,7 @@ namespace song_loudness {
     Scanner::~Scanner() = default;
 
     void Scanner::enqueue(const std::filesystem::path& path, bool priority) {
-        if (priority) {
-            impl->request(path, true);
-        } else {
-            impl->defer(path);
-        }
+        impl->request(path, priority);
     }
 
     float Scanner::gain_for(const std::filesystem::path& path) {

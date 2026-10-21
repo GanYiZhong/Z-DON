@@ -114,7 +114,7 @@ namespace texture_pack {
                 }
                 queue.push_back(std::move(job));
                 if (!thread.joinable()) {
-                    thread = std::thread([this]() { run(); });
+                    thread = std::thread([this] { run(); });
                 }
                 cv.notify_one();
             }
@@ -142,7 +142,7 @@ namespace texture_pack {
                     Job job;
                     {
                         std::unique_lock<std::mutex> lock(mutex);
-                        cv.wait(lock, [this]() { return quit || !queue.empty(); });
+                        cv.wait(lock, [this] { return quit || !queue.empty(); });
                         if (quit) {
                             return;
                         }
@@ -410,7 +410,7 @@ namespace texture_pack {
         }
         hits = hit_list.size();
         if (!spans.empty()) {
-            reader = std::thread([this, background]() {
+            reader = std::thread([this, background] {
 #ifdef _WIN32
                 if (background) {
                     win32_background_mode_thread();
@@ -578,7 +578,7 @@ namespace texture_pack {
             return false;
         }
         Span& s = *e.span;
-        cv.wait(lock, [&]() { return s.failed || s.ready >= e.span_offset + e.size; });
+        cv.wait(lock, [&] { return s.failed || s.ready >= e.span_offset + e.size; });
         if (s.ready < e.span_offset + e.size) {
             e.state = 3;
             dirty = true;

@@ -35,7 +35,7 @@
 #endif
 
 #ifdef PLATFORM_ANDROID
-#include <SDL3/SDL_main.h>
+#include "libs/sdl_main_compat.h"
 #endif
 
 #include "objects/global/debug_menu.h"
@@ -51,6 +51,7 @@
 #include "scenes/input_cali.h"
 #include "scenes/input_test.h"
 #include "scenes/loading.h"
+#include "scenes/onboarding.h"
 #include "scenes/result.h"
 #include "scenes/result_2p.h"
 #include "scenes/retry_game.h"
@@ -80,11 +81,8 @@ static void draw_skin_update_status() {
     const float x = static_cast<float>(size);
     float y = static_cast<float>(size) * 2.0f;
 
-    std::string skin_line =
+    const std::string skin_line =
         st.current_skin.empty() ? "Checking for skin updates..." : "Updating skin: " + st.current_skin;
-    if (!st.current_skin.empty() && st.files_total > 0) {
-        skin_line += " (" + std::to_string(st.files_done) + " / " + std::to_string(st.files_total) + " files)";
-    }
     ray::Font skin_font = font_manager.get_font(skin_line, size);
     ray::DrawTextEx(skin_font, skin_line.c_str(), ray::Vector2{x, y}, static_cast<float>(size), 1.0f, ray::YELLOW);
 
@@ -226,7 +224,7 @@ Screens check_args(int argc, char* argv[]) {
             path = abs;
         }
     }
-    SongParser tja = [&]() -> SongParser {
+    SongParser tja = [&] -> SongParser {
         try {
             return SongParser(path);
         } catch (const std::exception& e) {
@@ -256,7 +254,7 @@ Screens check_args(int argc, char* argv[]) {
     }
 
     Screens current_screen = practice ? Screens::GAME_PRACTICE : Screens::GAME;
-    global_data.session_data[(int)PlayerNum::P1].selected_song = path;
+    global_data.session_data[(int)PlayerNum::P1].selected_song = std::move(path);
     global_data.session_data[(int)PlayerNum::P1].selected_difficulty = selected_difficulty;
     if (auto_play) {
         global_data.force_auto_play = true;
@@ -332,6 +330,7 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<GameOverScreen>(screens, except, Screens::GAME_OVER);
     put_screen<InputTestScreen>(screens, except, Screens::INPUT_TEST);
     put_screen<RetryGameScreen>(screens, except, Screens::RETRY_GAME);
+    put_screen<OnboardingScreen>(screens, except, Screens::ONBOARDING);
 }
 
 void drop_other_screens_for_skin_reload() {
@@ -571,7 +570,9 @@ static void run_frame() {
     }
 
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
-    debug_menu.update(L.camera);
+    if (!global_data.skinless) {
+        debug_menu.update(L.camera);
+    }
 
     ray::BeginDrawing();
 
@@ -701,7 +702,7 @@ static void run_frame() {
             L.screen_fade_start = 0.0;
         } else {
             const float a = static_cast<float>(1.0 - (t < 0.0 ? 0.0 : t));
-            ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::BLACK, a));
+            draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::BLACK, a));
         }
     }
 
@@ -729,14 +730,16 @@ static void run_frame() {
     seg_mark(SEG_SWITCH);
     draw_touch_drum();
 
-    if (global_data.config->general.fps_counter) {
-        L.fps_counter.update();
-        L.fps_counter.draw();
+    if (!global_data.skinless) {
+        if (global_data.config->general.fps_counter) {
+            L.fps_counter.update();
+            L.fps_counter.draw();
+        }
+
+        draw_skin_update_status();
+
+        debug_menu.draw();
     }
-
-    draw_skin_update_status();
-
-    debug_menu.draw();
 
     draw_outer_border(tex.screen_width, tex.screen_height, L.last_color);
 
@@ -946,8 +949,11 @@ int main(int argc, char* argv[]) {
 #endif
     spdlog::info("Starting YataiDON");
     set_working_directory_to_executable();
+    const bool had_config = std::filesystem::exists("config.toml");
     global_data.config = new Config(get_config());
-    // Save config after loading in case migration occurred (old fields -> new fields)
+    const bool gen3 = global_data.config->general.score_method == ScoreMethod::GEN3;
+    global_data.needs_onboarding = !had_config || !std::filesystem::exists(gen3 ? "scores_gen3.db" : "scores.db");
+
     save_config(*global_data.config);
     ensure_config_file(*global_data.config);
     parse_card_reader_args(argc, argv, global_data.config->card_reader);
@@ -989,7 +995,14 @@ int main(int argc, char* argv[]) {
     if (zdon_test_mode() && !(flags & ray::FLAG_WINDOW_HIDDEN)) {
         ray::MinimizeWindow();
     }
-    load_skin();
+    try {
+        load_skin();
+    } catch (const std::exception& e) {
+        spdlog::error("Starting without a skin: {}", e.what());
+        global_data.skinless = true;
+        global_data.needs_onboarding = true;
+        initial_screen = Screens::ONBOARDING;
+    }
     if (dump_chara_spec && *dump_chara_spec) {
         std::exit(
             dump_chara(dump_chara_spec)); // exit() like the label dump: the audio thread keeps a plain return alive

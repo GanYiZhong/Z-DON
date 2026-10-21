@@ -5,6 +5,7 @@
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 std::vector<std::string> OsuParser::read_file_lines(const fs::path& path) {
     std::vector<std::string> lines;
@@ -228,6 +229,8 @@ OsuParser::OsuParser(const fs::path& path) : file_path(path) {
     {
         // Look for video or background: "Video,offset,"filename"" or "0,0,"filename""
         static const std::regex bg_re(R"re(^\s*(?:Video|\d+),\d+,"([^"]+)")re");
+        static constexpr std::string_view video_extensions[] = {".mp4", ".avi", ".mkv", ".mov", ".flv"};
+        static constexpr std::string_view image_extensions[] = {".jpg", ".jpeg", ".png", ".bmp"};
         bool in_events = false;
         for (const auto& el : lines) {
             if (el == "[Events]") {
@@ -248,10 +251,12 @@ OsuParser::OsuParser(const fs::path& path) : file_path(path) {
                 fs::path candidate = path.parent_path() / m[1].str();
                 std::string ext = candidate.extension().string();
                 std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-                if (ext == ".mp4" || ext == ".avi" || ext == ".mkv" || ext == ".mov" || ext == ".flv") {
+                if (std::ranges::contains(video_extensions, ext)) {
                     metadata.bgmovie = candidate;
                     break;
-                } else if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
+                }
+
+                if (std::ranges::contains(image_extensions, ext)) {
                     metadata.preimage = candidate;
                     break;
                 }

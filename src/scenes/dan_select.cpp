@@ -109,7 +109,7 @@ std::optional<Screens> DanSelectScreen::tick_timer(double current_ms) {
             return std::nullopt;
         }
         timer_started = true;
-        select_timer = std::make_unique<Timer>(100, current_ms, [this]() { timer_fired = true; });
+        select_timer = std::make_unique<Timer>(100, current_ms, [this] { timer_fired = true; });
     }
     if (!select_timer) {
         return std::nullopt;
@@ -151,7 +151,7 @@ void DanSelectScreen::open_confirm(double current_ms) {
     if (select_timer) {
         const int left = select_timer->time();
         if (left >= 0 && left < 30) {
-            select_timer = std::make_unique<Timer>(30, current_ms, [this]() { timer_fired = true; });
+            select_timer = std::make_unique<Timer>(30, current_ms, [this] { timer_fired = true; });
         }
     }
 }

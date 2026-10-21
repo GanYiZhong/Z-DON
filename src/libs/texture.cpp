@@ -7,9 +7,11 @@
 #include <condition_variable>
 #include <cstring>
 #include <cwctype>
+#include <format>
 #include <map>
 #include <mutex>
 #include <spdlog/spdlog.h>
+#include <string_view>
 #include <thread>
 
 #include "filesystem.h"
@@ -84,7 +86,7 @@ namespace {
             }
             reordered.push_back(framed->textures[idx]);
         }
-        framed->textures = reordered;
+        framed->textures = std::move(reordered);
     }
 
     // Copies src (restarting it if src is running) into dst and returns the copy
@@ -190,15 +192,21 @@ void TextureWrapper::init(const fs::path& skin_path) {
         for (auto& m : cfg["chara_3d"].GetObject()) {
             std::string name = m.name.GetString();
             if (m.value.IsNumber()) {
-                float v = m.value.GetFloat();
-                if (name == "scale") {
-                    chara_3d_config.scale = v;
-                } else if (name == "rot_x") {
-                    chara_3d_config.rot_x = v;
-                } else if (name == "rot_y") {
-                    chara_3d_config.rot_y = v;
-                } else if (name == "rot_z") {
-                    chara_3d_config.rot_z = v;
+                struct CharaField {
+                    std::string_view name;
+                    float Chara3DConfig::* member;
+                };
+
+                static constexpr CharaField fields[] = {
+                    {"scale", &Chara3DConfig::scale},
+                    {"rot_x", &Chara3DConfig::rot_x},
+                    {"rot_y", &Chara3DConfig::rot_y},
+                    {"rot_z", &Chara3DConfig::rot_z},
+                };
+
+                const auto field = std::ranges::find(fields, name, &CharaField::name);
+                if (field != std::end(fields)) {
+                    chara_3d_config.*(field->member) = m.value.GetFloat();
                 }
             } else if (m.value.IsArray() && m.value.Size() >= 2 && m.value[0].IsNumber() && m.value[1].IsNumber()) {
                 chara_positions[name] = {m.value[0].GetFloat() * scale, m.value[1].GetFloat() * scale};
@@ -762,7 +770,7 @@ public:
         unsigned hw = std::thread::hardware_concurrency();
         size_t workers = std::min<size_t>(items.size(), std::clamp<unsigned>(hw ? hw - 1 : 3, 1, 16));
         for (size_t w = 0; w < workers; ++w) {
-            pool.emplace_back([this]() { work(); });
+            pool.emplace_back([this] { work(); });
         }
     }
 
@@ -791,7 +799,7 @@ public:
             return false;
         }
         Item& it = items[found->second];
-        cv.wait(lock, [&]() { return it.state != State::Decoding; });
+        cv.wait(lock, [&] { return it.state != State::Decoding; });
         if (it.state == State::Pending) {
             it.state = State::Taken;
             lock.unlock();
@@ -872,7 +880,7 @@ private:
     void work() {
         std::unique_lock<std::mutex> lock(mutex);
         while (true) {
-            cv.wait(lock, [&]() { return stop || held < budget; });
+            cv.wait(lock, [&] { return stop || held < budget; });
             while (next < items.size() && items[next].state != State::Pending) {
                 ++next;
             }
@@ -979,7 +987,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     continue;
                 }
 
-                std::string tex_id = subset_key + "/" + tex_name;
+                std::string tex_id = std::format("{}/{}", subset_key, tex_name);
 
                 std::string cache_key = (folder / tex_name).string();
                 if (stash_to) {
@@ -1160,6 +1168,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
     // the names already provided by the child or a closer ancestor.
     const fs::path own_dir = graphics_path / screen_name / subset;
     std::vector<fs::path> ancestor_dirs;
+    ancestor_dirs.reserve(ancestor_graphics_paths.size());
     for (const fs::path& a : ancestor_graphics_paths) {
         ancestor_dirs.push_back(a / screen_name / subset);
     }
@@ -1276,6 +1285,7 @@ void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<f
         }
     }
     std::vector<fs::path> rest;
+    rest.reserve(want.size());
     for (const auto& [path, texs] : want) {
         rest.push_back(path);
     }
@@ -1392,7 +1402,7 @@ namespace {
         spdlog::info("Lazy texture prefill for {}: {} images ({} MB) on {} background jobs", pf->owner,
                      pf->files.size(), pf->bytes >> 20, jobs_n);
         // the first job opens the pack (reading its index is file I/O), then starts the others
-        jobs::submit(jobs::Priority::Background, [pf]() {
+        jobs::submit(jobs::Priority::Background, [pf] {
             if (texture_pack::enabled() && !pf->taken.load(std::memory_order_acquire)) {
                 std::vector<texture_pack::Session::Planned> planned;
                 for (const texture_lazy::EvictedFile& f : pf->files) {
@@ -1410,7 +1420,7 @@ namespace {
                 }
             }
             for (unsigned j = 1; j < pf->jobs; ++j) {
-                jobs::submit(jobs::Priority::Background, [pf]() { prefill_work(pf); });
+                jobs::submit(jobs::Priority::Background, [pf] { prefill_work(pf); });
             }
             prefill_work(pf);
         });
@@ -1503,7 +1513,7 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
                 continue;
             }
             std::string name = entry.path.filename().string();
-            if (seen.insert(name).second && !loaded_subsets.contains(screen_name + "/" + name)) {
+            if (seen.insert(name).second && !loaded_subsets.contains(std::format("{}/{}", screen_name, name))) {
                 subsets.push_back(std::move(name));
             }
         }

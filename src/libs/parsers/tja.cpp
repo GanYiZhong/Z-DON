@@ -19,6 +19,7 @@
 #include "../fixed_step.h"
 #include "../md5.h"
 #include "../profiler.h"
+#include "../sdl_compat.h"
 #include "../text.h"
 
 #ifdef _WIN32
@@ -305,20 +306,19 @@ TJAParser::TJAParser(const std::filesystem::path& path, int start_delay, int pla
     }
 }
 
-// An empty value gives 0; so does one that does not parse (with a warning)
-static double float_field_or_zero(const std::string& data_str, const char* name, const std::string& file) {
-    if (data_str.empty()) {
-        return 0.0;
-    }
-    try {
-        return std::stof(data_str);
-    } catch (const std::exception&) {
-        spdlog::warn("Invalid {} value '{}' in {}", name, data_str, file);
-        return 0.0;
-    }
-}
-
 void TJAParser::get_metadata() {
+    struct NumericField {
+        std::string_view keyword;
+        double TJAMetadata::* member;
+    };
+
+    static constexpr NumericField numeric_fields[] = {
+        {"BPM", &TJAMetadata::bpm},
+        {"OFFSET", &TJAMetadata::offset},
+        {"DEMOSTART", &TJAMetadata::demostart},
+        {"MOVIEOFFSET", &TJAMetadata::movieoffset},
+    };
+
     int current_diff = -1;
     // A course can hold one chart per STYLE (Single / Double), each with its own BALLOON,
     // SCOREINIT and SCOREDIFF. A chart uses the values in effect at its #START, where a STYLE
@@ -374,17 +374,26 @@ void TJAParser::get_metadata() {
                 region_code = to_lower(item.substr(5, 2));
             }
             metadata.title[region_code] = split_after_colon(item);
-        } else if (item.starts_with("BPM")) {
-            metadata.bpm = float_field_or_zero(split_after_colon(item), "BPM", file_path.string());
+        } else if (const auto field = std::ranges::find_if(
+                       numeric_fields, [&](const NumericField& field) { return item.starts_with(field.keyword); });
+                   field != std::end(numeric_fields)) {
+            std::string data_str = split_after_colon(item);
+            auto& value = metadata.*(field->member);
+            if (data_str.empty()) {
+                value = 0.0f;
+            } else {
+                try {
+                    value = std::stof(data_str);
+                } catch (const std::exception&) {
+                    spdlog::warn("Invalid {} value '{}' in {}", field->keyword, data_str, file_path.string());
+                    value = 0.0f;
+                }
+            }
         } else if (item.starts_with("WAVE")) {
             std::string data_str = trim(split_after_colon(item));
 
             fs::path wave_path = get_proper_path(data_str, encoding, file_path.parent_path());
             metadata.wave = wave_path;
-        } else if (item.starts_with("OFFSET")) {
-            metadata.offset = float_field_or_zero(split_after_colon(item), "OFFSET", file_path.string());
-        } else if (item.starts_with("DEMOSTART")) {
-            metadata.demostart = float_field_or_zero(split_after_colon(item), "DEMOSTART", file_path.string());
         } else if (item.starts_with("BGMOVIE")) {
             std::string data_str = split_after_colon(item);
             if (data_str.empty()) {
@@ -393,8 +402,6 @@ void TJAParser::get_metadata() {
             } else {
                 metadata.bgmovie = get_proper_path(trim(data_str), encoding, file_path.parent_path());
             }
-        } else if (item.starts_with("MOVIEOFFSET")) {
-            metadata.movieoffset = float_field_or_zero(split_after_colon(item), "MOVIEOFFSET", file_path.string());
         } else if (item.starts_with("PREIMAGE")) {
             std::string data_str = split_after_colon(item);
             if (data_str.empty()) {
@@ -407,22 +414,20 @@ void TJAParser::get_metadata() {
         } else if (item.starts_with("COURSE")) {
             std::string course = to_lower(trim(split_after_colon(item)));
 
-            if (course == "6" || course == "dan") {
-                current_diff = 6;
-            } else if (course == "5" || course == "tower") {
-                current_diff = 5;
-            } else if (course == "4" || course == "edit" || course == "ura") {
-                current_diff = 4;
-            } else if (course == "3" || course == "oni") {
-                current_diff = 3;
-            } else if (course == "2" || course == "hard") {
-                current_diff = 2;
-            } else if (course == "1" || course == "normal") {
-                current_diff = 1;
-            } else if (course == "0" || course == "easy") {
-                current_diff = 0;
-            } else {
-                current_diff = -1;
+            struct CourseAlias {
+                std::string_view name;
+                int difficulty;
+            };
+
+            static constexpr CourseAlias course_aliases[] = {
+                {"0", 0}, {"easy", 0}, {"1", 1},   {"normal", 1}, {"2", 2},     {"hard", 2}, {"3", 3},   {"oni", 3},
+                {"4", 4}, {"edit", 4}, {"ura", 4}, {"5", 5},      {"tower", 5}, {"6", 6},    {"dan", 6},
+            };
+
+            const auto alias = std::ranges::find(course_aliases, course, &CourseAlias::name);
+            current_diff = alias != std::end(course_aliases) ? alias->difficulty : -1;
+
+            if (current_diff == -1) {
                 spdlog::warn("Unrecognized COURSE value '{}' in {}", course, file_path.string());
             }
 
@@ -432,39 +437,59 @@ void TJAParser::get_metadata() {
             }
         } else if (current_diff != -1) {
             CourseData& course = metadata.course_data[current_diff];
-            auto parse_balloons = [&](const char* name,
-                                      const std::string& balloon_data) -> std::optional<std::vector<int>> {
-                try {
-                    return parse_balloon_data(balloon_data);
-                } catch (const std::exception& e) {
-                    spdlog::warn("Invalid {} value '{}' in {}: {}", name, balloon_data, file_path.string(), e.what());
-                    return std::nullopt;
-                }
-            };
-
             if (item.starts_with("LEVEL")) {
-                course.level =
-                    static_cast<int>(float_field_or_zero(split_after_colon(item), "LEVEL", file_path.string()));
-            } else if (item.starts_with("STYLE")) {
-                take_chart_values(course, style_base.try_emplace(current_diff, course).first->second);
-            } else if (item.starts_with("BALLOONNOR") || item.starts_with("BALLOONEXP")) {
-                const bool nor = item.starts_with("BALLOONNOR");
-                std::string balloon_data = split_after_colon(item);
-                if (!balloon_data.empty()) {
-                    if (auto balloons = parse_balloons(nor ? "BALLOONNOR" : "BALLOONEXP", balloon_data)) {
-                        course.branch_balloon[nor ? 0 : 1] = std::move(*balloons);
+                std::string data_str = split_after_colon(item);
+                if (data_str.empty()) {
+                    metadata.course_data[current_diff].level = 0;
+                } else {
+                    try {
+                        metadata.course_data[current_diff].level = static_cast<int>(std::stof(data_str));
+                    } catch (const std::exception&) {
+                        spdlog::warn("Invalid LEVEL value '{}' in {}", data_str, file_path.string());
+                        metadata.course_data[current_diff].level = 0;
                     }
                 }
+            } else if (item.starts_with("STYLE")) {
+                take_chart_values(course, style_base.try_emplace(current_diff, course).first->second);
             } else if (item.starts_with("BALLOON")) {
-                const bool mas = item.starts_with("BALLOONMAS");
-                if (!mas && !item.contains(':')) {
-                    course.balloon.clear();
+                struct BalloonRule {
+                    std::string_view keyword;
+                    bool append;
+                    bool clear_without_colon;
+                };
+
+                static constexpr BalloonRule rules[] = {
+                    {.keyword = "BALLOONNOR", .append = true, .clear_without_colon = false},
+                    {.keyword = "BALLOONEXP", .append = true, .clear_without_colon = false},
+                    {.keyword = "BALLOONMAS", .append = false, .clear_without_colon = false},
+                    {.keyword = "BALLOON", .append = false, .clear_without_colon = true},
+                };
+
+                const auto rule = std::ranges::find_if(
+                    rules, [&](const BalloonRule& rule) { return item.starts_with(rule.keyword); });
+
+                auto& balloons = metadata.course_data[current_diff].balloon;
+                if (rule->clear_without_colon && !item.contains(':')) {
+                    balloons.clear();
                     continue;
                 }
+
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
-                    if (auto balloons = parse_balloons(mas ? "BALLOONMAS" : "BALLOON", balloon_data)) {
-                        (mas ? course.branch_balloon[2] : course.balloon) = std::move(*balloons);
+                    try {
+                        auto parsed = parse_balloon_data(balloon_data);
+                        // Z-DON: BALLOONNOR / EXP / MAS are also each branch's own list (add_note)
+                        if (rule->keyword != "BALLOON") {
+                            course.branch_balloon[rule - std::begin(rules)] = parsed;
+                        }
+                        if (rule->append) {
+                            balloons.insert(balloons.end(), parsed.begin(), parsed.end());
+                        } else {
+                            balloons = std::move(parsed);
+                        }
+                    } catch (const std::exception& e) {
+                        spdlog::warn("Invalid {} value '{}' in {}: {}", rule->keyword, balloon_data, file_path.string(),
+                                     e.what());
                     }
                 }
             } else if (item.starts_with("SCOREINIT")) {
@@ -1623,15 +1648,25 @@ Interval get_note_interval_type(double interval_ms, double bpm, double time_sig)
 
     if (std::abs(interval_ms - eighth_note) < tolerance) {
         return Interval::EIGHTH;
-    } else if (std::abs(interval_ms - sixteenth_note) < tolerance) {
+    }
+
+    if (std::abs(interval_ms - sixteenth_note) < tolerance) {
         return Interval::SIXTEENTH;
-    } else if (std::abs(interval_ms - twelfth_note) < tolerance) {
+    }
+
+    if (std::abs(interval_ms - twelfth_note) < tolerance) {
         return Interval::TWELFTH;
-    } else if (std::abs(interval_ms - twentyfourth_note) < tolerance) {
+    }
+
+    if (std::abs(interval_ms - twentyfourth_note) < tolerance) {
         return Interval::TWENTYFOURTH;
-    } else if (std::abs(interval_ms - thirtysecond_note) < tolerance) {
+    }
+
+    if (std::abs(interval_ms - thirtysecond_note) < tolerance) {
         return Interval::THIRTYSECOND;
-    } else if (std::abs(interval_ms - quarter_note) < tolerance) {
+    }
+
+    if (std::abs(interval_ms - quarter_note) < tolerance) {
         return Interval::QUARTER;
     }
     return Interval::UNKNOWN;

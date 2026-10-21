@@ -61,14 +61,16 @@ enum class Screens {
     INPUT_CALI,
     GAME_OVER,
     INPUT_TEST,
-    RETRY_GAME
+    RETRY_GAME,
+    ONBOARDING
 };
 
 inline std::string screens_to_string(Screens screen) {
-    static const std::array<std::string, 21> names = {
-        "TITLE",          "ENTRY",      "SONG_SELECT", "GAME",       "GAME_2P",         "RESULT",        "RESULT_2P",
-        "SONG_SELECT_2P", "DAN_SELECT", "GAME_DAN",    "DAN_RESULT", "PRACTICE_SELECT", "GAME_PRACTICE", "AI_SELECT",
-        "AI_GAME",        "SETTINGS",   "LOADING",     "INPUT_CALI", "GAME_OVER",       "INPUT_TEST",    "RETRY_GAME"};
+    static const std::array<std::string, 22> names = {
+        "TITLE",         "ENTRY",          "SONG_SELECT", "GAME",      "GAME_2P",    "RESULT",
+        "RESULT_2P",     "SONG_SELECT_2P", "DAN_SELECT",  "GAME_DAN",  "DAN_RESULT", "PRACTICE_SELECT",
+        "GAME_PRACTICE", "AI_SELECT",      "AI_GAME",     "SETTINGS",  "LOADING",    "INPUT_CALI",
+        "GAME_OVER",     "INPUT_TEST",     "RETRY_GAME",  "ONBOARDING"};
     int idx = static_cast<int>(screen);
     if (idx < 0 || static_cast<size_t>(idx) >= names.size()) {
         return "UNKNOWN";
@@ -86,9 +88,9 @@ struct fmt::formatter<Screens> : fmt::formatter<std::string> {
 class Screen {
 
 public:
-    bool screen_init;
+    bool screen_init{false};
     std::string screen_name;
-    Screen(const std::string& name) : screen_init(false), screen_name(name) {}
+    Screen(const std::string& name) : screen_name(name) {}
 
     virtual ~Screen() = default;
 

@@ -123,7 +123,7 @@ void LoadingScreen::load_song_hashes() {
         // every worker takes the next chart (a new song pack is a run of uncached charts: in fixed ranges
         // one worker parsed all of it); `ranges` below only orders the path bindings
         std::atomic<int> cursor{0};
-        auto worker = [&]() {
+        auto worker = [&] {
             for (int i; (i = cursor.fetch_add(1)) < (int)songs.size();) {
                 auto u8 = songs[i].u8string();
                 const std::string path(u8.begin(), u8.end());
@@ -242,6 +242,7 @@ void LoadingScreen::load_song_hashes() {
 #ifdef __EMSCRIPTEN__
         worker();
 #else
+        threads.reserve(ranges.size());
         for (size_t t = 0; t < ranges.size(); t++) {
             threads.emplace_back(worker);
         }
@@ -349,6 +350,9 @@ std::optional<Screens> LoadingScreen::update() {
 
     fade_in->update(get_current_ms());
     if (fade_in->is_finished) {
+        if (global_data.needs_onboarding) {
+            return on_screen_end(Screens::ONBOARDING);
+        }
 #ifdef __EMSCRIPTEN__
         return on_screen_end(Screens::ENTRY);
 #else
@@ -360,15 +364,15 @@ std::optional<Screens> LoadingScreen::update() {
 }
 
 void LoadingScreen::draw() {
-    ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::BLACK);
+    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::BLACK);
 
-    ray::DrawRectangleRec(progress_bar, ray::Color(101, 0, 0, 255));
+    draw_rectangle(progress_bar, ray::Color(101, 0, 0, 255));
 
     float clamped_progress = std::max(0.0f, std::min(1.0f, progress.load()));
     ray::Rectangle fill = progress_bar;
     fill.width *= clamped_progress;
     if (fill.width > 0) {
-        ray::DrawRectangleRec(fill, ray::RED);
+        draw_rectangle(fill, ray::RED);
     }
     tex.draw_texture(t_warning);
 
@@ -384,7 +388,7 @@ void LoadingScreen::draw() {
         }
     }
 
-    ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::WHITE, fade_in->attribute));
+    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::WHITE, fade_in->attribute));
     if (allnet_indicator) {
         allnet_indicator->draw();
     }

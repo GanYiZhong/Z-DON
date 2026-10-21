@@ -1,9 +1,11 @@
 #pragma once
-#include <SDL3/SDL.h>
 #include <cassert>
 #include <optional>
 
-#include "ray.h" // IWYU pragma: keep
+// clang-format off
+#include "sdl_compat.h" // before ray.h: raylib.h must not be the first to pull in <stdarg.h>
+#include "ray.h"       // IWYU pragma: keep
+// clang-format on
 
 class WebCamera {
 public:

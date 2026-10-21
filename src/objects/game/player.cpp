@@ -14,11 +14,9 @@
 
 Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
                bool is_2p_param, const Modifiers& modifiers_param)
-    : is_2p(is_2p_param), is_dan(false), player_num(player_num_param), difficulty(difficulty_param),
+    : is_2p(is_2p_param), player_num(player_num_param), difficulty(difficulty_param),
       visual_offset(global_data.config->general.visual_offset), score_method(global_data.config->general.score_method),
-      modifiers(modifiers_param), parser(parser_ref), good_count(0), ok_count(0), bad_count(0), combo(0), score(0),
-      max_combo(0), total_drumroll(0), judge_x(0), judge_y(0), is_gogo_time(false), autoplay_hit_side(Side::LEFT),
-      last_subdivision(-1), combo_display(combo, 0), score_counter(is_2p, player_num) {
+      modifiers(modifiers_param), parser(parser_ref), combo_display(combo, 0), score_counter(is_2p, player_num) {
     init_player_textures();
     reset_chart();
     don_hitsound = "hitsound_don_" + std::to_string((int)player_num) + "p";
@@ -94,7 +92,7 @@ void Player::init_player_textures() {
     // fall back to the three coarse tiers when the skin does not ship them.
     // modifiers/score_method are fixed for this Player's lifetime, so the whole
     // badge set is resolved once here instead of every frame from draw_modifiers().
-    auto speed_badge = [&]() -> std::optional<TextureObject*> {
+    auto speed_badge = [&] -> std::optional<TextureObject*> {
         if (modifiers.speed <= 10) {
             return std::nullopt;
         }
@@ -1323,7 +1321,7 @@ void Player::draw_note_manager(double current_ms) {
             });
 
             if (tail_it != draw_note_list.end()) {
-                auto tail_note = *tail_it;
+                const auto& tail_note = *tail_it;
 
                 pos = std::ranges::lower_bound(draw_note_buffer, tail_note,
                                                [](const auto& a, const auto& b) { return a.index < b.index; });
@@ -1548,7 +1546,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
     if (is_drumroll && !other_notes.empty()) {
         check_drumroll(current_ms, drum_type, background);
         return;
-    } else if (is_balloon && !other_notes.empty()) {
+    }
+
+    if (is_balloon && !other_notes.empty()) {
         curr_note = other_notes.front();
         if (curr_note.type == NoteType::BALLOON_HEAD) {
             check_balloon(current_ms, drum_type, curr_note, background);
@@ -2004,7 +2004,7 @@ void Player::draw_song_timer(double current_ms, float y) {
     float progress = end_time > 0 ? (float)(current_ms / end_time) : 0.0f;
     const SkinInfo& cfg = *tex.get_skin_config(SC::GAME_SONG_TIMER);
     float width = cfg.width * std::max(std::min(progress, 1.0f), 0.0f);
-    ray::DrawRectangle(cfg.x, y + cfg.y, width, cfg.height, ray::Color(0, 255, 158, 255));
+    draw_rectangle(cfg.x, y + cfg.y, width, cfg.height, ray::Color(0, 255, 158, 255));
     tex.draw_texture(t_timer, {.y = y});
 }
 

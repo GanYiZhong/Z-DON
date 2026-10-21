@@ -7,7 +7,7 @@ Z-DON 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支，**完全�
 
 - 位置：`D:\GitHubRepos\Z-DON`，分支 `main`，起點為上游 master `0f313b0`（2026-10-18）。
 - `origin` = Yonokid/YataiDON，**只 fetch，永遠不 push**；定期 `git fetch origin && git merge origin/master`。
-- 目前同步到上游 master `5e1b04d`（2026-10-19；前一次 `bde4201`）。`bde4201` 合併時的重點：含 f2e1174「PlaybackClock＋歌曲生命週期」重構（`clock.position()` 取代 `ms_from_start`，`unload_song()`/`stop_song_audio()`），以及 `.clang-tidy` 新增的 modernize/readability 檢查。
+- 目前同步到上游 master `ef867fb`（2026-10-22；前一次 `5e1b04d`、再前 `bde4201`）。`ef867fb` 合併時響度、skin 更新器、TJA 衝突照使用者決定用上游版（見 roadmap「合併上游 ef867fb」）；`.clang-tidy` 又多了 default-member-init／nullptr／override／else-after-return／redundant-lambda-parameter-list／performance-* 檢查。`bde4201` 合併時的重點：含 f2e1174「PlaybackClock＋歌曲生命週期」重構（`clock.position()` 取代 `ms_from_start`，`unload_song()`/`stop_song_audio()`），以及 `.clang-tidy` 新增的 modernize/readability 檢查。
   合併時 Z-DON 自己的程式也要套上同樣的轉換：`pip install clang-tidy==23.1.3`，用 build 的 `compile_commands.json`（只留 `src/*.cpp`）跑那幾個檢查、`-extra-arg=--target=x86_64-w64-mingw32`；modernize-use-ranges 的自動修正在這環境會留下 `,,`，要手動清。上游自己沒改到的 Windows 專用行（CI 只跑 Linux）保持上游原樣。
 - `yataidon-local` = `D:/GitHubRepos/YataiDON`（wip-all 等本機分支），要搬舊修正時從這裡 cherry-pick。
 - 目前只放本機，沒有 GitHub remote；要建 repo 先問使用者。

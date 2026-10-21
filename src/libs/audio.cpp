@@ -236,21 +236,6 @@ AudioEngine::AudioEngine() {
 }
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
-struct RtApiEntry {
-    RtAudio::Api api;
-    const char* label;
-};
-
-// RtAudio backend for a config device_type (1-8), or null for the SDL3/PortAudio types.
-static const RtApiEntry* rt_api_for_type(int device_type) {
-    static const RtApiEntry kApis[] = {
-        {RtAudio::LINUX_ALSA, "ALSA"},       {RtAudio::LINUX_PULSE, "PulseAudio"}, {RtAudio::UNIX_JACK, "JACK"},
-        {RtAudio::LINUX_OSS, "OSS"},         {RtAudio::MACOSX_CORE, "CoreAudio"},  {RtAudio::WINDOWS_DS, "DirectSound"},
-        {RtAudio::WINDOWS_WASAPI, "WASAPI"}, {RtAudio::WINDOWS_ASIO, "ASIO"},
-    };
-    return device_type >= 1 && device_type <= 8 ? &kApis[device_type - 1] : nullptr;
-}
-
 static void rtaudio_error_log(RtAudioErrorType type, const std::string& errorText) {
     if (type == RTAUDIO_WARNING) {
         spdlog::warn("RtAudio: {}", errorText);
@@ -260,13 +245,33 @@ static void rtaudio_error_log(RtAudioErrorType type, const std::string& errorTex
 }
 #endif
 
+#if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
+struct RtAudioBackend {
+    int device_type;
+    RtAudio::Api api;
+    const char* name;
+};
+
+static const RtAudioBackend* find_rtaudio_backend(int device_type) {
+    static constexpr RtAudioBackend backends[] = {
+        {1, RtAudio::LINUX_ALSA, "ALSA"},       {2, RtAudio::LINUX_PULSE, "PulseAudio"},
+        {3, RtAudio::UNIX_JACK, "JACK"},        {4, RtAudio::LINUX_OSS, "OSS"},
+        {5, RtAudio::MACOSX_CORE, "CoreAudio"}, {6, RtAudio::WINDOWS_DS, "DirectSound"},
+        {7, RtAudio::WINDOWS_WASAPI, "WASAPI"}, {8, RtAudio::WINDOWS_ASIO, "ASIO"},
+    };
+
+    const auto backend = std::ranges::find(backends, device_type, &RtAudioBackend::device_type);
+    return backend != std::end(backends) ? backend : nullptr;
+}
+#endif
+
 std::vector<std::string> enumerate_audio_devices(int device_type) {
     std::vector<std::string> names;
 
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
-    if (const RtApiEntry* entry = rt_api_for_type(device_type)) {
+    if (const auto* backend = find_rtaudio_backend(device_type)) {
         try {
-            RtAudio rt(entry->api, rtaudio_error_log);
+            RtAudio rt(backend->api, rtaudio_error_log);
             for (unsigned int id : rt.getDeviceIds()) {
                 RtAudio::DeviceInfo info = rt.getDeviceInfo(id);
                 if (info.outputChannels > 0 && !info.name.empty()) {
@@ -446,10 +451,10 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
                 if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
                     frame_f = 0.0;
                     continue;
-                } else {
-                    still_playing = false;
-                    break;
                 }
+
+                still_playing = false;
+                break;
             }
 
             unsigned long dst_index = output_index * 2;
@@ -747,7 +752,7 @@ bool AudioEngine::init_sdl3_device() {
     spec.channels = 2;
     spec.freq = static_cast<int>(target_sample_rate);
 
-    auto quit_sdl_audio_subsystem = [this]() {
+    auto quit_sdl_audio_subsystem = [this] {
         if (sdl_audio_subsystem_initialized) {
             SDL_QuitSubSystem(SDL_INIT_AUDIO);
             sdl_audio_subsystem_initialized = false;
@@ -799,7 +804,7 @@ bool AudioEngine::init_sdl3_device() {
     SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(sdl_stream), &actual_spec, &actual_frames);
 
     spdlog::info("Audio Device initialized successfully");
-    spdlog::info("    > Backend:       SDL3 | {}", SDL_GetCurrentAudioDriver());
+    spdlog::info("    > Backend:       SDL | {}", SDL_GetCurrentAudioDriver());
     spdlog::info("    > Format:        Float32");
     spdlog::info("    > Channels:      {} (requested 2)", actual_spec.channels);
     spdlog::info("    > Sample rate:   {} Hz (requested {} Hz)", actual_spec.freq, (int)target_sample_rate);
@@ -832,8 +837,8 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
         bool ok = false;
         bool chosen = false;
 #if !defined(__ANDROID__) && !defined(YATAIDON_PLATFORM_IOS) && !defined(__EMSCRIPTEN__)
-        if (const RtApiEntry* entry = rt_api_for_type(audio_config.device_type)) {
-            ok = init_rtaudio_device(entry->api, entry->label);
+        if (const auto* backend = find_rtaudio_backend(audio_config.device_type)) {
+            ok = init_rtaudio_device(backend->api, backend->name);
             chosen = true;
         }
 #endif
@@ -1372,7 +1377,7 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
     }
     store_sound(name, snd);
 
-    std::thread([dec, job, finish, path = file_path.string()]() {
+    std::thread([dec, job, finish, path = file_path.string()] {
         const sf_count_t chunk = 1 << 15; // ~0.7 s at 44.1 kHz
         // writes only past frames_ready, which nothing else reads; an unload while this runs
         // leaves the buffer to this thread (SoundDecodeJob::orphaned)
@@ -1514,7 +1519,7 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
                           snd.channels);
             return name;
 #else
-            spdlog::error("Failed to open sound file: {} - {}", file_path.string(), sf_strerror(NULL));
+            spdlog::error("Failed to open sound file: {} - {}", file_path.string(), sf_strerror(nullptr));
             return "";
 #endif
         }
@@ -1729,27 +1734,28 @@ void AudioEngine::unload_all_sounds() {
     spdlog::info("All sounds unloaded");
 }
 
-static float preset_volume(const VolumeConfig& presets, VolumePreset preset) {
-    switch (preset) {
-    case VolumePreset::SOUND:
-        return presets.sound;
-    case VolumePreset::MUSIC:
-        return presets.music;
-    case VolumePreset::VOICE:
-        return presets.voice;
-    case VolumePreset::HITSOUND:
-        return presets.hitsound;
-    case VolumePreset::ATTRACT_MODE:
-        return presets.attract_mode;
-    default:
-        return 1.0f;
-    }
+static float get_preset_volume(const VolumeConfig& volumes, VolumePreset preset) {
+    struct PresetVolume {
+        VolumePreset preset;
+        float VolumeConfig::* member;
+    };
+
+    static constexpr PresetVolume presets[] = {
+        {VolumePreset::SOUND, &VolumeConfig::sound},
+        {VolumePreset::MUSIC, &VolumeConfig::music},
+        {VolumePreset::VOICE, &VolumeConfig::voice},
+        {VolumePreset::HITSOUND, &VolumeConfig::hitsound},
+        {VolumePreset::ATTRACT_MODE, &VolumeConfig::attract_mode},
+    };
+
+    const auto match = std::ranges::find(presets, preset, &PresetVolume::preset);
+    return match != std::end(presets) ? volumes.*(match->member) : 1.0f;
 }
 
 void AudioEngine::set_volume_presets(const VolumeConfig& presets) {
     volume_presets = presets;
     for (int c = 1; c <= (int)VolumePreset::ATTRACT_MODE; c++) {
-        category_volume[c].store(preset_volume(presets, (VolumePreset)c), std::memory_order_relaxed);
+        category_volume[c].store(get_preset_volume(presets, (VolumePreset)c), std::memory_order_relaxed);
     }
 }
 
@@ -2042,7 +2048,7 @@ void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> 
         }
         decoder_cv.notify_one();
     }
-    retire([old_list, replaced]() mutable {
+    retire([old_list, replaced] mutable {
         delete old_list;
         replaced.reset();
     });
@@ -2071,7 +2077,7 @@ void AudioEngine::unload_music_stream(const std::string& name) {
         std::erase(decoder_streams, old);
     }
     // the decoder may still be inside a read of it: it holds its own reference until done
-    retire([old_list, old]() mutable {
+    retire([old_list, old] mutable {
         delete old_list;
         old.reset();
     });
@@ -2134,7 +2140,7 @@ bool AudioEngine::decode_into_ring(music& mus, double target_rate) {
         return false;
     }
 
-    auto end_of_stream = [&mus]() {
+    auto end_of_stream = [&mus] {
         mus.decoder_eof = true;
         mus.eof.store(true, std::memory_order_release);
         return false;
@@ -2323,7 +2329,7 @@ std::string AudioEngine::load_music_stream(const fs::path& file_path, const std:
                           ff_ch);
             return name;
 #else
-            spdlog::error("Failed to open music file: {} - {}", file_path.string(), sf_strerror(NULL));
+            spdlog::error("Failed to open music file: {} - {}", file_path.string(), sf_strerror(nullptr));
             return "";
 #endif
         }

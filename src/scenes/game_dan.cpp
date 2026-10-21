@@ -369,7 +369,7 @@ void DanGameScreen::check_exam_failures(bool course_finished, bool song_finished
             continue;
         }
 
-        const auto mark_failed = [&]() {
+        const auto mark_failed = [&] {
             exam_failed[i] = true;
             if (!exam.gothrough && i < (int)exam_song_failed.size() && song_index < 3) {
                 exam_song_failed[i][song_index] = true;

@@ -29,7 +29,7 @@ protected:
 public:
     virtual ~BaseOptionBox() = default;
 
-    bool is_highlighted;
+    bool is_highlighted{false};
 
     BaseOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
@@ -62,7 +62,7 @@ class IntOptionBox : public BaseOptionBox {
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
     std::vector<std::pair<int, std::string>> value_list;
-    int value_index;
+    int value_index{0};
 
     void rebuild_text();
 
@@ -83,7 +83,7 @@ class StrOptionBox : public BaseOptionBox {
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
     std::vector<std::pair<std::string, std::string>> value_list;
-    int value_index;
+    int value_index{0};
 
     void rebuild_text();
 
@@ -166,7 +166,7 @@ public:
 private:
     int value;
     Screens calibrate_screen;
-    bool offset_highlighted; // true = on offset button, false = on calibrate button
+    bool offset_highlighted{true}; // true = on offset button, false = on calibrate button
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<OutlinedText> calibrate_text;
     std::unique_ptr<FadeAnimation> flicker_fade;

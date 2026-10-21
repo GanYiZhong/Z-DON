@@ -176,7 +176,7 @@ namespace readahead {
                 }
             }
             std::atomic<size_t> next{0};
-            auto read_files = [&]() {
+            auto read_files = [&] {
                 for (size_t i; (i = next.fetch_add(1)) < files.size();) {
                     if (!warm(files[i], gen)) {
                         return;
@@ -188,7 +188,7 @@ namespace readahead {
             std::vector<std::thread> pool;
             pool.reserve(helpers);
             for (size_t k = 0; k < helpers; ++k) {
-                pool.emplace_back([&]() {
+                pool.emplace_back([&] {
 #ifdef _WIN32
                     win32_background_mode_thread();
 #endif

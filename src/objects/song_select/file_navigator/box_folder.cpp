@@ -227,7 +227,7 @@ void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_
     }
 }
 
-FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def) : BaseBox(path, box_def), tja_count(0) {
+FolderBox::FolderBox(const fs::path& path, const BoxDef& box_def) : BaseBox(path, box_def) {
     this->text_name = box_def.name;
     enter_fade = std::make_unique<FadeAnimation>(166);
     refresh_scores();

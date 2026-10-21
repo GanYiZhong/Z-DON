@@ -7,7 +7,7 @@ namespace ray {
 } // namespace ray
 
 #if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
-#include <SDL3/SDL.h>
+#include "sdl_compat.h"
 #endif
 #include <string>
 
@@ -29,6 +29,13 @@ inline std::string repath_shader(const char* p) {
     return s;
 }
 #endif
+inline void draw_rectangle(int x, int y, int w, int h, ray::Color color) {
+    ray::DrawRectangle(x, y, w, h, color);
+}
+
+inline void draw_rectangle(ray::Rectangle rec, ray::Color color) {
+    ray::DrawRectangleRec(rec, color);
+}
 
 inline ray::Shader load_shader(const char* vs_path, const char* fs_path) {
 #if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)

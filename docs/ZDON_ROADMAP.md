@@ -1,6 +1,6 @@
 # Z-DON roadmap
 
-狀態：2026-10-22。上游同步到 `5e1b04d`。所有項目都用確定性證據驗證（見「驗證工具」），數字是當時這台機器量的。
+狀態：2026-10-22。上游同步到 `ef867fb`。所有項目都用確定性證據驗證（見「驗證工具」），數字是當時這台機器量的。
 
 ## 已完成
 
@@ -20,7 +20,7 @@
 | 每畫面貼圖打包快取 `cache/texpack/`、zlib-ng PNG 解碼 | `YATAIDON_TEXPACK=0`、`_TEXPACK_MB`、`_TEXPACK_VERIFY=1`、`YATAIDON_FASTPNG=0` | 冷硬碟選曲貼圖 755 → 417 ms；解碼 1.75× |
 | 3D 角色零件跨畫面重用 | — | 每個 Don 約 30 → 7 ms |
 | 選定歌曲就預讀歌曲資料夾、背景影片在背景開 | — | — |
-| 響度快取合成單一檔案、段位曲音符數存進 scores.db | — | — |
+| 段位曲音符數存進 scores.db | — | — |
 
 ### 執行時
 | 項目 | 開關 | 結果 |
@@ -54,7 +54,6 @@
 | 項目 | 開關 | 結果 |
 |---|---|---|
 | 一般演奏（單人 GameScreen、2P）的暫停選單：Esc（back_key）或空白鍵（pause_key）打開；歌曲時鐘、音樂、背景影片、音符都停住（Lua 背景、Player 都不 update）。左右框（或方向鍵）移動「繼續演奏／從頭演奏／選其他歌曲」，咚（或 Enter）確定，再按 Esc／空白鍵＝繼續。繼續前倒數 3-2-1（1.8 s），倒數中按 Esc／空白鍵再暫停；暫停與倒數期間按的鍵在恢復時全部丟掉（clear_input_buffers），所以不會有免費判定；F1 照舊重來。外觀沿用 skin 練習選單的 practice/menu_panel、menu_button(_selected) 貼圖（沒有就引擎畫純色面板），文字先找 skin 的 pause_menu_*，再找練習選單的 practice_menu_restart / practice_menu_another_song，最後內建 en/ja/zh/ko；不改任何 skin。只在開場轉場結束後、歌曲結束前、沒跳過時可暫停，其他時候 Esc 照舊直接離開。視窗失焦也會打開（測試模式不會，只在「有焦點 → 失焦」那一刻）。段位（game_dan）維持原樣（考試規則下暫停有疑慮）；練習模式、輸入校正不受影響。歌曲結束時 log 一行最終判定數 | `config.toml` `[general] pause_menu = true`（預設）；`false` = Esc 直接離開、2P 空白鍵照舊單純暫停 | dense 譜 auto：暫停兩次（4.80 s、2.80 s）時鐘停在 17761.8 / 32969.0 ms 原值恢復；結果 good 999 ok 0 bad 0 drumroll 64，與沒暫停的三次（drumroll 63/64/64、其中一次 ok 1，auto 本身就會差一下）相同。混音輸出錄音：暫停期間除了選單音效全靜音，恢復後與沒暫停的錄音對齊，延遲差＝暫停時間 +11 ms、+7 ms（相關係數 0.57–0.85）。手動（非 auto）暫停＋倒數期間按 15 下咚：good 0 ok 0 bad 999，與沒按相同；恢復後按的照常判定。重來、選其他歌曲、`pause_menu = false` 都驗過。確定性套件 121/121 相同 |
-| skin 更新器：保留本機修改（三方規則）。記住每個檔案上次安裝/確認時的清單雜湊（base）與裝進去的內容雜湊，存在 `cache/skin_hashes/<skin>.base`（`.txt` 雜湊快取維持上游格式）。本機和清單不同時：上游沒改（清單＝base）→ 保留本機檔、每次 log 一行、不算更新（不觸發重載）；上游改了 → 更新，本機若被改過先複製到 `<skin>/.zdon-local-backup/<路徑>.<時間>`（複製失敗就不覆蓋）；還沒有 base（第一次用新版）→ 照舊覆蓋，只有「雜湊快取記錄後又被改過（或從沒記錄）」的檔案才先備份。清單移除的檔案：除了原本的「記錄後沒動過」規則，已記錄的本機修改也不刪。缺檔一律下載。**另外**：下載改寫暫存檔再 rename（`<skin>/.skin-update-tmp/`，每個 skin 開始與結束時清空）、8 個同時下載＋各 skin 並行檢查（背景優先權工作執行緒、每個 worker 每個 host 一個 cpr::Session、串流寫檔邊下載邊算雜湊，記憶體不隨檔案大小增加）、狀態列顯示「Updating skin: <name> (k / n files)」 | `ZDON_SKIN_UPDATE_KEEP_LOCAL=0` 回到直接覆蓋；`ZDON_SKIN_UPDATE_THREADS=<n>`（1–16，預設 8）；`ZDON_SKIN_UPDATE_ONLY=<skin>[,<skin>…]` 只更新指定 skin（測試用，不連真伺服器） | 假 Gitea 伺服器（每檔延遲 300 ms 模擬台灣到 ESE）：50 檔更新 1 個執行緒 15.26 s → 8 個 2.28 s；兩個 skin 各 25 檔 15.26 s → 2.19 s；兩個 skin 共用 1 條 TCP 連線（1 個執行緒時）。沒有變更：0 更新、不重載、清單回 304。本機修改保留/上游也改時備份/移除只刪未改的/遊戲下載中被強制結束目標檔都還是舊版完整檔、下次清掉暫存/LFS 指標走 /media//截斷的清單不刪任何檔，全部通過。確定性套件與改動前的 6f319bb 121/121 相同 |
 
 ### 修掉的 bug（多半上游也有）
 - 打開「歌曲資料夾還有子資料夾」的類別會當機（scan_song_tree 懸空參考）。
@@ -63,7 +62,6 @@
 - 練習模式結束遊戲必當（PracticeTimer 在 Lua 關閉後才釋放）。
 - `TimelineObject::end_time`、`Player::last_drumroll_color_time` 未初始化。
 - 自動演奏/回放打段位也會記錄段位成績並升級名牌。
-- skin 更新器每次開機都下載整份清單（Green 約 1.15 MB）並重寫雜湊快取。
 
 ### 開發工具
 - `YATAIDON_TEST=1`：音量 1%、最小化（隱藏視窗時不最小化）、忽略真實輸入、不寫歌單。
@@ -73,15 +71,6 @@
 - `ZDON_FRAME_SPIKE_MS=<ms>`：每個超過門檻的幀記一行（update/draw 拆開），present（EndDrawing＋swap）超過門檻也另記；不需要開 FRAME_STATS。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 
-## 2026-10-22 skin 更新器四項：量測備註
-- 先前量到（真 ESE、沒有更新）：3 個 skin 依序約 2.7＋1.8＋0.9 ≈ 5.4 s。這次沒有對真伺服器量（不動使用者的 skin）；並行後三個 skin 的清單請求同時送出，預期接近最慢那個。
-- 假伺服器測試架在 scratchpad `upd/`（fake_gitea.py、harness.py）：只用 `Skins/ZDONUpdaterTest(2)`＋`ZDON_SKIN_UPDATE_ONLY`，跑完刪掉；config.toml md5 前後相同、使用者 skin 的雜湊快取沒變。
-- 強制結束測試：6 個 1 MB 檔以 100 KB/s 傳送，3 s 後 taskkill /F：6 個目標檔都是舊版完整內容，暫存資料夾留 6 個約 370 KB 的 .tmp；下一次啟動清掉暫存並更新完。
-- cpr `Session::Download(WriteCallback)` 會把 callback 留在 session 上，之後的 `Get()` 也會走它（懸空參考），所以同一個 session 的所有請求都走 `fetch()`，每次設新的 callback。
-- `std::filesystem::rename` 在 MinGW GCC 16.2 會取代既有檔（實測）；目標檔被開著（沒有 FILE_SHARE_DELETE）時失敗 → 保留舊檔、下次再試。
-- 上游 30da305（onboarding，2026-10-19）也改了 skin_updater.cpp（每個 skin 16 個下載執行緒、先 /media/ 再 /raw/、`download()`），Z-DON 還沒合併；下次合併上游會在這個檔案衝突，以 Z-DON 版為主、補上 `download()`/`in_progress()`/`failed`。
-- 上游 PR（只有原子寫入＋連線重用＋k / n 進度）：https://github.com/Yonokid/YataiDON/pull/330（Z-DON 不從這裡開 PR，走 YataiDON worktree `YataiDON_upd`）。
-
 ## 2026-10-21 vblank 限幀改成不撕裂（ZDON_PACING_TEARFREE）
 - 使用者回報：三種視窗模式都看到一條橫線切過音符。原因：驅動直接翻頁（independent flip／NVIDIA GL 走 DXGI）時，vsync 關的每次 swap 都會撕裂，撕裂線落在 swap 當下的掃描行；用 ZDON_PACING_LOG 換算，舊版限幀的 swap 集中在畫面高度 10–70%（音符軌道）。原設計假設 DWM 合成（只顯示每次刷新最新的一幀），不成立。
 - 改法（預設開，`ZDON_PACING_TEARFREE=0` 回舊行為）：限幀啟用時打開驅動 vsync；每次刷新只有要顯示的那一幀 swap，額外的（輸入）幀照跑輸入/update/判定/繪圖但不 swap；work 量到 swap 之前為止（vsync 等待不算 work，不然 lead 會一直長）。
@@ -90,12 +79,20 @@
 ## wip-all（YataiDON 本機分支）稽核，2026-10-19
 - wip-all HEAD 對它最後合併的上游 479816a 只剩 24 個檔案的差異（+1227/−72），逐項對照 Z-DON；另外 172 個本機 commit 全部分類。
 - 低吻合（<70%）的 123 個：84 個已在上游或 Z-DON（形式不同）、25 個在 wip-all 內被撤回/取代、11 個是撤回的 skin 文字標籤、**skin 用得到但 Z-DON 缺的 = 0**。
-- 補搬 dbc9e69：skin 更新器在 checksums 清單過期時照樣寫入完整下載（8ac153d，用假伺服器驗證）。不搬：YATAIDON_SYNC_LOG（開發用）。
+- 補搬過 dbc9e69（skin 更新器在 checksums 清單過期時照樣寫入完整下載，8ac153d）；合併上游 ef867fb 時改用上游的 skin 更新器，這項跟著拿掉（上游版遇到下載內容和清單不符時保留本機檔）。不搬：YATAIDON_SYNC_LOG（開發用）。
 - 完整分類表在 scratchpad arch/impl_wip_port.md。
 
 ## 合併上游 bde4201 後的已知畫面差異（都是上游自己的改動）
 - 練習模式：f2e1174 起會播前奏（以前第一幀就跳過約 1 s 前奏）。純上游 f2e1174 前/後與 Z-DON 合併前/後各自 19/19 相同。
 - 練習模式按空白鍵不會暫停（上游就沒有 pause_key 處理，只有 2P 咚/咔），未改。
+
+## 合併上游 ef867fb（#277 響度、onboarding＋skin 更新器、#329 資料表重構、clang-tidy #325、SDL2 相容、#323/#324）
+- 使用者決定三個衝突區都用上游版：
+  - 響度：用上游 #277 的 `loudness.*`（每首歌一個 `cache/loudness/*.loudness` 檔）；Z-DON 的單一 store 檔（462741a）拿掉，舊的 `cache/loudness/loudness_store.txt` 不再讀寫（留在磁碟上，上游格式的每首檔一直都在）。API 一樣，mixer／漸進解碼／常駐音效照舊乘 `normalization_gain`。
+  - skin 更新器：用上游 30da305 之後的 `skin_updater.*`（`download()`／`in_progress()`／`failed`、每個 skin 16 個下載執行緒）。Z-DON 的三方規則保留本機修改、`.zdon-local-backup`、暫存檔＋rename、8 執行緒並行、k / n 進度、`ZDON_SKIN_UPDATE_KEEP_LOCAL`／`_THREADS`／`_ONLY`、ETag 清單快取（`cache/skin_hashes/*.manifest`、`*.base` 不再使用）、過期清單照寫（8ac153d）全部拿掉。上游 PR #330 不在這裡加回。
+  - TJA：上游的數值欄位表（BPM/OFFSET/DEMOSTART/MOVIEOFFSET）、COURSE 別名表、BALLOON 規則表照收，LEVEL 用上游寫法；Z-DON 的 `float_field_or_zero` 拿掉。保留：整個名稱比對指令、譜面中間的標頭行、P1/P2 各自的 #END、STYLE 各段的 BALLOON/SCOREINIT/SCOREDIFF、OpenTaiko 字母、指令表／無 regex。每個分歧自己的 BALLOONNOR/EXP/MAS 接在上游的規則表後面（同一份解析結果也存一份到該分歧）；沒有自己清單的分歧改用上游語意的 `balloon`（NOR/EXP 接在後面、MAS 取代），以前是只看 BALLOON。全曲庫 3043 首（P0/P1/P2）音符與每顆氣球次數和合併前 Z-DON 相同，只有 3 首的 course `balloon` 欄位變了；合成譜 pr_c（BALLOON＋NOR＋MAS、沒有 EXP）的 EXP 分歧氣球 22 → 8（＝純上游）。
+- 其他衝突照 Z-DON 版、上游的新寫法跟著套（`find_rtaudio_backend`、`get_preset_volume`、`draw_rectangle`、`yd_key_scancode`、Lua 矩形不再重複縮放 a5de3b3、default member init）。新的 clang-tidy 檢查（default-member-init、nullptr、override、else-after-return、redundant-lambda-parameter-list、performance-*）套到 Z-DON 自己的程式；navigator.cpp 的 `const Work item = work[i]` 是故意複製（scan_dir 會 append），加 NOLINT。
+- 確定性套件 121/121 與合併前（upd1022）相同；AUDIO_SELFTEST 輸出 wav 和合併前逐位元組相同。
 
 ## 合併上游 5e1b04d（方向鍵全畫面、replay 時間戳改 RapidJSON、行動版 TLS）
 - 確定性套件 121/121 與合併前相同。

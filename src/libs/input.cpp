@@ -35,7 +35,7 @@
 #include "../platform/platform_ios.h"
 #endif
 
-#include <SDL3/SDL.h>
+#include "sdl_compat.h"
 std::atomic<bool> input_thread_running{true};
 std::thread input_thread;
 
@@ -165,9 +165,11 @@ static bool drum_pressed(const std::vector<int>& k1, const std::vector<int>& p1,
                          const std::vector<int>& p2, int touch_vkey, PlayerNum player_num, float* strength) {
     if (player_num == PlayerNum::P1) {
         return is_input_key_pressed(k1, p1, strength) || check_key_pressed(touch_vkey, strength);
-    } else if (player_num == PlayerNum::P2) {
+    }
+    if (player_num == PlayerNum::P2) {
         return is_input_key_pressed(k2, p2, strength);
-    } else if (player_num != PlayerNum::ALL) {
+    }
+    if (player_num != PlayerNum::ALL) {
         return false;
     }
     std::vector<int> keys = k1;
@@ -260,7 +262,7 @@ static bool handle_linux_text_input(SDL_Event* event) {
         return false;
     }
 
-    const bool* key_state = SDL_GetKeyboardState(nullptr);
+    const auto* key_state = SDL_GetKeyboardState(nullptr);
     std::scoped_lock lock(input_mutex);
     for (const char* p = event->text.text; *p; p++) {
         unsigned char c = (unsigned char)*p;
@@ -280,7 +282,7 @@ static bool handle_linux_text_input(SDL_Event* event) {
 }
 #endif
 
-static bool SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event* event) {
+static YD_EventFilterRet SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event* event) {
     if (is_input_locked()) {
         return 1;
     }
@@ -291,12 +293,12 @@ static bool SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event* event) {
     }
 #endif
 
-    if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_AC_BACK) {
+    if (event->type == SDL_EVENT_KEY_DOWN && yd_key_scancode(*event) == SDL_SCANCODE_AC_BACK) {
         std::scoped_lock lock(input_mutex);
         pressed_keys.emplace(ray::KEY_ESCAPE, 1.0f);
         return 0;
     }
-    if (event->type == SDL_EVENT_KEY_UP && event->key.scancode == SDL_SCANCODE_AC_BACK) {
+    if (event->type == SDL_EVENT_KEY_UP && yd_key_scancode(*event) == SDL_SCANCODE_AC_BACK) {
         return 0;
     }
 
@@ -307,7 +309,7 @@ static bool SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event* event) {
         if (!touch_drum_enabled.load(std::memory_order_relaxed)) {
             return 1;
         }
-        SDL_FingerID id = event->tfinger.fingerID;
+        SDL_FingerID id = yd_finger_id(*event);
         std::scoped_lock lock(input_mutex);
         if (!touch_id_to_vkey.contains(id)) {
             int sw = ray::GetScreenWidth();
@@ -323,7 +325,7 @@ static bool SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event* event) {
             pressed_keys.emplace(vkey, 1.0f);
         }
     } else if (event->type == SDL_EVENT_FINGER_UP || event->type == SDL_EVENT_FINGER_CANCELED) {
-        SDL_FingerID id = event->tfinger.fingerID;
+        SDL_FingerID id = yd_finger_id(*event);
         std::scoped_lock lock(input_mutex);
         auto it = touch_id_to_vkey.find(id);
         if (it != touch_id_to_vkey.end()) {

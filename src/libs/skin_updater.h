@@ -5,23 +5,31 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
-#include <utility>
+#include <vector>
 
 class SkinUpdater {
 public:
     struct Status {
-        bool running = false;     // a pass is currently in progress
-        bool finished = false;    // a pass has completed (true even when disabled)
-        bool any_updated = false; // the current pass identified >= 1 file to update
-        std::string current_skin; // skin being processed ("" between skins)
-        std::string current_file; // file being downloaded ("" while scanning)
-        int files_updated = 0;    // running total of files written this pass
-        int files_done = 0;       // files of current_skin downloaded (or failed) so far
-        int files_total = 0;      // files of current_skin to download; 0 while scanning
+        bool running = false;            // a pass is currently in progress
+        bool finished = false;           // a pass has completed (true even when disabled)
+        bool any_updated = false;        // the current pass identified >= 1 file to update
+        std::string current_skin;        // skin being processed ("" between skins)
+        std::string current_file;        // file being downloaded ("" while scanning)
+        int files_updated = 0;           // running total of files written this pass
+        std::vector<std::string> failed; // skins the last download() could not fully fetch
     };
 
+    struct Request {
+        std::string name;
+        std::string url;
+        std::string branch = "main";
+    };
+
+    void download(std::vector<Request> requests);
+
     void start();
+
+    bool in_progress();
 
     bool finished();
 
@@ -35,11 +43,10 @@ public:
 
 private:
     void scan_skins();
-    friend class SkinUpdatePass; // the pass's tasks report through the members below
+    bool update_one_skin(const std::filesystem::path& skin_dir, const std::string& repo_url, const std::string& branch);
     void set_current_skin(const std::string& name);
-    void set_current_file(const std::string& skin, const std::string& file);
+    void set_current_file(const std::string& file);
     void note_file_updated();
-    void set_progress(const std::string& skin, int done, int total);
 
     std::atomic<bool> started_{false};
     std::atomic<bool> running_{false};
@@ -49,7 +56,7 @@ private:
     std::string current_skin_;
     std::string current_file_;
     int files_updated_ = 0;
-    std::unordered_map<std::string, std::pair<int, int>> progress_; // skin -> files done, to download
+    std::vector<std::string> failed_;
 
     std::thread thread_;
 };

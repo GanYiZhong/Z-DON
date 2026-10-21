@@ -845,10 +845,10 @@ OutlinedText::OutlinedText(std::string text, int font_size, ray::Color color, ra
     }
 #else
     auto build = is_vertical ? &OutlinedText::build_vertical_text : &OutlinedText::build_horizontal_text;
-    build_future = jobs::submit(jobs::Priority::Normal, [this, build, color, outline_color, spacing]() {
+    build_future = jobs::submit(jobs::Priority::Normal, [this, build, color, outline_color, spacing] {
         auto data = (this->*build)(color, outline_color, spacing);
         std::scoped_lock lock(pending_mutex);
-        pending_image = std::move(data.img);
+        pending_image = data.img;
     });
     fixed_step::wait(build_future);
 #endif
@@ -1065,7 +1065,7 @@ bool OutlinedText::upload_pending() {
         if (!pending_image.has_value()) {
             return false;
         }
-        img = std::move(pending_image);
+        img = pending_image;
         pending_image.reset();
     }
 

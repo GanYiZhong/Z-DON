@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <map>
 #include <random>
 #include <rapidjson/document.h>
@@ -23,11 +24,12 @@
 #include "sha256.h"
 
 #if defined(NETWORK_ENABLED) && defined(__ANDROID__)
-#include <SDL3/SDL.h>
 #include <fstream>
 #include <jni.h>
 #include <sstream>
 #include <vector>
+
+#include "sdl_compat.h"
 #endif
 
 #ifdef GetObject
@@ -141,7 +143,7 @@ namespace {
 
         std::string canonical = method + "\n" + path + "\n";
         for (const auto& [k, v] : params) {
-            canonical += k + "=" + v + "&";
+            canonical += std::format("{}={}&", k, v);
         }
         canonical += "\n" + timestamp + "\n" + nonce;
 
@@ -621,7 +623,7 @@ std::optional<int> NetworkClient::take_replay_jump_result() {
     if (!replay_jump_result.has_value()) {
         return std::nullopt;
     }
-    std::optional<int> result = std::move(replay_jump_result);
+    std::optional<int> result = replay_jump_result;
     replay_jump_result.reset();
     return result;
 }

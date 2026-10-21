@@ -1,6 +1,5 @@
 #include "texture_retain.h"
 
-#include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <condition_variable>
 #include <cstdint>
@@ -12,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "sdl_compat.h"
 #include "texture.h"
 
 #ifdef _WIN32
@@ -195,7 +195,7 @@ namespace texture_retain {
                     }
                     if (!started) {
                         started = true;
-                        std::thread([this]() { run(); }).detach();
+                        std::thread([this] { run(); }).detach();
                     }
                     queue.emplace_back(data, bytes);
                     pending_bytes += bytes;
@@ -211,7 +211,7 @@ namespace texture_retain {
 #endif
                 std::unique_lock<std::mutex> lock(mutex);
                 while (true) {
-                    cv.wait(lock, [this]() { return !queue.empty(); });
+                    cv.wait(lock, [this] { return !queue.empty(); });
                     auto [data, bytes] = queue.front();
                     queue.pop_front();
                     lock.unlock();

@@ -388,8 +388,8 @@ std::optional<DanBoxData> DanNavigator::load_dan_box_data(const fs::path& json_p
     d.rank = rank;
     d.dan_index = dan_index;
     d.songs = songs;
-    d.song_titles = song_titles;
-    d.exams = exams;
+    d.song_titles = std::move(song_titles);
+    d.exams = std::move(exams);
     d.total_notes = total_notes_for(songs);
     d.gaiden = doc.HasMember("gaiden") && doc["gaiden"].IsBool() && doc["gaiden"].GetBool();
     return d;
@@ -681,7 +681,7 @@ void DanNavigator::begin_init(const std::vector<fs::path>& song_paths) {
         scan_result.clear();
     }
 
-    scan_thread = std::thread([this, song_paths]() {
+    scan_thread = std::thread([this, song_paths] {
         std::vector<DanBoxData> data;
         try {
             data = scan_all_data(song_paths);

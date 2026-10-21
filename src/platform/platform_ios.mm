@@ -1,28 +1,28 @@
 #include "platform_ios.h"
-#import <Foundation/Foundation.h>
+
 #import <AVFoundation/AVFoundation.h>
-#import <UIKit/UIKit.h>
+#import <Foundation/Foundation.h>
 #import <SDL3/SDL.h>
-#include <spdlog/spdlog.h>
+#import <UIKit/UIKit.h>
 #include <chrono>
 #include <filesystem>
 #include <mutex>
+#include <spdlog/spdlog.h>
 #include <stdexcept>
 
-#include "../libs/input.h"
 #include "../libs/global_data.h"
+#include "../libs/input.h"
 
 namespace {
-std::mutex clock_mutex;
-bool suspended = false;
-double paused_at = 0;
-double paused_duration = 0;
-void (*g_ios_frame_callback)() = nullptr;
+    std::mutex clock_mutex;
+    bool suspended = false;
+    double paused_at = 0;
+    double paused_duration = 0;
+    void (*g_ios_frame_callback)() = nullptr;
 
-double monotonic_ms() {
-    return std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
+    double monotonic_ms() {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
 } // namespace
 
 double ios_game_time_ms() {
@@ -32,9 +32,14 @@ double ios_game_time_ms() {
 
 void ios_set_suspended(bool value) {
     std::lock_guard<std::mutex> lock(clock_mutex);
-    if (value == suspended) return;
-    if (value) paused_at = monotonic_ms();
-    else paused_duration += monotonic_ms() - paused_at;
+    if (value == suspended) {
+        return;
+    }
+    if (value) {
+        paused_at = monotonic_ms();
+    } else {
+        paused_duration += monotonic_ms() - paused_at;
+    }
     suspended = value;
 }
 
@@ -55,9 +60,11 @@ void ios_request_audio_buffer() {
 void ios_prepare_filesystem() {
     namespace fs = std::filesystem;
     @autoreleasepool {
-        NSURL* documents = [[[NSFileManager defaultManager]
-            URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
-        if (!documents) throw std::runtime_error("Cannot locate iOS Documents directory");
+        NSURL* documents = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory
+                                                                   inDomains:NSUserDomainMask] firstObject];
+        if (!documents) {
+            throw std::runtime_error("Cannot locate iOS Documents directory");
+        }
         fs::path destination(documents.fileSystemRepresentation);
         fs::path resources([NSBundle mainBundle].resourcePath.fileSystemRepresentation);
         resources /= "GameData";
@@ -81,8 +88,9 @@ void ios_prepare_filesystem() {
                     // Shaders ship with the executable and must match its version.
                     bool shader = *relative.begin() == "shader";
                     if (shader || !fs::exists(target, ec)) {
-                        fs::copy_file(entry.path(), target, shader ? fs::copy_options::overwrite_existing
-                                                                  : fs::copy_options::skip_existing, ec);
+                        fs::copy_file(entry.path(), target,
+                                      shader ? fs::copy_options::overwrite_existing : fs::copy_options::skip_existing,
+                                      ec);
                         if (ec) {
                             spdlog::warn("iOS: failed to copy {}: {}", entry.path().string(), ec.message());
                             ec.clear();
@@ -107,35 +115,38 @@ void ios_configure_window_flags(unsigned int& flags) {
 
 void ios_initialize_after_window() {
     ios_request_audio_buffer();
-    
+
     // Register lifecycle event handler
-    SDL_AddEventWatch([](void* userdata, SDL_Event* event) -> bool {
-        if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
-            ios_on_background();
-        } else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
-            ios_on_foreground();
-        }
-        return true;
-    }, nullptr);
+    SDL_AddEventWatch(
+        [](void* userdata, SDL_Event* event) -> bool {
+            if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+                ios_on_background();
+            } else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+                ios_on_foreground();
+            }
+            return true;
+        },
+        nullptr);
 }
 
 int ios_run_main_loop(void (*run_frame)()) {
     poll_touch_once();
     g_ios_frame_callback = run_frame;
-    
+
     int window_count = 0;
     SDL_Window** windows = SDL_GetWindows(&window_count);
     if (!windows || window_count == 0) {
         SDL_free(windows);
         return 1;
     }
-    
-    bool registered = SDL_SetiOSAnimationCallback(windows[0], 1,
-        [](void*) { g_ios_frame_callback(); }, nullptr);
+
+    bool registered = SDL_SetiOSAnimationCallback(windows[0], 1, [](void*) { g_ios_frame_callback(); }, nullptr);
     SDL_free(windows);
-    
-    if (!registered) return 1;
-    
+
+    if (!registered) {
+        return 1;
+    }
+
     // UIKit owns the loop. No background input thread may outlive main().
     return 0;
 }
@@ -147,10 +158,12 @@ void ios_shutdown() {
 void ios_set_keyboard_visible(bool visible) {
     int count = 0;
     SDL_Window** windows = SDL_GetWindows(&count);
-    if (!windows || count == 0) return;
+    if (!windows || count == 0) {
+        return;
+    }
     SDL_Window* win = windows[0];
     SDL_free(windows);
-    
+
     if (visible) {
         SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
         SDL_StartTextInput(win);
@@ -165,9 +178,11 @@ void ios_draw_touch_navigation_labels(float screen_width, float screen_height) {
     const char* labels[] = {"Back", "Pause"};
     for (int i = 0; i < 2; ++i) {
         float x = screen_width * (0.36f + i * 0.15f);
-        ray::DrawRectangleRec({x, screen_height * 0.025f, screen_width * 0.13f, screen_height * 0.10f}, ray::Fade(ray::BLACK, 0.6f));
-        ray::DrawText(labels[i], static_cast<int>(x + (screen_width * 0.13f - ray::MeasureText(labels[i], font_size)) / 2),
-            static_cast<int>(screen_height * 0.075f - font_size / 2), font_size, ray::WHITE);
+        draw_rectangle({x, screen_height * 0.025f, screen_width * 0.13f, screen_height * 0.10f},
+                       ray::Fade(ray::BLACK, 0.6f));
+        ray::DrawText(labels[i],
+                      static_cast<int>(x + (screen_width * 0.13f - ray::MeasureText(labels[i], font_size)) / 2),
+                      static_cast<int>(screen_height * 0.075f - font_size / 2), font_size, ray::WHITE);
     }
 }
 
@@ -188,12 +203,17 @@ void ios_on_foreground() {
 }
 
 void ios_suspend_audio(bool suspended) {
-    // Implemented directly in platform layer
-    #import <SDL3/SDL.h>
-    extern SDL_AudioStream* g_ios_audio_stream;  // Defined in audio.cpp
-    if (!g_ios_audio_stream) return;
-    if (suspended) SDL_PauseAudioStreamDevice(g_ios_audio_stream);
-    else SDL_ResumeAudioStreamDevice(g_ios_audio_stream);
+// Implemented directly in platform layer
+#import <SDL3/SDL.h>
+    extern SDL_AudioStream* g_ios_audio_stream; // Defined in audio.cpp
+    if (!g_ios_audio_stream) {
+        return;
+    }
+    if (suspended) {
+        SDL_PauseAudioStreamDevice(g_ios_audio_stream);
+    } else {
+        SDL_ResumeAudioStreamDevice(g_ios_audio_stream);
+    }
 }
 
 int ios_handle_touch_navigation(int quadrant_vkey, float touch_x, float touch_y) {
@@ -201,10 +221,14 @@ int ios_handle_touch_navigation(int quadrant_vkey, float touch_x, float touch_y)
     bool navigation = touch_y >= 0.025f && touch_y <= 0.125f;
     if (navigation && touch_x >= 0.36f && touch_x <= 0.49f) {
         // Back button area
-        if (global_data.config) return global_data.config->keys.back_key;
+        if (global_data.config) {
+            return global_data.config->keys.back_key;
+        }
     } else if (navigation && touch_x >= 0.51f && touch_x <= 0.64f) {
         // Pause button area
-        if (global_data.config) return global_data.config->keys.pause_key;
+        if (global_data.config) {
+            return global_data.config->keys.pause_key;
+        }
     }
     return quadrant_vkey;
 }
