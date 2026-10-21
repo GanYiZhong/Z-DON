@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <unordered_map>
@@ -267,6 +268,8 @@ void SkinUpdater::set_current_skin(const std::string& name) {
     std::scoped_lock lock(status_mutex_);
     current_skin_ = name;
     current_file_.clear();
+    files_done_ = 0;
+    files_total_ = 0;
 }
 
 void SkinUpdater::set_current_file(const std::string& file) {
@@ -279,14 +282,17 @@ void SkinUpdater::note_file_updated() {
     ++files_updated_;
 }
 
-void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const std::string& repo_url,
-                                  const std::string& branch) {
+void SkinUpdater::set_progress(int done, int total) {
+    std::scoped_lock lock(status_mutex_);
+    files_done_ = done;
+    files_total_ = total;
+}
+
+void SkinUpdater::update_one_skin(cpr::Session& session, const std::filesystem::path& skin_dir,
+                                  const std::string& repo_url, const std::string& branch) {
     set_current_skin(skin_dir.filename().string());
     std::error_code tmp_ec;
     fs::remove_all(temp_dir(skin_dir), tmp_ec); // left by a pass that was cut short
-
-    cpr::Session session;
-    init_session(session);
 
     auto raw_url = [&](const std::string& rel_path) { return repo_url + "/raw/branch/" + branch + "/" + rel_path; };
 
@@ -320,7 +326,11 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
     std::unordered_set<std::string> listed;
     std::istringstream lines(manifest);
     std::string hash, rel_path;
-    int updated = 0;
+    struct Job {
+        std::string rel_path, hash;
+        fs::path local_file;
+    };
+    std::vector<Job> jobs; // the listed files that are missing or differ
     while (lines >> hash >> rel_path) {
         if (!rel_path.empty() && rel_path.front() == '*') {
             rel_path.erase(0, 1);
@@ -358,6 +368,17 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
 
         // File is missing or differs: this pass has at least one real update.
         any_updated_.store(true);
+        jobs.push_back({rel_path, hash, std::move(local_file)});
+    }
+
+    int updated = 0;
+    set_progress(0, static_cast<int>(jobs.size()));
+    for (size_t i = 0; i < jobs.size(); i++) {
+        const std::string& rel_path = jobs[i].rel_path;
+        const std::string& hash = jobs[i].hash;
+        const fs::path& local_file = jobs[i].local_file;
+        const std::string& key = rel_path;
+        set_progress(static_cast<int>(i), static_cast<int>(jobs.size()));
         set_current_file(rel_path);
         cpr::Response file_resp = get_url(session, raw_url(rel_path), 15000, 5000);
         if (!fetched(file_resp)) {
@@ -392,6 +413,8 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
                          rel_path);
             continue;
         }
+        uintmax_t size = 0;
+        int64_t mtime = 0;
         if (file_stamp(local_file, size, mtime)) {
             seen[key] = HashCacheEntry{got_hash, size, mtime};
         } else {
@@ -400,6 +423,8 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
         note_file_updated();
         ++updated;
     }
+    set_progress(static_cast<int>(jobs.size()), static_cast<int>(jobs.size()));
+    set_current_file({});
 
     int removed = 0;
     for (const auto& [rel, e] : cache) {
@@ -444,6 +469,7 @@ void SkinUpdater::scan_skins() {
     if (!fs::exists("Skins", ec)) {
         return;
     }
+    std::unique_ptr<cpr::Session> session;
     for (const auto& entry : fs::directory_iterator("Skins", ec)) {
         if (ec || !entry.is_directory()) {
             continue;
@@ -465,7 +491,13 @@ void SkinUpdater::scan_skins() {
             branch = "main";
         }
 
-        update_one_skin(entry.path(), strip_dot_git(repo_url), branch);
+        // one session for every skin: curl keeps the connection to each host open between requests,
+        // so the skins of one server share a TLS handshake instead of one per skin
+        if (!session) {
+            session = std::make_unique<cpr::Session>();
+            init_session(*session);
+        }
+        update_one_skin(*session, entry.path(), strip_dot_git(repo_url), branch);
     }
 }
 
@@ -488,6 +520,8 @@ void SkinUpdater::start() {
         std::scoped_lock lock(status_mutex_);
         current_skin_.clear();
         current_file_.clear();
+        files_done_ = 0;
+        files_total_ = 0;
     });
 }
 
@@ -512,6 +546,8 @@ SkinUpdater::Status SkinUpdater::snapshot() {
     s.current_skin = current_skin_;
     s.current_file = current_file_;
     s.files_updated = files_updated_;
+    s.files_done = files_done_;
+    s.files_total = files_total_;
     return s;
 }
 
