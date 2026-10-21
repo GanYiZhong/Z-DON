@@ -15,6 +15,13 @@
 // Only with vsync off and no target_fps; on by default. ZDON_VBLANK_PACING=0 turns it off,
 // =<n> allows at most n frames per refresh (unset or =auto: automatic).
 // ZDON_PACING_LOG=<file> writes a per-frame CSV (frame clock, wake, present end, vblank grid).
+//
+// Tear-free (default; ZDON_PACING_TEARFREE=0 = the old behavior): the design assumed DWM composes the
+// window, so only the newest frame at each refresh is seen. Drivers may instead flip the window
+// directly (independent flip; NVIDIA "layered on DXGI" GL) and then every swap without vsync tears,
+// at the scanline where it lands: measured mid-screen, through the note lane. So only the shown frame
+// of each refresh is presented, with the driver's vsync on; the extra frames still run input, update
+// and judging, and draw into the back buffer, but do not swap.
 
 #ifdef _WIN32
 namespace vblank_pacing {
@@ -26,6 +33,13 @@ namespace vblank_pacing {
     double frame_ms(double now_ms);
     // after present: sleeps until the next frame's grid time
     void wait_next();
+    // tear-free mode: whether the frame now running is the one shown at the coming refresh (true when
+    // pacing is off or tear-free is off: every frame is presented)
+    bool present_this_frame();
+    // tear-free mode turns the driver's vsync on after the window exists
+    bool wants_vsync();
+    // call right before the swap: the frame's work ends here (a vsync wait in the swap is not work)
+    void before_present();
 } // namespace vblank_pacing
 #else
 namespace vblank_pacing {
@@ -40,5 +54,12 @@ namespace vblank_pacing {
         return now_ms;
     }
     inline void wait_next() {}
+    inline bool present_this_frame() {
+        return true;
+    }
+    inline bool wants_vsync() {
+        return false;
+    }
+    inline void before_present() {}
 } // namespace vblank_pacing
 #endif

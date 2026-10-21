@@ -72,6 +72,11 @@
 - `ZDON_FRAME_SPIKE_MS=<ms>`：每個超過門檻的幀記一行（update/draw 拆開），present（EndDrawing＋swap）超過門檻也另記；不需要開 FRAME_STATS。
 - `tools/zdon_syntax_check.py`（單檔 -fsyntax-only）、`tools/build_pgo.sh`（PGO，量不到增益，預設不用）、預編譯標頭 `ZDON_PCH`。
 
+## 2026-10-21 vblank 限幀改成不撕裂（ZDON_PACING_TEARFREE）
+- 使用者回報：三種視窗模式都看到一條橫線切過音符。原因：驅動直接翻頁（independent flip／NVIDIA GL 走 DXGI）時，vsync 關的每次 swap 都會撕裂，撕裂線落在 swap 當下的掃描行；用 ZDON_PACING_LOG 換算，舊版限幀的 swap 集中在畫面高度 10–70%（音符軌道）。原設計假設 DWM 合成（只顯示每次刷新最新的一幀），不成立。
+- 改法（預設開，`ZDON_PACING_TEARFREE=0` 回舊行為）：限幀啟用時打開驅動 vsync；每次刷新只有要顯示的那一幀 swap，額外的（輸入）幀照跑輸入/update/判定/繪圖但不 swap；work 量到 swap 之前為止（vsync 等待不算 work，不然 lead 會一直長）。
+- 量測（dense auto、180 Hz、隱藏視窗、45 s）：幀步偏差 >1 ms 11.9% → 5.1%；錯過刷新 2 → 11 次；work p99 2.06 → 3.13 ms。確定性套件 121/121。實際是否還撕裂、順不順要使用者開視窗確認。
+
 ## wip-all（YataiDON 本機分支）稽核，2026-10-19
 - wip-all HEAD 對它最後合併的上游 479816a 只剩 24 個檔案的差異（+1227/−72），逐項對照 Z-DON；另外 172 個本機 commit 全部分類。
 - 低吻合（<70%）的 123 個：84 個已在上游或 Z-DON（形式不同）、25 個在 wip-all 內被撤回/取代、11 個是撤回的 skin 文字標籤、**skin 用得到但 Z-DON 缺的 = 0**。

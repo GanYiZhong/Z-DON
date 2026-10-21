@@ -752,7 +752,9 @@ static void run_frame() {
                                        // in static destructors with the worker threads still running)
         }
 
-        if (!next_screen.has_value()) {
+        // tear-free pacing: the extra (input) frames of a refresh are not presented
+        if (!next_screen.has_value() && vblank_pacing::present_this_frame()) {
+            vblank_pacing::before_present();
             ray::SwapScreenBuffer();
         }
         frame_spike_present(present_start);
@@ -1036,6 +1038,9 @@ int main(int argc, char* argv[]) {
                             : std::chrono::steady_clock::duration::zero();
 
     vblank_pacing::init(global_data.config->video.vsync, target_fps);
+    if (vblank_pacing::wants_vsync()) {
+        ray::SetWindowState(ray::FLAG_VSYNC_HINT); // the shown frame waits for the refresh: no tear line
+    }
     populate_screens(L.screens);
 
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);

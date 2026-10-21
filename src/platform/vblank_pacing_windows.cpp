@@ -51,6 +51,10 @@ namespace vblank_pacing {
             double shown_vblank_ms = 0.0; // the vblank whose shown frame was scheduled last
             double wake_ms = 0.0;
             double last_frame_ms = 0.0;
+            bool tear_free = true;     // ZDON_PACING_TEARFREE=0: present every frame, without vsync
+            bool next_shown = true;    // the frame wait_next scheduled is the refresh's shown frame
+            bool cur_shown = true;     // ... for the frame now running
+            double work_end_ms = -1.0; // before_present() of the frame now ending
             FILE* log = nullptr;
         } S;
 
@@ -101,14 +105,17 @@ namespace vblank_pacing {
                 for (int j = 0; j < extra; ++j) {
                     const double t = start + j * step;
                     if (t > now_ms && t + S.work_est <= shown) {
+                        S.next_shown = false;
                         return t;
                     }
                 }
                 if (shown > now_ms || now_ms + S.work_est < vblank) {
                     S.shown_vblank_ms = vblank;
+                    S.next_shown = true;
                     return shown > now_ms ? shown : -now_ms;
                 }
             }
+            S.next_shown = true;
             return -now_ms;
         }
 
@@ -179,8 +186,12 @@ namespace vblank_pacing {
             return;
         }
         S.active = true;
-        spdlog::info("vblank pacing: on, refresh {:.3f} ms, frames per refresh {}", S.period_ms,
-                     S.fixed_frames > 0 ? std::to_string(S.fixed_frames) : std::string("auto"));
+        const char* tf = std::getenv("ZDON_PACING_TEARFREE");
+        S.tear_free = !(tf && *tf == '0');
+        spdlog::info("vblank pacing: on, refresh {:.3f} ms, frames per refresh {}, {}", S.period_ms,
+                     S.fixed_frames > 0 ? std::to_string(S.fixed_frames) : std::string("auto"),
+                     S.tear_free ? "tear-free (only the shown frame is presented, with vsync)"
+                                 : "every frame presented without vsync (may tear)");
     }
 
     bool active() {
@@ -191,7 +202,22 @@ namespace vblank_pacing {
         return S.active ? S.period_ms : 0.0;
     }
 
+    bool present_this_frame() {
+        return !S.active || !S.tear_free || S.cur_shown;
+    }
+
+    bool wants_vsync() {
+        return S.active && S.tear_free;
+    }
+
+    void before_present() {
+        if (S.active) {
+            S.work_end_ms = get_current_ms();
+        }
+    }
+
     double frame_ms(double now_ms) {
+        S.cur_shown = S.next_shown;
         S.wake_ms = now_ms;
         double t = now_ms;
         if (S.active && S.scheduled_ms > 0.0 && now_ms >= S.scheduled_ms && now_ms - S.scheduled_ms < kOnTimeMs &&
@@ -216,7 +242,11 @@ namespace vblank_pacing {
         if (!S.active) {
             return;
         }
-        S.work.push_back(now - S.last_frame_ms);
+        // the work up to the swap: with vsync a shown frame's swap may wait for the refresh, which is not work
+        // (it would push the lead up to the whole period)
+        const double work_end = (S.work_end_ms > S.last_frame_ms && S.work_end_ms <= now) ? S.work_end_ms : now;
+        S.work_end_ms = -1.0;
+        S.work.push_back(work_end - S.last_frame_ms);
         update_lead();
         const double target = next_slot(now);
         if (target < 0.0) {
