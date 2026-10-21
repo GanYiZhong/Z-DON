@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <fstream>
 #include <functional>
@@ -135,6 +136,78 @@ namespace {
         if (ec) {
             fs::remove(tmp, ec);
         }
+    }
+
+    // Z-DON: the manifest hash each file had when it was last installed or found up to date (the
+    // "base"), and the hash of what was installed then. A file whose manifest hash still equals its
+    // base hasn't changed upstream; one whose local hash differs from what was installed was edited
+    // here. Kept in cache/skin_hashes/<skin>.base, one "<manifest hash> <installed hash> <path>" line
+    // per file; the .txt hash cache keeps its upstream format.
+    struct BaseEntry {
+        std::string manifest_hash;
+        std::string installed_hash;
+        bool operator==(const BaseEntry&) const = default;
+    };
+    using BaseMap = std::unordered_map<std::string, BaseEntry>;
+
+    fs::path base_path(const fs::path& skin_dir) {
+        return fs::path("cache") / "skin_hashes" / (skin_dir.filename().string() + ".base");
+    }
+
+    BaseMap load_bases(const fs::path& skin_dir) {
+        BaseMap bases;
+        std::ifstream in(base_path(skin_dir));
+        std::string line;
+        while (std::getline(in, line)) {
+            std::istringstream fields(line);
+            BaseEntry e;
+            if (!(fields >> e.manifest_hash >> e.installed_hash)) {
+                continue;
+            }
+            std::string rel;
+            std::getline(fields >> std::ws, rel);
+            if (!rel.empty()) {
+                bases[rel] = std::move(e);
+            }
+        }
+        return bases;
+    }
+
+    void save_bases(const fs::path& skin_dir, const BaseMap& bases) {
+        const fs::path file = base_path(skin_dir);
+        const fs::path tmp = fs::path(file).concat(".tmp");
+        std::error_code ec;
+        fs::create_directories(file.parent_path(), ec);
+        {
+            std::ofstream out(tmp, std::ios::trunc);
+            if (!out) {
+                return;
+            }
+            for (const auto& [rel, e] : bases) {
+                out << e.manifest_hash << ' ' << e.installed_hash << ' ' << rel << '\n';
+            }
+            if (!out) {
+                return;
+            }
+        }
+        fs::rename(tmp, file, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+        }
+    }
+
+    // "YYYYmmdd-HHMMSS", local time
+    std::string timestamp_now() {
+        const std::time_t t = std::time(nullptr);
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
+        return buf;
     }
 
     // The manifest as of its last download and its ETag: a pass asks for it only if it changed
@@ -293,6 +366,8 @@ namespace {
     // complete, so a pass cut short (the game killed, a full disk) leaves the old file, never a
     // half-written one. The folder is emptied at the start and end of each skin's pass.
     constexpr const char* kTempDirName = ".skin-update-tmp";
+    // Z-DON: a local edit replaced by an upstream change is copied here first, as <rel>.<timestamp>
+    constexpr const char* kBackupDirName = ".zdon-local-backup";
 
     fs::path temp_dir(const fs::path& skin_dir) {
         return skin_dir / kTempDirName;
@@ -300,7 +375,7 @@ namespace {
 
     // the updater's own folders, never a skin file even if a manifest listed one
     bool is_updater_path(const fs::path& rel) {
-        return !rel.empty() && *rel.begin() == kTempDirName;
+        return !rel.empty() && (*rel.begin() == kTempDirName || *rel.begin() == kBackupDirName);
     }
 
     // Renames the finished temp file over `target` (std::filesystem::rename replaces an existing file,
@@ -341,7 +416,9 @@ void SkinUpdater::set_progress(const std::string& skin, int done, int total) {
 // skin's last download does its removals and saves its hash cache.
 class SkinUpdatePass {
 public:
-    explicit SkinUpdatePass(SkinUpdater& updater) : u_(updater) {}
+    // keep_local: Z-DON's three-way rule (ZDON_SKIN_UPDATE_KEEP_LOCAL=0 turns it off)
+    SkinUpdatePass(SkinUpdater& updater, bool keep_local)
+        : u_(updater), keep_local_(keep_local), timestamp_(timestamp_now()) {}
 
     void add_skin(const fs::path& dir, const std::string& repo_url, const std::string& branch) {
         auto skin = std::make_shared<Skin>();
@@ -367,6 +444,7 @@ private:
     struct Job {
         std::string rel_path, hash; // rel_path: the manifest's own spelling (UTF-8), the cache key
         fs::path local_file;
+        bool backup = false; // copy the local file to the backup folder before replacing it
     };
     struct Skin {
         fs::path dir;
@@ -374,8 +452,10 @@ private:
         HashCache cache; // as loaded; read-only once the downloads start
         std::unordered_set<std::string> listed;
         std::vector<Job> jobs; // fixed once the downloads start
-        std::mutex mutex;      // guards seen, updated
+        std::mutex mutex;      // guards seen, bases_out, updated
         HashCache seen;        // this manifest's files: entries for files it no longer lists are dropped
+        BaseMap bases;         // as loaded
+        BaseMap bases_out;     // this manifest's files
         int updated = 0;
         std::atomic<int> done{0};   // downloads finished (written or failed)
         std::atomic<int> serial{0}; // temp file names
@@ -462,6 +542,7 @@ private:
         }
 
         skin->cache = load_hash_cache(skin_dir);
+        skin->bases = load_bases(skin_dir);
         const HashCache& cache = skin->cache;
         HashCache& seen = skin->seen; // no download runs yet: no lock needed
         std::istringstream lines(manifest);
@@ -484,11 +565,15 @@ private:
             skin->listed.insert(key);
             uintmax_t size = 0;
             int64_t mtime = 0;
+            bool backup = false;
+            const auto base = skin->bases.find(key);
             if (file_stamp(local_file, size, mtime)) {
                 // unchanged since its last check: the cached hash stands for the file
                 auto cached = cache.find(key);
                 std::string local_hash;
-                if (cached != cache.end() && cached->second.size == size && cached->second.mtime == mtime) {
+                const bool unchanged_since_check =
+                    cached != cache.end() && cached->second.size == size && cached->second.mtime == mtime;
+                if (unchanged_since_check) {
                     local_hash = cached->second.hash;
                 } else {
                     local_hash = sha256_file(local_file);
@@ -497,13 +582,36 @@ private:
                     seen[key] = HashCacheEntry{local_hash, size, mtime};
                 }
                 if (local_hash == hash) {
+                    skin->bases_out[key] = BaseEntry{hash, local_hash};
                     continue;
                 }
+                if (keep_local_ && !local_hash.empty()) {
+                    if (base != skin->bases.end() && base->second.manifest_hash == hash) {
+                        // upstream hasn't changed it since it was installed: what differs is local
+                        // (an edit; or, when it is still what was installed, a manifest that is
+                        // behind the repo): keep it, and don't count it as an update
+                        if (local_hash != base->second.installed_hash) {
+                            spdlog::info("Skin update ({}): keeping local edit of {} (unchanged upstream)", skin->name,
+                                         rel_path);
+                        }
+                        skin->bases_out[key] = base->second;
+                        continue;
+                    }
+                    // Upstream changed it (or no base is known yet): replace it, keeping a copy if it
+                    // was edited here. Without a base, "edited" = changed since the updater last
+                    // recorded it (or never recorded), so the first upstream update after this
+                    // version doesn't back up every untouched file.
+                    backup =
+                        base != skin->bases.end() ? local_hash != base->second.installed_hash : !unchanged_since_check;
+                }
+            }
+            if (base != skin->bases.end()) {
+                skin->bases_out[key] = base->second; // until the download replaces it
             }
 
             // File is missing or differs: this pass has at least one real update.
             u_.any_updated_.store(true);
-            skin->jobs.push_back({rel_path, hash, std::move(local_file)});
+            skin->jobs.push_back({rel_path, hash, std::move(local_file), backup});
         }
 
         if (skin->jobs.empty()) {
@@ -573,6 +681,10 @@ private:
                           rel_path);
         }
 
+        if (job.backup && !back_up(skin, job)) {
+            discard();
+            return;
+        }
         if (!replace_file(tmp, job.local_file)) {
             spdlog::warn("Skin update ({}): failed to write {}; keeping the old file", skin.name, rel_path);
             discard();
@@ -588,9 +700,33 @@ private:
             } else {
                 skin.seen.erase(rel_path);
             }
+            skin.bases_out[rel_path] = BaseEntry{job.hash, got.hash};
             ++skin.updated;
         }
         u_.note_file_updated();
+    }
+
+    // Copies the local file to <skin>/.zdon-local-backup/<rel>.<timestamp>; false (nothing replaced)
+    // if that fails
+    bool back_up(const Skin& skin, const Job& job) {
+        std::error_code ec;
+        if (!fs::exists(job.local_file, ec)) {
+            return true;
+        }
+        const fs::path rel = job.local_file.lexically_relative(skin.dir);
+        fs::path dest = skin.dir / kBackupDirName / fs::path(rel).concat("." + timestamp_);
+        for (int n = 2; fs::exists(dest, ec) && n < 100; n++) {
+            dest = skin.dir / kBackupDirName / fs::path(rel).concat("." + timestamp_ + "-" + std::to_string(n));
+        }
+        fs::create_directories(dest.parent_path(), ec);
+        if (!fs::copy_file(job.local_file, dest, ec) || ec) {
+            spdlog::warn("Skin update ({}): could not back up local edit of {} ({}); keeping it", skin.name,
+                         job.rel_path, ec.message());
+            return false;
+        }
+        spdlog::info("Skin update ({}): {} was edited locally and changed upstream; local copy saved to {}", skin.name,
+                     job.rel_path, dest.generic_string());
+        return true;
     }
 
     // after the skin's last download: removes the files the manifest dropped, saves the hash cache
@@ -609,6 +745,12 @@ private:
             uintmax_t size = 0;
             int64_t mtime = 0;
             if (!file_stamp(local_file, size, mtime) || size != e.size || mtime != e.mtime) {
+                continue;
+            }
+            // Z-DON: nor if what was recorded is a local edit (not what the updater installed)
+            if (const auto base = skin.bases.find(rel);
+                keep_local_ && base != skin.bases.end() && e.hash != base->second.installed_hash) {
+                spdlog::info("Skin update ({}): keeping local edit of {} (removed upstream)", skin.name, rel);
                 continue;
             }
             std::error_code ec;
@@ -631,13 +773,18 @@ private:
         if (skin.seen != skin.cache) {
             save_hash_cache(skin_dir, skin.seen);
         }
+        if (skin.bases_out != skin.bases) {
+            save_bases(skin_dir, skin.bases_out);
+        }
         std::error_code tmp_ec;
         fs::remove_all(temp_dir(skin_dir), tmp_ec);
         spdlog::info("Skin update ({}): {} file(s) updated, {} removed", skin.name, skin.updated, removed);
     }
 
     SkinUpdater& u_;
-    std::mutex mutex_; // guards queue_, pending_
+    const bool keep_local_;
+    const std::string timestamp_; // of the pass, for backup names
+    std::mutex mutex_;            // guards queue_, pending_
     std::condition_variable cv_;
     std::deque<Task> queue_;
     int pending_ = 0; // tasks queued or running
@@ -656,7 +803,11 @@ void SkinUpdater::scan_skins() {
         workers = std::clamp(std::atoi(n), 1, 16);
     }
 
-    SkinUpdatePass pass(*this);
+    // ZDON_SKIN_UPDATE_KEEP_LOCAL=0: overwrite local edits like upstream (no keep, no backups)
+    const char* keep = std::getenv("ZDON_SKIN_UPDATE_KEEP_LOCAL");
+    const bool keep_local = keep == nullptr || std::string_view(keep) != "0";
+
+    SkinUpdatePass pass(*this, keep_local);
     for (const auto& entry : fs::directory_iterator("Skins", ec)) {
         if (ec || !entry.is_directory()) {
             continue;
