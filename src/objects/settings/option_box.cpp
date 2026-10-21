@@ -5,6 +5,7 @@
 
 #include "../../libs/animation.h"
 #include "../../libs/audio.h"
+#include "../../libs/ime_ui.h"
 #include "../../libs/input.h"
 
 std::string getKeyString(int key_code);
@@ -267,6 +268,10 @@ void StrOptionBox::move_right() {
 
 void StrOptionBox::draw() {
     draw_base();
+    if (is_highlighted && value_list.empty()) {
+        ime_ui_set_field(
+            {(float)t_button_on->x[2], (float)t_button_on->y[2], (float)t_button_on->x2[2], (float)t_button_on->y2[2]});
+    }
 
     draw_value_box(*value_text, *flicker_fade);
 }

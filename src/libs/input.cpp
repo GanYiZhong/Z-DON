@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "animation.h"
+#include "ime_ui.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
 #include "test_mode.h"
@@ -867,6 +868,7 @@ void sync_text_input() {
                 SDL_StopTextInput(windows[0]);
             }
             text_input_active = text_input_wanted;
+            ime_ui_text_input_changed(text_input_active);
         }
         SDL_free(windows);
     }
@@ -890,6 +892,7 @@ TextEditAction poll_text_edit(std::string& text, const std::function<bool(int)>&
         }
         while (ray::GetCharPressed() > 0) {
         } // the 'v' itself is not typed
+        ime_ui_take_commit_tail();
         return TextEditAction::None;
     }
 
@@ -922,6 +925,17 @@ TextEditAction poll_text_edit(std::string& text, const std::function<bool(int)>&
             text.append(utf8, n);
         }
         key = ray::GetCharPressed();
+    }
+    const std::string tail = ime_ui_take_commit_tail();
+    for (size_t i = 0; i < tail.size();) {
+        int n = 0;
+        const int cp = ray::GetCodepointNext(tail.c_str() + i, &n);
+        i += n > 0 ? n : 1;
+        if (cp >= 0x20 && (!accept || accept(cp))) {
+            int m = 0;
+            const char* utf8 = ray::CodepointToUTF8(cp, &m);
+            text.append(utf8, m);
+        }
     }
     return action;
 }

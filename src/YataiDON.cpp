@@ -10,6 +10,7 @@
 #include "libs/filesystem.h"
 #include "libs/fixed_step.h"
 #include "libs/global_data.h"
+#include "libs/ime_ui.h"
 #include "libs/input.h"
 #include "libs/logging.h"
 #include "libs/network.h"
@@ -668,6 +669,7 @@ static void run_frame() {
                 pos = comma + 1;
             }
         }
+        ime_ui_dev_tick(since);
         for (auto it = fake_keys.begin(); it != fake_keys.end();) {
             if (since >= it->first) {
                 spdlog::info("[devkeys] key {} at {:.0f}", it->second, since);
@@ -740,6 +742,7 @@ static void run_frame() {
 
         debug_menu.draw();
     }
+    ime_ui_draw(L.camera);
 
     draw_outer_border(tex.screen_width, tex.screen_height, L.last_color);
 
@@ -988,7 +991,9 @@ int main(int argc, char* argv[]) {
         LoadingScreen::start_library_walk_early();
     }
 
+    ime_ui_set_hint();
     ray::InitWindow(1280, 720, "YataiDON");
+    ime_ui_install();
     // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way.
     // Not when the window is hidden (YATAIDON_DUMP_SCREEN): minimizing a hidden window stalled the
     // main loop for over a minute.
