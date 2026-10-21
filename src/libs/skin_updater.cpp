@@ -217,6 +217,50 @@ namespace {
         return body.starts_with(kLfsMarker);
     }
 
+    // Downloads are written to a file in <skin>/.skin-update-tmp and moved over the target only once
+    // complete, so a pass cut short (the game killed, a full disk) leaves the old file, never a
+    // half-written one. The folder is emptied at the start and end of each pass.
+    constexpr const char* kTempDirName = ".skin-update-tmp";
+
+    fs::path temp_dir(const fs::path& skin_dir) {
+        return skin_dir / kTempDirName;
+    }
+
+    // the updater's own folders, never a skin file even if a manifest listed one
+    bool is_updater_path(const fs::path& rel) {
+        return !rel.empty() && *rel.begin() == kTempDirName;
+    }
+
+    // Writes `body` to a new file in the temp folder, then renames it over `target` (std::filesystem::rename
+    // replaces an existing file, on Windows too: MoveFileExW with MOVEFILE_REPLACE_EXISTING). On any
+    // failure the temp file is removed and `target` is untouched.
+    bool write_atomically(const fs::path& skin_dir, const fs::path& target, const std::string& body, int serial) {
+        std::error_code ec;
+        const fs::path dir = temp_dir(skin_dir);
+        fs::create_directories(dir, ec);
+        const fs::path tmp = dir / (std::to_string(serial) + ".tmp");
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                return false;
+            }
+            out << body;
+            out.close();
+            if (!out) {
+                fs::remove(tmp, ec);
+                return false;
+            }
+        }
+        fs::create_directories(target.parent_path(), ec);
+        fs::rename(tmp, target, ec);
+        if (ec) {
+            std::error_code rm_ec;
+            fs::remove(tmp, rm_ec);
+            return false;
+        }
+        return true;
+    }
+
 } // namespace
 
 void SkinUpdater::set_current_skin(const std::string& name) {
@@ -238,6 +282,8 @@ void SkinUpdater::note_file_updated() {
 void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const std::string& repo_url,
                                   const std::string& branch) {
     set_current_skin(skin_dir.filename().string());
+    std::error_code tmp_ec;
+    fs::remove_all(temp_dir(skin_dir), tmp_ec); // left by a pass that was cut short
 
     cpr::Session session;
     init_session(session);
@@ -285,7 +331,7 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
 
         fs::path local_file = (skin_dir / rel_path).lexically_normal();
         const fs::path local_rel = local_file.lexically_relative(skin_dir);
-        if (local_rel.empty() || *local_rel.begin() == "..") {
+        if (local_rel.empty() || *local_rel.begin() == ".." || is_updater_path(local_rel)) {
             spdlog::warn("Skin update ({}): skipping unsafe manifest path {}", skin_dir.filename().string(), rel_path);
             continue;
         }
@@ -341,16 +387,12 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
                           skin_dir.filename().string(), rel_path);
         }
 
-        std::error_code mkdir_ec;
-        fs::create_directories(local_file.parent_path(), mkdir_ec);
-        std::ofstream out(local_file, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            spdlog::warn("Skin update ({}): failed to write {}", skin_dir.filename().string(), rel_path);
+        if (!write_atomically(skin_dir, local_file, file_resp.text, updated)) {
+            spdlog::warn("Skin update ({}): failed to write {}; keeping the old file", skin_dir.filename().string(),
+                         rel_path);
             continue;
         }
-        out << file_resp.text;
-        out.close();
-        if (out && file_stamp(local_file, size, mtime)) {
+        if (file_stamp(local_file, size, mtime)) {
             seen[key] = HashCacheEntry{got_hash, size, mtime};
         } else {
             seen.erase(key);
@@ -393,6 +435,7 @@ void SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
     if (seen != cache) {
         save_hash_cache(skin_dir, seen);
     }
+    fs::remove_all(temp_dir(skin_dir), tmp_ec);
     spdlog::info("Skin update ({}): {} file(s) updated, {} removed", skin_dir.filename().string(), updated, removed);
 }
 
