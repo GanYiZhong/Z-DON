@@ -12,6 +12,7 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <string_view>
@@ -795,8 +796,8 @@ void SkinUpdater::scan_skins() {
     if (!fs::exists("Skins", ec)) {
         return;
     }
-    // dev hooks: ZDON_SKIN_UPDATE_ONLY=<skin folder> checks only that skin (tests that must not reach
-    // the real servers); ZDON_SKIN_UPDATE_THREADS=<n> (1..16, default 8) downloads/checks at once
+    // dev hooks: ZDON_SKIN_UPDATE_ONLY=<skin folder>[,<skin folder>...] checks only those skins (tests that must not
+    // reach the real servers); ZDON_SKIN_UPDATE_THREADS=<n> (1..16, default 8) downloads/checks at once
     const char* only = std::getenv("ZDON_SKIN_UPDATE_ONLY");
     int workers = 8;
     if (const char* n = std::getenv("ZDON_SKIN_UPDATE_THREADS")) {
@@ -812,7 +813,9 @@ void SkinUpdater::scan_skins() {
         if (ec || !entry.is_directory()) {
             continue;
         }
-        if (only != nullptr && entry.path().filename().string() != only) {
+        if (only != nullptr &&
+            !std::ranges::contains(std::views::split(std::string_view(only), ','), entry.path().filename().string(),
+                                   [](auto part) { return std::string_view(part.begin(), part.end()); })) {
             continue;
         }
 
