@@ -22,7 +22,6 @@
 #include "libs/text.h"
 #include "libs/webcam.h"
 #include "objects/global/chara_3d.h"
-#include "platform/gameplay_ime.h"
 #include "platform/vblank_pacing.h"
 
 #ifdef _WIN32
@@ -548,7 +547,6 @@ static void run_frame() {
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
 
-    gameplay_ime::update(gameplay_ime::is_gameplay(L.current_screen));
     ray::PollInputEvents();
 #if defined(YATAIDON_PLATFORM_IOS)
     if (ios_is_suspended_state()) {
