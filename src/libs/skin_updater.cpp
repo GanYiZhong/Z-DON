@@ -1,12 +1,19 @@
 #include "skin_updater.h"
 
+#include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -50,14 +57,6 @@ namespace {
 #else
         (void)session;
 #endif
-    }
-
-    cpr::Response get_url(cpr::Session& session, const std::string& url, int32_t timeout_ms,
-                          int32_t connect_timeout_ms) {
-        session.SetUrl(cpr::Url{url});
-        session.SetTimeout(cpr::Timeout{timeout_ms});
-        session.SetConnectTimeout(cpr::ConnectTimeout{connect_timeout_ms});
-        return session.Get();
     }
 
     // Hashes the file in pieces rather than reading all of it into memory. Empty on a read error.
@@ -213,14 +212,86 @@ namespace {
         return r.status_code == 200 && r.error.code == cpr::ErrorCode::OK;
     }
 
-    bool is_lfs_pointer(const std::string& body) {
-        static const std::string kLfsMarker = "version https://git-lfs.github.com/spec/v1";
+    // Streams `url` to `sink` piece by piece as it arrives. Download() leaves the callback set on the
+    // session, so every request of a session must go through here (it sets its own each time).
+    cpr::Response fetch(cpr::Session& session, const std::string& url, int32_t timeout_ms,
+                        const std::function<bool(std::string_view)>& sink) {
+        session.SetUrl(cpr::Url{url});
+        session.SetTimeout(cpr::Timeout{timeout_ms});
+        session.SetConnectTimeout(cpr::ConnectTimeout{5000});
+        session.SetLowSpeed(cpr::LowSpeed{1, 30}); // stalled for 30 s
+        return session.Download(
+            cpr::WriteCallback{[&sink](const std::string_view& data, intptr_t) { return sink(data); }});
+    }
+
+    // scheme://host[:port] of `url`
+    std::string url_host(const std::string& url) {
+        const size_t scheme = url.find("://");
+        const size_t start = scheme == std::string::npos ? 0 : scheme + 3;
+        return url.substr(0, url.find('/', start));
+    }
+
+    // A worker's sessions, one per host: curl keeps each one's connection open between requests, so
+    // a pass makes one TLS handshake per worker and host instead of one per skin or file.
+    struct Worker {
+        std::unordered_map<std::string, std::unique_ptr<cpr::Session>> sessions;
+
+        cpr::Session& session_for(const std::string& url) {
+            std::unique_ptr<cpr::Session>& s = sessions[url_host(url)];
+            if (!s) {
+                s = std::make_unique<cpr::Session>();
+                init_session(*s);
+            }
+            return *s;
+        }
+    };
+
+    bool is_lfs_pointer(std::string_view body) {
+        static constexpr std::string_view kLfsMarker = "version https://git-lfs.github.com/spec/v1";
         return body.starts_with(kLfsMarker);
+    }
+
+    // A download streamed into a file, hashed on the way: memory use doesn't grow with the file.
+    struct FileFetch {
+        cpr::Response resp;
+        bool written = false; // every byte that arrived reached the file
+        uintmax_t size = 0;
+        std::string hash;
+        std::string head; // the first bytes, enough to recognise an LFS pointer
+
+        bool complete() const { return written && fetched(resp); }
+        bool lfs_pointer() const { return size <= 1024 && ::is_lfs_pointer(head); }
+    };
+
+    FileFetch fetch_to_file(cpr::Session& session, const std::string& url, int32_t timeout_ms, const fs::path& file) {
+        constexpr size_t kHeadBytes = 64;
+        FileFetch got;
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return got;
+        }
+        crypto::Sha256 ctx;
+        got.resp = fetch(session, url, timeout_ms, [&](std::string_view data) {
+            out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if (!out) {
+                return false; // aborts the transfer
+            }
+            ctx.update(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+            if (got.head.size() < kHeadBytes) {
+                got.head.append(data.substr(0, kHeadBytes - got.head.size()));
+            }
+            got.size += data.size();
+            return true;
+        });
+        out.close();
+        got.written = static_cast<bool>(out);
+        got.hash = crypto::to_hex(ctx.finalize());
+        return got;
     }
 
     // Downloads are written to a file in <skin>/.skin-update-tmp and moved over the target only once
     // complete, so a pass cut short (the game killed, a full disk) leaves the old file, never a
-    // half-written one. The folder is emptied at the start and end of each pass.
+    // half-written one. The folder is emptied at the start and end of each skin's pass.
     constexpr const char* kTempDirName = ".skin-update-tmp";
 
     fs::path temp_dir(const fs::path& skin_dir) {
@@ -232,34 +303,13 @@ namespace {
         return !rel.empty() && *rel.begin() == kTempDirName;
     }
 
-    // Writes `body` to a new file in the temp folder, then renames it over `target` (std::filesystem::rename
-    // replaces an existing file, on Windows too: MoveFileExW with MOVEFILE_REPLACE_EXISTING). On any
-    // failure the temp file is removed and `target` is untouched.
-    bool write_atomically(const fs::path& skin_dir, const fs::path& target, const std::string& body, int serial) {
+    // Renames the finished temp file over `target` (std::filesystem::rename replaces an existing file,
+    // on Windows too: MoveFileExW with MOVEFILE_REPLACE_EXISTING). On failure `target` is untouched.
+    bool replace_file(const fs::path& tmp, const fs::path& target) {
         std::error_code ec;
-        const fs::path dir = temp_dir(skin_dir);
-        fs::create_directories(dir, ec);
-        const fs::path tmp = dir / (std::to_string(serial) + ".tmp");
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                return false;
-            }
-            out << body;
-            out.close();
-            if (!out) {
-                fs::remove(tmp, ec);
-                return false;
-            }
-        }
         fs::create_directories(target.parent_path(), ec);
         fs::rename(tmp, target, ec);
-        if (ec) {
-            std::error_code rm_ec;
-            fs::remove(tmp, rm_ec);
-            return false;
-        }
-        return true;
+        return !ec;
     }
 
 } // namespace
@@ -268,12 +318,11 @@ void SkinUpdater::set_current_skin(const std::string& name) {
     std::scoped_lock lock(status_mutex_);
     current_skin_ = name;
     current_file_.clear();
-    files_done_ = 0;
-    files_total_ = 0;
 }
 
-void SkinUpdater::set_current_file(const std::string& file) {
+void SkinUpdater::set_current_file(const std::string& skin, const std::string& file) {
     std::scoped_lock lock(status_mutex_);
+    current_skin_ = skin;
     current_file_ = file;
 }
 
@@ -282,196 +331,337 @@ void SkinUpdater::note_file_updated() {
     ++files_updated_;
 }
 
-void SkinUpdater::set_progress(int done, int total) {
+void SkinUpdater::set_progress(const std::string& skin, int done, int total) {
     std::scoped_lock lock(status_mutex_);
-    files_done_ = done;
-    files_total_ = total;
+    progress_[skin] = {done, total};
 }
 
-void SkinUpdater::update_one_skin(cpr::Session& session, const std::filesystem::path& skin_dir,
-                                  const std::string& repo_url, const std::string& branch) {
-    set_current_skin(skin_dir.filename().string());
-    std::error_code tmp_ec;
-    fs::remove_all(temp_dir(skin_dir), tmp_ec); // left by a pass that was cut short
+// One pass over every skin: a check task per skin (manifest, local hashes), then a download task per
+// file that is missing or differs, all run by a few background threads. Whichever task finishes a
+// skin's last download does its removals and saves its hash cache.
+class SkinUpdatePass {
+public:
+    explicit SkinUpdatePass(SkinUpdater& updater) : u_(updater) {}
 
-    auto raw_url = [&](const std::string& rel_path) { return repo_url + "/raw/branch/" + branch + "/" + rel_path; };
-
-    auto media_url = [&](const std::string& rel_path) { return repo_url + "/media/branch/" + branch + "/" + rel_path; };
-
-    // a whole manifest or nothing: files it doesn't list get removed below, so a truncated
-    // one would delete everything past the cut (and the last line must be complete)
-    const std::string manifest_url = raw_url("checksums.sha256");
-    SavedManifest saved = load_manifest(skin_dir, manifest_url);
-    if (!saved.etag.empty()) {
-        session.SetHeader(cpr::Header{{"If-None-Match", saved.etag}});
-    }
-    cpr::Response checksums = get_url(session, manifest_url, 60000, 5000);
-    session.SetHeader(cpr::Header{});
-    std::string manifest;
-    if (!saved.etag.empty() && checksums.status_code == 304 && checksums.error.code == cpr::ErrorCode::OK) {
-        manifest = std::move(saved.text); // unchanged since the last pass
-    } else if (fetched(checksums) && !checksums.text.empty() && checksums.text.back() == '\n') {
-        manifest = std::move(checksums.text);
-        auto etag = checksums.header.find("ETag");
-        save_manifest(skin_dir, manifest_url, etag != checksums.header.end() ? etag->second : std::string(), manifest);
-    } else {
-        spdlog::warn("Skin update ({}): could not fetch a complete checksums.sha256 (HTTP {}, curl error {}: {})",
-                     skin_dir.filename().string(), checksums.status_code, static_cast<int>(checksums.error.code),
-                     checksums.error.message);
-        return;
+    void add_skin(const fs::path& dir, const std::string& repo_url, const std::string& branch) {
+        auto skin = std::make_shared<Skin>();
+        skin->dir = dir;
+        skin->name = dir.filename().string();
+        skin->repo_url = repo_url;
+        skin->branch = branch;
+        push([this, skin](Worker& w) { check(w, skin); });
     }
 
-    HashCache cache = load_hash_cache(skin_dir);
-    HashCache seen; // this manifest's files: entries for files it no longer lists are dropped
-    std::unordered_set<std::string> listed;
-    std::istringstream lines(manifest);
-    std::string hash, rel_path;
+    // runs the queued checks and everything they queue; returns once all are done
+    void run(int workers) {
+        std::vector<std::thread> pool;
+        for (int i = 0; i < workers && pending_ > 0; i++) {
+            pool.emplace_back([this] { worker_loop(); });
+        }
+        for (std::thread& t : pool) {
+            t.join();
+        }
+    }
+
+private:
     struct Job {
-        std::string rel_path, hash;
+        std::string rel_path, hash; // rel_path: the manifest's own spelling (UTF-8), the cache key
         fs::path local_file;
     };
-    std::vector<Job> jobs; // the listed files that are missing or differ
-    while (lines >> hash >> rel_path) {
-        if (!rel_path.empty() && rel_path.front() == '*') {
-            rel_path.erase(0, 1);
-        }
-        if (fs::path(rel_path).filename() == "checksums.sha256") {
-            continue;
-        }
+    struct Skin {
+        fs::path dir;
+        std::string name, repo_url, branch;
+        HashCache cache; // as loaded; read-only once the downloads start
+        std::unordered_set<std::string> listed;
+        std::vector<Job> jobs; // fixed once the downloads start
+        std::mutex mutex;      // guards seen, updated
+        HashCache seen;        // this manifest's files: entries for files it no longer lists are dropped
+        int updated = 0;
+        std::atomic<int> done{0};   // downloads finished (written or failed)
+        std::atomic<int> serial{0}; // temp file names
 
-        fs::path local_file = (skin_dir / rel_path).lexically_normal();
-        const fs::path local_rel = local_file.lexically_relative(skin_dir);
-        if (local_rel.empty() || *local_rel.begin() == ".." || is_updater_path(local_rel)) {
-            spdlog::warn("Skin update ({}): skipping unsafe manifest path {}", skin_dir.filename().string(), rel_path);
-            continue;
-        }
-        const std::string& key = rel_path; // the manifest's own spelling (UTF-8)
-        listed.insert(key);
-        uintmax_t size = 0;
-        int64_t mtime = 0;
-        if (file_stamp(local_file, size, mtime)) {
-            // unchanged since its last check: the cached hash stands for the file
-            auto cached = cache.find(key);
-            std::string local_hash;
-            if (cached != cache.end() && cached->second.size == size && cached->second.mtime == mtime) {
-                local_hash = cached->second.hash;
-            } else {
-                local_hash = sha256_file(local_file);
-            }
-            if (!local_hash.empty()) {
-                seen[key] = HashCacheEntry{local_hash, size, mtime};
-            }
-            if (local_hash == hash) {
-                continue;
-            }
-        }
+        std::string raw_url(const std::string& rel) const { return repo_url + "/raw/branch/" + branch + "/" + rel; }
+        std::string media_url(const std::string& rel) const { return repo_url + "/media/branch/" + branch + "/" + rel; }
+    };
+    using Task = std::function<void(Worker&)>;
 
-        // File is missing or differs: this pass has at least one real update.
-        any_updated_.store(true);
-        jobs.push_back({rel_path, hash, std::move(local_file)});
+    void push(Task task) {
+        {
+            std::scoped_lock lock(mutex_);
+            queue_.push_back(std::move(task));
+            ++pending_;
+        }
+        cv_.notify_one();
     }
 
-    int updated = 0;
-    set_progress(0, static_cast<int>(jobs.size()));
-    for (size_t i = 0; i < jobs.size(); i++) {
-        const std::string& rel_path = jobs[i].rel_path;
-        const std::string& hash = jobs[i].hash;
-        const fs::path& local_file = jobs[i].local_file;
-        const std::string& key = rel_path;
-        set_progress(static_cast<int>(i), static_cast<int>(jobs.size()));
-        set_current_file(rel_path);
-        cpr::Response file_resp = get_url(session, raw_url(rel_path), 15000, 5000);
-        if (!fetched(file_resp)) {
-            spdlog::warn("Skin update ({}): failed to download {} (HTTP {})", skin_dir.filename().string(), rel_path,
-                         file_resp.status_code);
-            continue;
-        }
-
-        if (is_lfs_pointer(file_resp.text)) {
-            spdlog::debug("Skin update ({}): {} is an LFS pointer; fetching content from media endpoint",
-                          skin_dir.filename().string(), rel_path);
-            cpr::Response lfs_resp = get_url(session, media_url(rel_path), 60000, 5000);
-            if (!fetched(lfs_resp)) {
-                spdlog::warn("Skin update ({}): failed to download LFS content {} (HTTP {})",
-                             skin_dir.filename().string(), rel_path, lfs_resp.status_code);
-                continue;
+    void worker_loop() {
+#ifdef _WIN32
+        win32_lower_thread_priority(); // below the game, like the updater thread
+#endif
+        Worker w; // its sessions live as long as the pass
+        for (;;) {
+            Task task;
+            {
+                std::unique_lock lock(mutex_);
+                cv_.wait(lock, [this] { return !queue_.empty() || pending_ == 0; });
+                if (queue_.empty()) {
+                    return; // nothing queued or running: the pass is done
+                }
+                task = std::move(queue_.front());
+                queue_.pop_front();
             }
-            file_resp = std::move(lfs_resp);
+            try {
+                task(w);
+            } catch (const std::exception& e) {
+                spdlog::error("Skin update: unhandled exception: {}", e.what());
+            }
+            bool all_done = false;
+            {
+                std::scoped_lock lock(mutex_);
+                all_done = --pending_ == 0;
+            }
+            if (all_done) {
+                cv_.notify_all();
+            }
         }
+    }
 
-        // A complete download (fetched() above) is written even when it doesn't match the
-        // manifest: that only means the manifest is behind the repo, and keeping the old file
-        // (or none, for a new one) would leave the skin half updated.
-        const std::string got_hash = crypto::to_hex(crypto::sha256(file_resp.text));
-        if (got_hash != hash) {
-            spdlog::debug("Skin update ({}): {} differs from its checksums.sha256 entry (stale manifest)",
-                          skin_dir.filename().string(), rel_path);
-        }
+    void check(Worker& w, const std::shared_ptr<Skin>& skin) {
+        const fs::path& skin_dir = skin->dir;
+        u_.set_current_skin(skin->name);
+        std::error_code tmp_ec;
+        fs::remove_all(temp_dir(skin_dir), tmp_ec); // left by a pass that was cut short
 
-        if (!write_atomically(skin_dir, local_file, file_resp.text, updated)) {
-            spdlog::warn("Skin update ({}): failed to write {}; keeping the old file", skin_dir.filename().string(),
-                         rel_path);
-            continue;
+        // a whole manifest or nothing: files it doesn't list get removed below, so a truncated
+        // one would delete everything past the cut (and the last line must be complete)
+        const std::string manifest_url = skin->raw_url("checksums.sha256");
+        cpr::Session& session = w.session_for(manifest_url);
+        SavedManifest saved = load_manifest(skin_dir, manifest_url);
+        if (!saved.etag.empty()) {
+            session.SetHeader(cpr::Header{{"If-None-Match", saved.etag}});
         }
-        uintmax_t size = 0;
-        int64_t mtime = 0;
-        if (file_stamp(local_file, size, mtime)) {
-            seen[key] = HashCacheEntry{got_hash, size, mtime};
+        std::string body;
+        cpr::Response checksums = fetch(session, manifest_url, 60000, [&body](std::string_view data) {
+            body.append(data);
+            return true;
+        });
+        session.SetHeader(cpr::Header{});
+        std::string manifest;
+        if (!saved.etag.empty() && checksums.status_code == 304 && checksums.error.code == cpr::ErrorCode::OK) {
+            manifest = std::move(saved.text); // unchanged since the last pass
+        } else if (fetched(checksums) && !body.empty() && body.back() == '\n') {
+            manifest = std::move(body);
+            auto etag = checksums.header.find("ETag");
+            save_manifest(skin_dir, manifest_url, etag != checksums.header.end() ? etag->second : std::string(),
+                          manifest);
         } else {
-            seen.erase(key);
+            spdlog::warn("Skin update ({}): could not fetch a complete checksums.sha256 (HTTP {}, curl error {}: {})",
+                         skin->name, checksums.status_code, static_cast<int>(checksums.error.code),
+                         checksums.error.message);
+            return;
         }
-        note_file_updated();
-        ++updated;
-    }
-    set_progress(static_cast<int>(jobs.size()), static_cast<int>(jobs.size()));
-    set_current_file({});
 
-    int removed = 0;
-    for (const auto& [rel, e] : cache) {
-        if (listed.contains(rel)) {
-            continue;
+        skin->cache = load_hash_cache(skin_dir);
+        const HashCache& cache = skin->cache;
+        HashCache& seen = skin->seen; // no download runs yet: no lock needed
+        std::istringstream lines(manifest);
+        std::string hash, rel_path;
+        while (lines >> hash >> rel_path) {
+            if (!rel_path.empty() && rel_path.front() == '*') {
+                rel_path.erase(0, 1);
+            }
+            if (fs::path(rel_path).filename() == "checksums.sha256") {
+                continue;
+            }
+
+            fs::path local_file = (skin_dir / rel_path).lexically_normal();
+            const fs::path local_rel = local_file.lexically_relative(skin_dir);
+            if (local_rel.empty() || *local_rel.begin() == ".." || is_updater_path(local_rel)) {
+                spdlog::warn("Skin update ({}): skipping unsafe manifest path {}", skin->name, rel_path);
+                continue;
+            }
+            const std::string& key = rel_path;
+            skin->listed.insert(key);
+            uintmax_t size = 0;
+            int64_t mtime = 0;
+            if (file_stamp(local_file, size, mtime)) {
+                // unchanged since its last check: the cached hash stands for the file
+                auto cached = cache.find(key);
+                std::string local_hash;
+                if (cached != cache.end() && cached->second.size == size && cached->second.mtime == mtime) {
+                    local_hash = cached->second.hash;
+                } else {
+                    local_hash = sha256_file(local_file);
+                }
+                if (!local_hash.empty()) {
+                    seen[key] = HashCacheEntry{local_hash, size, mtime};
+                }
+                if (local_hash == hash) {
+                    continue;
+                }
+            }
+
+            // File is missing or differs: this pass has at least one real update.
+            u_.any_updated_.store(true);
+            skin->jobs.push_back({rel_path, hash, std::move(local_file)});
         }
-        const fs::path local_file = (skin_dir / rel).lexically_normal();
-        const fs::path local_rel = local_file.lexically_relative(skin_dir);
-        if (local_rel.empty() || *local_rel.begin() == "..") {
-            continue;
+
+        if (skin->jobs.empty()) {
+            finish(*skin);
+            return;
+        }
+        const int total = static_cast<int>(skin->jobs.size());
+        u_.set_progress(skin->name, 0, total);
+        for (size_t i = 0; i < skin->jobs.size(); i++) {
+            push([this, skin, i](Worker& worker) { download(worker, skin, i); });
+        }
+    }
+
+    void download(Worker& w, const std::shared_ptr<Skin>& skin, size_t i) {
+        try {
+            download_file(w, *skin, skin->jobs[i]);
+        } catch (const std::exception& e) {
+            spdlog::error("Skin update ({}): {}: {}", skin->name, skin->jobs[i].rel_path, e.what());
+        }
+        const int total = static_cast<int>(skin->jobs.size());
+        const int done = ++skin->done;
+        u_.set_progress(skin->name, done, total);
+        if (done == total) {
+            finish(*skin);
+        }
+    }
+
+    void download_file(Worker& w, Skin& skin, const Job& job) {
+        const std::string& rel_path = job.rel_path;
+        u_.set_current_file(skin.name, rel_path);
+
+        std::error_code ec;
+        fs::create_directories(temp_dir(skin.dir), ec);
+        const fs::path tmp = temp_dir(skin.dir) / (std::to_string(skin.serial++) + ".tmp");
+        auto discard = [&tmp] {
+            std::error_code rm_ec;
+            fs::remove(tmp, rm_ec);
+        };
+
+        const std::string url = skin.raw_url(rel_path);
+        FileFetch got = fetch_to_file(w.session_for(url), url, 60000, tmp);
+        if (!got.complete()) {
+            spdlog::warn("Skin update ({}): failed to download {} (HTTP {})", skin.name, rel_path,
+                         got.resp.status_code);
+            discard();
+            return;
+        }
+
+        if (got.lfs_pointer()) {
+            spdlog::debug("Skin update ({}): {} is an LFS pointer; fetching content from media endpoint", skin.name,
+                          rel_path);
+            const std::string lfs_url = skin.media_url(rel_path);
+            got = fetch_to_file(w.session_for(lfs_url), lfs_url, 120000, tmp);
+            if (!got.complete()) {
+                spdlog::warn("Skin update ({}): failed to download LFS content {} (HTTP {})", skin.name, rel_path,
+                             got.resp.status_code);
+                discard();
+                return;
+            }
+        }
+
+        // A complete download is written even when it doesn't match the manifest: that only means
+        // the manifest is behind the repo, and keeping the old file (or none, for a new one) would
+        // leave the skin half updated.
+        if (got.hash != job.hash) {
+            spdlog::debug("Skin update ({}): {} differs from its checksums.sha256 entry (stale manifest)", skin.name,
+                          rel_path);
+        }
+
+        if (!replace_file(tmp, job.local_file)) {
+            spdlog::warn("Skin update ({}): failed to write {}; keeping the old file", skin.name, rel_path);
+            discard();
+            return;
         }
         uintmax_t size = 0;
         int64_t mtime = 0;
-        if (!file_stamp(local_file, size, mtime) || size != e.size || mtime != e.mtime) {
-            continue;
-        }
-        std::error_code ec;
-        if (!fs::remove(local_file, ec)) {
-            continue;
-        }
-        ++removed;
-        for (fs::path dir = local_file.parent_path(); dir != skin_dir && fs::is_empty(dir, ec) && !ec;
-             dir = dir.parent_path()) {
-            if (!fs::remove(dir, ec)) {
-                break;
+        const bool stamped = file_stamp(job.local_file, size, mtime);
+        {
+            std::scoped_lock lock(skin.mutex);
+            if (stamped) {
+                skin.seen[rel_path] = HashCacheEntry{got.hash, size, mtime};
+            } else {
+                skin.seen.erase(rel_path);
             }
+            ++skin.updated;
         }
-    }
-    if (removed > 0) {
-        any_updated_.store(true);
+        u_.note_file_updated();
     }
 
-    if (seen != cache) {
-        save_hash_cache(skin_dir, seen);
+    // after the skin's last download: removes the files the manifest dropped, saves the hash cache
+    void finish(Skin& skin) {
+        const fs::path& skin_dir = skin.dir;
+        int removed = 0;
+        for (const auto& [rel, e] : skin.cache) {
+            if (skin.listed.contains(rel)) {
+                continue;
+            }
+            const fs::path local_file = (skin_dir / rel).lexically_normal();
+            const fs::path local_rel = local_file.lexically_relative(skin_dir);
+            if (local_rel.empty() || *local_rel.begin() == "..") {
+                continue;
+            }
+            uintmax_t size = 0;
+            int64_t mtime = 0;
+            if (!file_stamp(local_file, size, mtime) || size != e.size || mtime != e.mtime) {
+                continue;
+            }
+            std::error_code ec;
+            if (!fs::remove(local_file, ec)) {
+                continue;
+            }
+            ++removed;
+            for (fs::path dir = local_file.parent_path(); dir != skin_dir && fs::is_empty(dir, ec) && !ec;
+                 dir = dir.parent_path()) {
+                if (!fs::remove(dir, ec)) {
+                    break;
+                }
+            }
+        }
+        if (removed > 0) {
+            u_.any_updated_.store(true);
+        }
+
+        std::scoped_lock lock(skin.mutex);
+        if (skin.seen != skin.cache) {
+            save_hash_cache(skin_dir, skin.seen);
+        }
+        std::error_code tmp_ec;
+        fs::remove_all(temp_dir(skin_dir), tmp_ec);
+        spdlog::info("Skin update ({}): {} file(s) updated, {} removed", skin.name, skin.updated, removed);
     }
-    fs::remove_all(temp_dir(skin_dir), tmp_ec);
-    spdlog::info("Skin update ({}): {} file(s) updated, {} removed", skin_dir.filename().string(), updated, removed);
-}
+
+    SkinUpdater& u_;
+    std::mutex mutex_; // guards queue_, pending_
+    std::condition_variable cv_;
+    std::deque<Task> queue_;
+    int pending_ = 0; // tasks queued or running
+};
 
 void SkinUpdater::scan_skins() {
     std::error_code ec;
     if (!fs::exists("Skins", ec)) {
         return;
     }
-    std::unique_ptr<cpr::Session> session;
+    // dev hooks: ZDON_SKIN_UPDATE_ONLY=<skin folder> checks only that skin (tests that must not reach
+    // the real servers); ZDON_SKIN_UPDATE_THREADS=<n> (1..16, default 8) downloads/checks at once
+    const char* only = std::getenv("ZDON_SKIN_UPDATE_ONLY");
+    int workers = 8;
+    if (const char* n = std::getenv("ZDON_SKIN_UPDATE_THREADS")) {
+        workers = std::clamp(std::atoi(n), 1, 16);
+    }
+
+    SkinUpdatePass pass(*this);
     for (const auto& entry : fs::directory_iterator("Skins", ec)) {
         if (ec || !entry.is_directory()) {
+            continue;
+        }
+        if (only != nullptr && entry.path().filename().string() != only) {
             continue;
         }
 
@@ -491,14 +681,13 @@ void SkinUpdater::scan_skins() {
             branch = "main";
         }
 
-        // one session for every skin: curl keeps the connection to each host open between requests,
-        // so the skins of one server share a TLS handshake instead of one per skin
-        if (!session) {
-            session = std::make_unique<cpr::Session>();
-            init_session(*session);
-        }
-        update_one_skin(*session, entry.path(), strip_dot_git(repo_url), branch);
+        pass.add_skin(entry.path(), strip_dot_git(repo_url), branch);
     }
+    const auto t0 = std::chrono::steady_clock::now();
+    pass.run(workers);
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    spdlog::info("Skin update: pass done in {} ms ({} worker(s))", ms, workers);
 }
 
 void SkinUpdater::start() {
@@ -520,8 +709,7 @@ void SkinUpdater::start() {
         std::scoped_lock lock(status_mutex_);
         current_skin_.clear();
         current_file_.clear();
-        files_done_ = 0;
-        files_total_ = 0;
+        progress_.clear();
     });
 }
 
@@ -546,8 +734,10 @@ SkinUpdater::Status SkinUpdater::snapshot() {
     s.current_skin = current_skin_;
     s.current_file = current_file_;
     s.files_updated = files_updated_;
-    s.files_done = files_done_;
-    s.files_total = files_total_;
+    if (auto p = progress_.find(current_skin_); p != progress_.end()) {
+        s.files_done = p->second.first;
+        s.files_total = p->second.second;
+    }
     return s;
 }
 

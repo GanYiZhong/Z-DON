@@ -5,10 +5,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
-
-namespace cpr {
-    class Session;
-}
+#include <unordered_map>
+#include <utility>
 
 class SkinUpdater {
 public:
@@ -37,12 +35,11 @@ public:
 
 private:
     void scan_skins();
-    void update_one_skin(cpr::Session& session, const std::filesystem::path& skin_dir, const std::string& repo_url,
-                         const std::string& branch);
+    friend class SkinUpdatePass; // the pass's tasks report through the members below
     void set_current_skin(const std::string& name);
-    void set_current_file(const std::string& file);
+    void set_current_file(const std::string& skin, const std::string& file);
     void note_file_updated();
-    void set_progress(int done, int total);
+    void set_progress(const std::string& skin, int done, int total);
 
     std::atomic<bool> started_{false};
     std::atomic<bool> running_{false};
@@ -52,8 +49,7 @@ private:
     std::string current_skin_;
     std::string current_file_;
     int files_updated_ = 0;
-    int files_done_ = 0;
-    int files_total_ = 0;
+    std::unordered_map<std::string, std::pair<int, int>> progress_; // skin -> files done, to download
 
     std::thread thread_;
 };
