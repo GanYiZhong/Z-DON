@@ -528,6 +528,76 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     return std::nullopt;
 }
 
+// "Other player" practice controls (pause / menu / speed / mark-edit exit) must
+// not fire from the playing player's own drum. The shipped config gives
+// [gamepad_2p] the same buttons as [gamepad_1p] (and keyboard 2P keys can
+// coincide too), so a binding shared with the playing player for the same
+// role is ignored. With no overlap this is the plain per-player check.
+enum class PracticeDrumRole {
+    L_DON,
+    R_DON,
+    L_KAT,
+    R_KAT
+};
+
+static const std::vector<int>& practice_role_binding(const DrumBindings& b, PracticeDrumRole role) {
+    switch (role) {
+    case PracticeDrumRole::L_DON:
+        return b.left_don;
+    case PracticeDrumRole::R_DON:
+        return b.right_don;
+    case PracticeDrumRole::L_KAT:
+        return b.left_kat;
+    case PracticeDrumRole::R_KAT:
+        break;
+    }
+    return b.right_kat;
+}
+
+static std::vector<int> practice_distinct_binding(const std::vector<int>& other, const std::vector<int>& own) {
+    std::vector<int> out;
+    for (int k : other) {
+        if (std::ranges::find(own, k) == own.end()) {
+            out.push_back(k);
+        }
+    }
+    return out;
+}
+
+static bool other_drum_pressed(PlayerNum self, PracticeDrumRole role) {
+    const auto& c = *global_data.config;
+    bool self_p1 = self != PlayerNum::P2;
+    const DrumBindings& own_keys = self_p1 ? c.keys_1p : c.keys_2p;
+    const DrumBindings& own_pad = self_p1 ? c.gamepad_1p : c.gamepad_2p;
+    const DrumBindings& other_keys = self_p1 ? c.keys_2p : c.keys_1p;
+    const DrumBindings& other_pad = self_p1 ? c.gamepad_2p : c.gamepad_1p;
+
+    const std::vector<int>& ok = practice_role_binding(other_keys, role);
+    const std::vector<int>& op = practice_role_binding(other_pad, role);
+    std::vector<int> keys = practice_distinct_binding(ok, practice_role_binding(own_keys, role));
+    std::vector<int> pads = practice_distinct_binding(op, practice_role_binding(own_pad, role));
+
+    if (keys.size() == ok.size() && pads.size() == op.size()) {
+        PlayerNum other = self_p1 ? PlayerNum::P2 : PlayerNum::P1;
+        switch (role) {
+        case PracticeDrumRole::L_DON:
+            return is_l_don_pressed(other);
+        case PracticeDrumRole::R_DON:
+            return is_r_don_pressed(other);
+        case PracticeDrumRole::L_KAT:
+            return is_l_kat_pressed(other);
+        case PracticeDrumRole::R_KAT:
+            break;
+        }
+        return is_r_kat_pressed(other);
+    }
+    return is_input_key_pressed(keys, pads);
+}
+
+static bool other_don_pressed(PlayerNum self) {
+    return other_drum_pressed(self, PracticeDrumRole::L_DON) || other_drum_pressed(self, PracticeDrumRole::R_DON);
+}
+
 std::optional<Screens> PracticeGameScreen::global_keys_practice() {
     if (check_key_pressed(global_data.config->keys.restart_key)) {
         restart_practice();
@@ -543,9 +613,9 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
     int player_idx = (int)global_data.player_num - 1;
 
     if (!clock.is_paused()) {
-        bool other_don = is_l_don_pressed(other_player) || is_r_don_pressed(other_player);
-        bool other_l_kat = is_l_kat_pressed(other_player);
-        bool other_r_kat = is_r_kat_pressed(other_player);
+        bool other_don = other_don_pressed(global_data.player_num);
+        bool other_l_kat = other_drum_pressed(global_data.player_num, PracticeDrumRole::L_KAT);
+        bool other_r_kat = other_drum_pressed(global_data.player_num, PracticeDrumRole::R_KAT);
         bool other_kat = other_l_kat || other_r_kat;
         if (other_don || other_kat) {
             pause_practice();
@@ -617,7 +687,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                 bool step_l = is_l_kat_pressed(global_data.player_num);
                 bool step_r = is_r_kat_pressed(global_data.player_num);
                 bool p1_don = is_l_don_pressed(global_data.player_num) || is_r_don_pressed(global_data.player_num);
-                bool p2_don = is_l_don_pressed(other_player) || is_r_don_pressed(other_player);
+                bool p2_don = other_don_pressed(global_data.player_num);
 
                 if (step_l || step_r) {
                     scrobble_step_bar(!step_l && step_r);
@@ -668,7 +738,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
             return std::nullopt;
         }
 
-        if (is_l_don_pressed(other_player) || is_r_don_pressed(other_player)) {
+        if (other_don_pressed(global_data.player_num)) {
             audio.play_sound("don", VolumePreset::SOUND);
             open_practice_menu();
             return std::nullopt;
@@ -678,8 +748,8 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
             resume_practice();
         }
 
-        bool speed_down = is_l_kat_pressed(other_player);
-        bool speed_up = is_r_kat_pressed(other_player);
+        bool speed_down = other_drum_pressed(global_data.player_num, PracticeDrumRole::L_KAT);
+        bool speed_up = other_drum_pressed(global_data.player_num, PracticeDrumRole::R_KAT);
         if (clock.is_paused() && (speed_down || speed_up)) {
             audio.play_sound("kat", VolumePreset::SOUND);
             change_practice_speed(speed_down, speed_up);
