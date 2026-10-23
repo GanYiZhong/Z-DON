@@ -459,6 +459,9 @@ void SongSelectScreen::draw() {
     }
     if (search_box) {
         search_box->draw(script.get());
+        if (player->char_picker) {
+            player->char_picker->draw(script->last_search_field);
+        }
     }
     if (game_transition.has_value()) {
         game_transition->draw();

@@ -104,6 +104,9 @@ std::optional<Screens> SettingsScreen::handle_input() {
         return std::nullopt;
     }
     const bool typing = box_manager->editing_text();
+    if (typing) {
+        return std::nullopt; // Z-DON: the text field's picker owns the drum (and Enter / Esc) meanwhile
+    }
     const bool numeric = box_manager->adjusting_number();
     if (numeric && hold_dir != 0) {
         // Single-kat hold repeats the step: 400 ms delay, then 100 ms,

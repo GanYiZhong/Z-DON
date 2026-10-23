@@ -180,6 +180,11 @@ void SongSelect2PScreen::draw() {
     }
     if (search_box) {
         search_box->draw(script.get());
+        for (auto* p : {player.get(), player_2.get()}) {
+            if (p && p->char_picker) {
+                p->char_picker->draw(script->last_search_field);
+            }
+        }
     }
     if (game_transition.has_value()) {
         game_transition->draw();

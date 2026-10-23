@@ -215,7 +215,8 @@ bool SongSelectScript::draw_search_box(const std::string& search, double bg_resi
         }
         const float cx = tex.screen_width / 2.0f;
         const float cy = tex.screen_height / 2.0f;
-        ime_ui_set_field({cx - lw / 2 + lx, cy - lh / 2 + ly, lw, lh});
+        last_search_field = {cx - lw / 2 + lx, cy - lh / 2 + ly, lw, lh};
+        ime_ui_set_field(last_search_field);
     }
     return draw_with_default(fn_draw_search_box, "SongSelect:draw_search_box", fn_default_search_box,
                              "player_ui.draw_search_box", box);

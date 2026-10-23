@@ -2,6 +2,7 @@
 
 #include "../../libs/texture.h"
 #include "../global/chara_3d.h"
+#include "../global/drum_char_picker.h"
 #include "../global/nameplate.h"
 #include "diff_sort.h"
 #include "modifier.h"
@@ -29,6 +30,8 @@ public:
 
     bool search_guard = false;
     double search_guard_until_ms = 0.0;
+    // Z-DON: drum on-screen keyboard, up while the search box is open
+    std::optional<DrumCharPicker> char_picker;
 
     std::optional<NeiroSelector> neiro_selector;
     std::optional<ModifierSelector> modifier_selector;

@@ -372,21 +372,35 @@ std::optional<std::string> SongSelectPlayer::handle_input_search() {
         // query. Swallow typed input for a short grace period and until every don key is up.
         while (char_pressed() > 0) {
         }
+        // Z-DON: the drum presses of the grace period do not reach the picker either
+        is_l_don_pressed(player_num);
+        is_r_don_pressed(player_num);
+        is_l_kat_pressed(player_num);
+        is_r_kat_pressed(player_num);
         if (get_current_ms() >= search_guard_until_ms && !any_don_key_down(player_num)) {
             search_guard = false;
         }
         return std::nullopt;
     }
 
-    TextEditAction action = poll_text_edit(search_string);
-#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
-    if (action == TextEditAction::None && (is_l_don_pressed(player_num) || is_r_don_pressed(player_num))) {
-        action = TextEditAction::Confirm;
+    // Z-DON: the drum types through the on-screen picker (kat moves, don picks, OK / CANCEL
+    // cells close); the keyboard and IME still type, except the keys bound as this player's
+    // drum, which drive the picker instead.
+    if (!char_picker) {
+        char_picker.emplace(DrumCharPicker::CharSet::FULL);
     }
-#endif
+    TextEditAction action =
+        poll_text_edit(search_string, [this](int cp) { return !DrumCharPicker::is_drum_char(cp, player_num); });
+    DrumCharPicker::Result picked = char_picker->handle_input(player_num, search_string);
+    if (action == TextEditAction::None && picked == DrumCharPicker::Result::CONFIRM) {
+        action = TextEditAction::Confirm;
+    } else if (action == TextEditAction::None && picked == DrumCharPicker::Result::CANCEL) {
+        action = TextEditAction::Cancel;
+    }
     if (action == TextEditAction::Confirm || action == TextEditAction::Cancel) {
         std::string result = action == TextEditAction::Confirm ? trim_search(search_string) : "";
         search_string = "";
+        char_picker.reset();
         clear_input_buffers();
         return result;
     }

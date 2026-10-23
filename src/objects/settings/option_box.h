@@ -9,6 +9,7 @@
 
 #include "../../libs/screen.h"
 #include "../../libs/text.h"
+#include "../global/drum_char_picker.h"
 #include "config_ref.h"
 
 class BaseOptionBox {
@@ -91,8 +92,11 @@ public:
 };
 
 class StrOptionBox : public BaseOptionBox {
+    std::string path;
     std::string value;
     std::string input_string; // used for free-form editing
+    // Z-DON: drum on-screen keyboard while a free-form field is edited
+    std::optional<DrumCharPicker> picker;
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
     std::vector<std::pair<std::string, std::string>> value_list;
