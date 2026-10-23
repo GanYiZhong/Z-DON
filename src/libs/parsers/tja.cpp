@@ -452,23 +452,24 @@ void TJAParser::get_metadata() {
             } else if (item.starts_with("STYLE")) {
                 take_chart_values(course, style_base.try_emplace(current_diff, course).first->second);
             } else if (item.starts_with("BALLOON")) {
+                // BALLOONNOR/EXP/MAS: each branch's own list; BALLOON: the list without branches
                 struct BalloonRule {
                     std::string_view keyword;
-                    bool append;
+                    int branch;
                     bool clear_without_colon;
                 };
 
                 static constexpr BalloonRule rules[] = {
-                    {.keyword = "BALLOONNOR", .append = true, .clear_without_colon = false},
-                    {.keyword = "BALLOONEXP", .append = true, .clear_without_colon = false},
-                    {.keyword = "BALLOONMAS", .append = false, .clear_without_colon = false},
-                    {.keyword = "BALLOON", .append = false, .clear_without_colon = true},
+                    {.keyword = "BALLOONNOR", .branch = 0, .clear_without_colon = false},
+                    {.keyword = "BALLOONEXP", .branch = 1, .clear_without_colon = false},
+                    {.keyword = "BALLOONMAS", .branch = 2, .clear_without_colon = false},
+                    {.keyword = "BALLOON", .branch = -1, .clear_without_colon = true},
                 };
 
                 const auto rule = std::ranges::find_if(
                     rules, [&](const BalloonRule& rule) { return item.starts_with(rule.keyword); });
 
-                auto& balloons = metadata.course_data[current_diff].balloon;
+                auto& balloons = rule->branch < 0 ? course.balloon : course.branch_balloon[rule->branch];
                 if (rule->clear_without_colon && !item.contains(':')) {
                     balloons.clear();
                     continue;
@@ -477,16 +478,7 @@ void TJAParser::get_metadata() {
                 std::string balloon_data = split_after_colon(item);
                 if (!balloon_data.empty()) {
                     try {
-                        auto parsed = parse_balloon_data(balloon_data);
-                        // Z-DON: BALLOONNOR / EXP / MAS are also each branch's own list (add_note)
-                        if (rule->keyword != "BALLOON") {
-                            course.branch_balloon[rule - std::begin(rules)] = parsed;
-                        }
-                        if (rule->append) {
-                            balloons.insert(balloons.end(), parsed.begin(), parsed.end());
-                        } else {
-                            balloons = std::move(parsed);
-                        }
+                        balloons = parse_balloon_data(balloon_data);
                     } catch (const std::exception& e) {
                         spdlog::warn("Invalid {} value '{}' in {}: {}", rule->keyword, balloon_data, file_path.string(),
                                      e.what());
