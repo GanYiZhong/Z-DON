@@ -103,6 +103,11 @@
 - 練習模式：f2e1174 起會播前奏（以前第一幀就跳過約 1 s 前奏）。純上游 f2e1174 前/後與 Z-DON 合併前/後各自 19/19 相同。
 - 練習模式按空白鍵不會暫停（上游就沒有 pause_key 處理，只有 2P 咚/咔），未改。
 
+## 合併上游 PR #326–#333（2026-10-23，使用者指示：所有 PR 都收進 Z-DON）
+- 已有、no-op 合併：#326 整個名稱比對指令／譜面中的 NAME:value 行／P1・P2 各自的 #END、#333 TimelineObject 預設值、#327 STYLE 各段的 BALLOON/SCOREINIT/SCOREDIFF（全保留 Z-DON 的指令桶比對與無 regex 寫法）。
+- 新收：#332 `COURSE:Ura` 也找得到 Edit 譜面的音符；#331 find_chart 掃到該 course 結束，Single 在前的 `#START P1/P2` 2P 也找得到；#328 BALLOONNOR/EXP/MAS 只填自己分歧的清單、不再接到／取代 `balloon`（取代上面 ef867fb 時「沒有自己清單的分歧用上游語意的 balloon」那條）；#330 skin 更新器暫存檔＋rename、連線重用、k / n 進度。
+- 驗證：全曲庫 3043 首＋合成譜（P0/P1/P2）音符比對：P0 只有合成 Ura 譜和 5 首的 course `balloon` 欄位變；P1/P2 變動的 122／223 個 course 全都是「Single 之後還有 #START P1/P2」的譜。確定性套件 121/121 與 merge1023 相同。
+
 ## 合併上游 ef867fb（#277 響度、onboarding＋skin 更新器、#329 資料表重構、clang-tidy #325、SDL2 相容、#323/#324）
 - 使用者決定三個衝突區都用上游版：
   - 響度：用上游 #277 的 `loudness.*`（每首歌一個 `cache/loudness/*.loudness` 檔）；Z-DON 的單一 store 檔（462741a）拿掉，舊的 `cache/loudness/loudness_store.txt` 不再讀寫（留在磁碟上，上游格式的每首檔一直都在）。API 一樣，mixer／漸進解碼／常駐音效照舊乘 `normalization_gain`。
