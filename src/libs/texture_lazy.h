@@ -51,8 +51,8 @@ namespace texture_lazy {
     // source: the image's file (to decode it again after an eviction); owner: the screen whose load made it
     // size / mtime: the source as listed (the texture pack checks them when it is decoded again)
     std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
-                                         const std::filesystem::path& source, const std::string& owner,
-                                         uint64_t size = 0, uint64_t mtime = 0);
+                                  const std::filesystem::path& source, const std::string& owner, uint64_t size = 0,
+                                  uint64_t mtime = 0);
 
     // an eager upload at load, for the per-screen log
     void count_eager(const std::string& screen, const Texture& t);

@@ -105,8 +105,8 @@ namespace texture_lazy {
     }
 
     std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
-                                         const std::filesystem::path& source, const std::string& owner, uint64_t size,
-                                         uint64_t mtime) {
+                                  const std::filesystem::path& source, const std::string& owner, uint64_t size,
+                                  uint64_t mtime) {
         if (!enabled() || !image.data || during_gameplay(screen)) {
             return nullptr;
         }
