@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "color_utils.h"
 #include "jobs.h"
 #include "texture.h"
 
@@ -40,7 +41,7 @@ private:
         ray::Font font{};                         // aliases the three below
         std::vector<ray::GlyphInfo> atlas_glyphs; // cache[0 .. atlas_glyphs.size()) are packed
         std::vector<ray::Rectangle> atlas_recs;
-        ray::Texture atlas_texture{};
+        Texture atlas_texture{};
         ray::Image atlas_image{}; // CPU copy (GRAY_ALPHA), kept to grow the texture
         int pen_x = 0, pen_y = 0, row_h = 0;
     };
@@ -57,7 +58,7 @@ private:
     std::unordered_map<int, SizedFont> fonts;
     uint64_t use_clock = 0;
 
-    ray::Texture sentinel_texture{};
+    Texture sentinel_texture{};
 
     mutable std::mutex font_mutex;
 
@@ -128,7 +129,7 @@ private:
     std::optional<ray::Image> pending_image;
     mutable std::mutex pending_mutex;
 
-    std::optional<ray::Texture> texture;
+    std::optional<Texture> texture;
 
     jobs::Handle build_future; // Z-DON: a job on the shared pool (was a std::async thread per text)
 
@@ -136,8 +137,8 @@ private:
         ray::Image img;
     };
 
-    BuildData build_horizontal_text(ray::Color color, ray::Color outline_color, float spacing);
-    BuildData build_vertical_text(ray::Color color, ray::Color outline_color, float spacing);
+    BuildData build_horizontal_text(Color color, Color outline_color, float spacing);
+    BuildData build_vertical_text(Color color, Color outline_color, float spacing);
 
 public:
     float width = 0.0f;
@@ -146,7 +147,7 @@ public:
     float y_offset = 0.0f;
     int top_extra = 0;
 
-    OutlinedText(std::string text, int font_size, ray::Color color, ray::Color outline_color, bool is_vertical,
+    OutlinedText(std::string text, int font_size, Color color, Color outline_color, bool is_vertical,
                  float outline_thickness = 5.0f, float spacing = 2.0f, float v_advance = 1.0f,
                  const std::string& font_name = "");
 

@@ -198,9 +198,9 @@ std::optional<Screens> OnboardingScreen::update() {
     }
 
     const int rows = kSkinCount + 2;
-    if (ray::IsKeyPressed(ray::KEY_UP)) {
+    if (key_pressed(SDL_SCANCODE_UP)) {
         row = (row + rows - 1) % rows;
-    } else if (ray::IsKeyPressed(ray::KEY_DOWN)) {
+    } else if (key_pressed(SDL_SCANCODE_DOWN)) {
         row = (row + 1) % rows;
     } else if (is_l_kat_pressed() || menu_left_pressed() || is_r_kat_pressed() || menu_right_pressed()) {
         if (row == online_row()) {
@@ -219,35 +219,34 @@ std::optional<Screens> OnboardingScreen::update() {
     return std::nullopt;
 }
 
-void OnboardingScreen::draw_line(const std::string& text, float y, int size, ray::Color color) {
+void OnboardingScreen::draw_line(const std::string& text, float y, int size, Color color) {
     // no skin yet means no skin font; the raylib default covers the ASCII this screen uses
-    ray::Font font = skinless_start ? ray::GetFontDefault() : font_manager.get_font(text, size);
-    ray::Vector2 dim = ray::MeasureTextEx(font, text.c_str(), static_cast<float>(size), 1.0f);
-    ray::DrawTextEx(font, text.c_str(), ray::Vector2{(tex.screen_width - dim.x) / 2.0f, y}, static_cast<float>(size),
-                    1.0f, color);
+    ray::Font font = skinless_start ? get_font_default() : font_manager.get_font(text, size);
+    Vec2 dim = measure_text_ex(font, text.c_str(), static_cast<float>(size), 1.0f);
+    draw_text_ex(font, text.c_str(), Vec2{(tex.screen_width - dim.x) / 2.0f, y}, static_cast<float>(size), 1.0f, color);
 }
 
 void OnboardingScreen::draw() {
-    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::Color(30, 30, 30, 255));
+    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, Color(30, 30, 30, 255));
     const float s = tex.screen_height / 720.0f;
-    draw_line("Welcome to YataiDON", 50 * s, static_cast<int>(52 * s), ray::WHITE);
+    draw_line("Welcome to YataiDON", 50 * s, static_cast<int>(52 * s), Color::WHITE);
 
     if (downloading) {
         const SkinUpdater::Status st = skin_updater.snapshot();
         if (!download_started) {
-            draw_line("Waiting for the skin updater...", 300 * s, static_cast<int>(34 * s), ray::LIGHTGRAY);
+            draw_line("Waiting for the skin updater...", 300 * s, static_cast<int>(34 * s), Color::LIGHTGRAY);
         } else {
             draw_line("Downloading " + (st.current_skin.empty() ? std::string("skins") : st.current_skin) + "...",
-                      280 * s, static_cast<int>(34 * s), ray::YELLOW);
-            draw_line(st.current_file, 340 * s, static_cast<int>(22 * s), ray::GRAY);
+                      280 * s, static_cast<int>(34 * s), Color::YELLOW);
+            draw_line(st.current_file, 340 * s, static_cast<int>(22 * s), Color::GRAY);
             draw_line(std::to_string(st.files_updated) + " files downloaded", 380 * s, static_cast<int>(22 * s),
-                      ray::GRAY);
+                      Color::GRAY);
         }
-        draw_line("Please wait", 600 * s, static_cast<int>(22 * s), ray::GRAY);
+        draw_line("Please wait", 600 * s, static_cast<int>(22 * s), Color::GRAY);
         return;
     }
 
-    draw_line("Pick your skins", 125 * s, static_cast<int>(26 * s), ray::GRAY);
+    draw_line("Pick your skins", 125 * s, static_cast<int>(26 * s), Color::GRAY);
     for (int i = 0; i < kSkinCount; i++) {
         std::string line = std::string(selected[i] ? "[x] " : "[ ] ") + kSkins[i].name;
         if (installed[i]) {
@@ -257,15 +256,15 @@ void OnboardingScreen::draw() {
         if (child >= 0) {
             line += "  (needed by " + std::string(kSkins[child].name) + ")";
         }
-        ray::Color c = i == row ? ray::YELLOW : (selected[i] ? ray::WHITE : ray::LIGHTGRAY);
+        Color c = i == row ? Color::YELLOW : (selected[i] ? Color::WHITE : Color::LIGHTGRAY);
         draw_line(line, (165 + i * 42) * s, static_cast<int>(28 * s), c);
     }
     draw_line(std::string("Online mode: ") + (online ? "ON" : "OFF"), 440 * s, static_cast<int>(32 * s),
-              row == online_row() ? ray::YELLOW : ray::LIGHTGRAY);
-    draw_line("Continue", 500 * s, static_cast<int>(32 * s), row == continue_row() ? ray::YELLOW : ray::LIGHTGRAY);
+              row == online_row() ? Color::YELLOW : Color::LIGHTGRAY);
+    draw_line("Continue", 500 * s, static_cast<int>(32 * s), row == continue_row() ? Color::YELLOW : Color::LIGHTGRAY);
     if (!error.empty()) {
-        draw_line(error, 565 * s, static_cast<int>(22 * s), ray::RED);
+        draw_line(error, 565 * s, static_cast<int>(22 * s), Color::RED);
     }
     draw_line("Up/Down: move    Enter / don: select    Left/Right: toggle online", 650 * s, static_cast<int>(20 * s),
-              ray::GRAY);
+              Color::GRAY);
 }

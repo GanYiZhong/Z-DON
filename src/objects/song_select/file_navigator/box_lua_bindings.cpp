@@ -51,7 +51,7 @@ void register_box_lua_bindings(sol::state& lua) {
         [](BaseBox& self) { return genre_to_ref_frame(self.genre_index); }, "fore_color",
         [](BaseBox& self) -> sol::object {
             sol::table t = script_manager.lua->create_table(0, 4);
-            const ray::Color& c = self.fore_color;
+            const Color& c = self.fore_color;
             t["r"] = c.r;
             t["g"] = c.g;
             t["b"] = c.b;
@@ -92,9 +92,9 @@ void register_box_lua_bindings(sol::state& lua) {
             if (!self.preimage.has_value()) {
                 return;
             }
-            ray::Rectangle src{0, 0, (float)self.preimage->width, (float)self.preimage->height};
-            ray::Rectangle dest{x, y, width, height};
-            ray::DrawTexturePro(self.preimage.value(), src, dest, ray::Vector2{0, 0}, 0, ray::Fade(ray::WHITE, fade));
+            Rect src{0, 0, (float)self.preimage->width, (float)self.preimage->height};
+            Rect dest{x, y, width, height};
+            draw_texture_pro(self.preimage.value(), src, dest, Vec2{0, 0}, 0, ::fade(Color::WHITE, fade));
         });
 
     lua.new_usertype<FolderBox>(
@@ -175,10 +175,9 @@ void register_box_lua_bindings(sol::state& lua) {
                 y = *cy - dh / 2.0f;
             }
 
-            ray::Rectangle src{0, 0, w, h};
-            ray::Rectangle dest{x, y, dw, dh};
-            ray::DrawTexturePro(self.box_texture.value(), src, dest, ray::Vector2{0, 0}, 0,
-                                ray::Fade(ray::WHITE, fade));
+            Rect src{0, 0, w, h};
+            Rect dest{x, y, dw, dh};
+            draw_texture_pro(self.box_texture.value(), src, dest, Vec2{0, 0}, 0, ::fade(Color::WHITE, fade));
         });
 
     lua.new_usertype<BackBox>("BackBox", sol::base_classes, sol::bases<BaseBox>());

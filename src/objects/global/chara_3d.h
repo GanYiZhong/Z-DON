@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../libs/color_utils.h"
 #include "../../libs/ray.h"
 #include "../../libs/texture.h"
 
@@ -88,7 +89,7 @@ private:
 
     void load_part(const fs::path& model_path, const fs::path& anim_path, bool normalize_face_scale = false);
 
-    std::vector<ray::Texture2D> face_textures;
+    std::vector<Texture> face_textures;
     std::unordered_map<int, std::unique_ptr<BaseAnimation>> face_anims;
     BaseAnimation* current_face_anim = nullptr;
     int current_face_index = -1;
@@ -166,9 +167,9 @@ public:
 
     void apply_face(int face_index);
 
-    void set_don_colors(ray::Color body, ray::Color face, ray::Color rim);
+    void set_don_colors(Color body, Color face, Color rim);
 
-    void set_tint(ray::Color color, float amount);
+    void set_tint(Color color, float amount);
     void set_bpm(float bpm);
     void set_anim(AnimIndex idx);
     void set_rotation(float x, float y, float z);

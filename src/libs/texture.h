@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "animation.h"
+#include "color_utils.h"
 #include "ray.h" // IWYU pragma: keep
 #include "skin_config.h"
 #include "texture_lazy.h"
@@ -36,38 +37,19 @@ inline Mirror mirror_from_string(const std::string& s) {
 }
 
 struct DrawTextureParams {
-    ray::Color color = ray::WHITE;
+    Color color = Color::WHITE;
     int frame = 0;
     float scale = 1.0f;
     bool center = false;
     Mirror mirror = Mirror::NONE;
     float x = 0, y = 0, x2 = 0, y2 = 0;
-    ray::Vector2 origin = {0, 0};
+    Vec2 origin = {0, 0};
     float rotation = 0;
     double fade = 1.1f;
     int index = 0;
-    std::optional<ray::Rectangle> src = std::nullopt;
+    std::optional<Rect> src = std::nullopt;
     std::optional<int> blend = std::nullopt;
 };
-
-inline int blend_from_string(const std::string& s) {
-    if (s == "additive") {
-        return ray::BLEND_ADDITIVE;
-    }
-    if (s == "multiplied") {
-        return ray::BLEND_MULTIPLIED;
-    }
-    if (s == "add_colors") {
-        return ray::BLEND_ADD_COLORS;
-    }
-    if (s == "subtract_colors") {
-        return ray::BLEND_SUBTRACT_COLORS;
-    }
-    if (s == "alpha_premultiply") {
-        return ray::BLEND_ALPHA_PREMULTIPLY;
-    }
-    return ray::BLEND_ALPHA;
-}
 
 struct SkinInfo {
     float x;
@@ -98,7 +80,7 @@ struct TextureObject {
     std::vector<int> y;
     std::vector<int> x2;
     std::vector<int> y2;
-    std::optional<std::vector<ray::Rectangle>> crop_data;
+    std::optional<std::vector<Rect>> crop_data;
 
     float opaque_right = 0.0f;
     TextureObject(const std::string& name, int width, int height)
@@ -114,8 +96,8 @@ struct TextureObject {
 
     // The frame's GL texture, uploaded first if it still waits for its first use (texture_lazy.h):
     // everything that hands the texture to GL goes through here.
-    const ray::Texture2D* frame_texture(int frame) const {
-        const ray::Texture2D* t = frame_texture_raw(frame);
+    const Texture* frame_texture(int frame) const {
+        const Texture* t = frame_texture_raw(frame);
         if (t && t->id == 0) {
             texture_lazy::upload(t);
         }
@@ -124,26 +106,26 @@ struct TextureObject {
 
     // The frame's texture as it is (id 0 while the upload is pending; width / height / format are set):
     // for bookkeeping that must not upload it.
-    virtual const ray::Texture2D* frame_texture_raw(int frame) const { return nullptr; }
+    virtual const Texture* frame_texture_raw(int frame) const { return nullptr; }
 
     virtual int frame_count() const { return 1; }
 };
 
 struct SingleTexture : public TextureObject {
-    std::shared_ptr<ray::Texture2D> texture;
+    std::shared_ptr<Texture> texture;
 
-    SingleTexture(const std::string& name, std::shared_ptr<ray::Texture2D> tex)
+    SingleTexture(const std::string& name, std::shared_ptr<Texture> tex)
         : TextureObject(name, tex->width, tex->height), texture(std::move(tex)) {
         texture_lazy::set_wrap(texture.get(), ray::TEXTURE_WRAP_CLAMP);
     }
 
-    const ray::Texture2D* frame_texture_raw(int) const override { return texture.get(); }
+    const Texture* frame_texture_raw(int) const override { return texture.get(); }
 };
 
 struct FramedTexture : public TextureObject {
-    std::vector<std::shared_ptr<ray::Texture2D>> textures;
+    std::vector<std::shared_ptr<Texture>> textures;
 
-    FramedTexture(const std::string& name, std::vector<std::shared_ptr<ray::Texture2D>> texs)
+    FramedTexture(const std::string& name, std::vector<std::shared_ptr<Texture>> texs)
         : TextureObject(name, texs.empty() ? 0 : texs[0]->width, texs.empty() ? 0 : texs[0]->height),
           textures(std::move(texs)) {
         for (auto& tex : textures) {
@@ -153,7 +135,7 @@ struct FramedTexture : public TextureObject {
 
     int frame_count() const override { return static_cast<int>(textures.size()); }
 
-    const ray::Texture2D* frame_texture_raw(int frame) const override {
+    const Texture* frame_texture_raw(int frame) const override {
         if (frame < 0 || frame >= static_cast<int>(textures.size())) {
             throw std::runtime_error("Frame " + std::to_string(frame) + " not available in framed texture " + name);
         }
@@ -163,14 +145,14 @@ struct FramedTexture : public TextureObject {
 
 struct DrawLogEntry {
     std::string name;
-    ray::Rectangle rect;
+    Rect rect;
     TextureObject* tex_obj = nullptr;
     int index = 0;
     float offset_x = 0.0f;
     float offset_y = 0.0f;
     float scale = 1.0f;
     bool center = false;
-    ray::Vector2 origin = {0, 0};
+    Vec2 origin = {0, 0};
     float rotation = 0.0f;
     bool from_lua = false;
     std::string lua_source;

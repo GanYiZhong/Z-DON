@@ -14,8 +14,8 @@
 // One axis of the virtual -> window mapping: dim/win_dim are the skin's and the window's size along the axis,
 // stretch is the camera's h_scale or v_scale, cam_offset the camera offset along it
 inline int virtual_to_screen_axis(float v, float dim, float win_dim, float stretch, float cam_offset) {
-    int win_w = ray::GetRenderWidth();
-    int win_h = ray::GetRenderHeight();
+    int win_w = get_render_width();
+    int win_h = get_render_height();
     float scale = std::min((float)win_w / tex.screen_width, (float)win_h / tex.screen_height);
     float effective_zoom = scale * global_data.camera.zoom;
     float zoom_off = (dim * scale * (global_data.camera.zoom - 1.0f)) * 0.5f;
@@ -28,7 +28,7 @@ inline int virtual_to_screen_x(float virtual_x) {
     if (tex.screen_width <= 0 || tex.screen_height <= 0) {
         return 0;
     }
-    return virtual_to_screen_axis(virtual_x, tex.screen_width, (float)ray::GetRenderWidth(), global_data.camera.h_scale,
+    return virtual_to_screen_axis(virtual_x, tex.screen_width, (float)get_render_width(), global_data.camera.h_scale,
                                   global_data.camera.offset.x);
 }
 
@@ -36,8 +36,8 @@ inline int virtual_to_screen_y(float virtual_y) {
     if (tex.screen_width <= 0 || tex.screen_height <= 0) {
         return 0;
     }
-    return virtual_to_screen_axis(virtual_y, tex.screen_height, (float)ray::GetRenderHeight(),
-                                  global_data.camera.v_scale, global_data.camera.offset.y);
+    return virtual_to_screen_axis(virtual_y, tex.screen_height, (float)get_render_height(), global_data.camera.v_scale,
+                                  global_data.camera.offset.y);
 }
 
 enum class Screens {

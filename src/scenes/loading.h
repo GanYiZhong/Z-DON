@@ -18,7 +18,7 @@ private:
     std::vector<fs::path> songs;
     std::vector<SongFileStamp> song_stamps; // what the directory listing said about each of `songs`
 
-    ray::Rectangle progress_bar{};
+    Rect progress_bar{};
 
     TextureObject* t_warning = nullptr;
 

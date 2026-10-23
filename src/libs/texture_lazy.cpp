@@ -37,8 +37,8 @@ namespace texture_lazy {
         };
 
         // never destroyed: textures may be freed by static destructors at exit
-        std::unordered_map<const ray::Texture2D*, Pending>& pending_map() {
-            static auto* m = new std::unordered_map<const ray::Texture2D*, Pending>();
+        std::unordered_map<const Texture*, Pending>& pending_map() {
+            static auto* m = new std::unordered_map<const Texture*, Pending>();
             return *m;
         }
         std::map<std::string, ScreenStats>& stats() {
@@ -81,7 +81,7 @@ namespace texture_lazy {
         }
 
         // drops a pending entry, freeing its image
-        void forget(std::unordered_map<const ray::Texture2D*, Pending>::iterator it) {
+        void forget(std::unordered_map<const Texture*, Pending>::iterator it) {
             if (!it->second.evicted) {
                 pending_bytes -= std::min(pending_bytes, it->second.bytes);
             }
@@ -104,7 +104,7 @@ namespace texture_lazy {
         return on;
     }
 
-    std::shared_ptr<ray::Texture2D> make(const ray::Image& image, const std::string& screen,
+    std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
                                          const std::filesystem::path& source, const std::string& owner, uint64_t size,
                                          uint64_t mtime) {
         if (!enabled() || !image.data || during_gameplay(screen)) {
@@ -121,7 +121,7 @@ namespace texture_lazy {
             }
             return nullptr;
         }
-        auto* t = new ray::Texture2D{};
+        auto* t = new Texture{};
         t->id = 0;
         t->width = image.width;
         t->height = image.height;
@@ -131,7 +131,7 @@ namespace texture_lazy {
         pending_bytes += bytes;
         ++st.lazy;
         st.lazy_bytes += bytes;
-        return std::shared_ptr<ray::Texture2D>(t, [](ray::Texture2D* p) {
+        return std::shared_ptr<Texture>(t, [](Texture* p) {
             auto& m = pending_map();
             if (auto it = m.find(p); it != m.end()) {
                 forget(it);
@@ -142,13 +142,13 @@ namespace texture_lazy {
         });
     }
 
-    void count_eager(const std::string& screen, const ray::Texture2D& t) {
+    void count_eager(const std::string& screen, const Texture& t) {
         ScreenStats& st = stats()[screen];
         ++st.eager;
         st.eager_bytes += image_bytes(t.width, t.height, t.format);
     }
 
-    void upload(const ray::Texture2D* t) {
+    void upload(const Texture* t) {
         if (!t || t->id != 0) {
             return;
         }
@@ -171,13 +171,13 @@ namespace texture_lazy {
                 return;
             }
         }
-        ray::Texture2D up = ray::LoadTextureFromImage(p.image);
+        Texture up = ray::LoadTextureFromImage(p.image);
         if (!ray::IsTextureValid(up)) {
             spdlog::error("Lazy texture upload failed ({}x{}, {})", p.image.width, p.image.height, p.screen);
             forget(it);
             return;
         }
-        auto* dst = const_cast<ray::Texture2D*>(t); // heap object owned by make()'s shared_ptr
+        auto* dst = const_cast<Texture*>(t); // heap object owned by make()'s shared_ptr
         *dst = up;
         if (p.wrap >= 0) {
             ray::SetTextureWrap(*dst, p.wrap);
@@ -192,7 +192,7 @@ namespace texture_lazy {
         forget(it);
     }
 
-    void set_filter(const ray::Texture2D* t, int filter) {
+    void set_filter(const Texture* t, int filter) {
         if (!t) {
             return;
         }
@@ -202,10 +202,10 @@ namespace texture_lazy {
             }
             return;
         }
-        ray::SetTextureFilter(*const_cast<ray::Texture2D*>(t), filter);
+        ray::SetTextureFilter(*const_cast<Texture*>(t), filter);
     }
 
-    void set_wrap(const ray::Texture2D* t, int wrap) {
+    void set_wrap(const Texture* t, int wrap) {
         if (!t) {
             return;
         }
@@ -215,7 +215,7 @@ namespace texture_lazy {
             }
             return;
         }
-        ray::SetTextureWrap(*const_cast<ray::Texture2D*>(t), wrap);
+        ray::SetTextureWrap(*const_cast<Texture*>(t), wrap);
     }
 
     void evict_all() {
@@ -253,7 +253,7 @@ namespace texture_lazy {
         }
     }
 
-    bool evicted(const ray::Texture2D* t) {
+    bool evicted(const Texture* t) {
         if (!t || t->id != 0) {
             return false;
         }
@@ -261,7 +261,7 @@ namespace texture_lazy {
         return it != pending_map().end() && it->second.evicted;
     }
 
-    std::filesystem::path source(const ray::Texture2D* t) {
+    std::filesystem::path source(const Texture* t) {
         auto it = pending_map().find(t);
         return it != pending_map().end() ? it->second.source : std::filesystem::path{};
     }
@@ -276,7 +276,7 @@ namespace texture_lazy {
         return out;
     }
 
-    void refill(const ray::Texture2D* t, ray::Image image) {
+    void refill(const Texture* t, ray::Image image) {
         auto it = pending_map().find(t);
         if (it == pending_map().end() || !it->second.evicted || !image.data) {
             texture_retain::free_image_async(image);
@@ -311,7 +311,7 @@ namespace texture_lazy {
     }
 
     size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, ray::Image>>& images) {
-        std::map<std::filesystem::path, std::vector<const ray::Texture2D*>> by_file;
+        std::map<std::filesystem::path, std::vector<const Texture*>> by_file;
         for (const auto& [t, p] : pending_map()) {
             if (p.evicted && p.owner == owner) {
                 by_file[p.source].push_back(t);

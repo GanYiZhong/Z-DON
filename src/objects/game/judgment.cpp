@@ -100,7 +100,7 @@ void Judgment::draw_outer_effect(float judge_x, float judge_y) {
                                       .x = judge_x,
                                       .y = judge_y,
                                       .fade = hit_fade,
-                                      .blend = ray::BLEND_ADDITIVE});
+                                      .blend = blend_mode::ADDITIVE});
 }
 
 void Judgment::draw_ray_effect(float judge_x, float judge_y) {
@@ -112,14 +112,14 @@ void Judgment::draw_ray_effect(float judge_x, float judge_y) {
                              .x = judge_x,
                              .y = judge_y,
                              .fade = ray_fade->attribute,
-                             .blend = ray::BLEND_ADDITIVE});
+                             .blend = blend_mode::ADDITIVE});
     if (ray2_scale) {
         tex.draw_texture(t_ray, {.scale = (float)ray2_scale->attribute,
                                  .center = true,
                                  .x = judge_x,
                                  .y = judge_y,
                                  .fade = ray2_fade->attribute,
-                                 .blend = ray::BLEND_ADDITIVE});
+                                 .blend = blend_mode::ADDITIVE});
     }
 }
 

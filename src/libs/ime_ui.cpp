@@ -5,7 +5,6 @@
 #include <cstring>
 #include <mutex>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "global_data.h"
@@ -35,7 +34,6 @@ namespace {
     std::mutex ime_mutex; // the watch runs where SDL events are pumped / pushed
     ImeState ime;
     bool ime_active = false;
-    std::string commit_tail; // what raylib dropped of each committed string (all but its 1st code point)
     bool field_set = false;
     ray::Rectangle field{};
 #ifdef ZDON_IME_UI
@@ -85,9 +83,6 @@ static bool SDLCALL ime_event_watch(void* /*userdata*/, SDL_Event* event) {
         std::scoped_lock lock(ime_mutex);
         ime.composition.clear(); // committed
         ime.start = ime.length = 0;
-        if (ime_active && event->text.text && *event->text.text) {
-            commit_tail += event->text.text + utf8_offset(event->text.text, 1);
-        }
         break;
     }
     default:
@@ -121,15 +116,9 @@ void ime_ui_text_input_changed(bool active) {
     std::scoped_lock lock(ime_mutex);
     ime_active = active;
     clear_locked();
-    commit_tail.clear();
 #ifdef ZDON_IME_UI
     last_area = {-1, -1, -1, -1};
 #endif
-}
-
-std::string ime_ui_take_commit_tail() {
-    std::scoped_lock lock(ime_mutex);
-    return std::exchange(commit_tail, std::string());
 }
 
 void ime_ui_set_field(ray::Rectangle rect) {
@@ -264,7 +253,7 @@ void ime_ui_draw(const ray::Camera2D& camera) {
     if (comp_h > 0) {
         const float tx = x + pad;
         const float ty = cy + (row_h - fs) / 2;
-        ray::DrawTextEx(font, st.composition.c_str(), {tx, ty}, (float)fs, spacing, ray::BLACK);
+        ray::DrawTextEx(font, st.composition.c_str(), {tx, ty}, (float)fs, spacing, Color::BLACK);
         const float uy = ty + fs + 2 * S;
         ray::DrawRectangleRec({tx, uy, comp_w, 2 * S}, ray::Color{90, 90, 90, 255});
         const size_t b0 = utf8_offset(st.composition, st.start);
@@ -274,7 +263,7 @@ void ime_ui_draw(const ray::Camera2D& camera) {
             const float x1 = tx + measure(st.composition.substr(0, b1));
             ray::DrawRectangleRec({x0, uy - 1 * S, x1 - x0, 4 * S}, border);
         } else {
-            ray::DrawRectangleRec({x0, ty - 2 * S, 2 * S, fs + 4 * S}, ray::BLACK); // caret
+            ray::DrawRectangleRec({x0, ty - 2 * S, 2 * S, fs + 4 * S}, Color::BLACK); // caret
         }
         cy += comp_h + sep;
         if (cand_h > 0) {
@@ -291,7 +280,7 @@ void ime_ui_draw(const ray::Camera2D& camera) {
         }
         const float tx = horizontal ? cx : x + 2 * pad;
         ray::DrawTextEx(font, labels[i].c_str(), {tx, cy + (row_h - fs) / 2}, (float)fs, spacing,
-                        is_sel ? ray::WHITE : ray::BLACK);
+                        is_sel ? Color::WHITE : Color::BLACK);
         if (horizontal) {
             cx += label_w[i] + gap;
         } else {

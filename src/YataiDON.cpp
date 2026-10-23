@@ -62,11 +62,11 @@
 #include "scenes/song_select_practice.h"
 #include "scenes/title.h"
 
-void draw_outer_border(int screen_width, int screen_height, ray::Color last_color) {
+void draw_outer_border(int screen_width, int screen_height, Color last_color) {
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if (dx != 0 || dy != 0) {
-                DrawRectangle(dx * screen_width, dy * screen_height, screen_width, screen_height, last_color);
+                draw_rectangle(dx * screen_width, dy * screen_height, screen_width, screen_height, last_color);
             }
         }
     }
@@ -85,13 +85,12 @@ static void draw_skin_update_status() {
     const std::string skin_line =
         st.current_skin.empty() ? "Checking for skin updates..." : "Updating skin: " + st.current_skin;
     ray::Font skin_font = font_manager.get_font(skin_line, size);
-    ray::DrawTextEx(skin_font, skin_line.c_str(), ray::Vector2{x, y}, static_cast<float>(size), 1.0f, ray::YELLOW);
+    draw_text_ex(skin_font, skin_line.c_str(), Vec2{x, y}, static_cast<float>(size), 1.0f, Color::YELLOW);
 
     if (!st.current_file.empty()) {
         y += static_cast<float>(size);
         ray::Font file_font = font_manager.get_font(st.current_file, size);
-        ray::DrawTextEx(file_font, st.current_file.c_str(), ray::Vector2{x, y}, static_cast<float>(size), 1.0f,
-                        ray::WHITE);
+        draw_text_ex(file_font, st.current_file.c_str(), Vec2{x, y}, static_cast<float>(size), 1.0f, Color::WHITE);
     }
 }
 
@@ -272,7 +271,7 @@ struct LoopState {
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / 60.0));
     std::chrono::time_point<std::chrono::steady_clock> next_frame_time = std::chrono::steady_clock::now();
     FPSCounter fps_counter;
-    ray::Color last_color = ray::BLACK;
+    Color last_color = Color::BLACK;
     double screen_fade_start = 0.0;
 };
 
@@ -548,7 +547,7 @@ static void run_frame() {
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
 
-    ray::PollInputEvents();
+    poll_input_events();
 #if defined(YATAIDON_PLATFORM_IOS)
     if (ios_is_suspended_state()) {
         return;
@@ -563,10 +562,10 @@ static void run_frame() {
     seg_mark(SEG_INPUT);
 
     if (check_key_pressed(global_data.config->keys.fullscreen_key)) {
-        ray::ToggleFullscreen();
+        toggle_fullscreen();
         spdlog::info("Toggled fullscreen");
     } else if (check_key_pressed(global_data.config->keys.borderless_key)) {
-        ray::ToggleBorderlessWindowed();
+        toggle_borderless_windowed();
         spdlog::info("Toggled borderless windowed mode");
     }
 
@@ -575,15 +574,15 @@ static void run_frame() {
         debug_menu.update(L.camera);
     }
 
-    ray::BeginDrawing();
+    begin_drawing();
 
     if (global_data.camera.border_color != L.last_color) {
-        ray::ClearBackground(global_data.camera.border_color);
+        clear_background(global_data.camera.border_color);
         L.last_color = global_data.camera.border_color;
     }
 
-    ray::BeginMode2D(L.camera);
-    ray::BeginBlendMode(ray::BLEND_CUSTOM_SEPARATE);
+    begin_mode_2d(L.camera);
+    begin_blend_mode(blend_mode::CUSTOM_SEPARATE);
 
     auto screen_it = L.screens.find(L.current_screen);
     Screen* screen = (screen_it != L.screens.end()) ? screen_it->second.get() : nullptr;
@@ -600,9 +599,9 @@ static void run_frame() {
         screen = (screen_it != L.screens.end()) ? screen_it->second.get() : nullptr;
     }
     if (!screen) {
-        ray::EndBlendMode();
-        ray::EndMode2D();
-        ray::EndDrawing();
+        end_blend_mode();
+        end_mode_2d();
+        end_drawing();
         return;
     }
 
@@ -704,7 +703,7 @@ static void run_frame() {
             L.screen_fade_start = 0.0;
         } else {
             const float a = static_cast<float>(1.0 - (t < 0.0 ? 0.0 : t));
-            draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::BLACK, a));
+            draw_rectangle(0, 0, tex.screen_width, tex.screen_height, fade(Color::BLACK, a));
         }
     }
 
@@ -746,15 +745,15 @@ static void run_frame() {
 
     draw_outer_border(tex.screen_width, tex.screen_height, L.last_color);
 
-    ray::EndBlendMode();
-    ray::EndMode2D();
+    end_blend_mode();
+    end_mode_2d();
     seg_mark(SEG_OVERLAY);
     const bool dump_done = dump_screen_tick();
     frame_stats_add(frame_start);
     {
         PROFILE_SCOPE_N("present");
         const auto present_start = std::chrono::steady_clock::now();
-        ray::EndDrawing();
+        end_drawing();
         draw_stats_add(screen->screen_name);
         if (dump_done) {
             g_dump_screen_done = true; // shut down as on a normal quit (std::exit here crashed
@@ -764,19 +763,19 @@ static void run_frame() {
         // tear-free pacing: the extra (input) frames of a refresh are not presented
         if (!next_screen.has_value() && vblank_pacing::present_this_frame()) {
             vblank_pacing::before_present();
-            ray::SwapScreenBuffer();
+            swap_screen_buffer();
         }
         frame_spike_present(present_start);
     }
 
-    if (ray::IsKeyPressed(ray::KEY_F12)) {
+    if (key_pressed(SDL_SCANCODE_F12)) {
         static int screenshot_counter = 0;
-        ray::Image image = ray::LoadImageFromScreen();
+        ray::Image image = load_image_from_screen();
         if (L.current_screen == Screens::RESULT && tex.options[SCO::CROP_RESULT_SCREENSHOT]) {
-            ray::ImageCrop(&image, {0, 0, (float)image.width, (float)image.height / 2.0f});
+            image_crop(&image, {0, 0, (float)image.width, (float)image.height / 2.0f});
         }
-        ray::ExportImage(image, ray::TextFormat("screenshot%03i.png", screenshot_counter));
-        ray::UnloadImage(image);
+        export_image(image, text_format("screenshot%03i.png", screenshot_counter));
+        unload_image(image);
         screenshot_counter++;
         spdlog::info("Screenshot saved");
     }
@@ -869,10 +868,10 @@ static bool dump_screen_tick() {
                                      : std::to_string(g_dump_screen.next) + "_" +
                                            std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
         if (!grabbed) {
-            shots.emplace_back(name, ray::LoadImageFromScreen());
+            shots.emplace_back(name, load_image_from_screen());
             grabbed = true;
         } else {
-            shots.emplace_back(name, ray::ImageCopy(shots.back().second));
+            shots.emplace_back(name, image_copy(shots.back().second));
         }
         g_dump_screen.next++;
     }
@@ -880,8 +879,8 @@ static bool dump_screen_tick() {
         return false;
     }
     for (auto& [name, img] : shots) {
-        ray::ExportImage(img, (fs::path(g_dump_screen.outdir) / name).string().c_str());
-        ray::UnloadImage(img);
+        export_image(img, (fs::path(g_dump_screen.outdir) / name).string().c_str());
+        unload_image(img);
     }
     shots.clear();
     return true;
@@ -919,17 +918,17 @@ static int dump_chara(const std::string& spec) {
             ch->update(ms);
         } // ~250 ms of animation
         ray::Camera2D cam = compute_camera2d(tex.screen_width, tex.screen_height);
-        ray::BeginDrawing();
-        ray::ClearBackground({200, 220, 200, 255});
-        ray::BeginMode2D(cam);
-        ray::BeginBlendMode(ray::BLEND_CUSTOM_SEPARATE);
+        begin_drawing();
+        clear_background(Color{200, 220, 200, 255});
+        begin_mode_2d(cam);
+        begin_blend_mode(blend_mode::CUSTOM_SEPARATE);
         ch->draw(tex.screen_width * 0.5f, tex.screen_height * 0.55f, 2.0f);
-        ray::EndBlendMode();
-        ray::EndMode2D();
-        ray::Image img = ray::LoadImageFromScreen();
-        ray::EndDrawing();
-        ray::ExportImage(img, (fs::path(f[0]) / (std::to_string(i) + ".png")).string().c_str());
-        ray::UnloadImage(img);
+        end_blend_mode();
+        end_mode_2d();
+        ray::Image img = load_image_from_screen();
+        end_drawing();
+        export_image(img, (fs::path(f[0]) / (std::to_string(i) + ".png")).string().c_str());
+        unload_image(img);
     }
     return 0;
 }
@@ -966,9 +965,9 @@ int main(int argc, char* argv[]) {
         global_data.force_auto_play = true;
     }
     init_scores_manager(global_data.config->general.score_method == ScoreMethod::GEN3);
-    unsigned int flags = ray::FLAG_WINDOW_RESIZABLE;
+    unsigned int flags = window_flag::RESIZABLE;
     if (global_data.config->video.vsync && !fixed_step::on()) {
-        flags |= ray::FLAG_VSYNC_HINT;
+        flags |= window_flag::VSYNC;
         spdlog::info("VSync enabled");
     }
 #ifdef YATAIDON_PLATFORM_IOS
@@ -982,8 +981,8 @@ int main(int argc, char* argv[]) {
     if (g_dump_screen.active) {
         flags |= ray::FLAG_WINDOW_HIDDEN;
     }
-    ray::SetConfigFlags(flags);
-    ray::SetTraceLogLevel(ray::LOG_ERROR);
+    set_window_flags(flags);
+    quiet_raylib_log();
     setup_logging(global_data.config->general.log_level);
     // The library walk only reads the disk: it runs while the window opens and the skin loads, and the
     // loading screen picks it up (not with a song on the command line, which skips that screen).
@@ -992,7 +991,7 @@ int main(int argc, char* argv[]) {
     }
 
     ime_ui_set_hint();
-    ray::InitWindow(1280, 720, "YataiDON");
+    init_window(1280, 720, "YataiDON");
     ime_ui_install();
     // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way.
     // Not when the window is hidden (YATAIDON_DUMP_SCREEN): minimizing a hidden window stalled the
@@ -1068,19 +1067,19 @@ int main(int argc, char* argv[]) {
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
     if (global_data.config->video.borderless) {
-        ray::ToggleBorderlessWindowed();
+        toggle_borderless_windowed();
         spdlog::info("Borderless window enabled");
     }
     if (global_data.config->video.fullscreen) {
-        ray::ToggleFullscreen();
+        toggle_fullscreen();
         spdlog::info("Fullscreen enabled");
     }
 #endif
 
     rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD,
                               RL_FUNC_ADD);
-    ray::SetExitKey(ray::KEY_NULL);
-    ray::HideCursor();
+    disable_exit_key();
+    hide_cursor();
 
     L.next_frame_time = std::chrono::steady_clock::now();
 #ifdef __EMSCRIPTEN__
@@ -1091,7 +1090,7 @@ int main(int argc, char* argv[]) {
     input_thread = std::thread(input_polling_thread);
     start_midi_input(global_data.config->midi);
 
-    while (!ray::WindowShouldClose() && !g_dump_screen_done) {
+    while (!window_should_close() && !g_dump_screen_done) {
         process_midi_events();
 
         // Consume buffered quit-key presses while editing to prevent a delayed game exit after the field closes.
@@ -1120,7 +1119,7 @@ int main(int argc, char* argv[]) {
 #if defined(__linux__) && !defined(__ANDROID__)
     unix_close_window();
 #else
-    ray::CloseWindow();
+    close_window();
 #endif
     spdlog::info("Game closed");
 #endif

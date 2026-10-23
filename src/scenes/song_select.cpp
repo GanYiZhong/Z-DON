@@ -306,7 +306,7 @@ void SongSelectScreen::start_search() {
     search_box.emplace();
     // The don key that opened the search (F/J) is also a typed character still
     // queued in raylib's char buffer; drop it so it does not land in the query.
-    while (ray::GetCharPressed() > 0) {
+    while (char_pressed() > 0) {
     }
 }
 
@@ -404,7 +404,7 @@ Screens SongSelectScreen::on_screen_end(Screens next_screen) {
         stats_future.wait();
     }
     navigator.join_loader();
-    ray::UnloadShader(shader);
+    unload_shader(shader);
     player.reset(); // Z-DON: its Don's model goes back to the part pool for the next screen
     return Screen::on_screen_end(next_screen);
 }

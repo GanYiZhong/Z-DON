@@ -3,6 +3,7 @@
 #include <cmath>
 #include <numbers>
 
+#include "../../../libs/color_utils.h"
 #include "../../../libs/text.h"
 #include "../../enums.h"
 
@@ -12,9 +13,9 @@ struct BoxDef {
     GenreIndex genre_index;
     std::string genre_label;
     std::string collection;
-    std::optional<ray::Color> back_color;
-    std::optional<ray::Color> fore_color;
-    std::optional<ray::Color> box_color;
+    std::optional<Color> back_color;
+    std::optional<Color> fore_color;
+    std::optional<Color> box_color;
     std::array<std::string, 3> explanation;
 };
 
@@ -41,9 +42,9 @@ public:
     std::array<std::string, 3> explanation;
 
     TextureIndex texture_index;
-    std::optional<ray::Color> back_color;
-    ray::Color fore_color;
-    ray::Color text_color = ray::WHITE;
+    std::optional<Color> back_color;
+    Color fore_color;
+    Color text_color = Color::WHITE;
 
     std::unique_ptr<FadeAnimation> fade;
     std::unique_ptr<MoveAnimation> open_anim;
@@ -118,12 +119,12 @@ public:
     bool has_recolor() const { return shader_loaded && texture_index == TextureIndex::NONE; }
     void begin_recolor() {
         if (shader_loaded) {
-            ray::BeginShaderMode(shader);
+            begin_shader_mode(shader);
         }
     }
     void end_recolor() {
         if (shader_loaded) {
-            ray::EndShaderMode();
+            end_shader_mode();
         }
     }
 

@@ -50,30 +50,30 @@ namespace texture_lazy {
     // the texture: the caller must not free it (it may keep reading it until it forgets the struct).
     // source: the image's file (to decode it again after an eviction); owner: the screen whose load made it
     // size / mtime: the source as listed (the texture pack checks them when it is decoded again)
-    std::shared_ptr<ray::Texture2D> make(const ray::Image& image, const std::string& screen,
+    std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
                                          const std::filesystem::path& source, const std::string& owner,
                                          uint64_t size = 0, uint64_t mtime = 0);
 
     // an eager upload at load, for the per-screen log
-    void count_eager(const std::string& screen, const ray::Texture2D& t);
+    void count_eager(const std::string& screen, const Texture& t);
 
     // Uploads t if it is still pending (id 0); no-op otherwise.
-    void upload(const ray::Texture2D* t);
+    void upload(const Texture* t);
 
     // SetTextureFilter / SetTextureWrap, remembered until the upload for a pending texture
-    void set_filter(const ray::Texture2D* t, int filter);
-    void set_wrap(const ray::Texture2D* t, int wrap);
+    void set_filter(const Texture* t, int filter);
+    void set_wrap(const Texture* t, int wrap);
 
     // Screen change: frees the decoded images of all pending textures (see above).
     void evict_all();
-    bool evicted(const ray::Texture2D* t);
+    bool evicted(const Texture* t);
     // the file an evicted texture decodes from
-    std::filesystem::path source(const ray::Texture2D* t);
+    std::filesystem::path source(const Texture* t);
     // the files of the evicted textures a load of `owner` made
     std::vector<std::filesystem::path> evicted_sources(const std::string& owner);
     // gives an evicted texture its decoded image back (the texture owns it from then on; freed when no
     // longer evicted or when image.data is null)
-    void refill(const ray::Texture2D* t, ray::Image image);
+    void refill(const Texture* t, ray::Image image);
     // the evicted files of owner, each once (sorted by path), and the RAM their images take
     struct EvictedFile {
         std::filesystem::path source;

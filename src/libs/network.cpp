@@ -264,9 +264,9 @@ std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_co
     if (doc.HasMember("chara_color_1") && doc["chara_color_1"].IsString() && doc.HasMember("chara_color_2") &&
         doc["chara_color_2"].IsString() && doc.HasMember("chara_color_3") && doc["chara_color_3"].IsString()) {
         try {
-            user.chara_colors = std::array<ray::Color, 3>{parse_hex_color(doc["chara_color_1"].GetString()),
-                                                          parse_hex_color(doc["chara_color_2"].GetString()),
-                                                          parse_hex_color(doc["chara_color_3"].GetString())};
+            user.chara_colors = std::array<Color, 3>{parse_hex_color(doc["chara_color_1"].GetString()),
+                                                     parse_hex_color(doc["chara_color_2"].GetString()),
+                                                     parse_hex_color(doc["chara_color_3"].GetString())};
         } catch (const std::invalid_argument&) {
         }
     }

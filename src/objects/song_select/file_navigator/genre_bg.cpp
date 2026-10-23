@@ -1,7 +1,6 @@
 #include "genre_bg.h"
 
-GenreBG::GenreBG(const std::string& text_name, std::optional<ray::Color> color, TextureIndex texture_index,
-                 float distance)
+GenreBG::GenreBG(const std::string& text_name, std::optional<Color> color, TextureIndex texture_index, float distance)
     : texture_index(texture_index) {
     float base_font_size = (float)tex.get_skin_config(SC::SONG_SELECT_BOX_NAME)->font_size;
     float font_size = base_font_size;
@@ -10,12 +9,12 @@ GenreBG::GenreBG(const std::string& text_name, std::optional<ray::Color> color, 
         font_size = base_font_size - 10.0f * tex.screen_scale;
         name_outline = 5.0f * (font_size / base_font_size);
     }
-    name = make_unique<OutlinedText>(text_name, (int)font_size, ray::WHITE, ray::BLACK, false, name_outline);
+    name = make_unique<OutlinedText>(text_name, (int)font_size, Color::WHITE, Color::BLACK, false, name_outline);
 
     if (color.has_value()) {
         shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
         set_recolor_uniforms(shader, color.value());
-        shader_loaded = ray::IsShaderValid(shader);
+        shader_loaded = is_shader_valid(shader);
     }
 
     const double duration_scale = global_data.config->general.fast_transitions ? 0.2 : 1.0;

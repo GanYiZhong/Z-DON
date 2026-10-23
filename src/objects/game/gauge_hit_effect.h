@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../libs/animation.h"
+#include "../../libs/color_utils.h"
 #include "../../libs/parsers/tja.h"
 #include "../../libs/ray.h"
 #include "../../libs/texture.h"
@@ -13,7 +14,7 @@ private:
     TextureResizeAnimation* resize;
     FadeAnimation* fade_out;
     FadeAnimation* rotation;
-    ray::Color color;
+    Color color;
     TextureObject* t_hit_effect = nullptr;
     TextureObject* t_note = nullptr;
     TextureObject* t_circle = nullptr;
@@ -24,7 +25,7 @@ private:
     float dest_height;
     float x2_pos;
     float y2_pos;
-    ray::Vector2 origin;
+    Vec2 origin;
     float rotation_angle;
 
 public:

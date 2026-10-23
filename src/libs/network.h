@@ -24,6 +24,8 @@
 #include <thread>
 #include <vector>
 
+#include "color_utils.h"
+
 enum class InputLogType {
     KAT_L = 0,
     DON_L = 1,
@@ -42,7 +44,7 @@ struct RemoteUser {
     std::optional<std::string> username;
     std::optional<std::string> title;
     std::optional<int> title_bg;
-    std::optional<std::array<ray::Color, 3>> chara_colors;
+    std::optional<std::array<Color, 3>> chara_colors;
     struct Costume {
         int head_index, body_index, cos_index;
         bool is_costume;

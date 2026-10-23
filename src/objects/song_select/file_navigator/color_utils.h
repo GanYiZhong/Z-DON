@@ -7,15 +7,15 @@
 #include "../../../libs/color_utils.h"
 #include "../../enums.h"
 
-ray::Color darken_color(const ray::Color& rgb);
+Color darken_color(const Color& rgb);
 
 struct BoxColors {
-    std::optional<ray::Color> box;
-    ray::Color outline;
-    ray::Color text;
+    std::optional<Color> box;
+    Color outline;
+    Color text;
 };
 
-BoxColors resolve_box_colors(const std::optional<ray::Color>& box_color, const std::optional<ray::Color>& back_color,
-                             const std::optional<ray::Color>& fore_color);
+BoxColors resolve_box_colors(const std::optional<Color>& box_color, const std::optional<Color>& back_color,
+                             const std::optional<Color>& fore_color);
 
-extern const std::map<GenreIndex, std::array<std::optional<ray::Color>, 2>> DEFAULT_COLORS;
+extern const std::map<GenreIndex, std::array<std::optional<Color>, 2>> DEFAULT_COLORS;

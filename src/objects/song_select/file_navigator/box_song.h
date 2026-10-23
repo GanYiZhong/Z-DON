@@ -20,7 +20,7 @@ public:
     bool is_favorite;
     std::string text_subtitle;
     std::unique_ptr<OutlinedText> bpm_text;
-    std::optional<ray::Texture2D> preimage;
+    std::optional<Texture> preimage;
     bool music_playing = false;
     struct PreviewLoad {
         std::atomic<bool> done{false};
@@ -48,7 +48,7 @@ public:
     ~SongBox() override {
         stop_preview_load();
         if (preimage.has_value()) {
-            ray::UnloadTexture(preimage.value());
+            unload_texture(preimage.value());
         }
     }
 

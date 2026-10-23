@@ -245,7 +245,7 @@ void main() {
         const int shift[2] = {fmt.chroma_shift_x, fmt.chroma_shift_y};
         ray::SetShaderValue(shader, loc_size, size, ray::SHADER_UNIFORM_IVEC2);
         ray::SetShaderValue(shader, loc_shift, shift, ray::SHADER_UNIFORM_IVEC2);
-        ray::DrawTexturePro(y, source, dest, {0.0f, 0.0f}, 0.0f, ray::WHITE);
+        ray::DrawTexturePro(y, source, dest, {0.0f, 0.0f}, 0.0f, Color::WHITE);
         ray::EndShaderMode();
     }
 
@@ -259,7 +259,7 @@ void main() {
         const Matrix view = rlGetMatrixModelview();
         ray::RenderTexture2D rt = ray::LoadRenderTexture(w, h);
         ray::BeginTextureMode(rt);
-        ray::ClearBackground(ray::BLACK);
+        ray::ClearBackground(Color::BLACK);
         draw({0.0f, 0.0f, (float)w, (float)h}, {0.0f, 0.0f, (float)w, (float)h});
         ray::EndTextureMode();
         rlSetMatrixProjection(proj);

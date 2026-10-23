@@ -87,7 +87,7 @@ static SessionData& current_session() {
     return global_data.session_data[idx];
 }
 
-static DrawTextureParams parse_draw_params_legacy(const sol::optional<sol::table>& params_table, bool allow_blend) {
+static DrawTextureParams parse_draw_params_legacy(const sol::optional<sol::table>& params_table) {
     DrawTextureParams params;
     if (!params_table) {
         return params;
@@ -118,13 +118,6 @@ static DrawTextureParams parse_draw_params_legacy(const sol::optional<sol::table
         params.mirror = mirror_from_string(mirror.value());
     }
 
-    if (allow_blend) {
-        sol::optional<std::string> blend = t["blend"];
-        if (blend) {
-            params.blend = blend_from_string(blend.value());
-        }
-    }
-
     sol::optional<sol::table> origin = t["origin"];
     if (origin) {
         params.origin.x = origin.value()[1].get_or(params.origin.x);
@@ -133,7 +126,7 @@ static DrawTextureParams parse_draw_params_legacy(const sol::optional<sol::table
 
     sol::optional<sol::table> src = t["src"];
     if (src) {
-        ray::Rectangle rect;
+        Rect rect;
         rect.x = src.value()["x"].get_or(0.0f);
         rect.y = src.value()["y"].get_or(0.0f);
         rect.width = src.value()["width"].get_or(0.0f);
@@ -186,7 +179,7 @@ static bool lua_is_table_like(lua_State* L, int idx) {
 // instead of looking up all ~17 names through sol proxies: draw_texture is called a few hundred
 // times per frame by Lua skins and the lookups were most of its cost. A table with a metatable
 // (fields could come from __index) or a userdata goes through the legacy path.
-static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& params_table, bool allow_blend = true) {
+static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& params_table) {
     if (!params_table) {
         return DrawTextureParams{};
     }
@@ -195,7 +188,7 @@ static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& para
     const int t = lua_gettop(L);
     if (lua_type(L, t) != LUA_TTABLE || lua_getmetatable(L, t)) {
         lua_settop(L, t - 1);
-        return parse_draw_params_legacy(params_table, allow_blend);
+        return parse_draw_params_legacy(params_table);
     }
 
     DrawTextureParams params;
@@ -238,7 +231,7 @@ static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& para
                 }
             } else if (key == "src") {
                 if (lua_is_table_like(L, v)) {
-                    ray::Rectangle rect;
+                    Rect rect;
                     rect.x = lua_field_or(L, v, "x", 0.0f);
                     rect.y = lua_field_or(L, v, "y", 0.0f);
                     rect.width = lua_field_or(L, v, "width", 0.0f);
@@ -253,10 +246,6 @@ static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& para
             } else if (key == "mirror") {
                 if (lua_type(L, v) == LUA_TSTRING) {
                     params.mirror = mirror_from_string(lua_tostring(L, v));
-                }
-            } else if (key == "blend") {
-                if (allow_blend && lua_type(L, v) == LUA_TSTRING) {
-                    params.blend = blend_from_string(lua_tostring(L, v));
                 }
             }
         }
@@ -518,11 +507,11 @@ static uint8_t to_u8(double v) {
     return static_cast<uint8_t>(std::clamp(static_cast<int>(v), 0, 255));
 }
 
-static ray::Color to_color(const std::array<double, 4>& c) {
-    return ray::Color{to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), to_u8(c[3])};
+static Color to_color(const std::array<double, 4>& c) {
+    return Color{to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), to_u8(c[3])};
 }
 
-static ray::Rectangle virtual_rect_to_screen(float x, float y, float w, float h) {
+static Rect virtual_rect_to_screen(float x, float y, float w, float h) {
     int sx = virtual_to_screen_x(x);
     int ex = virtual_to_screen_x(x + w);
     int sy = virtual_to_screen_y(y);
@@ -732,25 +721,25 @@ void ScriptManager::register_lua_bindings() {
             debug_draw_log.push_back({"rect", {x, y, w, h}});
             log_lua_site(debug_draw_log.back(), state);
         }
-        draw_rectangle({x, y, w, h}, ray::Color{to_u8(r), to_u8(g), to_u8(b), to_u8(a)});
+        draw_rectangle({x, y, w, h}, Color{to_u8(r), to_u8(g), to_u8(b), to_u8(a)});
     });
 
     // rounded rectangle with an outline; roundness is raylib's 0..1 corner factor, the outline thickness is in pixels
     tex.set_function("draw_rounded_rect", [](float x, float y, float w, float h, float roundness,
                                              std::array<double, 4> fill, double thickness, std::array<double, 4> line) {
-        ray::Rectangle r{x, y, w, h};
-        ray::DrawRectangleRounded(r, roundness, 16, to_color(fill));
+        Rect r{x, y, w, h};
+        draw_rectangle_rounded(r, roundness, 16, to_color(fill));
         if (thickness > 0) {
-            ray::DrawRectangleRoundedLinesEx(r, roundness, 16, (float)thickness, to_color(line));
+            draw_rectangle_rounded_lines_ex(r, roundness, 16, (float)thickness, to_color(line));
         }
     });
 
     tex.set_function("begin_scissor", [](float x, float y, float w, float h) {
-        ray::Rectangle rect = virtual_rect_to_screen(x, y, w, h);
-        ray::BeginScissorMode((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height);
+        Rect rect = virtual_rect_to_screen(x, y, w, h);
+        begin_scissor_mode((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height);
     });
 
-    tex.set_function("end_scissor", [] { ray::EndScissorMode(); });
+    tex.set_function("end_scissor", [] { end_scissor_mode(); });
 
     tex.set_function("get_skin_config", [](const std::string& config_key) -> sol::optional<sol::table> {
         const SkinInfo* skin_ptr = font_manager.get_text_info(config_key);
@@ -889,7 +878,7 @@ void ScriptManager::register_lua_bindings() {
     lua.new_usertype<OutlinedText>("OutlinedText", "width", &OutlinedText::width, "height", &OutlinedText::height,
                                    "text", sol::property([](OutlinedText& self) { return self.get_text(); }), "draw",
                                    [](OutlinedText& self, sol::optional<sol::table> params_table) {
-                                       DrawTextureParams params = parse_draw_params(params_table, false);
+                                       DrawTextureParams params = parse_draw_params(params_table);
                                        self.draw(params);
                                    });
 
@@ -913,8 +902,8 @@ void ScriptManager::register_lua_bindings() {
                               }
                           }
                           int font_size = cfg->font_size;
-                          ray::Color color_val = to_color(color);
-                          ray::Color outline_color_val = to_color(outline_color);
+                          Color color_val = to_color(color);
+                          Color outline_color_val = to_color(outline_color);
                           std::unique_ptr<OutlinedText> ptr =
                               std::make_unique<OutlinedText>(text, font_size, color_val, outline_color_val, is_vertical,
                                                              outline_thickness, spacing, 1.0f, font.value_or(""));
@@ -928,8 +917,8 @@ void ScriptManager::register_lua_bindings() {
                          std::array<double, 4> outline_color, bool is_vertical, sol::optional<float> thickness,
                          sol::optional<float> spacing, sol::optional<float> v_advance,
                          sol::optional<std::string> font) -> std::unique_ptr<OutlinedText> {
-                          ray::Color c = to_color(color);
-                          ray::Color oc = to_color(outline_color);
+                          Color c = to_color(color);
+                          Color oc = to_color(outline_color);
                           return std::make_unique<OutlinedText>(
                               content, static_cast<int>(font_size), c, oc, is_vertical, thickness.value_or(5.0f),
                               spacing.value_or(2.0f), v_advance.value_or(1.0f), font.value_or(""));
@@ -1028,9 +1017,9 @@ void ScriptManager::register_lua_bindings() {
         if (!webcam.is_ready()) {
             return;
         }
-        ray::Rectangle src{0, 0, (float)webcam.width(), (float)webcam.height()};
-        ray::Rectangle dst{x, y, w, h};
-        ray::DrawTexturePro(webcam.get_texture(), src, dst, ray::Vector2{0, 0}, 0, ray::WHITE);
+        Rect src{0, 0, (float)webcam.width(), (float)webcam.height()};
+        Rect dst{x, y, w, h};
+        draw_texture_pro(webcam.get_texture(), src, dst, Vec2{0, 0}, 0, Color::WHITE);
     });
 
     lua["camera"] = camera_tbl;

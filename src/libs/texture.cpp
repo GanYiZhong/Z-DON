@@ -55,16 +55,15 @@ namespace {
     }
 
     // "crop": [[x, y, w, h], ...]; malformed entries are logged and skipped
-    std::vector<ray::Rectangle> parse_crops(const Value& crop_array, const std::string& tex_name) {
-        std::vector<ray::Rectangle> crops;
+    std::vector<Rect> parse_crops(const Value& crop_array, const std::string& tex_name) {
+        std::vector<Rect> crops;
         for (SizeType j = 0; j < crop_array.Size(); j++) {
             const Value& crop = crop_array[j];
             if (!crop.IsArray() || crop.Size() < 4) {
                 spdlog::error("Invalid crop entry {} for texture {}", j, tex_name);
                 continue;
             }
-            crops.push_back(
-                ray::Rectangle{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
+            crops.push_back(Rect{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
         }
         return crops;
     }
@@ -77,7 +76,7 @@ namespace {
         if (!framed) {
             return;
         }
-        std::vector<std::shared_ptr<ray::Texture2D>> reordered;
+        std::vector<std::shared_ptr<Texture>> reordered;
         for (SizeType j = 0; j < mapping["frame_order"].Size(); j++) {
             int idx = static_cast<int>(json_number(mapping["frame_order"][j]));
             if (idx < 0 || idx >= static_cast<int>(framed->textures.size())) {
@@ -336,7 +335,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
                                  tex_mapping[0].HasMember("crop") && tex_mapping[0]["crop"].IsArray() &&
                                  !tex_mapping[0]["crop"].Empty();
 
-        std::vector<ray::Rectangle> crops;
+        std::vector<Rect> crops;
         if (has_crop_in_first) {
             crops = parse_crops(tex_mapping[0]["crop"], tex_obj->name);
             if (crops.empty()) {
@@ -376,7 +375,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
         }
     } else if (tex_mapping.IsObject()) {
         if (tex_mapping.HasMember("crop") && tex_mapping["crop"].IsArray() && !tex_mapping["crop"].Empty()) {
-            std::vector<ray::Rectangle> crops = parse_crops(tex_mapping["crop"], tex_obj->name);
+            std::vector<Rect> crops = parse_crops(tex_mapping["crop"], tex_obj->name);
             if (!crops.empty()) {
                 tex_obj->crop_data = crops;
                 tex_obj->width = static_cast<int>(crops[0].width);
@@ -392,7 +391,7 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
         apply_frame_order(tex_obj, tex_mapping);
     }
 
-    ray::TextureFilter filter = ray::TEXTURE_FILTER_BILINEAR;
+    ray::TextureFilter filter = texture_filter::BILINEAR;
     for (int i = 0; i < tex_obj->frame_count(); i++) {
         texture_lazy::set_filter(tex_obj->frame_texture_raw(i), filter);
     }
@@ -457,10 +456,10 @@ std::unordered_map<std::string, std::weak_ptr<TextureObject>>& tex_object_cache(
     return cache;
 }
 
-std::shared_ptr<ray::Texture2D> shared_texture(ray::Texture2D tex) {
-    return std::shared_ptr<ray::Texture2D>(new ray::Texture2D(tex), [](ray::Texture2D* p) {
+std::shared_ptr<Texture> shared_texture(Texture tex) {
+    return std::shared_ptr<Texture>(new Texture(tex), [](Texture* p) {
         if (p->id != 0) {
-            ray::UnloadTexture(*p);
+            unload_texture(*p);
         }
         delete p;
     });
@@ -510,7 +509,7 @@ namespace {
                 return image_from_memory(path, bytes.data(), bytes.size());
             }
         }
-        return ray::LoadImage(path.string().c_str());
+        return ::load_image(path.string().c_str());
     }
 
     // Dev hook: YATAIDON_TEXPACK_VERIFY=1 decodes every image a second time with ray::LoadImage from
@@ -531,20 +530,20 @@ namespace {
     ray::Image load_image(const fs::path& path, const std::string& key, texture_pack::Session* pack) {
         ray::Image image = load_image_unchecked(path, key, pack);
         if (verify_enabled()) {
-            ray::Image ref = ray::LoadImage(path.string().c_str());
+            ray::Image ref = ::load_image(path.string().c_str());
             const bool same =
                 ref.width == image.width && ref.height == image.height && ref.format == image.format &&
                 (ref.data == nullptr) == (image.data == nullptr) &&
                 (!ref.data ||
                  std::memcmp(ref.data, image.data,
-                             static_cast<size_t>(ray::GetPixelDataSize(ref.width, ref.height, ref.format))) == 0);
+                             static_cast<size_t>(get_pixel_data_size(ref.width, ref.height, ref.format))) == 0);
             ++verify_counts.checked;
             if (!same) {
                 ++verify_counts.mismatched;
                 spdlog::error("Texture pack verify: {} differs from LoadImage", path.string());
             }
             if (ref.data) {
-                ray::UnloadImage(ref);
+                unload_image(ref);
             }
         }
         return image;
@@ -792,7 +791,7 @@ public:
 
     // The decoded image for path when it's part of this prefetch (waiting for a worker that
     // has started it, decoding it here if none has); false when it isn't.
-    bool take(const fs::path& path, ray::Image& image, ray::Rectangle& border, bool& has_border) {
+    bool take(const fs::path& path, ray::Image& image, Rect& border, bool& has_border) {
         std::unique_lock<std::mutex> lock(mutex);
         auto found = index.find(image_key(path));
         if (found == index.end()) {
@@ -855,25 +854,25 @@ private:
         size_t group;
         State state = State::Pending;
         ray::Image image{};
-        ray::Rectangle border{};
+        Rect border{};
         bool want_border = false;
         bool has_border = false;
         size_t bytes = 0;
     };
 
     // true when border was computed
-    bool decode(const Item& it, ray::Image& image, ray::Rectangle& border) {
+    bool decode(const Item& it, ray::Image& image, Rect& border) {
         try {
             image = load_image(it.path, it.key, pack);
         } catch (const std::exception& e) {
             spdlog::error("Failed to decode image {}: {}", it.path.string(), e.what());
             image = ray::Image{};
         }
-        border = ray::Rectangle{};
+        border = Rect{};
         if (!it.want_border || !image.data) {
             return false;
         }
-        border = ray::GetImageAlphaBorder(image, 0.0f);
+        border = get_image_alpha_border(image, 0.0f);
         return true;
     }
 
@@ -891,12 +890,12 @@ private:
             it.state = State::Decoding;
             lock.unlock();
             ray::Image image;
-            ray::Rectangle border;
+            Rect border;
             const bool has_border = decode(it, image, border);
             lock.lock();
             if (finished_groups > it.group) { // its folder was loaded while this one decoded
                 if (image.data) {
-                    ray::UnloadImage(image);
+                    unload_image(image);
                 }
                 it.state = State::Dropped;
                 continue;
@@ -905,7 +904,7 @@ private:
             it.border = border;
             it.has_border = has_border;
             it.bytes =
-                image.data ? static_cast<size_t>(ray::GetPixelDataSize(image.width, image.height, image.format)) : 0;
+                image.data ? static_cast<size_t>(get_pixel_data_size(image.width, image.height, image.format)) : 0;
             it.state = State::Done;
             held += it.bytes;
             cv.notify_all();
@@ -1044,7 +1043,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
 
             // images load_screen_textures already decoded, the rest here
             std::vector<ray::Image> images(files.size());
-            std::vector<ray::Rectangle> borders(files.size());
+            std::vector<Rect> borders(files.size());
             std::vector<char> has_border(files.size(), 0);
             std::vector<fs::path> rest;
             std::vector<size_t> rest_index;
@@ -1076,14 +1075,14 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
             try {
                 // GPU textures indexed by file, so keys that share one atlas PNG
                 // (via "file" + "crop") upload it once and share the texture.
-                std::vector<std::shared_ptr<ray::Texture2D>> gpu(files.size());
+                std::vector<std::shared_ptr<Texture>> gpu(files.size());
                 for (const auto& p : pending) {
                     bool ok = true;
-                    std::vector<std::shared_ptr<ray::Texture2D>> texs;
+                    std::vector<std::shared_ptr<Texture>> texs;
                     texs.reserve(p.file_count);
                     for (size_t i = 0; i < p.file_count; ++i) {
                         size_t fi = p.first_file + i;
-                        std::shared_ptr<ray::Texture2D> tex = gpu[fi];
+                        std::shared_ptr<Texture> tex = gpu[fi];
                         if (!tex) {
                             const ray::Image& img = images[fi];
                             if (!img.data) {
@@ -1094,8 +1093,8 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                                 gpu[fi] = tex;
                                 lazy_owned[fi] = 1;
                             } else {
-                                ray::Texture2D t = ray::LoadTextureFromImage(img);
-                                if (!ray::IsTextureValid(t)) {
+                                Texture t = load_texture_from_image(img);
+                                if (!is_texture_valid(t)) {
                                     spdlog::error("Failed to load texture {}: Frame {}", p.name, i);
                                     ok = false;
                                 } else {
@@ -1124,8 +1123,8 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                         !p.mapping->HasMember("x2")) {
                         const ray::Image& img = images[p.first_file];
                         if (img.data) {
-                            const ray::Rectangle border =
-                                has_border[p.first_file] ? borders[p.first_file] : ray::GetImageAlphaBorder(img, 0.0f);
+                            const Rect border =
+                                has_border[p.first_file] ? borders[p.first_file] : get_image_alpha_border(img, 0.0f);
                             if (border.width > 0.0f) {
                                 obj->opaque_right = (border.x + border.width) * tex_scale;
                             }
@@ -1244,12 +1243,12 @@ static ray::Image decode_evicted(const fs::path& source) {
 // Z-DON: gives the evicted textures the screen now holds (its texture map and on-demand stash) their images
 // back: from the prefetch when load_screen_textures planned them, else decoded here in parallel
 void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<fs::path>& planned) {
-    std::map<fs::path, std::vector<const ray::Texture2D*>> want; // by file
+    std::map<fs::path, std::vector<const Texture*>> want; // by file
     size_t count = 0;
-    std::unordered_set<const ray::Texture2D*> seen;
+    std::unordered_set<const Texture*> seen;
     auto collect = [&](const std::shared_ptr<TextureObject>& obj) {
         for (int i = 0; obj && i < obj->frame_count(); ++i) {
-            const ray::Texture2D* t = obj->frame_texture_raw(i);
+            const Texture* t = obj->frame_texture_raw(i);
             if (texture_lazy::evicted(t) && seen.insert(t).second) {
                 want[texture_lazy::source(t)].push_back(t);
                 ++count;
@@ -1266,9 +1265,9 @@ void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<f
         return;
     }
     const auto start = std::chrono::steady_clock::now();
-    auto give = [](const std::vector<const ray::Texture2D*>& texs, const ray::Image& img) {
+    auto give = [](const std::vector<const Texture*>& texs, const ray::Image& img) {
         for (size_t i = 0; i < texs.size(); ++i) {
-            texture_lazy::refill(texs[i], i + 1 < texs.size() && img.data ? ray::ImageCopy(img) : img);
+            texture_lazy::refill(texs[i], i + 1 < texs.size() && img.data ? image_copy(img) : img);
         }
     };
     // in the prefetch's order, so its workers stay ahead of the takes
@@ -1276,7 +1275,7 @@ void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<f
     for (const fs::path& path : planned) {
         auto it = want.find(path);
         ray::Image img{};
-        ray::Rectangle border{};
+        Rect border{};
         bool has_border = false;
         if (it != want.end() && prefetch.take(path, img, border, has_border)) {
             give(it->second, img);
@@ -1363,7 +1362,7 @@ namespace {
             std::scoped_lock lock(pf->mutex);
             if (pf->taken.load(std::memory_order_relaxed)) {
                 if (img.data) {
-                    ray::UnloadImage(img); // the screen loaded meanwhile and decodes this one itself
+                    unload_image(img); // the screen loaded meanwhile and decodes this one itself
                 }
                 return;
             }
@@ -1769,9 +1768,9 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     const float mirror_x = (params.mirror == Mirror::HORIZONTAL) ? -1.0f : 1.0f;
     const float mirror_y = (params.mirror == Mirror::VERTICAL) ? -1.0f : 1.0f;
 
-    const ray::Color final_color = (params.fade != 1.1f) ? Fade(params.color, params.fade) : params.color;
+    const Color final_color = (params.fade != 1.1f) ? fade(params.color, params.fade) : params.color;
 
-    ray::Rectangle source_rect;
+    Rect source_rect;
     if (params.src.has_value()) {
         source_rect = params.src.value();
     } else if (tex_obj->crop_data.has_value()) {
@@ -1791,7 +1790,7 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     } else {
         const float width = static_cast<float>(tex_obj->width);
         const float height = static_cast<float>(tex_obj->height);
-        source_rect = ray::Rectangle{0, 0, width * mirror_x, height * mirror_y};
+        source_rect = Rect{0, 0, width * mirror_x, height * mirror_y};
     }
 
     if (params.index < 0 || static_cast<size_t>(params.index) >= tex_obj->x.size()) {
@@ -1803,7 +1802,7 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     const float base_x = tex_obj->x[params.index];
     const float base_y = tex_obj->y[params.index];
 
-    ray::Rectangle dest_rect;
+    Rect dest_rect;
     if (params.center) {
         const float x2v = tex_obj->x2[params.index];
         const float y2v = tex_obj->y2[params.index];
@@ -1812,13 +1811,13 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
         const float scaled_half_width = (x2v * params.scale) * 0.5f;
         const float scaled_half_height = (y2v * params.scale) * 0.5f;
 
-        dest_rect = ray::Rectangle{base_x + draw_offset_x + half_width - scaled_half_width + params.x,
-                                   base_y + draw_offset_y + half_height - scaled_half_height + params.y,
-                                   x2v * params.scale + params.x2, y2v * params.scale + params.y2};
+        dest_rect = Rect{base_x + draw_offset_x + half_width - scaled_half_width + params.x,
+                         base_y + draw_offset_y + half_height - scaled_half_height + params.y,
+                         x2v * params.scale + params.x2, y2v * params.scale + params.y2};
     } else {
-        dest_rect = ray::Rectangle{base_x + draw_offset_x + params.x, base_y + draw_offset_y + params.y,
-                                   tex_obj->x2[params.index] * params.scale + params.x2,
-                                   tex_obj->y2[params.index] * params.scale + params.y2};
+        dest_rect = Rect{base_x + draw_offset_x + params.x, base_y + draw_offset_y + params.y,
+                         tex_obj->x2[params.index] * params.scale + params.x2,
+                         tex_obj->y2[params.index] * params.scale + params.y2};
     }
 
     if (debug_log_draws) {
@@ -1835,14 +1834,14 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
         log_lua_site(debug_draw_log.back(), script_lua_state());
     }
 
-    const ray::Texture2D* frame_tex = tex_obj->frame_texture(params.frame);
+    const Texture* frame_tex = tex_obj->frame_texture(params.frame);
     if (frame_tex) {
         if (params.blend.has_value()) {
-            ray::BeginBlendMode(params.blend.value());
+            begin_blend_mode(params.blend.value());
         }
-        DrawTexturePro(*frame_tex, source_rect, dest_rect, params.origin, params.rotation, final_color);
+        draw_texture_pro(*frame_tex, source_rect, dest_rect, params.origin, params.rotation, final_color);
         if (params.blend.has_value()) {
-            ray::EndBlendMode();
+            end_blend_mode();
         }
     }
 }

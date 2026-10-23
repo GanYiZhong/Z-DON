@@ -7,11 +7,13 @@
 #include <unordered_set>
 
 #include "../../libs/animation.h"
+#include "../../libs/color_utils.h"
 #include "../../libs/filesystem.h"
 #include "../../libs/input.h"
 #include "../../libs/screen.h"
 #include "../../libs/script.h"
 #include "../../libs/texture.h"
+#include "../../libs/time.h"
 
 #ifdef DrawTextEx
 #undef DrawTextEx
@@ -67,9 +69,9 @@ public:
                                             std::nullopt, std::nullopt, EaseType::Quadratic);
         slide_anim->start();
         if (open) {
-            ray::ShowCursor();
+            show_cursor();
         } else {
-            ray::HideCursor();
+            hide_cursor();
         }
     }
 
@@ -106,10 +108,10 @@ public:
     bool fonts_loaded = false;
 
     void load_fonts() {
-        ui_font = ray::LoadFontEx(resolve_skin_path("Fonts/debug_ui.ttf").string().c_str(), 32, nullptr, 0);
-        code_font = ray::LoadFontEx(resolve_skin_path("Fonts/debug_code.ttf").string().c_str(), 32, nullptr, 0);
-        ray::SetTextureFilter(ui_font.texture, ray::TEXTURE_FILTER_BILINEAR);
-        ray::SetTextureFilter(code_font.texture, ray::TEXTURE_FILTER_BILINEAR);
+        ui_font = load_font_ex(resolve_skin_path("Fonts/debug_ui.ttf").string().c_str(), 32, nullptr, 0);
+        code_font = load_font_ex(resolve_skin_path("Fonts/debug_code.ttf").string().c_str(), 32, nullptr, 0);
+        set_texture_filter(ui_font.texture, texture_filter::BILINEAR);
+        set_texture_filter(code_font.texture, texture_filter::BILINEAR);
         fonts_loaded = true;
     }
 
@@ -117,26 +119,26 @@ public:
         if (!fonts_loaded) {
             return;
         }
-        ray::UnloadFont(ui_font);
-        ray::UnloadFont(code_font);
+        unload_font(ui_font);
+        unload_font(code_font);
         fonts_loaded = false;
     }
 
-    static void draw_with(const ray::Font& font, const char* text, int x, int y, int font_size, ray::Color color) {
-        ray::DrawTextEx(font, text, {(float)x, (float)y}, (float)font_size, font_size / 10.0f, color);
+    static void draw_with(const ray::Font& font, const char* text, int x, int y, int font_size, Color color) {
+        draw_text_ex(font, text, {(float)x, (float)y}, (float)font_size, font_size / 10.0f, color);
     }
 
     static int measure_with(const ray::Font& font, const char* text, int font_size) {
-        return (int)ray::MeasureTextEx(font, text, (float)font_size, font_size / 10.0f).x;
+        return (int)measure_text_ex(font, text, (float)font_size, font_size / 10.0f).x;
     }
 
-    void draw_text(const char* text, int x, int y, int font_size, ray::Color color) const {
+    void draw_text(const char* text, int x, int y, int font_size, Color color) const {
         draw_with(ui_font, text, x, y, font_size, color);
     }
 
     int measure_text(const char* text, int font_size) const { return measure_with(ui_font, text, font_size); }
 
-    void draw_code_text(const char* text, int x, int y, int font_size, ray::Color color) const {
+    void draw_code_text(const char* text, int x, int y, int font_size, Color color) const {
         draw_with(code_font, text, x, y, font_size, color);
     }
 
@@ -145,7 +147,7 @@ public:
     // The text of an edited field with a blinking caret.
     static std::string editing_text(bool editing, const std::string& shown, const std::string& buffer) {
         std::string text = editing ? buffer : shown;
-        if (editing && std::fmod(ray::GetTime(), 1.0) < 0.5) {
+        if (editing && std::fmod(get_current_ms(), 1000.0) < 500.0) {
             text += "|";
         }
         return text;
@@ -155,11 +157,11 @@ public:
         if (count <= shown) {
             return;
         }
-        draw_rectangle((int)track_x, (int)top, (int)SCROLLBAR_WIDTH, (int)height, ray::Fade(ray::WHITE, 0.1f));
+        draw_rectangle((int)track_x, (int)top, (int)SCROLLBAR_WIDTH, (int)height, fade(Color::WHITE, 0.1f));
         const int max_scroll = count - shown;
         const float thumb_h = std::max(SCROLLBAR_THUMB_MIN, height * ((float)shown / count));
         const float thumb_y = top + (max_scroll > 0 ? (scroll / (float)max_scroll) * (height - thumb_h) : 0.0f);
-        draw_rectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h, ray::Fade(ray::WHITE, 0.5f));
+        draw_rectangle((int)track_x, (int)thumb_y, (int)SCROLLBAR_WIDTH, (int)thumb_h, fade(Color::WHITE, 0.5f));
     }
 
     FramedTexture* get_selected_framed() const { return dynamic_cast<FramedTexture*>(selected_obj()); }
@@ -231,8 +233,8 @@ public:
     // `id` owns the mouse, so callers can swallow the press and keep it from
     // also hitting the list drawn underneath the scrollbar. The caller must
     // clear scroll_drag whenever the mouse button is up.
-    bool scrollbar_drag(ScrollDrag id, const ray::Vector2& mouse, bool pressed, float track_x, float track_top,
-                        float track_h, int count, int shown, int& scroll) {
+    bool scrollbar_drag(ScrollDrag id, const Vec2& mouse, bool pressed, float track_x, float track_top, float track_h,
+                        int count, int shown, int& scroll) {
         if (count <= shown) {
             if (scroll_drag == id) {
                 scroll_drag = ScrollDrag::None;
@@ -266,7 +268,7 @@ public:
     }
 
     void update(const ray::Camera2D& camera) {
-        if (ray::IsKeyPressed(ray::KEY_F7)) {
+        if (key_pressed(SDL_SCANCODE_F7)) {
             toggle_open();
         }
         if (slide_anim) {
@@ -287,8 +289,8 @@ public:
 
         const float panel_x = tex.screen_width - PANEL_WIDTH + slide_offset();
         const float tab_width = PANEL_WIDTH / TAB_COUNT;
-        const ray::Vector2 mouse = ray::GetScreenToWorld2D(ray::GetMousePosition(), camera);
-        const bool clicked = ray::IsMouseButtonPressed(ray::MOUSE_BUTTON_LEFT);
+        const Vec2 mouse = get_screen_to_world_2d(mouse_position(), camera);
+        const bool clicked = mouse_pressed(SDL_BUTTON_LEFT);
         const bool mouse_over_panel = mouse.x >= panel_x;
 
         if (clicked) {
@@ -297,11 +299,11 @@ public:
         }
 
         // Releasing the mouse always ends an in-progress scrollbar drag.
-        if (!ray::IsMouseButtonDown(ray::MOUSE_BUTTON_LEFT)) {
+        if (!mouse_down(SDL_BUTTON_LEFT)) {
             scroll_drag = ScrollDrag::None;
         }
 
-        if (editing_field < 0 && !editing_data_ptr && ray::IsKeyPressed(ray::KEY_TAB)) {
+        if (editing_field < 0 && !editing_data_ptr && key_pressed(SDL_SCANCODE_TAB)) {
             active_tab = (active_tab + 1) % TAB_COUNT;
         }
 
@@ -321,7 +323,7 @@ public:
             const bool mouse_in_scenes = mouse_over_panel && mouse.y >= list_top && mouse.y < list_bottom;
 
             if (mouse_in_scenes) {
-                float wheel = ray::GetMouseWheelMove();
+                float wheel = mouse_wheel();
                 if (wheel != 0.0f) {
                     scene_scroll -= (int)wheel;
                 }
@@ -355,7 +357,7 @@ public:
             const bool mouse_in_data = mouse_over_panel && mouse.y >= data_top && mouse.y < data_bottom;
 
             if (mouse_in_data) {
-                float wheel = ray::GetMouseWheelMove();
+                float wheel = mouse_wheel();
                 if (wheel != 0.0f) {
                     data_scroll -= (int)wheel;
                 }
@@ -372,7 +374,7 @@ public:
                     const DataField& f = fields[row];
                     float row_y = data_top + (row - data_scroll) * ROW_HEIGHT;
                     DataFieldRects r = data_field_rects(f, panel_x, row_y);
-                    const int step = ray::IsKeyDown(ray::KEY_LEFT_SHIFT) ? 10 : 1;
+                    const int step = key_down(SDL_SCANCODE_LSHIFT) ? 10 : 1;
                     if (f.kind == DataField::Kind::BOOL) {
                         if (in_rect(mouse, r.value)) {
                             *f.b = !*f.b;
@@ -441,9 +443,9 @@ public:
                     return;
                 }
                 if (in_rect(mouse, buttons.copy_path)) {
-                    ray::SetClipboardText(path.c_str());
+                    SDL_SetClipboardText(path.c_str());
                 } else if (in_rect(mouse, buttons.copy_path_line)) {
-                    ray::SetClipboardText((path + ":" + std::to_string(entry->lua_line)).c_str());
+                    SDL_SetClipboardText((path + ":" + std::to_string(entry->lua_line)).c_str());
                 }
             }
             return;
@@ -463,7 +465,7 @@ public:
         const bool mouse_in_list = mouse_over_panel && mouse.y >= list_top && mouse.y < list_bottom;
 
         if (mouse_in_list) {
-            float wheel = ray::GetMouseWheelMove();
+            float wheel = mouse_wheel();
             if (wheel != 0.0f) {
                 scroll_offset -= (int)(wheel * 3.0f);
             }
@@ -477,7 +479,7 @@ public:
         hovered_log_index = -1;
         if (!mouse_over_panel && scroll_drag == ScrollDrag::None) {
             for (int i = (int)debug_draw_log_prev.size() - 1; i >= 0; i--) {
-                const ray::Rectangle& r = debug_draw_log_prev[i].rect;
+                const Rect& r = debug_draw_log_prev[i].rect;
                 if (mouse.x >= r.x && mouse.x <= r.x + r.width && mouse.y >= r.y && mouse.y <= r.y + r.height) {
                     hovered_log_index = i;
                     break;
@@ -506,7 +508,7 @@ public:
         }
 
         if (clicked && has_selection && mouse_over_panel && mouse.y >= list_bottom) {
-            const int step = ray::IsKeyDown(ray::KEY_LEFT_SHIFT) ? 10 : 1;
+            const int step = key_down(SDL_SCANCODE_LSHIFT) ? 10 : 1;
             for (int i = 0; i < 4; i++) {
                 int* value = field_ptr(i);
                 if (!value) {
@@ -579,20 +581,20 @@ public:
         const float panel_x = screen_w - PANEL_WIDTH + slide_offset();
         const float tab_width = PANEL_WIDTH / TAB_COUNT;
 
-        draw_rectangle((int)panel_x, 0, (int)PANEL_WIDTH, (int)screen_h, ray::Fade(ray::BLACK, 0.85f));
+        draw_rectangle((int)panel_x, 0, (int)PANEL_WIDTH, (int)screen_h, fade(Color::BLACK, 0.85f));
 
         static const char* tab_labels[TAB_COUNT] = {"Textures", "Scenes", "Lua", ""};
         for (int i = 0; i < TAB_COUNT; i++) {
             float tab_x = panel_x + i * tab_width;
-            ray::Color tab_color = (i == active_tab) ? ray::Fade(ray::WHITE, 0.3f) : ray::Fade(ray::WHITE, 0.1f);
+            Color tab_color = (i == active_tab) ? fade(Color::WHITE, 0.3f) : fade(Color::WHITE, 0.1f);
             draw_rectangle((int)tab_x, 0, (int)tab_width, (int)TAB_HEIGHT, tab_color);
-            ray::DrawRectangleLines((int)tab_x, 0, (int)tab_width, (int)TAB_HEIGHT, ray::Fade(ray::WHITE, 0.4f));
+            draw_rectangle_lines((int)tab_x, 0, (int)tab_width, (int)TAB_HEIGHT, fade(Color::WHITE, 0.4f));
 
             const char* label = tab_labels[i];
             int label_w = measure_text(label, 16);
             int label_x = (int)(tab_x + (tab_width - label_w) * 0.5f);
             int label_y = (int)((TAB_HEIGHT - 16) * 0.5f);
-            draw_text(label, label_x, label_y, 16, ray::WHITE);
+            draw_text(label, label_x, label_y, 16, Color::WHITE);
         }
 
         if (active_tab == 0) {
@@ -606,14 +608,14 @@ public:
 
 private:
     struct LuaButtons {
-        ray::Rectangle copy_path, copy_path_line;
+        Rect copy_path, copy_path_line;
     };
 
     static LuaButtons lua_buttons(float panel_x, float screen_h) {
         float width = (PANEL_WIDTH - LUA_BTN_GAP * 3) / 2;
         float row_y = screen_h - LUA_BTN_HEIGHT - LUA_BTN_GAP;
-        ray::Rectangle left = {panel_x + LUA_BTN_GAP, row_y, width, LUA_BTN_HEIGHT};
-        ray::Rectangle right = {left.x + width + LUA_BTN_GAP, row_y, width, LUA_BTN_HEIGHT};
+        Rect left = {panel_x + LUA_BTN_GAP, row_y, width, LUA_BTN_HEIGHT};
+        Rect right = {left.x + width + LUA_BTN_GAP, row_y, width, LUA_BTN_HEIGHT};
         return {left, right};
     }
 
@@ -662,7 +664,7 @@ private:
         return std::max(1, (int)((PANEL_WIDTH - 12.0f) * 10.0f / ten_chars));
     }
 
-    float draw_lua_rows(const std::string& text, float x, float y, int max_rows, ray::Color color) const {
+    float draw_lua_rows(const std::string& text, float x, float y, int max_rows, Color color) const {
         int budget = lua_chars_per_row();
         for (int row = 0; row < max_rows && (size_t)row * budget < text.size(); row++) {
             draw_code_text(text.substr((size_t)row * budget, budget).c_str(), (int)x, (int)y, LUA_TEXT_SIZE, color);
@@ -671,12 +673,12 @@ private:
         return y;
     }
 
-    void draw_lua_button(const ray::Rectangle& box, const char* label, bool enabled) const {
-        draw_rectangle(box, ray::Fade(ray::WHITE, enabled ? 0.2f : 0.05f));
-        ray::DrawRectangleLinesEx(box, 1.0f, ray::Fade(ray::WHITE, 0.4f));
+    void draw_lua_button(const Rect& box, const char* label, bool enabled) const {
+        draw_rectangle(box, fade(Color::WHITE, enabled ? 0.2f : 0.05f));
+        draw_rectangle_lines_ex(box, 1.0f, fade(Color::WHITE, 0.4f));
         int label_w = measure_code_text(label, LUA_TEXT_SIZE);
         draw_code_text(label, (int)(box.x + (box.width - label_w) * 0.5f), (int)box.y + 5, LUA_TEXT_SIZE,
-                       enabled ? ray::WHITE : ray::GRAY);
+                       enabled ? Color::WHITE : Color::GRAY);
     }
 
     struct SourceFile {
@@ -695,11 +697,11 @@ private:
             it = source_cache.emplace(path.string(), SourceFile{}).first;
         }
         SourceFile& file = it->second;
-        if (ray::GetTime() - file.checked_at < SOURCE_RESTAT_SECONDS) {
+        if (get_current_ms() / 1000.0 - file.checked_at < SOURCE_RESTAT_SECONDS) {
             return file.lines.empty() ? nullptr : &file.lines;
         }
 
-        file.checked_at = ray::GetTime();
+        file.checked_at = get_current_ms() / 1000.0;
         std::error_code ec;
         fs::file_time_type mtime = fs::last_write_time(path, ec);
         if (ec) {
@@ -739,27 +741,27 @@ private:
         float y = TAB_HEIGHT + 8.0f;
 
         if (!has_selection) {
-            draw_lua_rows("Select an element on the Textures tab.", x, y, 1, ray::GRAY);
+            draw_lua_rows("Select an element on the Textures tab.", x, y, 1, Color::GRAY);
             return;
         }
 
-        y = draw_lua_rows(selected_name, x, y, 2, ray::WHITE) + 4.0f;
+        y = draw_lua_rows(selected_name, x, y, 2, Color::WHITE) + 4.0f;
 
         const DrawLogEntry* entry = find_selected_entry();
         if (!entry) {
-            draw_lua_rows("Not drawn this frame.", x, y, 1, ray::GRAY);
+            draw_lua_rows("Not drawn this frame.", x, y, 1, Color::GRAY);
             return;
         }
 
-        y = draw_lua_rows(ray::TextFormat("%d draw(s) with this name this frame", selected_draw_count()), x, y, 1,
-                          ray::GRAY);
+        y = draw_lua_rows(text_format("%d draw(s) with this name this frame", selected_draw_count()), x, y, 1,
+                          Color::GRAY);
         if (entry->tex_obj) {
-            y = draw_lua_rows(ray::TextFormat("texture loaded by %s", loaded_by(entry->name)), x, y, 2, ray::GRAY);
+            y = draw_lua_rows(text_format("texture loaded by %s", loaded_by(entry->name)), x, y, 2, Color::GRAY);
         }
         y += 6.0f;
 
         if (!entry->from_lua) {
-            draw_lua_rows("Drawn from C++: no lua frame was on the stack.", x, y, 2, ray::SKYBLUE);
+            draw_lua_rows("Drawn from C++: no lua frame was on the stack.", x, y, 2, Color::SKYBLUE);
             return;
         }
 
@@ -771,15 +773,15 @@ private:
         std::string file = fs::path(shown).filename().string();
         y = draw_lua_rows(
             entry->lua_function.empty()
-                ? ray::TextFormat("%s:%d, in the function defined at line %d", file.c_str(), entry->lua_line,
-                                  entry->lua_defined_line)
-                : ray::TextFormat("%s:%d, in %s()", file.c_str(), entry->lua_line, entry->lua_function.c_str()),
-            x, y, 2, ray::ORANGE);
-        y = draw_lua_rows(shown, x, y, 4, ray::Fade(ray::ORANGE, 0.6f)) + 6.0f;
+                ? text_format("%s:%d, in the function defined at line %d", file.c_str(), entry->lua_line,
+                              entry->lua_defined_line)
+                : text_format("%s:%d, in %s()", file.c_str(), entry->lua_line, entry->lua_function.c_str()),
+            x, y, 2, Color::ORANGE);
+        y = draw_lua_rows(shown, x, y, 4, fade(Color::ORANGE, 0.6f)) + 6.0f;
 
         if (!path.empty()) {
             if (const std::vector<std::string>* lines = source_lines(path)) {
-                draw_lua_rows(call_text(*lines, entry->lua_line), x, y, CALL_TEXT_MAX_ROWS, ray::WHITE);
+                draw_lua_rows(call_text(*lines, entry->lua_line), x, y, CALL_TEXT_MAX_ROWS, Color::WHITE);
             }
         }
 
@@ -937,18 +939,18 @@ private:
     }
 
     struct DataFieldRects {
-        ray::Rectangle minus, plus, value;
+        Rect minus, plus, value;
     };
 
     static DataFieldRects data_field_rects(const DataField& f, float panel_x, float row_y) {
         float btn_size = ROW_HEIGHT - 4.0f;
         if (f.kind == DataField::Kind::BOOL || f.kind == DataField::Kind::STRING) {
-            ray::Rectangle value = {panel_x + 148, row_y + 1, PANEL_WIDTH - 148 - 6, ROW_HEIGHT - 2};
+            Rect value = {panel_x + 148, row_y + 1, PANEL_WIDTH - 148 - 6, ROW_HEIGHT - 2};
             return {{}, {}, value};
         }
-        ray::Rectangle minus = {panel_x + 148, row_y + 1, btn_size, btn_size};
-        ray::Rectangle value = {minus.x + btn_size + 4, row_y + 1, 88.0f, btn_size};
-        ray::Rectangle plus = {value.x + value.width + 4, row_y + 1, btn_size, btn_size};
+        Rect minus = {panel_x + 148, row_y + 1, btn_size, btn_size};
+        Rect value = {minus.x + btn_size + 4, row_y + 1, 88.0f, btn_size};
+        Rect plus = {value.x + value.width + 4, row_y + 1, btn_size, btn_size};
         return {minus, plus, value};
     }
 
@@ -962,7 +964,7 @@ private:
         const int scissor_x1 = virtual_to_screen_x(panel_x + PANEL_WIDTH);
         int scissor_y0 = virtual_to_screen_y(list_top);
         int scissor_y1 = virtual_to_screen_y(list_bottom);
-        ray::BeginScissorMode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
+        begin_scissor_mode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
         for (int row = 0; row < scene_shown; row++) {
             int idx = row + scene_scroll;
             if (idx >= scene_count) {
@@ -974,29 +976,28 @@ private:
             bool is_selected = selected_screen.has_value() && *selected_screen == ALL_SCREENS[idx];
 
             if (is_selected) {
-                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT,
-                               ray::Fade(ray::YELLOW, 0.3f));
+                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT, fade(Color::YELLOW, 0.3f));
             } else if (is_current) {
                 draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT,
-                               ray::Fade(ray::SKYBLUE, 0.35f));
+                               fade(Color::SKYBLUE, 0.35f));
             }
-            ray::Color color = is_selected ? ray::YELLOW : (is_current ? ray::SKYBLUE : ray::WHITE);
+            Color color = is_selected ? Color::YELLOW : (is_current ? Color::SKYBLUE : Color::WHITE);
             draw_text(name.c_str(), (int)panel_x + 4, (int)row_y + 3, 14, color);
         }
-        ray::EndScissorMode();
+        end_scissor_mode();
 
         draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, list_top, SCENE_LIST_HEIGHT, scene_count, scene_shown,
                        scene_scroll);
 
         const float button_top = list_bottom;
-        ray::Rectangle button = {panel_x + 6, button_top + 3, PANEL_WIDTH - 12, SWITCH_BTN_HEIGHT - 6};
+        Rect button = {panel_x + 6, button_top + 3, PANEL_WIDTH - 12, SWITCH_BTN_HEIGHT - 6};
         bool enabled = selected_screen.has_value();
-        draw_rectangle(button, ray::Fade(ray::WHITE, enabled ? 0.25f : 0.08f));
-        ray::DrawRectangleLinesEx(button, 1.0f, enabled ? ray::YELLOW : ray::Fade(ray::WHITE, 0.3f));
+        draw_rectangle(button, fade(Color::WHITE, enabled ? 0.25f : 0.08f));
+        draw_rectangle_lines_ex(button, 1.0f, enabled ? Color(Color::YELLOW) : fade(Color::WHITE, 0.3f));
         std::string label = enabled ? ("Switch to " + screens_to_string(*selected_screen)) : "Select a scene above";
         int label_w = measure_text(label.c_str(), 14);
         draw_text(label.c_str(), (int)(button.x + (button.width - label_w) * 0.5f), (int)button.y + 6, 14,
-                  enabled ? ray::YELLOW : ray::GRAY);
+                  enabled ? Color::YELLOW : Color::GRAY);
 
         const float data_top = button_top + SWITCH_BTN_HEIGHT;
         const float data_bottom = screen_h;
@@ -1004,11 +1005,10 @@ private:
         const int field_count = (int)fields.size();
         const int data_shown = std::max(0, (int)((data_bottom - data_top) / ROW_HEIGHT));
 
-        ray::DrawLine((int)panel_x, (int)data_top, (int)(panel_x + PANEL_WIDTH), (int)data_top,
-                      ray::Fade(ray::WHITE, 0.4f));
+        draw_line((int)panel_x, (int)data_top, (int)(panel_x + PANEL_WIDTH), (int)data_top, fade(Color::WHITE, 0.4f));
         scissor_y0 = virtual_to_screen_y(data_top);
         scissor_y1 = virtual_to_screen_y(data_bottom);
-        ray::BeginScissorMode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
+        begin_scissor_mode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
         for (int row = 0; row < data_shown; row++) {
             int idx = row + data_scroll;
             if (idx >= field_count) {
@@ -1018,41 +1018,42 @@ private:
             float row_y = data_top + row * ROW_HEIGHT;
             DataFieldRects r = data_field_rects(f, panel_x, row_y);
 
-            draw_text(f.label.c_str(), (int)panel_x + 4, (int)row_y + 4, 12, ray::WHITE);
+            draw_text(f.label.c_str(), (int)panel_x + 4, (int)row_y + 4, 12, Color::WHITE);
 
             if (f.kind == DataField::Kind::BOOL) {
                 bool v = *f.b;
-                draw_rectangle(r.value, ray::Fade(v ? ray::GREEN : ray::RED, 0.25f));
-                ray::DrawRectangleLinesEx(r.value, 1.0f, ray::Fade(ray::WHITE, 0.4f));
-                draw_text(v ? "true" : "false", (int)r.value.x + 4, (int)r.value.y + 3, 13, ray::WHITE);
+                draw_rectangle(r.value, fade(v ? Color::GREEN : Color::RED, 0.25f));
+                draw_rectangle_lines_ex(r.value, 1.0f, fade(Color::WHITE, 0.4f));
+                draw_text(v ? "true" : "false", (int)r.value.x + 4, (int)r.value.y + 3, 13, Color::WHITE);
             } else if (f.kind == DataField::Kind::STRING) {
                 bool is_editing = editing_data_ptr == static_cast<void*>(f.s);
-                draw_rectangle(r.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
-                ray::DrawRectangleLinesEx(r.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
+                draw_rectangle(r.value, fade(Color::WHITE, is_editing ? 0.25f : 0.1f));
+                draw_rectangle_lines_ex(r.value, 1.0f, is_editing ? Color(Color::SKYBLUE) : fade(Color::WHITE, 0.4f));
                 std::string text = editing_text(is_editing, *f.s, edit_data_buffer);
-                draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 13, ray::WHITE);
+                draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 13, Color::WHITE);
             } else if (f.kind == DataField::Kind::PLAYER_NUM) {
-                draw_rectangle(r.minus, ray::Fade(ray::WHITE, 0.2f));
-                draw_text("-", (int)r.minus.x + 5, (int)r.minus.y, 14, ray::WHITE);
-                draw_rectangle(r.plus, ray::Fade(ray::WHITE, 0.2f));
-                draw_text("+", (int)r.plus.x + 4, (int)r.plus.y, 14, ray::WHITE);
+                draw_rectangle(r.minus, fade(Color::WHITE, 0.2f));
+                draw_text("-", (int)r.minus.x + 5, (int)r.minus.y, 14, Color::WHITE);
+                draw_rectangle(r.plus, fade(Color::WHITE, 0.2f));
+                draw_text("+", (int)r.plus.x + 4, (int)r.plus.y, 14, Color::WHITE);
                 const char* name = player_num_name(*f.pn);
                 int name_w = measure_text(name, 13);
-                draw_text(name, (int)(r.value.x + (r.value.width - name_w) * 0.5f), (int)r.value.y + 3, 13, ray::WHITE);
+                draw_text(name, (int)(r.value.x + (r.value.width - name_w) * 0.5f), (int)r.value.y + 3, 13,
+                          Color::WHITE);
             } else { // INT
                 bool is_editing = editing_data_ptr == (f.kind == DataField::Kind::FLOAT ? static_cast<void*>(f.fl)
                                                                                         : static_cast<void*>(f.i));
-                draw_rectangle(r.minus, ray::Fade(ray::WHITE, 0.2f));
-                draw_text("-", (int)r.minus.x + 5, (int)r.minus.y, 14, ray::WHITE);
-                draw_rectangle(r.plus, ray::Fade(ray::WHITE, 0.2f));
-                draw_text("+", (int)r.plus.x + 4, (int)r.plus.y, 14, ray::WHITE);
-                draw_rectangle(r.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
-                ray::DrawRectangleLinesEx(r.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
+                draw_rectangle(r.minus, fade(Color::WHITE, 0.2f));
+                draw_text("-", (int)r.minus.x + 5, (int)r.minus.y, 14, Color::WHITE);
+                draw_rectangle(r.plus, fade(Color::WHITE, 0.2f));
+                draw_text("+", (int)r.plus.x + 4, (int)r.plus.y, 14, Color::WHITE);
+                draw_rectangle(r.value, fade(Color::WHITE, is_editing ? 0.25f : 0.1f));
+                draw_rectangle_lines_ex(r.value, 1.0f, is_editing ? Color(Color::SKYBLUE) : fade(Color::WHITE, 0.4f));
                 std::string text = editing_text(is_editing, data_field_display(f), edit_data_buffer);
-                draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 12, ray::WHITE);
+                draw_text(text.c_str(), (int)r.value.x + 4, (int)r.value.y + 3, 12, Color::WHITE);
             }
         }
-        ray::EndScissorMode();
+        end_scissor_mode();
 
         draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, data_top, data_bottom - data_top, field_count,
                        data_shown, data_scroll);
@@ -1106,19 +1107,19 @@ private:
     }
 
     void draw_verdict(const DrawLogEntry& entry, float panel_x, float top) {
-        ray::Color color = ray::GRAY;
+        Color color = Color::GRAY;
         std::string headline, advice;
         switch (position_of(entry)) {
         case Position::Json:
-            color = ray::GREEN;
+            color = Color::GREEN;
             headline = "position comes from texture.json";
             break;
         case Position::JsonPlusOffset:
-            color = ray::ORANGE;
-            headline = ray::TextFormat("caller adds x%+.0f y%+.0f to the json base", entry.offset_x, entry.offset_y);
+            color = Color::ORANGE;
+            headline = text_format("caller adds x%+.0f y%+.0f to the json base", entry.offset_x, entry.offset_y);
             break;
         case Position::NoJson:
-            color = ray::RED;
+            color = Color::RED;
             headline = "no texture.json behind this draw";
             advice = "x/y here do nothing; the position is set in code";
             break;
@@ -1128,16 +1129,16 @@ private:
             break;
         }
         if (advice.empty()) {
-            advice = entry.scale != 1.0f ? ray::TextFormat("x/y move it 1:1; x2/y2 change by x%.2f", entry.scale)
+            advice = entry.scale != 1.0f ? text_format("x/y move it 1:1; x2/y2 change by x%.2f", entry.scale)
                                          : "x/y move it 1:1 whatever the caller adds";
         }
-        draw_rectangle((int)panel_x, (int)top, (int)PANEL_WIDTH, (int)VERDICT_HEIGHT, ray::Fade(color, 0.3f));
-        draw_text(headline.c_str(), (int)panel_x + 6, (int)top + 3, 12, ray::WHITE);
-        draw_text(advice.c_str(), (int)panel_x + 6, (int)top + 18, 12, ray::Fade(ray::WHITE, 0.75f));
+        draw_rectangle((int)panel_x, (int)top, (int)PANEL_WIDTH, (int)VERDICT_HEIGHT, fade(color, 0.3f));
+        draw_text(headline.c_str(), (int)panel_x + 6, (int)top + 3, 12, Color::WHITE);
+        draw_text(advice.c_str(), (int)panel_x + 6, (int)top + 18, 12, fade(Color::WHITE, 0.75f));
     }
 
     struct FieldButtons {
-        ray::Rectangle minus, plus, value;
+        Rect minus, plus, value;
     };
 
     struct VisualRow {
@@ -1181,7 +1182,7 @@ private:
         }
     }
 
-    static bool in_rect(ray::Vector2 p, const ray::Rectangle& r) {
+    static bool in_rect(Vec2 p, const Rect& r) {
         return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
     }
 
@@ -1212,14 +1213,14 @@ private:
     static FieldButtons field_buttons(int field_idx, float panel_x, float edit_top) {
         float row_y = edit_top + EDIT_FIELDS_TOP + field_idx * EDIT_ROW_HEIGHT;
         float btn_size = EDIT_ROW_HEIGHT - 6.0f;
-        ray::Rectangle minus = {panel_x + 40, row_y + 3, btn_size, btn_size};
-        ray::Rectangle value = {minus.x + btn_size + 6, row_y + 2, 60.0f, btn_size + 2};
-        ray::Rectangle plus = {value.x + value.width + 6, row_y + 3, btn_size, btn_size};
+        Rect minus = {panel_x + 40, row_y + 3, btn_size, btn_size};
+        Rect value = {minus.x + btn_size + 6, row_y + 2, 60.0f, btn_size + 2};
+        Rect plus = {value.x + value.width + 6, row_y + 3, btn_size, btn_size};
         return {minus, plus, value};
     }
 
     struct FrameCellButtons {
-        ray::Rectangle left, right;
+        Rect left, right;
     };
 
     static FrameCellButtons frame_cell_buttons(int idx, float panel_x, float frames_top) {
@@ -1228,12 +1229,12 @@ private:
         float row_y = frames_top + FRAMES_HEADER_HEIGHT + (idx / cols) * FRAME_ROW_HEIGHT;
         float btn_row_y = row_y + FRAME_THUMB_SIZE + 4.0f;
         float btn_size = FRAME_BTN_ROW_HEIGHT - 4.0f;
-        ray::Rectangle left = {cell_x + 2, btn_row_y, btn_size, btn_size};
-        ray::Rectangle right = {cell_x + FRAME_CELL_WIDTH - btn_size - 2, btn_row_y, btn_size, btn_size};
+        Rect left = {cell_x + 2, btn_row_y, btn_size, btn_size};
+        Rect right = {cell_x + FRAME_CELL_WIDTH - btn_size - 2, btn_row_y, btn_size, btn_size};
         return {left, right};
     }
 
-    const ray::Rectangle* find_selected_rect() const {
+    const Rect* find_selected_rect() const {
         const DrawLogEntry* entry = find_selected_entry();
         return entry ? &entry->rect : nullptr;
     }
@@ -1250,7 +1251,7 @@ private:
         int scissor_x1 = virtual_to_screen_x(panel_x + PANEL_WIDTH);
         int scissor_y0 = virtual_to_screen_y(list_top);
         int scissor_y1 = virtual_to_screen_y(list_bottom);
-        ray::BeginScissorMode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
+        begin_scissor_mode(scissor_x0, scissor_y0, scissor_x1 - scissor_x0, scissor_y1 - scissor_y0);
         for (int row = 0; row < rows_shown; row++) {
             int ridx = row + scroll_offset;
             if (ridx >= row_count) {
@@ -1261,10 +1262,9 @@ private:
 
             if (vr.is_header) {
                 bool expanded = expanded_subsets.contains(vr.subset);
-                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT,
-                               ray::Fade(ray::WHITE, 0.12f));
-                draw_text(expanded ? "v" : ">", (int)panel_x + 4, (int)row_y + 3, 14, ray::WHITE);
-                draw_text(vr.label.c_str(), (int)panel_x + 18, (int)row_y + 3, 14, ray::WHITE);
+                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT, fade(Color::WHITE, 0.12f));
+                draw_text(expanded ? "v" : ">", (int)panel_x + 4, (int)row_y + 3, 14, Color::WHITE);
+                draw_text(vr.label.c_str(), (int)panel_x + 18, (int)row_y + 3, 14, Color::WHITE);
                 continue;
             }
 
@@ -1273,37 +1273,36 @@ private:
             bool is_selected = (&e == selected);
             if (is_selected) {
                 draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT,
-                               ray::Fade(ray::SKYBLUE, 0.35f));
+                               fade(Color::SKYBLUE, 0.35f));
             } else if (is_hovered) {
-                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT,
-                               ray::Fade(ray::YELLOW, 0.3f));
+                draw_rectangle((int)panel_x, (int)row_y, (int)PANEL_WIDTH, (int)ROW_HEIGHT, fade(Color::YELLOW, 0.3f));
             }
-            ray::Color color = is_selected ? ray::SKYBLUE : (is_hovered ? ray::YELLOW : ray::WHITE);
+            Color color = is_selected ? Color::SKYBLUE : (is_hovered ? Color::YELLOW : Color::WHITE);
             draw_text(vr.label.c_str(), (int)panel_x + 20, (int)row_y + 3, 14, color);
         }
-        ray::EndScissorMode();
+        end_scissor_mode();
 
         draw_scrollbar(panel_x + PANEL_WIDTH - SCROLLBAR_WIDTH, list_top, list_bottom - list_top, row_count, rows_shown,
                        scroll_offset);
 
-        const ray::Rectangle* box_rect = nullptr;
+        const Rect* box_rect = nullptr;
         std::string box_name;
         if (hovered_log_index >= 0) {
             box_rect = &debug_draw_log_prev[hovered_log_index].rect;
             box_name = debug_draw_log_prev[hovered_log_index].name;
-        } else if (const ray::Rectangle* r = find_selected_rect()) {
+        } else if (const Rect* r = find_selected_rect()) {
             box_rect = r;
             box_name = selected_name;
         }
         if (box_rect) {
-            ray::DrawRectangleLinesEx(*box_rect, 2.0f, ray::YELLOW);
+            draw_rectangle_lines_ex(*box_rect, 2.0f, Color::YELLOW);
             float label_y = box_rect->y - 20.0f;
             if (label_y < 0) {
                 label_y = box_rect->y + box_rect->height + 2.0f;
             }
             int label_w = measure_text(box_name.c_str(), 18);
-            draw_rectangle((int)box_rect->x - 2, (int)label_y - 2, label_w + 4, 22, ray::Fade(ray::BLACK, 0.8f));
-            draw_text(box_name.c_str(), (int)box_rect->x, (int)label_y, 18, ray::YELLOW);
+            draw_rectangle((int)box_rect->x - 2, (int)label_y - 2, label_w + 4, 22, fade(Color::BLACK, 0.8f));
+            draw_text(box_name.c_str(), (int)box_rect->x, (int)label_y, 18, Color::YELLOW);
         }
 
         draw_edit_panel(panel_x, list_bottom);
@@ -1311,20 +1310,19 @@ private:
 
     void draw_edit_panel(float panel_x, float edit_top) {
         draw_rectangle((int)panel_x, (int)edit_top, (int)PANEL_WIDTH, (int)edit_panel_height(),
-                       ray::Fade(ray::WHITE, 0.05f));
-        ray::DrawLine((int)panel_x, (int)edit_top, (int)(panel_x + PANEL_WIDTH), (int)edit_top,
-                      ray::Fade(ray::WHITE, 0.4f));
+                       fade(Color::WHITE, 0.05f));
+        draw_line((int)panel_x, (int)edit_top, (int)(panel_x + PANEL_WIDTH), (int)edit_top, fade(Color::WHITE, 0.4f));
 
         if (!has_selection) {
-            draw_text("Click a texture to select it", (int)panel_x + 8, (int)edit_top + 8, 14, ray::GRAY);
+            draw_text("Click a texture to select it", (int)panel_x + 8, (int)edit_top + 8, 14, Color::GRAY);
             return;
         }
 
-        draw_text(selected_name.c_str(), (int)panel_x + 8, (int)edit_top + 8, 16, ray::WHITE);
+        draw_text(selected_name.c_str(), (int)panel_x + 8, (int)edit_top + 8, 16, Color::WHITE);
 
         const DrawLogEntry* entry = find_selected_entry();
         if (!entry) {
-            draw_text("(not drawn this frame)", (int)panel_x + 8, (int)edit_top + 26, 14, ray::GRAY);
+            draw_text("(not drawn this frame)", (int)panel_x + 8, (int)edit_top + 26, 14, Color::GRAY);
             return;
         }
         draw_verdict(*entry, panel_x, edit_top + VERDICT_TOP);
@@ -1334,8 +1332,8 @@ private:
             return;
         }
 
-        const char* info = ray::TextFormat("%dx%d px, %d frame(s)", obj->width, obj->height, obj->frame_count());
-        draw_text(info, (int)panel_x + 8, (int)edit_top + 26, 14, ray::GRAY);
+        const char* info = text_format("%dx%d px, %d frame(s)", obj->width, obj->height, obj->frame_count());
+        draw_text(info, (int)panel_x + 8, (int)edit_top + 26, 14, Color::GRAY);
 
         for (int i = 0; i < 4; i++) {
             int* value = field_ptr(i);
@@ -1345,19 +1343,19 @@ private:
             FieldButtons b = field_buttons(i, panel_x, edit_top);
             float row_y = edit_top + EDIT_FIELDS_TOP + i * EDIT_ROW_HEIGHT;
 
-            draw_text(field_label(i), (int)panel_x + 8, (int)row_y + 4, 14, ray::WHITE);
+            draw_text(field_label(i), (int)panel_x + 8, (int)row_y + 4, 14, Color::WHITE);
 
-            draw_rectangle(b.minus, ray::Fade(ray::WHITE, 0.2f));
-            draw_text("-", (int)b.minus.x + 6, (int)b.minus.y + 1, 16, ray::WHITE);
-            draw_rectangle(b.plus, ray::Fade(ray::WHITE, 0.2f));
-            draw_text("+", (int)b.plus.x + 5, (int)b.plus.y + 1, 16, ray::WHITE);
+            draw_rectangle(b.minus, fade(Color::WHITE, 0.2f));
+            draw_text("-", (int)b.minus.x + 6, (int)b.minus.y + 1, 16, Color::WHITE);
+            draw_rectangle(b.plus, fade(Color::WHITE, 0.2f));
+            draw_text("+", (int)b.plus.x + 5, (int)b.plus.y + 1, 16, Color::WHITE);
 
             bool is_editing = (editing_field == i);
-            draw_rectangle(b.value, ray::Fade(ray::WHITE, is_editing ? 0.25f : 0.1f));
-            ray::DrawRectangleLinesEx(b.value, 1.0f, is_editing ? ray::SKYBLUE : ray::Fade(ray::WHITE, 0.4f));
+            draw_rectangle(b.value, fade(Color::WHITE, is_editing ? 0.25f : 0.1f));
+            draw_rectangle_lines_ex(b.value, 1.0f, is_editing ? Color(Color::SKYBLUE) : fade(Color::WHITE, 0.4f));
 
             std::string text = editing_text(is_editing, std::to_string(*value), edit_buffer);
-            draw_text(text.c_str(), (int)b.value.x + 4, (int)b.value.y + 4, 14, ray::WHITE);
+            draw_text(text.c_str(), (int)b.value.x + 4, (int)b.value.y + 4, 14, Color::WHITE);
         }
 
         draw_frames_section(panel_x, edit_top);
@@ -1373,31 +1371,31 @@ private:
         const float frames_top = edit_top + EDIT_PANEL_HEIGHT;
         const int cols = frame_grid_cols();
 
-        draw_text(ray::TextFormat("Frames (%d)", frame_count), (int)panel_x + 8, (int)frames_top + 2, 14, ray::WHITE);
+        draw_text(text_format("Frames (%d)", frame_count), (int)panel_x + 8, (int)frames_top + 2, 14, Color::WHITE);
 
         for (int idx = 0; idx < frame_count; idx++) {
             float cell_x = panel_x + (idx % cols) * FRAME_CELL_WIDTH;
             float row_y = frames_top + FRAMES_HEADER_HEIGHT + (idx / cols) * FRAME_ROW_HEIGHT;
 
-            ray::Rectangle thumb_bg = {cell_x + (FRAME_CELL_WIDTH - FRAME_THUMB_SIZE) * 0.5f, row_y, FRAME_THUMB_SIZE,
-                                       FRAME_THUMB_SIZE};
-            draw_rectangle(thumb_bg, ray::Fade(ray::BLACK, 0.5f));
-            const ray::Texture2D& t = *framed->frame_texture(idx); // uploads a pending one
-            ray::Rectangle src = {0, 0, (float)t.width, (float)t.height};
-            ray::DrawTexturePro(t, src, thumb_bg, {0, 0}, 0, ray::WHITE);
-            ray::DrawRectangleLinesEx(thumb_bg, 1.0f, ray::Fade(ray::WHITE, 0.4f));
+            Rect thumb_bg = {cell_x + (FRAME_CELL_WIDTH - FRAME_THUMB_SIZE) * 0.5f, row_y, FRAME_THUMB_SIZE,
+                             FRAME_THUMB_SIZE};
+            draw_rectangle(thumb_bg, fade(Color::BLACK, 0.5f));
+            const Texture& t = *framed->frame_texture(idx); // uploads a pending one
+            Rect src = {0, 0, (float)t.width, (float)t.height};
+            draw_texture_pro(t, src, thumb_bg, {0, 0}, 0, Color::WHITE);
+            draw_rectangle_lines_ex(thumb_bg, 1.0f, fade(Color::WHITE, 0.4f));
 
             FrameCellButtons b = frame_cell_buttons(idx, panel_x, frames_top);
-            draw_rectangle(b.left, ray::Fade(ray::WHITE, idx > 0 ? 0.2f : 0.05f));
-            draw_text("<", (int)b.left.x + 4, (int)b.left.y, 14, idx > 0 ? ray::WHITE : ray::GRAY);
+            draw_rectangle(b.left, fade(Color::WHITE, idx > 0 ? 0.2f : 0.05f));
+            draw_text("<", (int)b.left.x + 4, (int)b.left.y, 14, idx > 0 ? Color::WHITE : Color::GRAY);
 
-            const char* index_text = ray::TextFormat("%d", idx);
+            const char* index_text = text_format("%d", idx);
             int index_w = measure_text(index_text, 14);
             draw_text(index_text, (int)(cell_x + (FRAME_CELL_WIDTH - index_w) * 0.5f), (int)b.left.y + 2, 14,
-                      ray::WHITE);
+                      Color::WHITE);
 
-            draw_rectangle(b.right, ray::Fade(ray::WHITE, idx < frame_count - 1 ? 0.2f : 0.05f));
-            draw_text(">", (int)b.right.x + 4, (int)b.right.y, 14, idx < frame_count - 1 ? ray::WHITE : ray::GRAY);
+            draw_rectangle(b.right, fade(Color::WHITE, idx < frame_count - 1 ? 0.2f : 0.05f));
+            draw_text(">", (int)b.right.x + 4, (int)b.right.y, 14, idx < frame_count - 1 ? Color::WHITE : Color::GRAY);
         }
     }
 };

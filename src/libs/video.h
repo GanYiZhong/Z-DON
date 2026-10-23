@@ -27,7 +27,7 @@ private:
         std::vector<uint8_t> check_rgb; // ZDON_VIDEO_YUV_CHECK: swscale's RGB24 of this frame
     };
 
-    std::optional<ray::Texture2D> texture;
+    std::optional<Texture> texture;
     video_yuv::Textures yuv_textures; // Z-DON: the frame as YUV planes, converted while drawing
     std::array<bool, 2> is_finished_arr = {false, false};
     bool audio_started = false;

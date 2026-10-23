@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 
+#include "../libs/color_utils.h"
 #include "../libs/input.h"
 #include "../objects/game/practice_menu.h"
 #include "game.h"
@@ -180,7 +181,7 @@ private:
     void scrobble_step_bar(bool right);
 
     float get_scrobble_position_x(const Note& note, double current_ms) const;
-    ray::Color moji_judgment_color(int note_index) const;
+    Color moji_judgment_color(int note_index) const;
     void draw_bar_scrobble(const Note& bar, double current_ms) const;
     void draw_drumroll_scrobble(const Note& head, double current_ms) const;
     void draw_balloon_scrobble(const Note& head, double current_ms) const;

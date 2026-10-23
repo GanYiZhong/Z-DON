@@ -20,7 +20,7 @@ void ResultScreen::on_screen_start() {
     fs::path loading_graphic_path = session_data.selected_song.parent_path() / "Loading.png";
     background.reset();
     if (exists(loading_graphic_path)) {
-        ray::Texture2D loaded = ray::LoadTexture(loading_graphic_path.string().c_str());
+        Texture loaded = load_texture(loading_graphic_path.string().c_str());
         if (loaded.id != 0) {
             loading_graphic.emplace(loaded);
         } else {
@@ -35,7 +35,7 @@ void ResultScreen::on_screen_start() {
 
 Screens ResultScreen::on_screen_end(Screens next_screen) {
     if (loading_graphic.has_value()) {
-        ray::UnloadTexture(loading_graphic.value());
+        unload_texture(loading_graphic.value());
         loading_graphic.reset();
     }
     // the retry mini-game restarts the song from this session
@@ -159,7 +159,7 @@ void ResultScreen::draw_overlay() {
         fade_in->draw();
     }
     if (fade_out) {
-        draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::BLACK, fade_out->attribute));
+        draw_rectangle(0, 0, tex.screen_width, tex.screen_height, fade(Color::BLACK, fade_out->attribute));
     }
     if (retry_message) {
         retry_message->draw();
@@ -179,9 +179,9 @@ void ResultScreen::draw() {
         background->draw();
     }
     if (loading_graphic.has_value()) {
-        ray::Rectangle src = {0, 0, (float)loading_graphic.value().width, (float)loading_graphic.value().height};
-        ray::Rectangle dst = {0, 0, (float)tex.screen_width, (float)tex.screen_height};
-        ray::DrawTexturePro(loading_graphic.value(), src, dst, {0, 0}, 0, ray::WHITE);
+        Rect src = {0, 0, (float)loading_graphic.value().width, (float)loading_graphic.value().height};
+        Rect dst = {0, 0, (float)tex.screen_width, (float)tex.screen_height};
+        draw_texture_pro(loading_graphic.value(), src, dst, {0, 0}, 0, Color::WHITE);
     }
     draw_song_info();
     if (player_1.has_value()) {

@@ -121,15 +121,13 @@ void SongBox::preregister_text() {
 void SongBox::load_text() {
     BaseBox::load_text();
     bpm_text = make_unique<OutlinedText>("BPM\n" + std::to_string(static_cast<int>(parser.metadata.bpm)),
-                                         tex.get_skin_config(SC::SONG_SELECT_BOX_BPM)->font_size, ray::WHITE,
-                                         ray::BLACK, false);
+                                         tex.get_skin_config(SC::SONG_SELECT_BOX_BPM)->font_size, Color::WHITE,
+                                         Color::BLACK, false);
     if (exists(parser.metadata.preimage)) {
         if (preimage.has_value()) {
-            ray::UnloadTexture(preimage.value());
+            unload_texture(preimage.value());
         }
-        preimage = ray::LoadTexture(parser.metadata.preimage.string().c_str());
-        ray::GenTextureMipmaps(&preimage.value());
-        ray::SetTextureFilter(preimage.value(), ray::TEXTURE_FILTER_TRILINEAR);
+        preimage = load_texture_mipmapped(parser.metadata.preimage.string().c_str());
     }
     text_loaded = true;
 }

@@ -456,7 +456,7 @@ std::optional<Screens> EntryScreen::handle_input() {
         return std::nullopt;
     }
     if (state == EntryState::WAITING) {
-        const bool enter = ray::IsKeyPressed(ray::KEY_ENTER);
+        const bool enter = key_pressed(SDL_SCANCODE_RETURN);
         const bool don = is_l_don_pressed() || is_r_don_pressed();
         if (!enter && !don) {
             return std::nullopt;
@@ -471,7 +471,7 @@ std::optional<Screens> EntryScreen::handle_input() {
         return std::nullopt;
     }
     // Enter again with one player in: online login (registers placeholder "1") for the free seat
-    if (global_data.config->network.online_play && ray::IsKeyPressed(ray::KEY_ENTER) &&
+    if (global_data.config->network.online_play && key_pressed(SDL_SCANCODE_RETURN) &&
         (state == EntryState::SELECT_SIDE || state == EntryState::SELECT_MODE) &&
         seat_joined(PlayerNum::P1) != seat_joined(PlayerNum::P2)) {
         local_login_ = false;
@@ -783,7 +783,7 @@ void EntryScreen::draw() {
     }
 
     if (box_manager->is_finished()) {
-        draw_rectangle(0, 0, tex.screen_width, tex.screen_height, ray::BLACK);
+        draw_rectangle(0, 0, tex.screen_width, tex.screen_height, Color::BLACK);
     }
 
     network_msg.draw();

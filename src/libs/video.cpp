@@ -10,11 +10,11 @@
 
 VideoPlayer::VideoPlayer(fs::path path) : is_finished_arr{false, false} {
     if (path.extension() == ".png" || path.extension() == ".jpg") {
-        texture = ray::LoadTexture(path.string().c_str());
+        texture = load_texture(path.string().c_str());
         is_static = true;
-        if (!ray::IsTextureValid(texture.value())) {
+        if (!is_texture_valid(texture.value())) {
             spdlog::error("Failed to load static texture for video: {}", path.stem().string());
-            ray::UnloadTexture(texture.value());
+            unload_texture(texture.value());
             texture.reset();
             return;
         }
@@ -151,7 +151,7 @@ void VideoPlayer::stop_decode_thread() {
 void VideoPlayer::upload_frame(const DecodedFrame& frame) {
     if (frame.yuv) {
         if (texture.has_value()) {
-            ray::UnloadTexture(texture.value());
+            unload_texture(texture.value());
             texture.reset();
         }
         if (yuv_textures.upload(frame.format, frame.bytes.data()) && !frame.check_rgb.empty()) {
@@ -163,7 +163,7 @@ void VideoPlayer::upload_frame(const DecodedFrame& frame) {
     const void* pixels_ptr = static_cast<const void*>(frame.bytes.data());
 
     if (texture.has_value() && (texture->width != frame.width || texture->height != frame.height)) {
-        ray::UnloadTexture(texture.value());
+        unload_texture(texture.value());
         texture.reset();
     }
 
@@ -173,13 +173,13 @@ void VideoPlayer::upload_frame(const DecodedFrame& frame) {
         image.width = frame.width;
         image.height = frame.height;
         image.mipmaps = 1;
-        image.format = ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8;
+        image.format = pixel_format::RGB8;
 
-        ray::Texture2D tex = ray::LoadTextureFromImage(image);
-        ray::SetTextureFilter(tex, ray::TEXTURE_FILTER_TRILINEAR);
+        Texture tex = load_texture_from_image(image);
+        set_texture_filter(tex, texture_filter::TRILINEAR);
         texture = tex;
     } else {
-        ray::UpdateTexture(texture.value(), pixels_ptr);
+        update_texture(texture.value(), pixels_ptr);
     }
 }
 
@@ -275,7 +275,7 @@ void VideoPlayer::update(double current_ms) {
 }
 
 void VideoPlayer::draw() {
-    ray::ClearBackground(ray::BLACK);
+    clear_background(Color::BLACK);
     const bool yuv = yuv_textures.valid();
     if (!yuv && !texture.has_value()) {
         return;
@@ -283,7 +283,7 @@ void VideoPlayer::draw() {
     const int tex_w = yuv ? yuv_textures.width() : texture->width;
     const int tex_h = yuv ? yuv_textures.height() : texture->height;
 
-    ray::Rectangle source{0.f, 0.f, static_cast<float>(tex_w), static_cast<float>(tex_h)};
+    Rect source{0.f, 0.f, static_cast<float>(tex_w), static_cast<float>(tex_h)};
 
     float texture_aspect = static_cast<float>(tex_w) / static_cast<float>(tex_h);
     float screen_aspect = static_cast<float>(tex.screen_width) / static_cast<float>(tex.screen_height);
@@ -304,13 +304,13 @@ void VideoPlayer::draw() {
         dest_y = 0.f;
     }
 
-    ray::Rectangle destination{dest_x, dest_y, dest_width, dest_height};
-    ray::Vector2 origin{0.f, 0.f};
+    Rect destination{dest_x, dest_y, dest_width, dest_height};
+    Vec2 origin{0.f, 0.f};
 
     if (yuv) {
         yuv_textures.draw(source, destination);
     } else {
-        ray::DrawTexturePro(texture.value(), source, destination, origin, 0.f, ray::WHITE);
+        draw_texture_pro(texture.value(), source, destination, origin, 0.f, Color::WHITE);
     }
 }
 
@@ -324,7 +324,7 @@ void VideoPlayer::stop() {
     }
 
     if (texture.has_value()) {
-        ray::UnloadTexture(texture.value());
+        unload_texture(texture.value());
         texture.reset();
     }
     yuv_textures.unload();

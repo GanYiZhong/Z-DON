@@ -118,7 +118,7 @@ void PauseMenu::make_texts() {
     lang = l;
     const float s = tex.screen_scale;
     title = std::make_unique<OutlinedText>(menu_text("pause_menu_title", nullptr, lang), static_cast<int>(44 * s),
-                                           ray::WHITE, ray::BLACK, false);
+                                           Color::WHITE, Color::BLACK, false);
     const std::pair<const char*, const char*> keys[ROW_COUNT] = {{"pause_menu_resume", nullptr},
                                                                  {"pause_menu_restart", "practice_menu_restart"},
                                                                  {"pause_menu_back", "practice_menu_another_song"}};
@@ -127,15 +127,15 @@ void PauseMenu::make_texts() {
     for (int i = 0; i < ROW_COUNT; ++i) {
         const std::string label = menu_text(keys[i].first, keys[i].second, lang);
         int fs = static_cast<int>(32 * s);
-        rows[i] = std::make_unique<OutlinedText>(label, fs, ray::WHITE, ray::BLACK, false);
+        rows[i] = std::make_unique<OutlinedText>(label, fs, Color::WHITE, Color::BLACK, false);
         if (rows[i]->width > max_w) { // shrink a long label to fit the button
             fs = std::max(1, static_cast<int>(std::floor(fs * max_w / rows[i]->width)));
-            rows[i] = std::make_unique<OutlinedText>(label, fs, ray::WHITE, ray::BLACK, false);
+            rows[i] = std::make_unique<OutlinedText>(label, fs, Color::WHITE, Color::BLACK, false);
         }
     }
     for (int i = 0; i < 3; ++i) {
-        digits[i] = std::make_unique<OutlinedText>(std::to_string(i + 1), static_cast<int>(160 * s), ray::WHITE,
-                                                   ray::BLACK, false, 8.0f);
+        digits[i] = std::make_unique<OutlinedText>(std::to_string(i + 1), static_cast<int>(160 * s), Color::WHITE,
+                                                   Color::BLACK, false, 8.0f);
     }
 }
 
@@ -147,7 +147,7 @@ void PauseMenu::draw(double now_ms) {
     const float w = static_cast<float>(tex.screen_width);
     const float h = static_cast<float>(tex.screen_height);
     const float s = tex.screen_scale;
-    ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(ray::BLACK, open ? 0.55f : 0.35f));
+    ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(Color::BLACK, open ? 0.55f : 0.35f));
 
     if (counting()) {
         const double left = kCountdownMs - (now_ms - *countdown_start);
@@ -178,7 +178,7 @@ void PauseMenu::draw(double now_ms) {
     } else {
         const ray::Rectangle r{px, py, pw, ph};
         ray::DrawRectangleRec(r, ray::Color{24, 24, 32, 235});
-        ray::DrawRectangleLinesEx(r, 4 * s, ray::WHITE);
+        ray::DrawRectangleLinesEx(r, 4 * s, Color::WHITE);
     }
     title->draw({.x = px + (pw - title->width) / 2.0f, .y = py + ph * 0.2f});
 
@@ -195,7 +195,7 @@ void PauseMenu::draw(double now_ms) {
         } else {
             const ray::Rectangle r{bx, by, bw, bh};
             ray::DrawRectangleRec(r, sel ? ray::Color{232, 96, 40, 255} : ray::Color{72, 72, 84, 255});
-            ray::DrawRectangleLinesEx(r, 3 * s, sel ? ray::WHITE : ray::GRAY);
+            ray::DrawRectangleLinesEx(r, 3 * s, sel ? Color::WHITE : Color::GRAY);
         }
         rows[i]->draw({.x = bx + (bw - rows[i]->width) / 2.0f, .y = by + (bh - rows[i]->height) / 2.0f});
     }
