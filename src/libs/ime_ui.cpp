@@ -8,16 +8,14 @@
 #include <vector>
 
 #include "global_data.h"
-#include "spdlog/spdlog.h"
 #include "text.h"
 #include "texture.h"
 
 #if defined(PLATFORM_DESKTOP_SDL)
 #include "sdl_compat.h"
+#if !defined(YATAIDON_USE_SDL2)
+#define YATAIDON_IME_UI 1
 #endif
-
-#if defined(PLATFORM_DESKTOP_SDL) && !defined(YATAIDON_USE_SDL2)
-#define ZDON_IME_UI 1
 #endif
 
 namespace {
@@ -36,7 +34,7 @@ namespace {
     bool ime_active = false;
     bool field_set = false;
     ray::Rectangle field{};
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
     SDL_Rect last_area{-1, -1, -1, -1};
 #endif
 
@@ -51,13 +49,9 @@ namespace {
         }
         return i;
     }
-
-    void clear_locked() {
-        ime = ImeState{};
-    }
 } // namespace
 
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
 static bool SDLCALL ime_event_watch(void* /*userdata*/, SDL_Event* event) {
     switch (event->type) {
     case SDL_EVENT_TEXT_EDITING: {
@@ -101,13 +95,13 @@ static SDL_Window* main_window() {
 #endif
 
 void ime_ui_set_hint() {
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
     SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition,candidates");
 #endif
 }
 
 void ime_ui_install() {
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
     SDL_AddEventWatch(ime_event_watch, nullptr);
 #endif
 }
@@ -115,8 +109,8 @@ void ime_ui_install() {
 void ime_ui_text_input_changed(bool active) {
     std::scoped_lock lock(ime_mutex);
     ime_active = active;
-    clear_locked();
-#ifdef ZDON_IME_UI
+    ime = ImeState{};
+#ifdef YATAIDON_IME_UI
     last_area = {-1, -1, -1, -1};
 #endif
 }
@@ -133,16 +127,19 @@ void ime_ui_draw(const ray::Camera2D& camera) {
         return;
     }
     const float S = tex.screen_scale;
-    const float sw = (float)tex.screen_width;
-    const float sh = (float)tex.screen_height;
+    const auto sw = (float)tex.screen_width;
+    const auto sh = (float)tex.screen_height;
     const ray::Rectangle r = had_field ? field : ray::Rectangle{sw / 4, sh * 0.3f, sw / 2, 60 * S};
 
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
     // Where any OS IME UI that still shows should go: the field, in window coordinates.
     if (SDL_Window* win = main_window()) {
         ray::Vector2 a = ray::GetWorldToScreen2D({r.x, r.y}, camera);
         ray::Vector2 b = ray::GetWorldToScreen2D({r.x + r.width, r.y + r.height}, camera);
-        int ww = 0, wh = 0, pw = 0, ph = 0;
+        int ww = 0;
+        int wh = 0;
+        int pw = 0;
+        int ph = 0;
         SDL_GetWindowSize(win, &ww, &wh);
         SDL_GetWindowSizeInPixels(win, &pw, &ph);
         const float kx = pw > 0 ? (float)ww / pw : 1.0f;
@@ -168,10 +165,11 @@ void ime_ui_draw(const ray::Camera2D& camera) {
 
     // Windows SDL numbers the candidates itself ("1 xx"); elsewhere they come bare.
     std::vector<std::string> labels;
+    labels.reserve(st.candidates.size());
     for (size_t i = 0; i < st.candidates.size(); ++i) {
         const std::string& c = st.candidates[i];
         const bool numbered = c.size() >= 2 && c[0] >= '0' && c[0] <= '9' && c[1] == ' ';
-        labels.push_back(numbered ? c : std::to_string((i + 1) % 10) + " " + c);
+        labels.push_back(numbered ? c : std::to_string((i + 1) % 10).append(" ").append(c));
     }
     // SDL's Windows backend reports the selection over the whole list, the strings for one page.
     int sel = st.selected;
@@ -198,6 +196,7 @@ void ime_ui_draw(const ray::Camera2D& camera) {
     const float comp_w = st.composition.empty() ? 0 : measure(st.composition);
     const float comp_h = st.composition.empty() ? 0 : row_h;
     std::vector<float> label_w;
+    label_w.reserve(labels.size());
     for (const auto& l : labels) {
         label_w.push_back(measure(l));
     }
@@ -243,11 +242,11 @@ void ime_ui_draw(const ray::Camera2D& camera) {
         y = std::max(margin, sh - margin - h);
     }
 
-    const ray::Color border{119, 26, 45, 255}; // the search box's outline
+    const Color border{119, 26, 45, 255}; // the default search box's outline
     const ray::Rectangle panel{x, y, w, h};
     const float round = std::min(24 * S / std::min(w, h), 1.0f);
-    ray::DrawRectangleRounded(panel, round, 16, ray::Color{255, 255, 255, 245});
-    ray::DrawRectangleRoundedLinesEx(panel, round, 16, 3 * S, border);
+    draw_rectangle_rounded(panel, round, 16, Color{255, 255, 255, 245});
+    draw_rectangle_rounded_lines_ex(panel, round, 16, 3 * S, border);
 
     float cy = y + pad;
     if (comp_h > 0) {
@@ -255,19 +254,20 @@ void ime_ui_draw(const ray::Camera2D& camera) {
         const float ty = cy + (row_h - fs) / 2;
         ray::DrawTextEx(font, st.composition.c_str(), {tx, ty}, (float)fs, spacing, Color::BLACK);
         const float uy = ty + fs + 2 * S;
-        ray::DrawRectangleRec({tx, uy, comp_w, 2 * S}, ray::Color{90, 90, 90, 255});
+        draw_rectangle(ray::Rectangle{tx, uy, comp_w, 2 * S}, Color{90, 90, 90, 255});
         const size_t b0 = utf8_offset(st.composition, st.start);
         const float x0 = tx + measure(st.composition.substr(0, b0));
         if (st.length > 0) {
             const size_t b1 = utf8_offset(st.composition, st.start + st.length);
             const float x1 = tx + measure(st.composition.substr(0, b1));
-            ray::DrawRectangleRec({x0, uy - 1 * S, x1 - x0, 4 * S}, border);
+            draw_rectangle(ray::Rectangle{x0, uy - 1 * S, x1 - x0, 4 * S}, border);
         } else {
-            ray::DrawRectangleRec({x0, ty - 2 * S, 2 * S, fs + 4 * S}, Color::BLACK); // caret
+            draw_rectangle(ray::Rectangle{x0, ty - 2 * S, 2 * S, fs + 4 * S}, Color::BLACK); // caret
         }
         cy += comp_h + sep;
         if (cand_h > 0) {
-            ray::DrawRectangleRec({x + pad, cy - sep / 2 - 1 * S, w - 2 * pad, 1 * S}, ray::Color{200, 200, 200, 255});
+            draw_rectangle(ray::Rectangle{x + pad, cy - sep / 2 - 1 * S, w - 2 * pad, 1 * S},
+                           Color{200, 200, 200, 255});
         }
     }
     float cx = x + pad + pad;
@@ -276,7 +276,7 @@ void ime_ui_draw(const ray::Camera2D& camera) {
         const ray::Rectangle cell = horizontal ? ray::Rectangle{cx - pad / 2, cy, label_w[i] + pad, row_h}
                                                : ray::Rectangle{x + pad, cy, w - 2 * pad, row_h};
         if (is_sel) {
-            ray::DrawRectangleRounded(cell, 0.3f, 8, border);
+            draw_rectangle_rounded(cell, 0.3f, 8, border);
         }
         const float tx = horizontal ? cx : x + 2 * pad;
         ray::DrawTextEx(font, labels[i].c_str(), {tx, cy + (row_h - fs) / 2}, (float)fs, spacing,
@@ -293,12 +293,12 @@ void ime_ui_draw(const ray::Camera2D& camera) {
     if (!page_label.empty()) {
         const float pw = measure(page_label);
         ray::DrawTextEx(font, page_label.c_str(), {x + w - pad - pw * 0.7f, cy + 2 * S}, fs * 0.7f, spacing,
-                        ray::Color{110, 110, 110, 255});
+                        Color{110, 110, 110, 255});
     }
 }
 
 void ime_ui_dev_tick(double since) {
-#ifdef ZDON_IME_UI
+#ifdef YATAIDON_IME_UI
     static const char* spec = std::getenv("YATAIDON_FAKE_IME");
     if (!spec || !*spec) {
         return;
