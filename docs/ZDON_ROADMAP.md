@@ -106,7 +106,7 @@
 ## 合併上游 PR #326–#333（2026-10-23，使用者指示：所有 PR 都收進 Z-DON）
 - 已有、no-op 合併：#326 整個名稱比對指令／譜面中的 NAME:value 行／P1・P2 各自的 #END、#333 TimelineObject 預設值、#327 STYLE 各段的 BALLOON/SCOREINIT/SCOREDIFF（全保留 Z-DON 的指令桶比對與無 regex 寫法）。
 - 新收：#332 `COURSE:Ura` 也找得到 Edit 譜面的音符；#331 find_chart 掃到該 course 結束，Single 在前的 `#START P1/P2` 2P 也找得到；#328 BALLOONNOR/EXP/MAS 只填自己分歧的清單、不再接到／取代 `balloon`（取代上面 ef867fb 時「沒有自己清單的分歧用上游語意的 balloon」那條）；#330 skin 更新器暫存檔＋rename、連線重用、k / n 進度。
-- 驗證：全曲庫 3043 首＋合成譜（P0/P1/P2）音符比對：P0 只有合成 Ura 譜和 5 首的 course `balloon` 欄位變；P1/P2 變動的 122／223 個 course 全都是「Single 之後還有 #START P1/P2」的譜。確定性套件 121/121 與 merge1023 相同。
+- 驗證：全曲庫 3043 首＋合成譜（P0/P1/P2）音符比對：P0 只有合成 Ura 譜，和 3 首實際歌曲（Bataille Decisive、41 no Sorezore no Mirai、Pan vs Gohan Daikessen）的 course `balloon` 欄位變（每顆氣球次數不變）；P1/P2 變動的 122／223 個 course 全都是「Single 之後還有 #START P1/P2」的譜。確定性套件 121/121 與 merge1023 相同。
 
 ## 合併上游 ef867fb（#277 響度、onboarding＋skin 更新器、#329 資料表重構、clang-tidy #325、SDL2 相容、#323/#324）
 - 使用者決定三個衝突區都用上游版：
