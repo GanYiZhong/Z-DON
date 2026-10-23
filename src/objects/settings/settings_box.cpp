@@ -35,7 +35,7 @@ std::unique_ptr<BaseOptionBox> SettingsBox::make_option_box(const rapidjson::Val
     }
 
     if (type == "audiooffset") {
-        return std::make_unique<AudioOffsetOptionBox>(name, desc, path, Screens::INPUT_CALI);
+        return std::make_unique<AudioOffsetOptionBox>(name, desc, path);
     }
     if (type == "bool") {
         std::string true_label = values_map.contains("true") ? values_map["true"] : "Enabled";
@@ -111,14 +111,30 @@ SettingsBox::SettingsBox(const std::string& name, const std::string& label_text,
     t_box_highlight = tex.get_texture("box/box_highlight");
     t_blue_arrow = tex.get_texture("background/blue_arrow");
 
+    std::vector<std::string> bind_paths; // Z-DON: rows the "Reset to defaults" row resets
     if (options_json.IsObject()) {
         for (auto it = options_json.MemberBegin(); it != options_json.MemberEnd(); ++it) {
             try {
                 options.push_back(make_option_box(it->value));
             } catch (const std::exception& e) {
                 spdlog::warn("Skipping option '{}': {}", it->name.GetString(), e.what());
+                continue;
+            }
+            // Z-DON: Calibrate is its own row right after the audio offset row.
+            if (dynamic_cast<AudioOffsetOptionBox*>(options.back().get())) {
+                options.push_back(std::make_unique<CalibrateOptionBox>(
+                    settings_builtin_text("calibrate_name"), settings_builtin_text("calibrate_desc"),
+                    it->value["path"].GetString(), Screens::INPUT_CALI));
+            }
+            if (dynamic_cast<KeybindOptionBox*>(options.back().get()) ||
+                dynamic_cast<KeyBindControllerOptionBox*>(options.back().get())) {
+                bind_paths.emplace_back(it->value["path"].GetString());
             }
         }
+    }
+    if (!bind_paths.empty()) {
+        options.push_back(std::make_unique<ResetBindingsOptionBox>(
+            settings_builtin_text("reset_name"), settings_builtin_text("reset_desc"), std::move(bind_paths)));
     }
 }
 
@@ -202,6 +218,25 @@ void SettingsBox::select_option() {
         set_keyboard_visible(options[option_index]->is_highlighted);
     }
     options[option_index]->confirm();
+    if (options[option_index]->reload_siblings) {
+        options[option_index]->reload_siblings = false;
+        for (auto& opt : options) {
+            opt->reload();
+        }
+    }
+}
+
+bool SettingsBox::take_capture_done() {
+    bool done = false;
+    for (auto& opt : options) {
+        done = done || opt->capture_done;
+        opt->capture_done = false;
+    }
+    return done;
+}
+
+bool SettingsBox::adjusting_number() const {
+    return !options.empty() && options[option_index]->is_highlighted && options[option_index]->repeats_on_hold();
 }
 
 bool SettingsBox::editing_text() const {
@@ -214,10 +249,8 @@ void SettingsBox::select() {
 
 std::optional<Screens> SettingsBox::pending_screen_change() {
     for (auto& opt : options) {
-        auto* ao = dynamic_cast<AudioOffsetOptionBox*>(opt.get());
-        if (ao && ao->wants_screen_change) {
-            ao->wants_screen_change = false;
-            return ao->pending_screen;
+        if (auto screen = opt->take_screen_change()) {
+            return screen;
         }
     }
     return std::nullopt;

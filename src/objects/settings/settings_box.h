@@ -55,6 +55,10 @@ public:
 
     void select_option();
     bool editing_text() const;
+    // Z-DON: true once after a key/controller capture ended (consumes the flag).
+    bool take_capture_done();
+    // Z-DON: the highlighted option is a number that a held kat repeats.
+    bool adjusting_number() const;
 
     void select();
 

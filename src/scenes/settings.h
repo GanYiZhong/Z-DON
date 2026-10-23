@@ -17,6 +17,14 @@ private:
     TextureObject* t_background = nullptr;
     TextureObject* t_footer = nullptr;
 
+    // Z-DON: input after a key/controller capture is dropped until then, so the
+    // captured press does not also move the cursor or re-open the capture.
+    double input_guard_until = 0.0;
+    // Z-DON: hold-repeat of kat left/right on numeric values (-1 / +1, 0 = none).
+    int hold_dir = 0;
+    double hold_start = 0.0;
+    double next_repeat = 0.0;
+
     std::optional<Screens> handle_input();
 
 public:

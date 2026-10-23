@@ -20,6 +20,9 @@ public:
     // Returns true if the exit box was selected, otherwise false
     bool select_box();
     bool editing_text() const { return box_selected && boxes[selected_box_index]->editing_text(); }
+    // Z-DON: see SettingsBox::take_capture_done / adjusting_number.
+    bool take_capture_done();
+    bool adjusting_number() const { return box_selected && boxes[selected_box_index]->adjusting_number(); }
 
     std::optional<Screens> pending_screen_change();
 

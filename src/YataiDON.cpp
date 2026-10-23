@@ -622,8 +622,8 @@ static void run_frame() {
     seg_mark(SEG_UPDATE);
     sync_text_input();
 
-    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title>;<ms>" jumps there once,
-    // <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
+    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title|practice_select|settings>;<ms>" jumps there
+    // once, <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
     {
         const double since = dev_hook_clock(); // frames with YATAIDON_FIXED_STEP_MS
         static bool jump_done = false;
@@ -645,6 +645,8 @@ static void run_frame() {
                     debug_menu.requested_screen = Screens::TITLE;
                 } else if (name == "practice_select") {
                     debug_menu.requested_screen = Screens::PRACTICE_SELECT;
+                } else if (name == "settings") {
+                    debug_menu.requested_screen = Screens::SETTINGS;
                 }
             }
         }

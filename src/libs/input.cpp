@@ -824,6 +824,8 @@ void input_polling_thread() {
     }
 }
 
+static void dev_push_frame_key(int scancode); // below, next to the frame event watch
+
 void dev_inject_key(int key) {
     // the hook takes raylib key codes (ASCII for letters, digits, space); input is keyed by SDL scancode
     if (key > 0 && key < 128) {
@@ -832,6 +834,12 @@ void dev_inject_key(int key) {
         if (sc != SDL_SCANCODE_UNKNOWN) {
             key = sc;
         }
+    }
+    // YATAIDON_FAKE_KEYS_RAW=1: the key also reaches the per-frame keyboard queue (key_pressed /
+    // key_pressed_next), as a real key press does -- for testing keybind capture.
+    static const bool raw = std::getenv("YATAIDON_FAKE_KEYS_RAW") != nullptr;
+    if (raw && key > 0 && key < SDL_SCANCODE_COUNT) {
+        dev_push_frame_key(key);
     }
     std::scoped_lock lock(input_mutex);
     pressed_keys.emplace(key, 1.0f);
@@ -1052,6 +1060,12 @@ namespace {
         return 0;
     }
 } // namespace
+
+static void dev_push_frame_key(int scancode) {
+    std::scoped_lock lock(frame_mutex);
+    pending.key_pressed.set(scancode);
+    pending.key_queue.push_back(scancode);
+}
 
 void poll_input_events() {
     if (!frame_watch_registered) {

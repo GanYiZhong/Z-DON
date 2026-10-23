@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,11 +31,22 @@ public:
     virtual ~BaseOptionBox() = default;
 
     bool is_highlighted{false};
+    // Z-DON: set by a key/button capture when it ends (bound or refused), so
+    // the settings screen can drop the captured press instead of acting on it.
+    bool capture_done{false};
+    // Z-DON: set when this option rewrote other options' config values (reset to defaults).
+    bool reload_siblings{false};
 
     BaseOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     virtual void confirm() {}
     virtual bool needs_text_input() const { return false; }
+    // Z-DON: a held kat repeats move_left/move_right while highlighted (numeric values).
+    virtual bool repeats_on_hold() const { return false; }
+    // Z-DON: re-read the value from config (after a reset of sibling options).
+    virtual void reload() {}
+    // Z-DON: a requested screen transition; consumed by the call.
+    virtual std::optional<Screens> take_screen_change() { return std::nullopt; }
 
     virtual void update(double /*current_time*/) {}
     virtual void move_left() {}
@@ -71,6 +83,7 @@ public:
                  const std::map<std::string, std::string>& values);
 
     void confirm() override;
+    bool repeats_on_hold() const override { return value_list.empty(); }
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;
@@ -100,9 +113,13 @@ public:
 };
 
 class KeybindOptionBox : public BaseOptionBox {
+    std::string path;
     std::vector<int> value;
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
+    // Capture starts one frame after highlighting (see KeyBindControllerOptionBox).
+    bool capture_armed = false;
+    double message_until = 0.0; // "already used" shown in the value box until then
 
     void rebuild_text();
 
@@ -110,17 +127,20 @@ public:
     KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
+    void reload() override;
     void update(double current_time) override;
     void draw() override;
 };
 
 class KeyBindControllerOptionBox : public BaseOptionBox {
+    std::string path;
     std::vector<int> value;
     std::unique_ptr<OutlinedText> value_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
     // Capture starts one frame after highlighting, so the press that opened
     // the box isn't immediately bound to it.
     bool capture_armed = false;
+    double message_until = 0.0;
 
     void rebuild_text();
 
@@ -128,6 +148,7 @@ public:
     KeyBindControllerOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
+    void reload() override;
     void update(double current_time) override;
     void draw() override;
 };
@@ -143,33 +164,74 @@ public:
     FloatOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
+    bool repeats_on_hold() const override { return true; }
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;
     void draw() override;
 };
 
+// Z-DON: kat left/right adjusts the offset both ways; Calibrate is its own
+// row (CalibrateOptionBox) right after it, so it stays a visible item.
 class AudioOffsetOptionBox : public BaseOptionBox {
 public:
-    AudioOffsetOptionBox(const std::string& name, const std::string& description, const std::string& path,
-                         Screens calibrate_screen);
+    AudioOffsetOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
+    bool repeats_on_hold() const override { return true; }
     void move_left() override;
     void move_right() override;
     void draw() override;
     void update(double current_time) override;
 
-    bool wants_screen_change = false;
-    Screens pending_screen = Screens::INPUT_CALI;
-
 private:
     int value;
-    Screens calibrate_screen;
-    bool offset_highlighted{true}; // true = on offset button, false = on calibrate button
     std::unique_ptr<OutlinedText> value_text;
-    std::unique_ptr<OutlinedText> calibrate_text;
     std::unique_ptr<FadeAnimation> flicker_fade;
 
     void rebuild_text();
 };
+
+// Z-DON: a row that opens the audio offset calibration screen on don.
+class CalibrateOptionBox : public BaseOptionBox {
+public:
+    CalibrateOptionBox(const std::string& name, const std::string& description, const std::string& path,
+                       Screens calibrate_screen);
+
+    void confirm() override;
+    std::optional<Screens> take_screen_change() override;
+    void update(double current_time) override;
+    void draw() override;
+
+private:
+    Screens calibrate_screen;
+    bool wants_screen_change = false;
+    std::unique_ptr<OutlinedText> button_text;
+    std::unique_ptr<FadeAnimation> flicker_fade;
+};
+
+// Z-DON: "Reset to defaults" row appended to every box with key/controller
+// bind rows. Don opens a No/Yes choice (No first), kat picks, don applies.
+class ResetBindingsOptionBox : public BaseOptionBox {
+public:
+    ResetBindingsOptionBox(const std::string& name, const std::string& description, std::vector<std::string> paths);
+
+    void confirm() override;
+    void move_left() override;
+    void move_right() override;
+    void update(double current_time) override;
+    void draw() override;
+
+private:
+    std::vector<std::string> paths;
+    bool yes = false;
+    std::unique_ptr<OutlinedText> no_text;
+    std::unique_ptr<OutlinedText> yes_text;
+    std::unique_ptr<FadeAnimation> flicker_fade;
+};
+
+// Z-DON: the config.cpp default for a key / controller binding path, if it has one.
+std::optional<std::vector<int>> default_binding(const std::string& path);
+
+// Z-DON: localized built-in label for the rows above ("en" fallback).
+std::string settings_builtin_text(const std::string& key);

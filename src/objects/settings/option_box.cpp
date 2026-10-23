@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 #include "../../libs/animation.h"
 #include "../../libs/audio.h"
@@ -63,6 +64,92 @@ void BaseOptionBox::draw_value_box(OutlinedText& text, const FadeAnimation& flic
         tex.draw_texture(t_button_on, {.fade = flicker.attribute, .index = 2});
     }
     draw_centered(text, 2);
+}
+
+// Z-DON built-in labels for the rows the code adds (Calibrate, Reset to defaults)
+// and for the refused-keybind message. zh is Simplified like the skin templates.
+std::string settings_builtin_text(const std::string& key) {
+    static const std::map<std::string, std::map<std::string, std::string>> t = {
+        {"calibrate_name",
+         {{"en", "Audio Offset Calibration"},
+          {"ja", "音ズレ調整"},
+          {"zh", "音频延迟校准"},
+          {"ko", "오디오 오프셋 보정"}}},
+        {"calibrate_desc",
+         {{"en", "Hit don to open the calibration screen."},
+          {"ja", "ドンで調整画面を開きます。"},
+          {"zh", "敲咚打开校准画面。"},
+          {"ko", "쿵으로 보정 화면을 엽니다."}}},
+        {"calibrate_button", {{"en", "Calibrate"}, {"ja", "調整"}, {"zh", "校准"}, {"ko", "보정"}}},
+        {"reset_name",
+         {{"en", "Reset to Defaults"}, {"ja", "初期設定に戻す"}, {"zh", "恢复默认"}, {"ko", "기본값 복원"}}},
+        {"reset_desc",
+         {{"en", "Restores every binding in this box. Don, pick Yes with kat, don."},
+          {"ja", "この項目のキー設定を初期値に戻します。ドン、カッで「はい」、ドン。"},
+          {"zh", "将此项的所有按键恢复默认。咚，用咔选“是”，咚。"},
+          {"ko", "이 항목의 키 설정을 기본값으로 되돌립니다. 쿵, 딱으로 예, 쿵."}}},
+        {"no", {{"en", "No"}, {"ja", "いいえ"}, {"zh", "否"}, {"ko", "아니요"}}},
+        {"yes", {{"en", "Yes"}, {"ja", "はい"}, {"zh", "是"}, {"ko", "예"}}},
+        {"key_in_use", {{"en", "Already used"}, {"ja", "使用中"}, {"zh", "已被占用"}, {"ko", "이미 사용 중"}}},
+    };
+    const auto& m = t.at(key);
+    auto it = m.find(global_data.config->general.language);
+    return it != m.end() ? it->second : m.at("en");
+}
+
+std::optional<std::vector<int>> default_binding(const std::string& path) {
+    // Mirrors the defaults in get_config() (libs/config.cpp).
+    static const std::map<std::string, std::vector<int>> d = {
+        {"keys/exit_key", {SDL_SCANCODE_Q}},
+        {"keys/fullscreen_key", {SDL_SCANCODE_F11}},
+        {"keys/borderless_key", {SDL_SCANCODE_F10}},
+        {"keys/pause_key", {SDL_SCANCODE_SPACE}},
+        {"keys/back_key", {SDL_SCANCODE_ESCAPE}},
+        {"keys/restart_key", {SDL_SCANCODE_F1}},
+        {"keys_1p/left_kat", {SDL_SCANCODE_D}},
+        {"keys_1p/left_don", {SDL_SCANCODE_F}},
+        {"keys_1p/right_don", {SDL_SCANCODE_J}},
+        {"keys_1p/right_kat", {SDL_SCANCODE_K}},
+        {"keys_2p/left_kat", {SDL_SCANCODE_Z}},
+        {"keys_2p/left_don", {SDL_SCANCODE_X}},
+        {"keys_2p/right_don", {SDL_SCANCODE_C}},
+        {"keys_2p/right_kat", {SDL_SCANCODE_V}},
+        {"gamepad_1p/left_kat", {10}},
+        {"gamepad_1p/left_don", {16}},
+        {"gamepad_1p/right_don", {17}},
+        {"gamepad_1p/right_kat", {12}},
+        {"gamepad_2p/left_kat", {}},
+        {"gamepad_2p/left_don", {}},
+        {"gamepad_2p/right_don", {}},
+        {"gamepad_2p/right_kat", {}},
+    };
+    auto it = d.find(path);
+    if (it == d.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+// Lock-out guard: a P1 drum role (keyboard or controller) may not take a key
+// another P1 drum role already uses, or the menus (kat moves, don confirms)
+// could become unreachable. Rebinding a role to its own key is fine.
+static bool p1_drum_key_taken(const std::string& path, int key) {
+    for (const char* prefix : {"keys_1p/", "gamepad_1p/"}) {
+        if (!path.starts_with(prefix)) {
+            continue;
+        }
+        for (const char* role : {"left_kat", "left_don", "right_don", "right_kat"}) {
+            std::string other = std::string(prefix) + role;
+            if (other == path) {
+                continue;
+            }
+            std::vector<int> keys = get_config_ref(other).get_vec();
+            if (std::ranges::find(keys, key) != keys.end()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static std::vector<int> load_key_binding(const ConfigRef& ref) {
@@ -278,7 +365,7 @@ void StrOptionBox::draw() {
 }
 
 KeybindOptionBox::KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path)
-    : BaseOptionBox(name, description, path), value_text(nullptr), flicker_fade(make_flicker()) {
+    : BaseOptionBox(name, description, path), path(path), value_text(nullptr), flicker_fade(make_flicker()) {
     value = load_key_binding(config_ref);
     rebuild_text();
 }
@@ -303,18 +390,45 @@ void KeybindOptionBox::confirm() {
     save_key_binding(config_ref, value);
 }
 
+void KeybindOptionBox::reload() {
+    value = load_key_binding(config_ref);
+    rebuild_text();
+}
+
 void KeybindOptionBox::update(double current_time) {
     flicker_fade->update(current_time);
-    if (is_highlighted) {
-        int key = key_pressed_next();
-        if (key > 0) {
-            value = {key};
-            confirm();
-            audio.play_sound("don", VolumePreset::SOUND);
-            rebuild_text();
-            is_highlighted = false;
-        }
+    if (message_until > 0.0 && current_time >= message_until) {
+        message_until = 0.0;
+        rebuild_text();
     }
+    if (!is_highlighted) {
+        capture_armed = false;
+        return;
+    }
+    if (!capture_armed) {
+        // Drop keys queued before the press that opened this box.
+        while (key_pressed_next() > 0) {
+        }
+        capture_armed = true;
+        return;
+    }
+    int key = key_pressed_next();
+    if (key <= 0) {
+        return;
+    }
+    is_highlighted = false;
+    capture_done = true;
+    if (p1_drum_key_taken(path, key)) {
+        audio.play_sound("kat", VolumePreset::SOUND);
+        value_text = std::make_unique<OutlinedText>(settings_builtin_text("key_in_use"), option_font_size(),
+                                                    Color::WHITE, Color::BLACK, false, 4, -4);
+        message_until = current_time + 1500.0;
+        return;
+    }
+    value = {key};
+    confirm();
+    audio.play_sound("don", VolumePreset::SOUND);
+    rebuild_text();
 }
 
 void KeybindOptionBox::draw() {
@@ -325,7 +439,7 @@ void KeybindOptionBox::draw() {
 
 KeyBindControllerOptionBox::KeyBindControllerOptionBox(const std::string& name, const std::string& description,
                                                        const std::string& path)
-    : BaseOptionBox(name, description, path), value_text(nullptr), flicker_fade(make_flicker()) {
+    : BaseOptionBox(name, description, path), path(path), value_text(nullptr), flicker_fade(make_flicker()) {
     value = load_key_binding(config_ref);
     rebuild_text();
 }
@@ -346,8 +460,17 @@ void KeyBindControllerOptionBox::confirm() {
     save_key_binding(config_ref, value);
 }
 
+void KeyBindControllerOptionBox::reload() {
+    value = load_key_binding(config_ref);
+    rebuild_text();
+}
+
 void KeyBindControllerOptionBox::update(double current_time) {
     flicker_fade->update(current_time);
+    if (message_until > 0.0 && current_time >= message_until) {
+        message_until = 0.0;
+        rebuild_text();
+    }
     if (!is_highlighted) {
         capture_armed = false;
         return;
@@ -362,11 +485,19 @@ void KeyBindControllerOptionBox::update(double current_time) {
     {
         int btn = take_gamepad_button_pressed();
         if (btn >= 0) {
+            is_highlighted = false;
+            capture_done = true;
+            if (p1_drum_key_taken(path, btn)) {
+                audio.play_sound("kat", VolumePreset::SOUND);
+                value_text = std::make_unique<OutlinedText>(settings_builtin_text("key_in_use"), option_font_size(),
+                                                            Color::WHITE, Color::BLACK, false, 4, -4);
+                message_until = current_time + 1500.0;
+                return;
+            }
             value = {btn};
             confirm();
             audio.play_sound("don", VolumePreset::SOUND);
             rebuild_text();
-            is_highlighted = false;
         }
     }
 }
@@ -397,13 +528,14 @@ void FloatOptionBox::update(double current_time) {
     flicker_fade->update(current_time);
 }
 
+// Volumes: 0-100 %.
 void FloatOptionBox::move_left() {
-    value = std::round((value * 100.0f) - 1.0f) / 100.0f;
+    value = std::clamp(std::round((value * 100.0f) - 1.0f), 0.0f, 100.0f) / 100.0f;
     rebuild_text();
 }
 
 void FloatOptionBox::move_right() {
-    value = std::round((value * 100.0f) + 1.0f) / 100.0f;
+    value = std::clamp(std::round((value * 100.0f) + 1.0f), 0.0f, 100.0f) / 100.0f;
     rebuild_text();
 }
 
@@ -414,10 +546,8 @@ void FloatOptionBox::draw() {
 }
 
 AudioOffsetOptionBox::AudioOffsetOptionBox(const std::string& name, const std::string& description,
-                                           const std::string& path, Screens calibrate_screen)
-    : BaseOptionBox(name, description, path), value(config_ref.get_int()), calibrate_screen(calibrate_screen),
-      value_text(nullptr), calibrate_text(std::make_unique<OutlinedText>("Calibrate", option_font_size(), Color::WHITE,
-                                                                         Color::BLACK, false, 4, -4)),
+                                           const std::string& path)
+    : BaseOptionBox(name, description, path), value(config_ref.get_int()), value_text(nullptr),
       flicker_fade(make_flicker()) {
     rebuild_text();
 }
@@ -429,29 +559,19 @@ void AudioOffsetOptionBox::rebuild_text() {
 
 void AudioOffsetOptionBox::confirm() {
     if (is_highlighted) {
-        return; // entering — act on exit only
+        return; // entering -- act on exit only
     }
-    if (offset_highlighted) {
-        config_ref.set_int(value);
-    } else {
-        wants_screen_change = true;
-        pending_screen = calibrate_screen;
-    }
+    config_ref.set_int(value);
 }
 
 void AudioOffsetOptionBox::move_left() {
-    if (offset_highlighted) {
-        value -= 1;
-        rebuild_text();
-    } else {
-        offset_highlighted = true;
-    }
+    value -= 1;
+    rebuild_text();
 }
 
 void AudioOffsetOptionBox::move_right() {
-    if (offset_highlighted) {
-        offset_highlighted = false;
-    }
+    value += 1;
+    rebuild_text();
 }
 
 void AudioOffsetOptionBox::update(double current_time) {
@@ -460,20 +580,87 @@ void AudioOffsetOptionBox::update(double current_time) {
 
 void AudioOffsetOptionBox::draw() {
     draw_base();
+    draw_value_box(*value_text, *flicker_fade);
+}
 
-    // Offset value button (index 0)
-    if (offset_highlighted && is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 0});
-    } else {
-        tex.draw_texture(t_button_off, {.index = 0});
-    }
-    draw_centered(*value_text, 0);
+CalibrateOptionBox::CalibrateOptionBox(const std::string& name, const std::string& description, const std::string& path,
+                                       Screens calibrate_screen)
+    : BaseOptionBox(name, description, path), calibrate_screen(calibrate_screen),
+      button_text(std::make_unique<OutlinedText>(settings_builtin_text("calibrate_button"), option_font_size(),
+                                                 Color::WHITE, Color::BLACK, false, 4, -4)),
+      flicker_fade(make_flicker()) {}
 
-    // Calibrate button (index 1)
-    if (!offset_highlighted && is_highlighted) {
-        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 1});
-    } else {
-        tex.draw_texture(t_button_off, {.index = 1});
+void CalibrateOptionBox::confirm() {
+    // select_option() highlighted this row: go straight to calibration.
+    if (is_highlighted) {
+        is_highlighted = false;
+        wants_screen_change = true;
     }
-    draw_centered(*calibrate_text, 1);
+}
+
+std::optional<Screens> CalibrateOptionBox::take_screen_change() {
+    if (!wants_screen_change) {
+        return std::nullopt;
+    }
+    wants_screen_change = false;
+    return calibrate_screen;
+}
+
+void CalibrateOptionBox::update(double current_time) {
+    flicker_fade->update(current_time);
+}
+
+void CalibrateOptionBox::draw() {
+    draw_base();
+    draw_value_box(*button_text, *flicker_fade);
+}
+
+ResetBindingsOptionBox::ResetBindingsOptionBox(const std::string& name, const std::string& description,
+                                               std::vector<std::string> paths)
+    : BaseOptionBox(name, description, paths.front()), paths(std::move(paths)),
+      no_text(std::make_unique<OutlinedText>(settings_builtin_text("no"), option_font_size(), Color::WHITE,
+                                             Color::BLACK, false, 4, -4)),
+      yes_text(std::make_unique<OutlinedText>(settings_builtin_text("yes"), option_font_size(), Color::WHITE,
+                                              Color::BLACK, false, 4, -4)),
+      flicker_fade(make_flicker()) {}
+
+void ResetBindingsOptionBox::confirm() {
+    if (is_highlighted) {
+        yes = false; // entering: the choice starts on No
+        return;
+    }
+    if (!yes) {
+        return;
+    }
+    yes = false;
+    for (const std::string& p : paths) {
+        if (auto def = default_binding(p)) {
+            ConfigRef ref = get_config_ref(p);
+            save_key_binding(ref, *def);
+        }
+    }
+    reload_siblings = true;
+}
+
+void ResetBindingsOptionBox::move_left() {
+    yes = false;
+}
+
+void ResetBindingsOptionBox::move_right() {
+    yes = true;
+}
+
+void ResetBindingsOptionBox::update(double current_time) {
+    flicker_fade->update(current_time);
+}
+
+void ResetBindingsOptionBox::draw() {
+    draw_base();
+    tex.draw_texture(t_button_off, {.index = 0});
+    tex.draw_texture(t_button_off, {.index = 1});
+    if (is_highlighted) {
+        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = yes ? 1 : 0});
+    }
+    draw_centered(*no_text, 0);
+    draw_centered(*yes_text, 1);
 }

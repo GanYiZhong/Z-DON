@@ -92,13 +92,54 @@ std::optional<Screens> SettingsScreen::handle_input() {
     if (key_pressed(SDL_SCANCODE_F3)) {
         return on_screen_end(Screens::INPUT_TEST);
     }
+    const double now = get_current_ms();
+    if (box_manager->take_capture_done()) {
+        // The press was bound by the option's update() this frame; the drum
+        // path may report it now or a frame later, so flush for a moment.
+        input_guard_until = now + 200.0;
+    }
+    if (now < input_guard_until) {
+        clear_input_buffers();
+        hold_dir = 0;
+        return std::nullopt;
+    }
     const bool typing = box_manager->editing_text();
+    const bool numeric = box_manager->adjusting_number();
+    if (numeric && hold_dir != 0) {
+        // Single-kat hold repeats the step: 400 ms delay, then 100 ms,
+        // 50 ms after 1.5 s and 20 ms after 3 s of holding.
+        bool held = hold_dir < 0 ? (is_kat_held(true) || key_down(SDL_SCANCODE_LEFT))
+                                 : (is_kat_held(false) || key_down(SDL_SCANCODE_RIGHT));
+        if (!held) {
+            hold_dir = 0;
+        } else if (now >= next_repeat) {
+            double held_ms = now - hold_start;
+            next_repeat = now + (held_ms < 1500.0 ? 100.0 : held_ms < 3000.0 ? 50.0 : 20.0);
+            if (hold_dir < 0) {
+                box_manager->move_left();
+            } else {
+                box_manager->move_right();
+            }
+        }
+    } else {
+        hold_dir = 0;
+    }
     if (is_l_kat_pressed() || (!typing && menu_left_pressed())) {
         audio.play_sound("kat", VolumePreset::SOUND);
         box_manager->move_left();
+        if (numeric) {
+            hold_dir = -1;
+            hold_start = now;
+            next_repeat = now + 400.0;
+        }
     } else if (is_r_kat_pressed() || (!typing && menu_right_pressed())) {
         audio.play_sound("kat", VolumePreset::SOUND);
         box_manager->move_right();
+        if (numeric) {
+            hold_dir = 1;
+            hold_start = now;
+            next_repeat = now + 400.0;
+        }
     } else if (is_l_don_pressed() || is_r_don_pressed() || (!typing && menu_confirm_pressed())) {
         audio.play_sound("don", VolumePreset::SOUND);
         bool result = box_manager->select_box();

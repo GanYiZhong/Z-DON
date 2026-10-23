@@ -84,6 +84,14 @@ void SettingsBoxManager::move_right() {
     }
 }
 
+bool SettingsBoxManager::take_capture_done() {
+    bool done = false;
+    for (auto& b : boxes) {
+        done = b->take_capture_done() || done;
+    }
+    return done;
+}
+
 std::optional<Screens> SettingsBoxManager::pending_screen_change() {
     for (auto& b : boxes) {
         auto result = b->pending_screen_change();
