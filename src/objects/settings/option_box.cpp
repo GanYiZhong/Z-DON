@@ -281,8 +281,8 @@ void IntOptionBox::draw() {
 
 StrOptionBox::StrOptionBox(const std::string& name, const std::string& description, const std::string& path,
                            const std::map<std::string, std::string>& values)
-    : BaseOptionBox(name, description, path), path(path), value(config_ref.get_str()), input_string(value),
-      value_text(nullptr), flicker_fade(make_flicker()) {
+    : BaseOptionBox(name, description, path), value(config_ref.get_str()), input_string(value), value_text(nullptr),
+      flicker_fade(make_flicker()) {
     if (!values.empty()) {
         for (auto& [k, v] : values) {
             value_list.emplace_back(k, v);
@@ -309,14 +309,6 @@ void StrOptionBox::rebuild_text() {
 }
 
 void StrOptionBox::confirm() {
-    if (value_list.empty()) {
-        // Z-DON: leaving a free-form field commits what was typed (it used to write the old value)
-        if (is_highlighted) {
-            input_string = value;
-        } else {
-            value = input_string;
-        }
-    }
     config_ref.set_str(value);
 }
 
@@ -326,39 +318,23 @@ bool StrOptionBox::needs_text_input() const {
 
 void StrOptionBox::update(double current_time) {
     flicker_fade->update(current_time);
-    if (!is_highlighted || !value_list.empty()) {
-        picker.reset();
-        return;
-    }
-    // Z-DON: the drum types through the on-screen picker (OK commits, CANCEL reverts);
-    // the keyboard and IME still type, except the keys bound as drums. The access
-    // code takes digits only.
-    const bool digits = path.starts_with("network/access_code");
-    if (!picker) {
-        picker.emplace(digits ? DrumCharPicker::CharSet::DIGITS : DrumCharPicker::CharSet::FULL, digits ? 20 : 0);
-    }
-    std::string before = input_string;
-    TextEditAction action = poll_text_edit(input_string, [digits](int cp) {
-        return !DrumCharPicker::is_drum_char(cp, PlayerNum::ALL) && (!digits || (cp >= '0' && cp <= '9'));
-    });
-    DrumCharPicker::Result picked = picker->handle_input(PlayerNum::ALL, input_string);
-    if (action == TextEditAction::None && picked == DrumCharPicker::Result::CONFIRM) {
-        action = TextEditAction::Confirm;
-    } else if (action == TextEditAction::None && picked == DrumCharPicker::Result::CANCEL) {
-        action = TextEditAction::Cancel;
-    }
-    if (action == TextEditAction::Cancel) {
-        input_string = value;
-    }
-    if (action != TextEditAction::None) {
-        is_highlighted = false;
-        confirm(); // commits input_string (reverted above on cancel)
-        set_keyboard_visible(false);
-        picker.reset();
-        capture_done = true; // the settings screen drops this press
-    }
-    if (input_string != before || action != TextEditAction::None) {
-        rebuild_text();
+    if (is_highlighted && value_list.empty()) {
+        std::string before = input_string;
+        TextEditAction action = poll_text_edit(input_string);
+#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
+        if (action == TextEditAction::None && (is_l_don_pressed() || is_r_don_pressed())) {
+            action = TextEditAction::Confirm;
+        }
+#endif
+        if (action == TextEditAction::Confirm) {
+            value = input_string;
+            confirm();
+            is_highlighted = false;
+            set_keyboard_visible(false);
+        }
+        if (input_string != before) {
+            rebuild_text();
+        }
     }
 }
 
@@ -380,16 +356,12 @@ void StrOptionBox::move_right() {
 
 void StrOptionBox::draw() {
     draw_base();
-    const Rect field{(float)t_button_on->x[2], (float)t_button_on->y[2], (float)t_button_on->x2[2],
-                     (float)t_button_on->y2[2]};
     if (is_highlighted && value_list.empty()) {
-        ime_ui_set_field(field);
+        ime_ui_set_field(
+            {(float)t_button_on->x[2], (float)t_button_on->y[2], (float)t_button_on->x2[2], (float)t_button_on->y2[2]});
     }
 
     draw_value_box(*value_text, *flicker_fade);
-    if (is_highlighted && picker) {
-        picker->draw(field); // also points the IME overlay clear of the picker
-    }
 }
 
 KeybindOptionBox::KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path)

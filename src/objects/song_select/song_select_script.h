@@ -105,8 +105,6 @@ public:
     bool draw_background_diffs(SongSelectPlayer* player);
     // the search overlay: search text and the open animation (bg_resize, fade_in)
     bool draw_search_box(const std::string& search, double bg_resize, double fade_in);
-    // Z-DON: the search field rect of the last draw_search_box (screen space)
-    Rect last_search_field{};
     // true when the skin's own hook drew the panel (the default module draws it otherwise)
     bool draw_option_panel(SongSelectPlayer* player, int kind);
 
