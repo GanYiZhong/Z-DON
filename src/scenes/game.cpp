@@ -369,6 +369,8 @@ void GameScreen::toggle_pause() {
 
 void GameScreen::restart_song() {
     pause_menu.reset();
+    tex.cancel_predecode("result");
+    audio.cancel_predecoded_sounds("result");
     unload_song();
     initialize_chart(global_data.session_data[(int)restart_player_num()].selected_song);
 
@@ -772,6 +774,10 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
 
         global_data.songs_played += 1;
         score_saved = true;
+        // Z-DON: a second after the last note the result screen's textures decode in the background, while the
+        // ending plays (never while notes are still to be hit)
+        tex.start_predecode("result");
+        audio.predecode_screen_sounds("result");
     }
 
     if (clock.position() >= end_time + transition_delay && !result_transition.is_started) {
