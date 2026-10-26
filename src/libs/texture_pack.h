@@ -67,6 +67,9 @@ namespace texture_pack {
         // The load is done (no more get/put): queue the rewrite when the pack missed anything.
         void finish();
 
+        // Z-DON: every file the pack holds (key and stat as written), planned or not; empty without a pack
+        std::vector<Planned> listed();
+
     private:
         struct Span;
         struct Entry {

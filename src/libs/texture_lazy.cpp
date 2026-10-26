@@ -597,6 +597,48 @@ namespace texture_lazy {
         }
     }
 
+    bool bandable(const ray::Image& image) {
+        return image.data && image.mipmaps == 1 && image.format < ray::PIXELFORMAT_COMPRESSED_DXT1_RGB &&
+               image.height > 0;
+    }
+
+    bool upload_band(const ray::Image& image, BandUpload& st) {
+        if (!bandable(image)) {
+            return false;
+        }
+        if (st.id == 0) {
+            st.id = rlLoadTexture(nullptr, image.width, image.height, image.format, 1);
+            if (st.id == 0) {
+                return false;
+            }
+            Texture empty{}; // into video memory while empty (warm_touch)
+            empty.id = st.id;
+            empty.width = image.width;
+            empty.height = image.height;
+            empty.mipmaps = 1;
+            empty.format = image.format;
+            warm_touch(empty);
+            st.rows_done = 0;
+        }
+        const size_t row_bytes = std::max<size_t>(1, image_bytes(image.width, 1, image.format));
+        const int rows = std::clamp(static_cast<int>(kWarmBandBytes / row_bytes), 1, image.height - st.rows_done);
+        rlUpdateTexture(st.id, 0, st.rows_done, image.width, rows, image.format,
+                        static_cast<const unsigned char*>(image.data) + row_bytes * st.rows_done);
+        rlDisableTexture();
+        st.rows_done += rows;
+        if (st.rows_done < image.height) {
+            return false;
+        }
+        Texture done{};
+        done.id = st.id;
+        done.width = image.width;
+        done.height = image.height;
+        done.mipmaps = 1;
+        done.format = image.format;
+        warm_touch(done);
+        return true;
+    }
+
     void log_screen(const std::string& screen_name) {
         for (auto& [screen, st] : stats()) {
             if (st.uploaded > 0) {

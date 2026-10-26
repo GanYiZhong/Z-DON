@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "../libs/animation.h"
@@ -147,13 +148,19 @@ void GameScreen::adopt_movie(bool wait) {
 
 void GameScreen::initialize_chart(const fs::path& song) {
     start_delay = (song.extension() == ".osu") ? 0 : start_delay;
+    const auto t0 = std::chrono::steady_clock::now();
     parser = std::make_shared<SongParser>(song, start_delay);
+    const auto t1 = std::chrono::steady_clock::now();
     initialize_song_movie();
     set_session_song_info(global_data.player_num);
 
     load_song_audio(AudioLoadMode::Async);
 
+    const auto t2 = std::chrono::steady_clock::now();
     create_players();
+    using ms = std::chrono::duration<double, std::milli>;
+    spdlog::info("Chart read in {:.1f} ms, players made in {:.1f} ms", ms(t1 - t0).count(),
+                 ms(std::chrono::steady_clock::now() - t2).count());
 }
 
 void GameScreen::initialize_song_movie() {

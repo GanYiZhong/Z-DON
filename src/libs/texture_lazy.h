@@ -112,4 +112,14 @@ namespace texture_lazy {
     // Once per frame, after its present: uploads queued warm-up textures for up to ZDON_WARM_UPLOAD_MS.
     void warm_tick();
 
+    // Z-DON predecode (TextureWrapper::start_predecode): an image uploaded the warm-up's way, a 1 MB band of rows
+    // per call into a texture drawn once into a 1x1 target when allocated and once when complete. True once every
+    // row is in (st.id is the texture then); false with st.id 0 when it cannot be (not bandable, allocation failed).
+    struct BandUpload {
+        unsigned int id = 0;
+        int rows_done = 0;
+    };
+    bool bandable(const ray::Image& image);
+    bool upload_band(const ray::Image& image, BandUpload& st);
+
 } // namespace texture_lazy

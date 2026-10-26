@@ -787,6 +787,7 @@ static void run_frame() {
     }
 
     texture_lazy::warm_tick(); // Z-DON: textures the screen will draw, uploaded ahead in the frame's spare time
+    tex.predecode_tick();      // Z-DON: the next screen's (start_predecode)
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
     vblank_pacing::wait_next(); // no-op unless pacing is on (no target_fps; then target_duration is 0)

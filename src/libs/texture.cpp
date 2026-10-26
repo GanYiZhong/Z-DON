@@ -750,6 +750,98 @@ std::vector<std::unordered_set<std::string>> subset_skips(DirIndex& dirs, const 
     return skips;
 }
 
+// Z-DON: images a predecode (TextureWrapper::start_predecode) decoded before their screen started to load,
+// by image key, with the file's size and time from the pack index. A screen load first checks them against
+// its own folder listing (a changed or vanished file is decoded again as usual), then takes them where it
+// would decode the file; the ones left when the screen has started are freed.
+namespace {
+    struct Predecoded {
+        struct Image {
+            ray::Image image{};
+            texture_pack::FileStat stat;
+            bool checked = false;   // matched the load's listing (image prefetch workers take only these)
+            unsigned int gl_id = 0; // uploaded ahead (predecode_tick): the texture of exactly these pixels
+        };
+        struct Uploaded {
+            unsigned int id = 0;
+            int width = 0, height = 0, format = 0;
+        };
+        std::mutex mutex;
+        std::unordered_map<std::string, Image> images;
+        // the uploaded textures of images handed to the load, by key, until load_folder makes their texture
+        std::unordered_map<std::string, Uploaded> uploaded;
+        std::string owner;
+        size_t given = 0, given_bytes = 0, given_gl = 0;
+
+        static void unload_gl(unsigned int id) {
+            if (id != 0) {
+                Texture t{};
+                t.id = id;
+                ray::UnloadTexture(t);
+            }
+        }
+        // main thread only (it frees GL textures)
+        void clear_locked() {
+            for (auto& [key, im] : images) {
+                texture_retain::free_image_async(im.image);
+                unload_gl(im.gl_id);
+            }
+            images.clear();
+            for (auto& [key, up] : uploaded) {
+                unload_gl(up.id);
+            }
+            uploaded.clear();
+        }
+        // hands an image out (mutex held): its uploaded texture waits for take_gl
+        void give_locked(const std::string& key, Image& im) {
+            given_bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+            ++given;
+            if (im.gl_id != 0) {
+                uploaded[key] = {im.gl_id, im.image.width, im.image.height, im.image.format};
+                im.gl_id = 0;
+            }
+        }
+        // the texture uploaded ahead for key's image, when it matches img (main thread)
+        bool take_gl(const std::string& key, const ray::Image& img, Texture& out) {
+            std::scoped_lock lock(mutex);
+            auto it = uploaded.find(key);
+            if (it == uploaded.end()) {
+                return false;
+            }
+            const Uploaded up = it->second;
+            uploaded.erase(it);
+            if (up.width != img.width || up.height != img.height || up.format != img.format || img.mipmaps != 1) {
+                unload_gl(up.id);
+                return false;
+            }
+            out = Texture{};
+            out.id = up.id;
+            out.width = up.width;
+            out.height = up.height;
+            out.mipmaps = 1;
+            out.format = up.format;
+            ++given_gl;
+            return true;
+        }
+        // a worker's take: only an image checked against the listing
+        bool take_checked(const std::string& key, ray::Image& out) {
+            std::scoped_lock lock(mutex);
+            auto it = images.find(key);
+            if (it == images.end() || !it->second.checked) {
+                return false;
+            }
+            out = it->second.image;
+            give_locked(key, it->second);
+            images.erase(it);
+            return true;
+        }
+    };
+    Predecoded& predecoded() {
+        static auto* p = new Predecoded(); // never destroyed: jobs may outlive static teardown
+        return *p;
+    }
+} // namespace
+
 class ImagePrefetch {
 public:
     ImagePrefetch(const std::vector<std::vector<fs::path>>& groups, const std::unordered_set<std::string>& border_keys,
@@ -863,7 +955,9 @@ private:
     // true when border was computed
     bool decode(const Item& it, ray::Image& image, Rect& border) {
         try {
-            image = load_image(it.path, it.key, pack);
+            if (!predecoded().take_checked(it.key, image)) {
+                image = load_image(it.path, it.key, pack);
+            }
         } catch (const std::exception& e) {
             spdlog::error("Failed to decode image {}: {}", it.path.string(), e.what());
             image = ray::Image{};
@@ -1057,6 +1151,29 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     rest_index.push_back(i);
                 }
             }
+            // Z-DON: predecoded images (a folder a script loads while its screen starts)
+            if (!rest.empty()) {
+                Predecoded& pre = predecoded();
+                std::scoped_lock lock(pre.mutex);
+                if (!pre.images.empty()) {
+                    size_t kept = 0;
+                    for (size_t k = 0; k < rest.size(); ++k) {
+                        auto pit = pre.images.find(ImagePrefetch::image_key(rest[k]));
+                        const DirIndex::Entry* e = pit == pre.images.end() ? nullptr : dirs.file_entry(rest[k]);
+                        if (e && e->size == pit->second.stat.size && e->mtime == pit->second.stat.mtime) {
+                            images[rest_index[k]] = pit->second.image;
+                            pre.give_locked(pit->first, pit->second);
+                            pre.images.erase(pit);
+                            continue;
+                        }
+                        rest[kept] = rest[k];
+                        rest_index[kept] = rest_index[k];
+                        ++kept;
+                    }
+                    rest.resize(kept);
+                    rest_index.resize(kept);
+                }
+            }
             std::vector<ray::Image> decoded;
             decode_images_parallel(rest, decoded);
             for (size_t k = 0; k < rest.size(); ++k) {
@@ -1093,7 +1210,11 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                                 gpu[fi] = tex;
                                 lazy_owned[fi] = 1;
                             } else {
-                                Texture t = load_texture_from_image(img);
+                                Texture t{};
+                                // Z-DON: uploaded ahead from the same pixels (start_predecode), else now
+                                if (!predecoded().take_gl(ImagePrefetch::image_key(files[fi]), img, t)) {
+                                    t = load_texture_from_image(img);
+                                }
                                 if (!is_texture_valid(t)) {
                                     spdlog::error("Failed to load texture {}: Frame {}", p.name, i);
                                     ok = false;
@@ -1308,9 +1429,22 @@ namespace {
     struct Prefill {
         std::string owner;
         std::string skin;
-        std::vector<texture_lazy::EvictedFile> files;
+        std::vector<texture_lazy::EvictedFile> files; // whole: set by the first job (under mutex)
         size_t bytes = 0;
         unsigned jobs = 0;
+        // Z-DON predecode (start_predecode): every file of owner's texture pack, not only the evicted ones,
+        // up to cap bytes of images; a load of a screen in `via` leaves it running for owner
+        bool whole = false;
+        size_t cap = 0;
+        std::atomic<size_t> held{0};
+        std::vector<std::string> via;
+        // whole, for a screen whose textures upload at load (the game screen): the decoded images are also
+        // uploaded ahead, on the main thread after the frame's present (predecode_tick); main thread only
+        bool upload = false;
+        std::vector<texture_lazy::BandUpload> up;
+        std::vector<char> up_state; // 0 to do, 1 uploaded, 2 left for the load
+        size_t up_pos = 0, up_count = 0, up_bytes = 0, up_frames = 0;
+        double up_ms = 0, up_max_ms = 0;
         std::unique_ptr<texture_pack::Session> pack; // set by the first job before the others start
         std::atomic<size_t> next{0};
         std::atomic<bool> taken{false};
@@ -1325,6 +1459,8 @@ namespace {
         static auto* p = new std::shared_ptr<Prefill>(); // never destroyed: jobs may outlive static teardown
         return *p;
     }
+
+    size_t drop_prefill(struct Prefill& pf);
 
     // the screen a player most likely goes to from screen_name
     const char* prefill_target(const std::string& screen_name) {
@@ -1352,12 +1488,19 @@ namespace {
             if (slow_ms > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(slow_ms));
             }
+            if (pf->whole && pf->held.load(std::memory_order_relaxed) >= pf->cap) {
+                return; // the RAM cap: the rest decodes with the load
+            }
             const fs::path& path = pf->files[i].source;
             ray::Image img{};
             try {
                 img = load_image(path, ImagePrefetch::image_key(path), pf->pack.get());
             } catch (const std::exception& e) {
                 spdlog::error("Lazy texture prefill: failed to decode {}: {}", path.string(), e.what());
+            }
+            if (img.data) {
+                pf->held.fetch_add(static_cast<size_t>(get_pixel_data_size(img.width, img.height, img.format)),
+                                   std::memory_order_relaxed);
             }
             std::scoped_lock lock(pf->mutex);
             if (pf->taken.load(std::memory_order_relaxed)) {
@@ -1397,6 +1540,9 @@ namespace {
         }
         pf->images.assign(pf->files.size(), ray::Image{});
         pf->start = std::chrono::steady_clock::now();
+        if (prefill_slot()) {
+            drop_prefill(*prefill_slot());
+        }
         prefill_slot() = pf;
         spdlog::info("Lazy texture prefill for {}: {} images ({} MB) on {} background jobs", pf->owner,
                      pf->files.size(), pf->bytes >> 20, jobs_n);
@@ -1425,11 +1571,129 @@ namespace {
         });
     }
 
+    // ZDON_PREDECODE: 0 = off, else the number of background jobs (default 4); ZDON_PREDECODE_MB: the cap
+    unsigned predecode_jobs() {
+        static const unsigned n = [] {
+            const char* v = std::getenv("ZDON_PREDECODE");
+            const long k = v && *v ? std::strtol(v, nullptr, 10) : 4;
+            return k > 0 ? static_cast<unsigned>(std::min(k, 16L)) : 0U;
+        }();
+        return n;
+    }
+    size_t predecode_cap() {
+        static const size_t cap = [] {
+            const char* v = std::getenv("ZDON_PREDECODE_MB");
+            const long mb = v && *v ? std::strtol(v, nullptr, 10) : 512;
+            return mb > 0 ? static_cast<size_t>(mb) << 20 : size_t{0};
+        }();
+        return cap;
+    }
+
+    // stops a prefill / predecode and frees what it decoded (jobs still decoding drop theirs)
+    size_t drop_prefill(Prefill& pf) {
+        for (texture_lazy::BandUpload& st : pf.up) {
+            Predecoded::unload_gl(st.id);
+            st.id = 0;
+        }
+        std::scoped_lock lock(pf.mutex);
+        pf.taken.store(true, std::memory_order_release);
+        for (ray::Image& img : pf.images) {
+            if (img.data) {
+                texture_retain::free_image_async(img);
+                img = ray::Image{};
+            }
+        }
+        return pf.done;
+    }
+
+    // a screen starts loading while a predecode runs: its target takes the images, any other screen drops them
+    void take_predecode(const std::shared_ptr<Prefill>& pf, const std::string& screen_name) {
+        std::vector<std::pair<std::string, Predecoded::Image>> got;
+        size_t done = 0, total = 0;
+        {
+            std::scoped_lock lock(pf->mutex);
+            pf->taken.store(true, std::memory_order_release);
+            for (size_t i = 0; i < pf->images.size(); ++i) {
+                unsigned int gl = 0;
+                if (i < pf->up.size()) {
+                    if (i < pf->up_state.size() && pf->up_state[i] == 1) {
+                        gl = pf->up[i].id;
+                    } else {
+                        Predecoded::unload_gl(pf->up[i].id); // only some rows in: uploaded whole at the load
+                    }
+                    pf->up[i].id = 0;
+                }
+                if (pf->images[i].data) {
+                    got.emplace_back(
+                        ImagePrefetch::image_key(pf->files[i].source),
+                        Predecoded::Image{pf->images[i], {pf->files[i].size, pf->files[i].mtime}, false, gl});
+                    pf->images[i] = ray::Image{};
+                } else {
+                    Predecoded::unload_gl(gl);
+                }
+            }
+            done = pf->done;
+            total = pf->files.size();
+        }
+        if (pf->up_frames > 0) {
+            spdlog::info("Texture predecode for {}: {} textures uploaded ahead ({} MB) in {} frames, {:.1f} ms in all, "
+                         "longest {:.2f} ms",
+                         pf->owner, pf->up_count, pf->up_bytes >> 20, pf->up_frames, pf->up_ms, pf->up_max_ms);
+        }
+        const double since =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf->start).count();
+        if (screen_name != pf->owner) {
+            for (auto& [key, im] : got) {
+                texture_retain::free_image_async(im.image);
+                Predecoded::unload_gl(im.gl_id);
+            }
+            spdlog::info("Texture predecode for {}: {} loads instead, {} decoded images dropped", pf->owner,
+                         screen_name, done);
+            return;
+        }
+        // textures of the screen whose images were evicted (texture_lazy) take theirs as from a prefill
+        std::unordered_map<std::string, fs::path> evicted;
+        for (const fs::path& src : texture_lazy::evicted_sources(pf->owner)) {
+            evicted.emplace(ImagePrefetch::image_key(src), src);
+        }
+        std::vector<std::pair<fs::path, ray::Image>> refill;
+        size_t bytes = 0;
+        Predecoded& pre = predecoded();
+        {
+            std::scoped_lock lock(pre.mutex);
+            pre.clear_locked();
+            pre.owner = pf->owner;
+            pre.given = pre.given_bytes = 0;
+            for (auto& [key, im] : got) {
+                bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+                if (auto it = evicted.find(key); it != evicted.end()) {
+                    refill.emplace_back(it->second, im.image);
+                    Predecoded::unload_gl(im.gl_id); // a lazy texture: uploaded on first use
+                } else {
+                    pre.images.insert_or_assign(key, im);
+                }
+            }
+        }
+        const size_t refilled = refill.empty() ? 0 : texture_lazy::refill_from(pf->owner, refill);
+        spdlog::info("Texture predecode for {}: {} of {} images ready after {:.0f} ms ({} MB{}), {} evicted textures "
+                     "refilled",
+                     pf->owner, got.size(), total, since, bytes >> 20,
+                     done < total ? ", the rest decodes with the load" : "", refilled);
+    }
+
     // a screen starts loading: screen_name takes what is done if it is the target, otherwise it is dropped
     void take_prefill(const std::string& screen_name) {
+        if (prefill_slot() && prefill_slot()->whole && screen_name != prefill_slot()->owner &&
+            std::ranges::find(prefill_slot()->via, screen_name) != prefill_slot()->via.end()) {
+            return; // a screen on the way to the predecode's target: it keeps running
+        }
         std::shared_ptr<Prefill> pf = std::move(prefill_slot());
         prefill_slot().reset();
         if (!pf) {
+            return;
+        }
+        if (pf->whole) {
+            take_predecode(pf, screen_name);
             return;
         }
         std::vector<std::pair<fs::path, ray::Image>> got;
@@ -1469,6 +1733,160 @@ namespace {
         }
     }
 } // namespace
+
+void TextureWrapper::start_predecode(const std::string& target, std::vector<std::string> via) {
+    const unsigned jobs_n = predecode_jobs();
+    if (jobs_n == 0 || predecode_cap() == 0 || !texture_pack::enabled() || target == screen_loaded) {
+        return;
+    }
+    std::shared_ptr<Prefill>& slot = prefill_slot();
+    if (slot && slot->whole && slot->owner == target && !slot->taken.load(std::memory_order_acquire)) {
+        slot->via = std::move(via); // already under way
+        return;
+    }
+    if (slot) {
+        const size_t n = drop_prefill(*slot);
+        spdlog::info("Texture predecode for {}: replaced by {}, {} decoded images dropped", slot->owner, target, n);
+        slot.reset();
+    }
+    auto pf = std::make_shared<Prefill>();
+    pf->owner = target;
+    pf->skin = skin_root().filename().string();
+    pf->jobs = jobs_n;
+    pf->whole = true;
+    pf->cap = predecode_cap();
+    pf->via = std::move(via);
+    pf->upload = target == "game"; // the screens whose textures upload at load (texture_lazy: gameplay)
+    pf->start = std::chrono::steady_clock::now();
+    slot = pf;
+    // the first job reads the pack's index (file I/O), opens the pack, then starts the others
+    jobs::submit(jobs::Priority::Background, [pf] {
+        if (pf->taken.load(std::memory_order_acquire)) {
+            return;
+        }
+        const fs::path pack_file = texture_pack::pack_path(pf->skin, pf->owner);
+        std::vector<texture_pack::Session::Planned> planned;
+        try {
+            texture_pack::Session index(pack_file, pf->owner, {}, nullptr, nullptr, true);
+            planned = index.listed();
+        } catch (const std::exception& e) {
+            spdlog::warn("Texture predecode for {}: texture pack not read: {}", pf->owner, e.what());
+        }
+        if (planned.empty()) {
+            spdlog::info("Texture predecode for {}: no texture pack yet", pf->owner);
+            return;
+        }
+        std::vector<texture_lazy::EvictedFile> files;
+        files.reserve(planned.size());
+        for (const texture_pack::Session::Planned& p : planned) {
+            files.push_back({fs::path(p.key), p.stat.size, p.stat.mtime, 0});
+        }
+        try {
+            // never finished: a predecode only reads the pack, the screen's own loads rewrite it
+            pf->pack = std::make_unique<texture_pack::Session>(pack_file, pf->owner, std::move(planned), nullptr,
+                                                               nullptr, true);
+        } catch (const std::exception& e) {
+            spdlog::warn("Texture predecode for {}: texture pack not used: {}", pf->owner, e.what());
+        }
+        {
+            std::scoped_lock lock(pf->mutex);
+            if (pf->taken.load(std::memory_order_relaxed)) {
+                return;
+            }
+            pf->images.assign(files.size(), ray::Image{});
+            pf->files = std::move(files);
+        }
+        spdlog::info("Texture predecode for {}: {} files of its texture pack on {} background jobs (cap {} MB)",
+                     pf->owner, pf->files.size(), pf->jobs, pf->cap >> 20);
+        for (unsigned j = 1; j < pf->jobs; ++j) {
+            jobs::submit(jobs::Priority::Background, [pf] { prefill_work(pf); });
+        }
+        prefill_work(pf);
+    });
+}
+
+void TextureWrapper::cancel_predecode(const std::string& target) {
+    std::shared_ptr<Prefill>& slot = prefill_slot();
+    if (!slot || !slot->whole || slot->owner != target) {
+        return;
+    }
+    const size_t n = drop_prefill(*slot);
+    spdlog::info("Texture predecode for {}: cancelled, {} decoded images dropped", target, n);
+    slot.reset();
+}
+
+void TextureWrapper::end_predecode() {
+    Predecoded& pre = predecoded();
+    std::scoped_lock lock(pre.mutex);
+    if (pre.owner.empty()) {
+        return;
+    }
+    size_t left_bytes = 0;
+    for (const auto& [key, im] : pre.images) {
+        left_bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+    }
+    spdlog::info("Texture predecode for {}: {} images used instead of decoding ({} MB; {} textures uploaded ahead), {} "
+                 "not needed ({} MB)",
+                 pre.owner, pre.given, pre.given_bytes >> 20, pre.given_gl, pre.images.size(), left_bytes >> 20);
+    pre.clear_locked();
+    pre.owner.clear();
+    pre.given_gl = 0;
+}
+
+void TextureWrapper::predecode_tick() {
+    std::shared_ptr<Prefill>& slot = prefill_slot();
+    if (!slot || !slot->upload || slot->taken.load(std::memory_order_acquire)) {
+        return;
+    }
+    Prefill& pf = *slot;
+    // ZDON_PREUPLOAD_MS: the frame time it may take after the present (default 1.0, 0 = no upload ahead)
+    static const double budget = [] {
+        const char* v = std::getenv("ZDON_PREUPLOAD_MS");
+        return v && *v ? std::max(0.0, std::atof(v)) : 1.0;
+    }();
+    if (budget <= 0) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    auto elapsed = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    bool worked = false;
+    while (elapsed() < budget) {
+        ray::Image img{};
+        {
+            std::scoped_lock lock(pf.mutex);
+            if (pf.up.size() != pf.images.size()) {
+                pf.up.resize(pf.images.size());
+                pf.up_state.resize(pf.images.size(), 0);
+            }
+            if (pf.up_pos >= pf.images.size()) {
+                break;
+            }
+            img = pf.images[pf.up_pos]; // freed only on this thread (drop / take)
+        }
+        if (!img.data) {
+            break; // not decoded yet (they come in order): next frame
+        }
+        worked = true;
+        texture_lazy::BandUpload& st = pf.up[pf.up_pos];
+        if (texture_lazy::upload_band(img, st)) {
+            pf.up_state[pf.up_pos] = 1;
+            ++pf.up_count;
+            pf.up_bytes += static_cast<size_t>(get_pixel_data_size(img.width, img.height, img.format));
+            ++pf.up_pos;
+        } else if (st.id == 0) {
+            pf.up_state[pf.up_pos] = 2; // not bandable: uploaded at the load as before
+            ++pf.up_pos;
+        }
+    }
+    if (worked) {
+        const double ms = elapsed();
+        ++pf.up_frames;
+        pf.up_ms += ms;
+        pf.up_max_ms = std::max(pf.up_max_ms, ms);
+    }
+}
 
 // decoded-but-not-yet-uploaded images load_screen_textures may hold ahead of load_folder
 constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
@@ -1617,12 +2035,38 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     const size_t refill_group = groups.size();
     groups.push_back(refill_files);
 
+    // Z-DON: predecoded images (start_predecode), checked against this load's listing: a file changed or gone
+    // since is decoded again as usual; one in a folder not listed yet waits for the load_folder that lists it
+    std::unordered_set<std::string> predecoded_keys;
+    {
+        Predecoded& pre = predecoded();
+        std::scoped_lock lock(pre.mutex);
+        for (auto it = pre.images.begin(); it != pre.images.end();) {
+            const DirIndex::Entry* e = nullptr;
+            const int r = dirs.peek_file(fs::path(it->first), e);
+            if (r == 0 || (r == 1 && (e->size != it->second.stat.size || e->mtime != it->second.stat.mtime))) {
+                texture_retain::free_image_async(it->second.image);
+                Predecoded::unload_gl(it->second.gl_id);
+                it = pre.images.erase(it);
+                continue;
+            }
+            it->second.checked = r == 1;
+            if (r == 1) {
+                predecoded_keys.insert(it->first);
+            }
+            ++it;
+        }
+    }
+
     // the screen's texture pack: the planned files' bytes in one file, checked against the listings
     std::unique_ptr<texture_pack::Session> pack;
     if (texture_pack::enabled()) {
         std::vector<texture_pack::Session::Planned> planned;
         for (const auto& group : groups) {
             for (const fs::path& p : group) {
+                if (predecoded_keys.contains(ImagePrefetch::image_key(p))) {
+                    continue; // not read again (kept in the pack as a current entry)
+                }
                 if (const DirIndex::Entry* e = dirs.file_entry(p)) {
                     planned.push_back({ImagePrefetch::image_key(p), {e->size, e->mtime}});
                 }

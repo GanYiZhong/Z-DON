@@ -373,6 +373,15 @@ std::optional<Screens> SongSelectScreen::update() {
     }
 
     if (state != prev_state) {
+        // Z-DON: a song is chosen: the game screen's textures decode in the background while the player picks a
+        // difficulty (they do not depend on the song); backing out drops them
+        if (state == SongSelectState::SONG_SELECTED) {
+            tex.start_predecode("game");
+            audio.predecode_screen_sounds("game");
+        } else if (prev_state == SongSelectState::SONG_SELECTED && !game_transition.has_value()) {
+            tex.cancel_predecode("game");
+            audio.cancel_predecoded_sounds("game");
+        }
         script->restart_text_fade();
         if (prev_state == SongSelectState::SEARCHING) {
             set_keyboard_visible(false);

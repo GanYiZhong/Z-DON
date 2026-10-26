@@ -26,11 +26,125 @@ SDL_AudioStream* g_ios_audio_stream = nullptr;
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
 
 #include "filesystem.h"
+
+// Z-DON: sounds decoded ahead by predecode_screen_sounds, by path, until load_screen_sounds of that screen
+namespace {
+    struct PreSound {
+        sound snd{};                           // a short sound: data, frame_count, sample_rate, channels
+        std::shared_ptr<ProgressiveHead> head; // a long one: its first seconds (load_sound_progressive)
+        size_t bytes = 0;                      // of PCM written
+        uint64_t size = 0;
+        int64_t mtime = 0;
+    };
+    struct SoundBatch {
+        std::string screen;
+        std::atomic<bool> cancel{false};
+        std::mutex mutex;
+        std::unordered_map<std::string, PreSound> sounds;
+        size_t bytes = 0;
+        size_t used = 0;
+        bool done = false;
+        double ms = 0;
+    };
+    constexpr size_t kPredecodeSoundCap = size_t{64} << 20;
+    std::mutex batch_slot_mutex;
+    std::shared_ptr<SoundBatch> batch_slot;
+
+    std::string predecode_key(const fs::path& p) {
+        return p.lexically_normal().generic_string();
+    }
+    bool file_stat(const fs::path& p, uint64_t& size, int64_t& mtime) {
+        std::error_code ec;
+        size = static_cast<uint64_t>(fs::file_size(p, ec));
+        if (ec) {
+            return false;
+        }
+        mtime = static_cast<int64_t>(fs::last_write_time(p, ec).time_since_epoch().count());
+        return !ec;
+    }
+    void free_batch_locked(SoundBatch& b) {
+        for (auto& [key, ps] : b.sounds) {
+            delete[] ps.snd.data;
+        }
+        b.sounds.clear();
+        b.bytes = 0;
+    }
+    std::shared_ptr<SoundBatch> current_batch() {
+        std::scoped_lock lock(batch_slot_mutex);
+        return batch_slot;
+    }
+    // empties the slot; logs what the dropped batch held when `why` is set
+    void drop_batch(const char* why) {
+        std::shared_ptr<SoundBatch> b;
+        {
+            std::scoped_lock lock(batch_slot_mutex);
+            b = std::move(batch_slot);
+            batch_slot.reset();
+        }
+        if (!b) {
+            return;
+        }
+        b->cancel.store(true, std::memory_order_release);
+        std::scoped_lock lock(b->mutex);
+        if (why) {
+            spdlog::info("Sound predecode for {}: {} ({} used, {} not needed)", b->screen, why, b->used,
+                         b->sounds.size());
+        }
+        free_batch_locked(*b);
+    }
+    // the predecoded PCM of file_path when its file is unchanged (the caller owns out.snd.data / out.head then)
+    bool take_predecoded(const fs::path& file_path, PreSound& out) {
+        std::shared_ptr<SoundBatch> b = current_batch();
+        if (!b) {
+            return false;
+        }
+        PreSound ps;
+        {
+            std::scoped_lock lock(b->mutex);
+            auto it = b->sounds.find(predecode_key(file_path));
+            if (it == b->sounds.end()) {
+                return false;
+            }
+            ps = it->second;
+            b->bytes -= std::min(b->bytes, ps.bytes);
+            b->sounds.erase(it);
+        }
+        uint64_t size = 0;
+        int64_t mtime = 0;
+        if (!file_stat(file_path, size, mtime) || size != ps.size || mtime != ps.mtime) {
+            delete[] ps.snd.data; // changed since: decoded again (a head frees itself)
+            return false;
+        }
+        {
+            std::scoped_lock lock(b->mutex);
+            ++b->used;
+        }
+        out = std::move(ps);
+        return true;
+    }
+    bool predecode_enabled() {
+        static const bool on = [] {
+            const char* v = std::getenv("ZDON_PREDECODE");
+            return !(v && *v == '0');
+        }();
+        return on;
+    }
+    // dev hook ZDON_PREDECODE_VERIFY=1: every sound taken from a predecode is decoded again the usual way and compared
+    bool predecode_verify() {
+        static const bool on = std::getenv("ZDON_PREDECODE_VERIFY") != nullptr;
+        return on;
+    }
+    bool same_pcm(const sound& a, const sound& b, size_t frames) {
+        return a.channels == b.channels && a.sample_rate == b.sample_rate && a.data && b.data &&
+               std::memcmp(a.data, b.data, frames * a.channels * sizeof(float)) == 0;
+    }
+} // namespace
 
 #ifdef SUPPORT_FUMEN
 static bool is_bank_file(const fs::path& p) {
@@ -875,6 +989,7 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
 }
 
 void AudioEngine::close_audio_device() {
+    drop_batch(nullptr); // Z-DON: predecoded sounds of the old skin
     loudness_scanner.reset();
     audio_dev::stop();
     drop_resident_sounds(); // a skin change or reload: the next skin's files may differ
@@ -1273,15 +1388,8 @@ bool AudioEngine::stop_decode_job(sound& snd) {
 
 // Z-DON: a long sound (a screen's bgm: Nijiiro's song select bgm.ogg took ~210 ms warm, ~450 ms
 // from a cold disk to decode whole) decodes its first seconds here and the rest on a background
-// thread, into the same buffer; it can start playing at once. Takes ownership of file.
-std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
-                                                const std::string& name) {
-    const unsigned int channels = static_cast<unsigned int>(info.channels);
-    const bool resample = static_cast<double>(info.samplerate) != target_sample_rate;
-    const double ratio = resample ? target_sample_rate / static_cast<double>(info.samplerate) : 1.0;
-    const size_t expected = static_cast<size_t>(static_cast<double>(info.frames) * ratio);
-    const size_t capacity = expected + 64; // frames; room for the resampler's rounding
-
+// thread, into the same buffer; it can start playing at once.
+struct ProgressiveHead {
     struct Decoder {
         SNDFILE* file = nullptr;
         SRC_STATE* src = nullptr;
@@ -1332,34 +1440,84 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
         }
     };
 
-    auto dec = std::make_shared<Decoder>();
-    dec->file = file;
-    dec->capacity = capacity;
-    dec->channels = channels;
-    dec->ratio = ratio;
-    if (resample) {
-        int err = 0;
-        dec->src = src_new(SRC_SINC_FASTEST, static_cast<int>(channels), &err);
-        if (!dec->src) {
-            spdlog::error("Failed to create resampler for {}: {}", file_path.string(), src_strerror(err));
-            sf_close(file);
-            return "";
-        }
-    }
-    dec->out = new float[capacity * channels]; // only the frames_ready part is ever read
+    std::shared_ptr<Decoder> dec;
+    bool more = false;      // the head did not reach the end
+    size_t expected = 0;    // frames at the device rate
+    unsigned int rate = 0;  // the sound's rate (the device's when resampled)
+    bool installed = false; // handed to a sound (which owns dec->out from then on)
 
-    // the first seconds now, so play_sound right after this has something to play
-    const sf_count_t head = static_cast<sf_count_t>(info.samplerate) * kProgressiveHeadSeconds;
-    const bool more = dec->step(head);
+    ~ProgressiveHead() {
+        if (installed || !dec) {
+            return;
+        }
+        sf_close(dec->file);
+        if (dec->src) {
+            src_delete(dec->src);
+        }
+        delete[] dec->out;
+    }
+
+    // the first kProgressiveHeadSeconds of file (taken over); null when it cannot be decoded
+    static std::shared_ptr<ProgressiveHead> begin(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
+                                                  double target_sample_rate) {
+        const unsigned int channels = static_cast<unsigned int>(info.channels);
+        const bool resample = static_cast<double>(info.samplerate) != target_sample_rate;
+        const double ratio = resample ? target_sample_rate / static_cast<double>(info.samplerate) : 1.0;
+        const size_t expected = static_cast<size_t>(static_cast<double>(info.frames) * ratio);
+        const size_t capacity = expected + 64; // frames; room for the resampler's rounding
+
+        auto dec = std::make_shared<Decoder>();
+        dec->file = file;
+        dec->capacity = capacity;
+        dec->channels = channels;
+        dec->ratio = ratio;
+        if (resample) {
+            int err = 0;
+            dec->src = src_new(SRC_SINC_FASTEST, static_cast<int>(channels), &err);
+            if (!dec->src) {
+                spdlog::error("Failed to create resampler for {}: {}", file_path.string(), src_strerror(err));
+                sf_close(file);
+                return nullptr;
+            }
+        }
+        dec->out = new float[capacity * channels]; // only the frames_ready part is ever read
+
+        auto h = std::make_shared<ProgressiveHead>();
+        h->dec = dec;
+        h->expected = expected;
+        h->rate = resample ? static_cast<unsigned int>(target_sample_rate) : info.samplerate;
+        // the first seconds now, so play_sound right after this has something to play
+        const sf_count_t head = static_cast<sf_count_t>(info.samplerate) * AudioEngine::kProgressiveHeadSeconds;
+        h->more = dec->step(head);
+        return h;
+    }
+};
+
+// Takes ownership of file.
+std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
+                                                const std::string& name) {
+    std::shared_ptr<ProgressiveHead> h = ProgressiveHead::begin(file, info, file_path, target_sample_rate);
+    if (!h) {
+        return "";
+    }
+    return install_progressive(h, file_path, name);
+}
+
+std::string AudioEngine::install_progressive(const std::shared_ptr<ProgressiveHead>& h, const fs::path& file_path,
+                                             const std::string& name) {
+    using Decoder = ProgressiveHead::Decoder;
+    std::shared_ptr<Decoder> dec = h->dec;
+    const bool more = h->more;
+    h->installed = true;
 
     auto job = std::make_shared<SoundDecodeJob>();
     job->frames_ready.store(static_cast<unsigned int>(dec->written), std::memory_order_release);
 
     sound snd{};
     snd.data = dec->out;
-    snd.frame_count = static_cast<unsigned int>(more ? expected : dec->written);
-    snd.sample_rate = resample ? static_cast<unsigned int>(target_sample_rate) : info.samplerate;
-    snd.channels = channels;
+    snd.frame_count = static_cast<unsigned int>(more ? h->expected : dec->written);
+    snd.sample_rate = h->rate;
+    snd.channels = dec->channels;
     snd.decode_job = job;
     snd.normalization_gain = loaded_sound_gain(file_path, name);
 
@@ -1400,7 +1558,7 @@ std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& in
         delete[] orphaned;
     }).detach();
 
-    spdlog::debug("Loading sound in the background: {} ({} frames ready of ~{})", name, dec->written, expected);
+    spdlog::debug("Loading sound in the background: {} ({} frames ready of ~{})", name, dec->written, h->expected);
     return name;
 }
 
@@ -1441,10 +1599,94 @@ float AudioEngine::loaded_song_gain(const fs::path& file_path) {
     return loudness_scanner ? loudness_scanner->gain_for(file_path) : song_loudness::fallback_gain();
 }
 
+bool AudioEngine::read_short_sound(SNDFILE* file, const SF_INFO& info, const fs::path& file_path, double target_rate,
+                                   sound& snd) {
+    const unsigned int channels = static_cast<unsigned int>(info.channels);
+    const unsigned int total_frames = static_cast<unsigned int>(info.frames);
+    float* data = new float[static_cast<size_t>(info.frames) * channels];
+
+    sf_count_t frames_read = sf_readf_float(file, data, total_frames);
+    sf_close(file);
+
+    if (frames_read != total_frames) {
+        spdlog::warn("Read {} frames, expected {} for sound: {}", frames_read, total_frames, file_path.string());
+    }
+
+    snd.data = data;
+    snd.frame_count = frames_read;
+    snd.sample_rate = info.samplerate;
+    snd.channels = channels;
+
+    if (snd.sample_rate != target_rate) {
+        double ratio = target_rate / (double)snd.sample_rate;
+        long output_frames = (long)(frames_read * ratio) + 1;
+        float* resampled_data = new float[output_frames * channels];
+
+        SRC_DATA src_data;
+        src_data.data_in = data;
+        src_data.input_frames = frames_read;
+        src_data.data_out = resampled_data;
+        src_data.output_frames = output_frames;
+        src_data.src_ratio = ratio;
+        src_data.end_of_input = 1;
+
+        int error = src_simple(&src_data, SRC_SINC_FASTEST, channels);
+        if (error) {
+            spdlog::error("Failed to resample sound: {} - {}", file_path.string(), src_strerror(error));
+            delete[] data;
+            delete[] resampled_data;
+            snd.data = nullptr;
+            return false;
+        }
+
+        delete[] data;
+        snd.data = resampled_data;
+        snd.frame_count = src_data.output_frames_gen;
+        snd.sample_rate = target_rate;
+    }
+    return true;
+}
+
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
     try {
         if (name == "song") {
             queue_song_loudness(file_path, true);
+        } else if (PreSound ps; take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
+            if (std::shared_ptr<ProgressiveHead> h = std::move(ps.head)) {
+                if (predecode_verify()) {
+                    SF_INFO vi;
+                    SNDFILE* vf = open_sound_file(file_path, vi);
+                    std::shared_ptr<ProgressiveHead> v =
+                        vf ? ProgressiveHead::begin(vf, vi, file_path, target_sample_rate) : nullptr;
+                    const bool same =
+                        v && v->dec->written == h->dec->written && v->more == h->more && v->expected == h->expected &&
+                        v->rate == h->rate &&
+                        std::memcmp(v->dec->out, h->dec->out, h->dec->written * h->dec->channels * sizeof(float)) == 0;
+                    spdlog::info("Predecode verify: head of {} {} ({} frames)", file_path.filename().string(),
+                                 same ? "identical" : "DIFFERS", h->dec->written);
+                }
+                return install_progressive(h, file_path, name);
+            }
+            sound& pre = ps.snd;
+            if (predecode_verify()) {
+                SF_INFO vi;
+                SNDFILE* vf = open_sound_file(file_path, vi);
+                sound v{};
+                const bool same = vf && read_short_sound(vf, vi, file_path, target_sample_rate, v) &&
+                                  v.frame_count == pre.frame_count && same_pcm(v, pre, pre.frame_count);
+                delete[] v.data;
+                if (!same) {
+                    spdlog::error("Predecode verify: sound {} DIFFERS", file_path.string());
+                } else {
+                    static std::atomic<size_t> checked{0};
+                    if (++checked % 25 == 1) {
+                        spdlog::info("Predecode verify: {} sounds identical so far", checked.load());
+                    }
+                }
+            }
+            pre.normalization_gain = loaded_sound_gain(file_path, name);
+            store_sound(name, pre);
+            return name;
         }
 #ifdef SUPPORT_FUMEN
         if (is_bank_file(file_path)) {
@@ -1530,50 +1772,12 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
             sf_close(file);
             return "";
         }
-        unsigned int total_frames = static_cast<unsigned int>(total_frames_sf);
         if (total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
             return load_sound_progressive(file, file_info, file_path, name);
         }
-        float* data = new float[static_cast<size_t>(total_frames_sf) * channels];
-
-        sf_count_t frames_read = sf_readf_float(file, data, total_frames);
-        sf_close(file);
-
-        if (frames_read != total_frames) {
-            spdlog::warn("Read {} frames, expected {} for sound: {}", frames_read, total_frames, file_path.string());
-        }
-
         sound snd{};
-        snd.data = data;
-        snd.frame_count = frames_read;
-        snd.sample_rate = file_info.samplerate;
-        snd.channels = channels;
-
-        if (snd.sample_rate != target_sample_rate) {
-            double ratio = target_sample_rate / (double)snd.sample_rate;
-            long output_frames = (long)(frames_read * ratio) + 1;
-            float* resampled_data = new float[output_frames * channels];
-
-            SRC_DATA src_data;
-            src_data.data_in = data;
-            src_data.input_frames = frames_read;
-            src_data.data_out = resampled_data;
-            src_data.output_frames = output_frames;
-            src_data.src_ratio = ratio;
-            src_data.end_of_input = 1;
-
-            int error = src_simple(&src_data, SRC_SINC_FASTEST, channels);
-            if (error) {
-                spdlog::error("Failed to resample sound: {} - {}", file_path.string(), src_strerror(error));
-                delete[] data;
-                delete[] resampled_data;
-                return "";
-            }
-
-            delete[] data;
-            snd.data = resampled_data;
-            snd.frame_count = src_data.output_frames_gen;
-            snd.sample_rate = target_sample_rate;
+        if (!read_short_sound(file, file_info, file_path, target_sample_rate, snd)) {
+            return "";
         }
 
         snd.normalization_gain = loaded_sound_gain(file_path, name);
@@ -1591,12 +1795,9 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
     }
 }
 
-void AudioEngine::load_screen_sounds(const std::string& screen_name) {
-    struct Want {
-        fs::path file;
-        std::string name;
-        bool resident; // Z-DON: kept across screens (see load_resident_sound)
-    };
+std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::path& sounds_path,
+                                                                      const std::string& screen_name, bool warn) {
+    using Want = ScreenSound;
     std::vector<Want> queue;
     std::unordered_set<std::string> claimed;
 
@@ -1645,7 +1846,7 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
     for (const fs::path& dir : ancestor_sounds) {
         has_screen_sounds = has_screen_sounds || fs::exists(dir / screen_name);
     }
-    if (!has_screen_sounds) {
+    if (!has_screen_sounds && warn) {
         spdlog::warn("Sounds for screen {} not found", screen_name);
     }
 
@@ -1669,6 +1870,109 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
     for (const fs::path& dir : ancestor_sounds) {
         scan(dir / "global", true);
     }
+    return queue;
+}
+
+void AudioEngine::predecode_screen_sounds(const std::string& screen_name) {
+    if (!predecode_enabled() || !is_ready) {
+        return;
+    }
+    if (auto b = current_batch(); b && b->screen == screen_name && !b->cancel.load(std::memory_order_acquire)) {
+        return; // already under way
+    }
+    drop_batch("replaced");
+    auto b = std::make_shared<SoundBatch>();
+    b->screen = screen_name;
+    {
+        std::scoped_lock lock(batch_slot_mutex);
+        batch_slot = b;
+    }
+    // what is resident now is reused by the load without decoding
+    std::unordered_map<std::string, std::string> kept;
+    {
+        std::scoped_lock g(resident_lock);
+        for (const auto& [name, r] : resident) {
+            kept.emplace(name, r.path);
+        }
+    }
+    jobs::submit(
+        jobs::Priority::Background, [this, b, kept = std::move(kept), sounds = sounds_path, rate = target_sample_rate] {
+            const auto start = std::chrono::steady_clock::now();
+            size_t n = 0;
+            for (const ScreenSound& w : screen_sound_files(sounds, b->screen, false)) {
+                if (b->cancel.load(std::memory_order_acquire)) {
+                    break;
+                }
+                if (w.resident) {
+                    auto it = kept.find(w.name);
+                    if (it != kept.end() && it->second == path_to_string(w.file.lexically_normal())) {
+                        continue;
+                    }
+                }
+#ifdef SUPPORT_FUMEN
+                if (is_bank_file(w.file)) {
+                    continue;
+                }
+#endif
+                PreSound ps;
+                if (!file_stat(w.file, ps.size, ps.mtime)) {
+                    continue;
+                }
+                SF_INFO info;
+                SNDFILE* file = open_sound_file(w.file, info);
+                if (!file) {
+                    continue;
+                }
+                if (info.frames <= 0 || info.channels <= 0) {
+                    sf_close(file);
+                    continue;
+                }
+                if (info.frames > static_cast<sf_count_t>(info.samplerate) * kProgressiveMinSeconds) {
+                    // a long one (a bgm): its first seconds, as load_sound_progressive decodes them
+                    ps.head = ProgressiveHead::begin(file, info, w.file, rate);
+                    if (!ps.head) {
+                        continue;
+                    }
+                    ps.bytes = ps.head->dec->written * ps.head->dec->channels * sizeof(float);
+                } else if (read_short_sound(file, info, w.file, rate, ps.snd)) {
+                    ps.bytes = static_cast<size_t>(ps.snd.frame_count) * ps.snd.channels * sizeof(float);
+                } else {
+                    continue;
+                }
+                const size_t bytes = ps.bytes;
+                std::scoped_lock lock(b->mutex);
+                if (b->cancel.load(std::memory_order_relaxed) || b->bytes + bytes > kPredecodeSoundCap) {
+                    delete[] ps.snd.data;
+                    break;
+                }
+                auto [it, inserted] = b->sounds.try_emplace(predecode_key(w.file), ps);
+                if (!inserted) {
+                    delete[] ps.snd.data;
+                    continue;
+                }
+                b->bytes += bytes;
+                ++n;
+            }
+            std::scoped_lock lock(b->mutex);
+            b->done = true;
+            b->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            spdlog::info("Sound predecode for {}: {} sounds decoded ahead in {:.0f} ms ({:.1f} MB)", b->screen, n,
+                         b->ms, b->bytes / 1048576.0);
+        });
+}
+
+void AudioEngine::cancel_predecoded_sounds(const std::string& screen_name) {
+    if (auto b = current_batch(); b && b->screen == screen_name) {
+        drop_batch("cancelled");
+    }
+}
+
+void AudioEngine::load_screen_sounds(const std::string& screen_name) {
+    if (auto b = current_batch(); b && b->screen != screen_name) {
+        drop_batch("another screen loads"); // Z-DON predecode for another screen
+    }
+    const std::vector<ScreenSound> queue = screen_sound_files(sounds_path, screen_name, true);
+    using Want = ScreenSound;
 
     std::atomic<int> reused{0};
     auto load = [this, &queue, &reused](size_t i) {
@@ -1690,6 +1994,7 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name) {
     } else {
         jobs::parallel_for(queue.size(), jobs::Priority::Critical, load, workers);
     }
+    drop_batch(current_batch() ? "loaded" : nullptr); // Z-DON: what the load did not take
     std::scoped_lock g(resident_lock);
     spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB)", screen_name, queue.size(),
                  reused.load(), resident.size(), resident_bytes / 1048576.0);

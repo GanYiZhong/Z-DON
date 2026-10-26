@@ -171,6 +171,8 @@ struct music {
 // Returns an empty list on platforms without device enumeration support.
 std::vector<std::string> enumerate_audio_devices(int device_type);
 
+struct ProgressiveHead; // Z-DON: a long sound's first seconds, decoded (audio.cpp)
+
 class AudioEngine {
 public:
     fs::path sounds_path;
@@ -188,6 +190,14 @@ public:
     void queue_song_loudness(const fs::path& file_path, bool priority = false);
 
     void load_screen_sounds(const std::string& screen_name);
+    // Z-DON predecode: decodes what load_screen_sounds(screen_name) would decode (not the resident sounds already
+    // kept; of a long one, a bgm, the first kProgressiveHeadSeconds it decodes before returning) on a background
+    // job while the current screen idles; that load then takes the PCM instead of decoding the file again (same
+    // decoder, the file's size and time checked; a long one's rest decodes in the background as before). A load of
+    // another screen drops them; so does a new predecode. ZDON_PREDECODE=0 turns it off; at most 64 MB of PCM.
+    // ZDON_PREDECODE_VERIFY=1 (dev) decodes every taken sound again and compares.
+    void predecode_screen_sounds(const std::string& screen_name);
+    void cancel_predecoded_sounds(const std::string& screen_name);
 
     std::string load_sound(const fs::path& file_path, const std::string& name);
     // Z-DON: load_sound whose PCM stays resident across unloads (screen changes; still stopped and
@@ -263,6 +273,19 @@ private:
 
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
                                        const std::string& name);
+    std::string install_progressive(const std::shared_ptr<ProgressiveHead>& h, const fs::path& file_path,
+                                    const std::string& name);
+    // reads a short sound whole (resampled to the device rate) into snd and closes file; false on failure
+    static bool read_short_sound(SNDFILE* file, const SF_INFO& info, const fs::path& file_path, double target_rate,
+                                 sound& snd);
+    // the sound files load_screen_sounds loads for screen_name, nearest skin first
+    struct ScreenSound {
+        fs::path file;
+        std::string name;
+        bool resident; // Z-DON: kept across screens (see load_resident_sound)
+    };
+    static std::vector<ScreenSound> screen_sound_files(const fs::path& sounds_path, const std::string& screen_name,
+                                                       bool warn);
     // true when the decoder took over freeing snd.data
     static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns

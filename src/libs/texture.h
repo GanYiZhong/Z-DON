@@ -312,6 +312,19 @@ public:
 
     void load_screen_textures(const std::string& screen_name);
 
+    // Z-DON predecode: the textures of the screen likely to come next, decoded from its texture pack on background
+    // jobs (ZDON_PREDECODE=<jobs>, default 4, 0 = off; ZDON_PREDECODE_MB caps the images, default 512) while the
+    // current screen idles. Its load takes the decoded images where it would decode the file (the file's size and
+    // time checked against the load's own listing), uploads stay on the main thread; a load of any other screen
+    // but those in `via` drops them. end_predecode frees what the screen did not need once it has started.
+    void start_predecode(const std::string& target, std::vector<std::string> via = {});
+    void cancel_predecode(const std::string& target);
+    void end_predecode();
+    // once per frame after its present: for the game screen, uploads predecoded images ahead (ZDON_PREUPLOAD_MS of
+    // the frame, default 1.0, 0 = off), a band of rows at a time like the warm-up (texture_lazy.h); its load
+    // takes those textures instead of uploading the same pixels again
+    void predecode_tick();
+
     const std::string& loaded_screen() const { return screen_loaded; }
     bool has_folder(const std::string& screen_name, const std::string& subset) const {
         return loaded_subsets.contains(screen_name + "/" + fs::path(subset).filename().string());

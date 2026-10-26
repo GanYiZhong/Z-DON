@@ -601,6 +601,22 @@ namespace texture_pack {
         return true;
     }
 
+    std::vector<Session::Planned> Session::listed() {
+        std::scoped_lock lock(mutex);
+        std::vector<Planned> out;
+        if (!pack_ok) {
+            return out;
+        }
+        out.reserve(entries.size());
+        for (const Entry& e : entries) {
+            if (e.planned && e.size == 0 && e.state == 0) {
+                continue; // planned by this session, not in the pack
+            }
+            out.push_back({e.key, e.stat});
+        }
+        return out;
+    }
+
     void Session::reject(const std::string& key) {
         std::scoped_lock lock(mutex);
         auto it = by_key.find(key);
