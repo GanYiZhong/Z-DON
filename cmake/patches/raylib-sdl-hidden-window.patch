@@ -1,0 +1,20 @@
+diff --git a/src/platforms/rcore_desktop_sdl.c b/src/platforms/rcore_desktop_sdl.c
+index 46963bd..ea27228 100644
+--- a/src/platforms/rcore_desktop_sdl.c
++++ b/src/platforms/rcore_desktop_sdl.c
+@@ -2012,7 +2012,14 @@ int InitPlatform(void)
+     // Check window creation flags
+     if (FLAG_IS_SET(CORE.Window.flags, FLAG_FULLSCREEN_MODE)) FLAG_SET(flags, SDL_WINDOW_FULLSCREEN);
+ 
+-    //if (!FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_HIDDEN)) FLAG_SET(flags, SDL_WINDOW_HIDDEN);
++    // Z-DON: honour FLAG_WINDOW_HIDDEN (test runs): never shown, never focused, mouse not captured
++    if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_HIDDEN))
++    {
++        FLAG_SET(flags, SDL_WINDOW_HIDDEN);
++        FLAG_CLEAR(flags, SDL_WINDOW_INPUT_FOCUS);
++        FLAG_CLEAR(flags, SDL_WINDOW_MOUSE_FOCUS);
++        FLAG_CLEAR(flags, SDL_WINDOW_MOUSE_CAPTURE);
++    }
+     if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_UNDECORATED)) FLAG_SET(flags, SDL_WINDOW_BORDERLESS);
+     if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_RESIZABLE)) FLAG_SET(flags, SDL_WINDOW_RESIZABLE);
+     if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_MINIMIZED)) FLAG_SET(flags, SDL_WINDOW_MINIMIZED);

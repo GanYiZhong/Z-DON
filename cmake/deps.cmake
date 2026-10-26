@@ -98,6 +98,10 @@ FetchContent_MakeAvailable(raylib)
 # that reads them and keeps its VAO bound from the upload to the draws. Applied at configure time, idempotent.
 execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-lazy-blend.patch
                         -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+# Z-DON: the SDL platform ignored FLAG_WINDOW_HIDDEN (the window was always created shown and focused);
+# test runs (YATAIDON_TEST=1) create theirs hidden
+execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-sdl-hidden-window.patch
+                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
 # three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
 target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
 if(IOS)

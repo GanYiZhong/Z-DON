@@ -75,7 +75,7 @@
 - 自動演奏/回放打段位也會記錄段位成績並升級名牌。
 
 ### 開發工具
-- `YATAIDON_TEST=1`：音量 1%、最小化（隱藏視窗時不最小化）、忽略真實輸入、不寫歌單。
+- `YATAIDON_TEST=1`：音量 1%、視窗建立時就隱藏（不會出現在畫面上、不會搶前景；config 要全螢幕/無邊框時改成「無邊框、螢幕大小」的隱藏視窗，畫面與全螢幕相同）、忽略真實輸入、不寫歌單。raylib 的 SDL 平台原本忽略 `FLAG_WINDOW_HIDDEN`（`cmake/patches/raylib-sdl-hidden-window.patch`），所以以前的「隱藏視窗」（DUMP_SCREEN/DUMP_FRAMES）其實都是顯示、取得焦點的全螢幕視窗。2026-10-27 驗證：確定性套件 121/121 與 bd16149（顯示的視窗）相同；套件跑完全程每 20 ms 查 GetForegroundWindow／IsWindowVisible，遊戲視窗從沒顯示、從沒在前景。
 - `YATAIDON_FIXED_STEP_MS=<ms>`＋`YATAIDON_DUMP_FRAMES=<dir>;<frames>`：確定性畫面（固定時間步、等背景載入、無網路），同一個 exe 跑出逐位元組相同的截圖。
 - `YATAIDON_JUMP_SCREEN`、`YATAIDON_FAKE_KEYS`、`YATAIDON_FORCE_AUTO`、`YATAIDON_DUMP_SCREEN`、`YATAIDON_DUMP_CHARA`。
 - `YATAIDON_FRAME_STATS=1`：每 2 s 一行 `[frame]`：幀工作時間 avg/p50/p99/max、幀間隔（開始到開始）超過 2.08 / 4.17 / 8.33 ms 的次數（480 / 240 / 120 Hz 的一格）、程序 CPU（單核 %，Windows）、working set 與 private MB。每 2 s 才查一次系統（GetProcessTimes＋GetProcessMemoryInfo），預設關。

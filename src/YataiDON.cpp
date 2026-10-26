@@ -986,7 +986,9 @@ int main(int argc, char* argv[]) {
         flags |= ray::FLAG_WINDOW_HIDDEN;
     }
     dump_screen_init();
-    if (g_dump_screen.active) {
+    // Dev hook: YATAIDON_TEST=1 (automated test runs) never shows its window, so it can neither take the
+    // foreground nor cover the player's screen; a window created hidden still renders and reads back
+    if (g_dump_screen.active || zdon_test_mode()) {
         flags |= ray::FLAG_WINDOW_HIDDEN;
     }
     set_window_flags(flags);
@@ -1001,12 +1003,6 @@ int main(int argc, char* argv[]) {
     ime_ui_set_hint();
     init_window(1280, 720, "YataiDON");
     ime_ui_install();
-    // Dev hook: YATAIDON_TEST=1 (automated test runs) starts minimized, out of the player's way.
-    // Not when the window is hidden (YATAIDON_DUMP_SCREEN): minimizing a hidden window stalled the
-    // main loop for over a minute.
-    if (zdon_test_mode() && !(flags & ray::FLAG_WINDOW_HIDDEN)) {
-        ray::MinimizeWindow();
-    }
     try {
         load_skin();
     } catch (const std::exception& e) {
@@ -1074,13 +1070,24 @@ int main(int argc, char* argv[]) {
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
-    if (global_data.config->video.borderless) {
-        toggle_borderless_windowed();
-        spdlog::info("Borderless window enabled");
-    }
-    if (global_data.config->video.fullscreen) {
-        toggle_fullscreen();
-        spdlog::info("Fullscreen enabled");
+    if ((flags & ray::FLAG_WINDOW_HIDDEN) &&
+        (global_data.config->video.borderless || global_data.config->video.fullscreen)) {
+        // a hidden window does not go fullscreen (SDL keeps it pending until shown): give it the monitor's size
+        // without a frame instead, so it renders the frames a fullscreen window would
+        ray::SetWindowState(ray::FLAG_WINDOW_UNDECORATED);
+        const int monitor = ray::GetCurrentMonitor();
+        set_window_size(ray::GetMonitorWidth(monitor), ray::GetMonitorHeight(monitor));
+        spdlog::info("Hidden window sized to the monitor ({}x{}) instead of fullscreen", ray::GetMonitorWidth(monitor),
+                     ray::GetMonitorHeight(monitor));
+    } else {
+        if (global_data.config->video.borderless) {
+            toggle_borderless_windowed();
+            spdlog::info("Borderless window enabled");
+        }
+        if (global_data.config->video.fullscreen) {
+            toggle_fullscreen();
+            spdlog::info("Fullscreen enabled");
+        }
     }
 #endif
 
