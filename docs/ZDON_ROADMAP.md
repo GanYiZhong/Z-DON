@@ -43,9 +43,13 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-10-26 結算 → 選曲預解、第一次畫到的上傳：量測備註
+- 量法：Nijiiro（暫時改 config 的 skin、關 skin 更新器，跑完逐位元組還原）、隱藏視窗、`ZDON_FRAME_SPIKE_MS=0.001` 記每一幀；選曲 → 1-2-3 Koi easy auto → 結算 → 選曲兩輪。Green 用的假按鍵在即時模式會漏（有一兩輪沒選到歌），所以完整流程用 Nijiiro；skin 更新器開著時選曲不吃按鍵（更新中）。
+- 結算畫面背景預解（prefill，2026-10-21 已做）今天重量，同一個 HEAD exe：`ZDON_LAZY_PREFILL=0` 回選曲 textures 188–190 ms、initialized 281–282 ms、載入幀 272–278 ms（載入時重解 478 張 100 ms）；預設開 62 ms、149–154 ms、144–147 ms（484 張早在結算開始後約 190 ms 解完）。進選曲只剩上傳——而 lazy upload 下回選曲那幾幀第一次上傳是 0 張（畫過的貼圖 retention 留著），所以沒有新的東西要做。
+
 ## 2026-10-21 資源用量四項：量測備註
 - 限幀空轉：直接寫 console 小程式量 `CreateWaitableTimerExW(HIGH_RESOLUTION)`，遲到 p50 0.33、p99 0.61 ms；提高執行緒優先權或 `NtSetTimerResolution(0.5 ms)` 都一樣（看起來是 0.5 ms 的 tick），所以縮到 0.1 ms 的固定空轉會讓 2.4% 的喚醒超過 0.5 ms、步進 std 0.069 → 0.14 ms；改成依 p99 調整。原本估的 8% 單核實際是 4%（timer 平均已遲到 0.32 ms，只剩一半要空轉）。主執行緒 CPU 量起來雜訊太大（同版本 22–31%），所以用 log 直接算空轉時間。
-- 未畫過的貼圖：只是「不保留在 retention 裡」只省 83 MB——約 300 MB 的物件（box/background 107 MB、yellow_box/s_crown_* 93 MB、diff_select/difficulty_back 34 MB…）同時被 Lua 腳本拿著，物件不會死；所以改成釋放影像、物件留著、下次載入補回。`KEEP_MB` 先留小圖：留 126 MB（457 張小圖）只把重解從 89 ms 降到 67–71 ms，大圖才是時間大宗，所以預設全放。進選曲時的重解是 CPU 解碼量（約 2.6 GB/s 輸出）決定的，要再省得在結算畫面背景先解，沒做。
+- 未畫過的貼圖：只是「不保留在 retention 裡」只省 83 MB——約 300 MB 的物件（box/background 107 MB、yellow_box/s_crown_* 93 MB、diff_select/difficulty_back 34 MB…）同時被 Lua 腳本拿著，物件不會死；所以改成釋放影像、物件留著、下次載入補回。`KEEP_MB` 先留小圖：留 126 MB（457 張小圖）只把重解從 89 ms 降到 67–71 ms，大圖才是時間大宗，所以預設全放。進選曲時的重解是 CPU 解碼量（約 2.6 GB/s 輸出）決定的，要再省得在結算畫面背景先解——已做（prefill，1b6483d，見上表與「2026-10-26」）。
 - 影片：雙線性色度（含 left siting）在 720p 測試片的色塊邊緣和 swscale 差到 255（平均約 2），720p→1080p 畫面上差到 100；最近鄰色度直接取樣也只在原尺寸吻合，放大時色度邊緣比舊的銳利（差到 100）。最後在 shader 裡手動做「四個像素各自轉 RGB 再雙線性」，才和舊路徑放大後也只差 3。
 - 影片 CPU 要固定幀數比：預設的 vblank 限幀在 YUV 版因為幀工作變短、p99.5 變小，每個刷新多塞了輸入幀（165 → 266–330 fps），每秒 CPU 反而變高（每幀 CPU 2.9–3.1 → 1.8–2.1 ms）。上表用 `ZDON_VBLANK_PACING=1`。
 - 標 BT.709 的影片舊路徑用 601 解，新路徑照標記，所以畫面會變（測試片 max 109、平均 5）；未標記的照舊 601。
