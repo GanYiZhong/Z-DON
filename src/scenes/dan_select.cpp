@@ -145,6 +145,9 @@ void DanSelectScreen::open_confirm(double current_ms) {
     audio.play_sound("dan_confirm", VolumePreset::VOICE);
     confirm_fade->start();
     state = SongSelectState::SONG_SELECTED;
+    // Z-DON predecode: the game screen's textures and sounds while the player confirms
+    tex.start_predecode("game");
+    audio.predecode_screen_sounds("game");
     confirm_index = CONFIRM_NO;
     modifier_selector.reset();
     confirm_opened_at = current_ms;
@@ -298,6 +301,8 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
     }
     audio.play_sound("cancel", VolumePreset::SOUND);
     state = SongSelectState::BROWSING;
+    tex.cancel_predecode("game");
+    audio.cancel_predecoded_sounds("game");
     return std::nullopt;
 }
 

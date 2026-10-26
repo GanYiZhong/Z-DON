@@ -1,6 +1,7 @@
 #include "game_dan.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include "../libs/input.h"
 #include "../libs/script.h"
@@ -120,8 +121,12 @@ void DanGameScreen::change_song() {
 
     stop_song_audio();
 
+    using ms = std::chrono::duration<double, std::milli>;
+    const auto t0 = std::chrono::steady_clock::now();
     parser = std::make_shared<SongParser>(entry.song_path, (int)start_delay);
+    const auto t1 = std::chrono::steady_clock::now();
     load_song_audio(AudioLoadMode::Sync);
+    const auto t2 = std::chrono::steady_clock::now();
 
     song_started = false;
 
@@ -131,6 +136,9 @@ void DanGameScreen::change_song() {
     init_skip();
 
     begin_song_presentation(entry, song_index + 1);
+    spdlog::info("Dan song {} loaded in {:.1f} ms: chart read {:.1f} ms, audio {:.1f} ms, the rest {:.1f} ms",
+                 song_index + 1, ms(std::chrono::steady_clock::now() - t0).count(), ms(t1 - t0).count(),
+                 ms(t2 - t1).count(), ms(std::chrono::steady_clock::now() - t2).count());
 }
 
 void DanGameScreen::begin_song_presentation(const DanSongEntry& entry, int song_number) {
