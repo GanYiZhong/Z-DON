@@ -121,6 +121,21 @@ public:
     }
 
 protected:
+    // Z-DON predecode: what the screen most likely shown next needs, decoded while this one idles (the textures
+    // after the result screens come from the prefill, texture_lazy.h; a song's screens start theirs when a song
+    // is chosen and after its last note)
+    static void predecode_next(const std::string& screen) {
+        if (screen == "title") {
+            tex.start_predecode("song_select", {"entry"}); // the entry screen comes in between
+        } else if (screen == "entry") {
+            audio.predecode_screen_sounds("song_select");
+        } else if (screen == "result") {
+            audio.predecode_screen_sounds("song_select");
+        } else if (screen == "dan_result") {
+            audio.predecode_screen_sounds("dan_select");
+        }
+    }
+
     static void unload_screen_resources() {
         audio.unload_all_sounds();
         audio.unload_all_music();
@@ -135,6 +150,7 @@ protected:
                 on_screen_start();
                 tex.end_predecode(); // Z-DON: the predecoded images the screen did not need
                 spdlog::info("{} initialized", screen_name);
+                predecode_next(screen_name);
                 readahead::after_screen(screen_name);
             } catch (const std::exception& e) {
                 spdlog::critical("{} failed to initialize: {}", screen_name, e.what());
