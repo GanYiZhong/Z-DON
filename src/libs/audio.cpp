@@ -944,6 +944,9 @@ bool AudioEngine::init_audio_device(const fs::path& sounds_path, const AudioConf
     this->is_ready = false;
     // Dev hook: YATAIDON_TEST=1 (automated test runs) plays everything at 1% volume
     this->master_volume = zdon_test_mode() ? 0.01f : 1.0f;
+    if (zdon_test_mode()) {
+        spdlog::info("Test run (YATAIDON_TEST=1): master volume {:.0f}%", master_volume.load() * 100.0f);
+    }
     // the backends' callbacks reuse this for multi-channel / SDL output: no allocation there
     sdl_scratch_buffer.resize(std::max<size_t>(sdl_scratch_buffer.size(), 16384));
     start_decoder();
