@@ -1,5 +1,7 @@
 #include "box_song.h"
 
+#include <chrono>
+#include <cstdlib>
 #include <thread>
 
 #include "../../../libs/audio.h"
@@ -10,6 +12,17 @@
 namespace {
     double bgm_resume_at = 0.0; // 0 = nothing pending
     int preview_holders = 0;    // focused song boxes that own the bgm slot
+
+    // Z-DON dev hook ZDON_PREVIEW_LOG=1: logs how long a preview took to open and to start playing
+    struct PreviewTiming {
+        double started_ms = 0; // when the stream was opened (0 = not timing)
+        double open_ms = 0;
+        float position = 0;
+    } preview_timing;
+    bool preview_log() {
+        static const bool on = std::getenv("ZDON_PREVIEW_LOG") != nullptr;
+        return on;
+    }
 } // namespace
 
 void SongBox::reset_bgm_slot() {
@@ -170,8 +183,23 @@ void SongBox::update(double current_time) {
     }
 
     if (is_stream && yellow_box_active && box_opened && !music_playing) {
+        const double t0 = get_current_ms();
+        const auto open_start = std::chrono::steady_clock::now();
         audio.load_music_stream(parser.metadata.wave, "preview");
+        const double open_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_start).count();
         play_preview(parser.metadata.demostart);
+        if (preview_log() && music_playing) {
+            preview_timing = {t0, open_ms, audio.get_music_time_played("preview")};
+        }
+    }
+    if (preview_timing.started_ms > 0 && yellow_box_active && music_playing &&
+        audio.get_music_time_played("preview") > preview_timing.position) {
+        spdlog::info("Preview of {} playing {:.1f} ms after it was opened (open {:.2f} ms on the main thread), "
+                     "{:.0f} ms after the box opened",
+                     parser.metadata.wave.filename().string(), get_current_ms() - preview_timing.started_ms,
+                     preview_timing.open_ms, get_current_ms() - bar_open_started_at);
+        preview_timing.started_ms = 0;
     }
 
     if (preview_load && preview_load->done.load(std::memory_order_acquire) && yellow_box_active && box_opened &&
