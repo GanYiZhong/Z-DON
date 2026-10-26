@@ -21,6 +21,7 @@
 #include "libs/song_parser.h"
 #include "libs/test_mode.h"
 #include "libs/text.h"
+#include "libs/texture_lazy.h"
 #include "libs/webcam.h"
 #include "objects/global/chara_3d.h"
 #include "platform/vblank_pacing.h"
@@ -784,6 +785,8 @@ static void run_frame() {
         screenshot_counter++;
         spdlog::info("Screenshot saved");
     }
+
+    texture_lazy::warm_tick(); // Z-DON: textures the screen will draw, uploaded ahead in the frame's spare time
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
     vblank_pacing::wait_next(); // no-op unless pacing is on (no target_fps; then target_duration is 0)

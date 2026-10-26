@@ -3,13 +3,19 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "global_data.h"
 #include "texture_retain.h"
+
+// raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
+using ray::Matrix;
+#include <rlgl.h>
 
 namespace texture_lazy {
     namespace {
@@ -26,6 +32,10 @@ namespace texture_lazy {
             std::string owner;
             uint64_t file_size = 0, file_mtime = 0;
             bool evicted = false; // image freed at a screen change; source decodes it again
+            // ahead-of-use upload in progress (warm_tick): the GL texture holding the first rows_done rows;
+            // the Texture keeps id 0 until every row is in, so a draw before that finishes it at once
+            unsigned int gl_id = 0;
+            int rows_done = 0;
         };
 
         struct ScreenStats {
@@ -33,6 +43,8 @@ namespace texture_lazy {
             size_t lazy = 0, lazy_bytes = 0;         // left pending at load
             size_t uploaded = 0, uploaded_bytes = 0; // pending ones uploaded since the last log
             double upload_ms = 0;
+            size_t warmed = 0, warmed_bytes = 0; // uploaded ahead of their first use (warm_tick)
+            double warm_ms = 0;
             bool cap_logged = false;
         };
 
@@ -80,13 +92,142 @@ namespace texture_lazy {
             return now == "GAME" || now == "GAME_2P" || now == "GAME_DAN" || now == "GAME_PRACTICE" || now == "AI_GAME";
         }
 
-        // drops a pending entry, freeing its image
+        // drops a pending entry, freeing its image (and the GL texture of an unfinished ahead-of-use upload)
         void forget(std::unordered_map<const Texture*, Pending>::iterator it) {
             if (!it->second.evicted) {
                 pending_bytes -= std::min(pending_bytes, it->second.bytes);
             }
+            if (it->second.gl_id != 0) {
+                rlUnloadTexture(it->second.gl_id);
+            }
             texture_retain::free_image_async(it->second.image);
             pending_map().erase(it);
+        }
+
+        // Warm-up (texture_lazy.h): the files whose pending textures were first drawn on each screen, in
+        // the order they were first drawn, kept in cache/warm_upload.txt ("<owner>\t<source>" lines).
+        constexpr size_t kWarmMaxPerOwner = 512;
+        constexpr size_t kWarmBandBytes = size_t{1} << 20; // rows uploaded per glTexSubImage2D
+
+        // Draws t once into a 1x1 target. The driver (NVIDIA) moves a texture into video memory on its first
+        // draw, all at once (measured: a band-uploaded texture made the first frame that drew the difficulty
+        // select 11-13 ms again, in the batch flush); a texture drawn while still empty is moved then, and the
+        // bands uploaded after that go to it directly (the longest warm-up frame 15 -> 2.4 ms).
+        void warm_touch(const Texture& t) {
+            static ray::RenderTexture2D rt = ray::LoadRenderTexture(1, 1); // never unloaded, like the GL context
+            ray::BeginTextureMode(rt);
+            ray::DrawTexturePro(t, ray::Rectangle{0, 0, 1, 1}, ray::Rectangle{0, 0, 1, 1}, ray::Vector2{0, 0}, 0,
+                                ray::Color{255, 255, 255, 255});
+            ray::EndTextureMode();
+        }
+
+        double warm_budget_ms() {
+            static const double ms = [] {
+                const char* v = std::getenv("ZDON_WARM_UPLOAD_MS");
+                return v && *v ? std::max(0.0, std::atof(v)) : 1.0;
+            }();
+            return ms;
+        }
+
+        struct WarmRecords {
+            bool loaded = false;
+            bool dirty = false;
+            std::map<std::string, std::vector<std::string>> by_owner;
+            std::map<std::string, std::unordered_set<std::string>> known;
+        };
+        WarmRecords& warm_records() {
+            static auto* r = new WarmRecords();
+            if (!r->loaded) {
+                r->loaded = true;
+                std::ifstream in(std::filesystem::path("cache") / "warm_upload.txt");
+                std::string line;
+                while (std::getline(in, line)) {
+                    if (!line.empty() && line.back() == '\r') {
+                        line.pop_back();
+                    }
+                    const size_t tab = line.find('\t');
+                    if (tab == std::string::npos || tab == 0 || tab + 1 >= line.size()) {
+                        continue;
+                    }
+                    std::string owner = line.substr(0, tab);
+                    std::string source = line.substr(tab + 1);
+                    auto& list = r->by_owner[owner];
+                    if (list.size() < kWarmMaxPerOwner && r->known[owner].insert(source).second) {
+                        list.push_back(std::move(source));
+                    }
+                }
+            }
+            return *r;
+        }
+
+        void warm_record(const std::string& owner, const std::filesystem::path& source) {
+            if (warm_budget_ms() <= 0 || owner.empty() || source.empty()) {
+                return;
+            }
+            WarmRecords& r = warm_records();
+            const std::string key = source.generic_string();
+            if (!r.known[owner].insert(key).second) {
+                return;
+            }
+            auto& list = r.by_owner[owner];
+            if (list.size() >= kWarmMaxPerOwner) {
+                r.known[owner].erase(list.front());
+                list.erase(list.begin());
+            }
+            list.push_back(key);
+            r.dirty = true;
+        }
+
+        void warm_flush() {
+            WarmRecords& r = warm_records();
+            if (!r.dirty) {
+                return;
+            }
+            r.dirty = false;
+            const std::filesystem::path path = std::filesystem::path("cache") / "warm_upload.txt";
+            std::filesystem::path tmp = path;
+            tmp += ".tmp";
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                for (const auto& [owner, list] : r.by_owner) {
+                    for (const std::string& source : list) {
+                        out << owner << '\t' << source << '\n';
+                    }
+                }
+                if (!out) {
+                    spdlog::warn("Texture warm-up list not written: {}", tmp.string());
+                    return;
+                }
+            }
+            std::filesystem::rename(tmp, path, ec);
+            if (ec) {
+                spdlog::warn("Texture warm-up list not written: {} ({})", path.string(), ec.message());
+                std::filesystem::remove(tmp, ec);
+            }
+        }
+
+        // the textures warm_tick uploads, in order (checked against pending_map before each use)
+        std::vector<const Texture*> warm_queue;
+        size_t warm_pos = 0;
+        size_t warm_ticks = 0; // frames warm_tick worked in since the last log, and its longest one
+        double warm_tick_max_ms = 0;
+
+        // the texture uploaded: hands it to t with the filter and wrap set while it was pending
+        void finish_upload(const Texture* t, const Pending& p, const Texture& up) {
+            auto* dst = const_cast<Texture*>(t); // heap object owned by make()'s shared_ptr
+            *dst = up;
+            if (p.wrap >= 0) {
+                ray::SetTextureWrap(*dst, p.wrap);
+            }
+            if (p.filter >= 0) {
+                ray::SetTextureFilter(*dst, p.filter);
+            }
+        }
+
+        bool bandable(const Pending& p) {
+            return p.image.mipmaps == 1 && p.image.format < ray::PIXELFORMAT_COMPRESSED_DXT1_RGB && p.image.height > 0;
         }
 
     } // namespace
@@ -171,24 +312,40 @@ namespace texture_lazy {
                 return;
             }
         }
-        Texture up = ray::LoadTextureFromImage(p.image);
+        Texture up{};
+        if (p.gl_id != 0) {
+            // warm_tick had uploaded the first rows: the rest now
+            const size_t row_bytes = image_bytes(p.image.width, 1, p.image.format);
+            rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, p.image.height - p.rows_done, p.image.format,
+                            static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
+            rlDisableTexture();
+            up.id = p.gl_id;
+            up.width = p.image.width;
+            up.height = p.image.height;
+            up.mipmaps = p.image.mipmaps;
+            up.format = p.image.format;
+            p.gl_id = 0; // t owns it now
+        } else {
+            up = ray::LoadTextureFromImage(p.image);
+        }
         if (!ray::IsTextureValid(up)) {
             spdlog::error("Lazy texture upload failed ({}x{}, {})", p.image.width, p.image.height, p.screen);
             forget(it);
             return;
         }
-        auto* dst = const_cast<Texture*>(t); // heap object owned by make()'s shared_ptr
-        *dst = up;
-        if (p.wrap >= 0) {
-            ray::SetTextureWrap(*dst, p.wrap);
-        }
-        if (p.filter >= 0) {
-            ray::SetTextureFilter(*dst, p.filter);
-        }
+        finish_upload(t, p, up);
         ScreenStats& st = stats()[p.screen];
         ++st.uploaded;
         st.uploaded_bytes += p.bytes;
         st.upload_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        // ZDON_LAZY_UPLOAD_LOG=1 (dev): one line per texture uploaded on its first use
+        static const bool log_each = std::getenv("ZDON_LAZY_UPLOAD_LOG") != nullptr;
+        if (log_each) {
+            spdlog::info("Lazy texture upload: {} ({}x{}, {}) uploaded on first use ({:.2f} ms)", p.source.string(),
+                         t->width, t->height, p.owner,
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        }
+        warm_record(p.owner, p.source);
         forget(it);
     }
 
@@ -219,6 +376,9 @@ namespace texture_lazy {
     }
 
     void evict_all() {
+        warm_queue.clear();
+        warm_pos = 0;
+        warm_flush();
         if (!evict_enabled()) {
             return;
         }
@@ -229,6 +389,11 @@ namespace texture_lazy {
         }();
         std::vector<Pending*> candidates;
         for (auto& [t, p] : pending_map()) {
+            if (p.gl_id != 0) { // an ahead-of-use upload the screen did not finish: dropped, as if never begun
+                rlUnloadTexture(p.gl_id);
+                p.gl_id = 0;
+                p.rows_done = 0;
+            }
             if (!p.evicted && !p.source.empty() && p.image.data) {
                 candidates.push_back(&p);
             }
@@ -351,6 +516,87 @@ namespace texture_lazy {
         decoder = decode;
     }
 
+    void warm_tick() {
+        if (warm_pos >= warm_queue.size()) {
+            return;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        const double budget = warm_budget_ms();
+        auto elapsed = [&] {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        };
+        auto& m = pending_map();
+        while (warm_pos < warm_queue.size() && elapsed() < budget) {
+            const Texture* t = warm_queue[warm_pos];
+            auto it = m.find(t);
+            if (it == m.end() || t->id != 0 || it->second.evicted || !it->second.image.data) {
+                ++warm_pos; // drawn (uploaded) or gone since the queue was made
+                continue;
+            }
+            Pending& p = it->second;
+            const auto t0 = std::chrono::steady_clock::now();
+            Texture up{};
+            if (!bandable(p)) {
+                up = ray::LoadTextureFromImage(p.image);
+            } else {
+                // a band of rows per call, so one big texture spreads over several frames
+                if (p.gl_id == 0) {
+                    p.gl_id = rlLoadTexture(nullptr, p.image.width, p.image.height, p.image.format, 1);
+                    if (p.gl_id == 0) {
+                        ++warm_pos; // left for its first use
+                        continue;
+                    }
+                    {
+                        Texture empty{}; // into video memory while empty (warm_touch)
+                        empty.id = p.gl_id;
+                        empty.width = p.image.width;
+                        empty.height = p.image.height;
+                        empty.mipmaps = 1;
+                        empty.format = p.image.format;
+                        warm_touch(empty);
+                    }
+                }
+                const size_t row_bytes = std::max<size_t>(1, image_bytes(p.image.width, 1, p.image.format));
+                const int rows =
+                    std::clamp(static_cast<int>(kWarmBandBytes / row_bytes), 1, p.image.height - p.rows_done);
+                rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, rows, p.image.format,
+                                static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
+                rlDisableTexture();
+                p.rows_done += rows;
+                ScreenStats& st = stats()[p.screen];
+                st.warm_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                if (p.rows_done < p.image.height) {
+                    continue;
+                }
+                up.id = p.gl_id;
+                up.width = p.image.width;
+                up.height = p.image.height;
+                up.mipmaps = p.image.mipmaps;
+                up.format = p.image.format;
+                p.gl_id = 0;
+            }
+            ++warm_pos;
+            if (!ray::IsTextureValid(up)) {
+                continue; // left for its first use, which uploads it again (and logs a failure)
+            }
+            finish_upload(t, p, up);
+            warm_touch(*t);
+            ScreenStats& st = stats()[p.screen];
+            ++st.warmed;
+            st.warmed_bytes += p.bytes;
+            if (!bandable(p)) {
+                st.warm_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            }
+            forget(it);
+        }
+        ++warm_ticks;
+        warm_tick_max_ms = std::max(warm_tick_max_ms, elapsed());
+        static const bool log_each = std::getenv("ZDON_LAZY_UPLOAD_LOG") != nullptr;
+        if (log_each) {
+            spdlog::info("Lazy texture upload: warm tick {:.2f} ms", elapsed());
+        }
+    }
+
     void log_screen(const std::string& screen_name) {
         for (auto& [screen, st] : stats()) {
             if (st.uploaded > 0) {
@@ -360,6 +606,44 @@ namespace texture_lazy {
                 st.uploaded = 0;
                 st.uploaded_bytes = 0;
                 st.upload_ms = 0;
+            }
+            if (st.warmed > 0) {
+                spdlog::info("Lazy texture upload: {} pending textures of {} uploaded ahead of their first use since "
+                             "the last screen load ({} MB, {:.1f} ms)",
+                             st.warmed, screen, st.warmed_bytes / kMB, st.warm_ms);
+                st.warmed = 0;
+                st.warmed_bytes = 0;
+                st.warm_ms = 0;
+            }
+        }
+        if (warm_ticks > 0) {
+            spdlog::info("Lazy texture upload: ahead-of-use uploads ran in {} frames, longest {:.2f} ms", warm_ticks,
+                         warm_tick_max_ms);
+            warm_ticks = 0;
+            warm_tick_max_ms = 0;
+        }
+        // what warm_tick uploads while this screen shows: its pending textures first drawn the last times
+        warm_queue.clear();
+        warm_pos = 0;
+        if (warm_budget_ms() > 0) {
+            WarmRecords& r = warm_records();
+            if (auto lit = r.by_owner.find(screen_name); lit != r.by_owner.end()) {
+                std::unordered_map<std::string, std::vector<const Texture*>> by_source;
+                for (const auto& [t, p] : pending_map()) {
+                    if (p.owner == screen_name && !p.evicted && p.image.data) {
+                        by_source[p.source.generic_string()].push_back(t);
+                    }
+                }
+                for (const std::string& source : lit->second) {
+                    if (auto sit = by_source.find(source); sit != by_source.end()) {
+                        warm_queue.insert(warm_queue.end(), sit->second.begin(), sit->second.end());
+                    }
+                }
+            }
+            if (!warm_queue.empty()) {
+                spdlog::info("Lazy texture upload for {}: {} textures drawn the last times to upload ahead, {:.1f} ms "
+                             "per frame",
+                             screen_name, warm_queue.size(), warm_budget_ms());
             }
         }
         auto it = stats().find(screen_name);

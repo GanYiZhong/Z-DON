@@ -40,6 +40,19 @@
 // screen loads (an eviction in between would free them again); a load of any other screen drops them.
 // ZDON_LAZY_PREFILL=0 turns it off, =<n> uses n jobs (default 4); ZDON_LAZY_PREFILL_SLOW_MS=<ms> (dev) waits
 // that long before each image.
+//
+// Warm-up: a texture first drawn in the middle of a screen (song select's difficulty select: 12 textures,
+// 12 ms in one frame; a crown 16 ms in another) still uploads in the frame that draws it. Every first-use
+// upload is recorded as (screen whose load made it, file), in cache/warm_upload.txt (at most 512 per screen,
+// written at a screen change when it changed). After a screen loads, warm_tick() uploads the recorded
+// textures it holds still pending, in the order they were first drawn, a 1 MB band of rows per call
+// (glTexSubImage2D) until ZDON_WARM_UPLOAD_MS of the frame (default 1.0) is spent; it runs after the
+// frame's present, in the time the frame limiter would sleep. Each texture is drawn once into a 1x1 target
+// right after it is allocated and once when complete, so the driver moves it into video memory while
+// empty instead of all at once on its first real draw. A texture keeps id 0 until all its rows
+// are in, so drawn earlier it finishes its upload on the spot as before: no frame shows anything else.
+// An unfinished one is dropped at the screen change. ZDON_WARM_UPLOAD_MS=0 turns it off (no recording).
+// ZDON_LAZY_UPLOAD_LOG=1 (dev) logs each texture uploaded on its first use.
 namespace texture_lazy {
 
     bool enabled();
@@ -93,7 +106,10 @@ namespace texture_lazy {
     void set_decoder(ray::Image (*decode)(const std::filesystem::path& source));
 
     // Logs the pending textures uploaded since the last call (all screens), then what screen_name's
-    // load uploaded at once vs left pending.
+    // load uploaded at once vs left pending; queues the warm-up of screen_name.
     void log_screen(const std::string& screen_name);
+
+    // Once per frame, after its present: uploads queued warm-up textures for up to ZDON_WARM_UPLOAD_MS.
+    void warm_tick();
 
 } // namespace texture_lazy
