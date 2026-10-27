@@ -1583,7 +1583,7 @@ namespace {
     unsigned predecode_jobs() {
         static const unsigned n = [] {
             const char* v = std::getenv("ZDON_PREDECODE");
-            const long k = v && *v ? std::strtol(v, nullptr, 10) : 4;
+            const long k = v && *v ? std::strtol(v, nullptr, 10) : zdon_os::mobile_cap_mb(4, 2);
             return k > 0 ? static_cast<unsigned>(std::min(k, 16L)) : 0U;
         }();
         return n;
@@ -1591,7 +1591,7 @@ namespace {
     size_t predecode_cap() {
         static const size_t cap = [] {
             const char* v = std::getenv("ZDON_PREDECODE_MB");
-            const long mb = v && *v ? std::strtol(v, nullptr, 10) : 512;
+            const long mb = v && *v ? std::strtol(v, nullptr, 10) : zdon_os::mobile_cap_mb(512, 128);
             return mb > 0 ? static_cast<size_t>(mb) << 20 : size_t{0};
         }();
         return cap;

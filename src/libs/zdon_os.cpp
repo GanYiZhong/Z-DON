@@ -1,6 +1,7 @@
 #include "zdon_os.h"
 
 #include <cstdint>
+#include <spdlog/spdlog.h>
 
 #if defined(_WIN32)
 #include "../platform/platform_windows.h"
@@ -22,6 +23,7 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <sys/resource.h>
+#include <sys/sysctl.h>
 #endif
 
 #ifdef ZDON_POSIX_LIST_DIR
@@ -124,6 +126,42 @@ namespace zdon_os {
 #else
         (void)us;
         return false;
+#endif
+    }
+
+    uint64_t physical_memory_mb() {
+#if defined(_WIN32)
+        MEMORYSTATUSEX m{};
+        m.dwLength = sizeof(m);
+        return GlobalMemoryStatusEx(&m) ? m.ullTotalPhys >> 20 : 0;
+#elif defined(__linux__)
+        const long pages = ::sysconf(_SC_PHYS_PAGES);
+        const long page = ::sysconf(_SC_PAGESIZE);
+        return pages > 0 && page > 0 ? (static_cast<uint64_t>(pages) * static_cast<uint64_t>(page)) >> 20 : 0;
+#elif defined(__APPLE__)
+        uint64_t bytes = 0;
+        size_t len = sizeof(bytes);
+        return ::sysctlbyname("hw.memsize", &bytes, &len, nullptr, 0) == 0 ? bytes >> 20 : 0;
+#else
+        return 0;
+#endif
+    }
+
+    bool texture_extras_by_default() {
+#if defined(__EMSCRIPTEN__)
+        return false;
+#else
+        if constexpr (!kMobile) {
+            return true;
+        } else {
+            static const bool big = [] {
+                const uint64_t mb = physical_memory_mb();
+                spdlog::info("Texture packs, lazy upload, predecode and retention: {} by default ({} MB of memory)",
+                             mb >= 5632 ? "on" : "off", mb);
+                return mb >= 5632;
+            }();
+            return big;
+        }
 #endif
     }
 

@@ -36,6 +36,25 @@ namespace zdon_os {
     // caller then uses a normal sleep.
     bool precise_sleep_us(long long us);
 
+    // Physical memory in MB, 0 when it cannot be read.
+    uint64_t physical_memory_mb();
+
+#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
+    constexpr bool kMobile = true;
+#else
+    constexpr bool kMobile = false;
+#endif
+
+    // Whether the memory-hungry texture work (texture packs, lazy upload, predecode, retention) is on
+    // by default: always on desktop, never on the web (no threads, files in memory), on Android and
+    // iOS only with at least 5.5 GB of physical memory (a "6 GB" phone reports a little less), and
+    // there with smaller caps (mobile_cap_mb).
+    bool texture_extras_by_default();
+    // `desktop_mb` on desktop, `mobile_mb` on Android/iOS (the default cap of one of those features)
+    constexpr long mobile_cap_mb(long desktop_mb, long mobile_mb) {
+        return kMobile ? mobile_mb : desktop_mb;
+    }
+
 #ifdef ZDON_POSIX_LIST_DIR
     // One entry of a directory listing (readdir: the type comes with the name on the usual file systems).
     struct DirEntry {

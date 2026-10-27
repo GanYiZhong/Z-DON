@@ -56,9 +56,17 @@ namespace texture_retain {
                     const long mb = std::strtol(v, nullptr, 10);
                     return mb > 0 ? static_cast<size_t>(mb) * kMB : size_t{0};
                 }
-#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS) || defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
                 return size_t{0};
 #else
+                if constexpr (zdon_os::kMobile) {
+                    // the GPU shares the device's memory, and the driver does not say how much is free
+                    if (!zdon_os::texture_extras_by_default()) {
+                        return size_t{0};
+                    }
+                    spdlog::info("Texture retention budget: 256 MB (mobile)");
+                    return size_t{256} * kMB;
+                }
                 const size_t vram = reported_vram_mb();
                 const size_t mb = vram ? std::clamp<size_t>(vram / 4, 256, 1024) : 512;
                 spdlog::info("Texture retention budget: {} MB (video memory reported: {} MB)", mb, vram);

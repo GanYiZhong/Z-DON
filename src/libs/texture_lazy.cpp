@@ -12,6 +12,7 @@
 
 #include "global_data.h"
 #include "texture_retain.h"
+#include "zdon_os.h"
 
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
 using ray::Matrix;
@@ -63,7 +64,7 @@ namespace texture_lazy {
         size_t cap_bytes() {
             static const size_t cap = [] {
                 const char* v = std::getenv("ZDON_LAZY_UPLOAD_MB");
-                const long mb = v && *v ? std::strtol(v, nullptr, 10) : 768;
+                const long mb = v && *v ? std::strtol(v, nullptr, 10) : zdon_os::mobile_cap_mb(768, 256);
                 return mb > 0 ? static_cast<size_t>(mb) * kMB : size_t{0};
             }();
             return cap;
@@ -234,11 +235,7 @@ namespace texture_lazy {
 
     bool enabled() {
         static const bool on = [] {
-#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS) || defined(__EMSCRIPTEN__)
-            const bool def = false;
-#else
-            const bool def = true;
-#endif
+            const bool def = zdon_os::texture_extras_by_default(); // Android/iOS: with enough memory
             const char* v = std::getenv("ZDON_LAZY_UPLOAD");
             return v && *v ? *v != '0' : def;
         }();

@@ -72,7 +72,7 @@ namespace texture_pack {
                     const long mb = std::strtol(v, nullptr, 10);
                     return mb > 0 ? static_cast<uint64_t>(mb) * kMB : uint64_t{0};
                 }
-                return uint64_t{1024} * kMB;
+                return static_cast<uint64_t>(zdon_os::mobile_cap_mb(1024, 512)) * kMB;
             }();
             return limit;
         }
@@ -321,12 +321,13 @@ namespace texture_pack {
     };
 
     bool enabled() {
-#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS) || defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
         return false;
 #else
+        // Android/iOS: only on a device with the memory for it (zdon_os), unless YATAIDON_TEXPACK says
         static const bool on = [] {
             const char* v = std::getenv("YATAIDON_TEXPACK");
-            return !(v && v[0] == '0');
+            return v && *v ? v[0] != '0' : zdon_os::texture_extras_by_default();
         }();
         return on;
 #endif
