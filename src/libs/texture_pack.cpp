@@ -9,9 +9,7 @@
 #include <fstream>
 #include <spdlog/spdlog.h>
 
-#ifdef _WIN32
-#include "../platform/platform_windows.h"
-#endif
+#include "zdon_os.h"
 
 namespace fs = std::filesystem;
 
@@ -135,9 +133,7 @@ namespace texture_pack {
 
         private:
             void run() {
-#ifdef _WIN32
-                win32_background_mode_thread(); // low CPU and I/O priority: the game's reads go first
-#endif
+                zdon_os::background_thread(); // low CPU and I/O priority: the game's reads go first
                 while (true) {
                     Job job;
                     {
@@ -411,13 +407,9 @@ namespace texture_pack {
         hits = hit_list.size();
         if (!spans.empty()) {
             reader = std::thread([this, background] {
-#ifdef _WIN32
                 if (background) {
-                    win32_background_mode_thread();
+                    zdon_os::background_thread();
                 }
-#else
-                (void)background;
-#endif
                 read_spans();
             });
         }

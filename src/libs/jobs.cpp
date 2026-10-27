@@ -5,15 +5,7 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
+#include "zdon_os.h"
 
 namespace jobs {
     namespace detail {
@@ -85,12 +77,7 @@ namespace jobs {
             }
 
             static void set_background(bool background) {
-#ifdef _WIN32
-                SetThreadPriority(GetCurrentThread(),
-                                  background ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_NORMAL);
-#else
-                (void)background;
-#endif
+                zdon_os::job_priority_background(background); // see there for Linux
             }
 
             void work() {

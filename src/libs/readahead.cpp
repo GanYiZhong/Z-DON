@@ -1,13 +1,5 @@
 #include "readahead.h"
 
-#include "filesystem.h"
-#include "global_data.h"
-#include "texture_pack.h"
-#include "texture_retain.h"
-#ifdef _WIN32
-#include "../platform/platform_windows.h"
-#endif
-
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -18,6 +10,12 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include "filesystem.h"
+#include "global_data.h"
+#include "texture_pack.h"
+#include "texture_retain.h"
+#include "zdon_os.h"
 
 #if defined(__linux__) || defined(__ANDROID__)
 #include <fcntl.h>
@@ -189,9 +187,7 @@ namespace readahead {
             pool.reserve(helpers);
             for (size_t k = 0; k < helpers; ++k) {
                 pool.emplace_back([&] {
-#ifdef _WIN32
-                    win32_background_mode_thread();
-#endif
+                    zdon_os::background_thread();
                     read_files();
                 });
             }
@@ -202,9 +198,7 @@ namespace readahead {
         }
 
         void run() {
-#ifdef _WIN32
-            win32_background_mode_thread(); // low CPU and I/O priority, so the game's own reads go first
-#endif
+            zdon_os::background_thread(); // low CPU and I/O priority, so the game's own reads go first
             while (true) {
                 Request req;
                 uint64_t gen;

@@ -13,9 +13,9 @@
 
 #include "sdl_compat.h"
 #include "texture.h"
+#include "zdon_os.h"
 
 #ifdef _WIN32
-#include "../platform/platform_windows.h"
 #define ZDON_GLAPI __stdcall
 #else
 #define ZDON_GLAPI
@@ -206,9 +206,7 @@ namespace texture_retain {
 
         private:
             void run() {
-#ifdef _WIN32
-                win32_background_mode_thread();
-#endif
+                zdon_os::background_thread();
                 std::unique_lock<std::mutex> lock(mutex);
                 while (true) {
                     cv.wait(lock, [this] { return !queue.empty(); });
