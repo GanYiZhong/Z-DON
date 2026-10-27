@@ -45,6 +45,17 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-10-27 效能優化移植到其他平台（`src/libs/zdon_os.*`）
+- 背景執行緒：`zdon_os::background_thread()` 取代只有 Windows 的呼叫。Linux nice +10＋I/O best-effort 7（不用 idle class：遊戲有時會等這些讀取）；Android 只 nice +10（ioprio_set 不一定在 app 的 seccomp 白名單，被擋會直接殺 app）；macOS/iOS utility QoS＋`IOPOL_THROTTLE`。job pool 的可逆切換 `job_priority_background()`：macOS/iOS utility QoS 再切回原本的；Linux/Android 只有 RLIMIT_NICE（或 root）允許調回去時才 nice +10（一般使用者降了就調不回來，卡在低優先權的 worker 會拖到遊戲自己的工作），否則不動。WSL 實測：背景執行緒 ni=10 / best-effort 7。
+- 限幀與輸入執行緒的精準 sleep：macOS/iOS 用 `mach_wait_until`（iOS 本來就沒有限幀，只有輸入執行緒）；Linux 照舊。
+- 曲庫走訪／貼圖資料夾列表：Linux/Android/macOS/iOS 也走跟 Windows 一樣的快速路徑（一般資料夾不 canonical、只有連結才解析；譜面檔帶列表的大小/時間，載入畫面不用每首再 stat 兩次）。`<dirent.h>` 在這個專案的 include 路徑會拿到 raylib 的 Windows 版 shim，所以用 `fs::directory_iterator`（libstdc++/libc++ 都帶 readdir 的 d_type）。時間存成 FILETIME 單位（跟 Windows 同）；Linux/macOS 既有的 texture pack 會重建一次。WSL 對拍：3043 首（ext4 複本、D: 的 drvfs、合成的連結/迴圈/fumen 樹）路徑與順序和舊的可攜版逐筆相同、每個 stamp 的大小/時間正確；暖快取 ext4 舊走訪＋載入 stat 87 ms → 64 ms，drvfs 49–51 s → 30–32 s。
+- 預讀：macOS/iOS 用 `F_RDADVISE`（以前整個檔案讀一遍），Linux 照舊 `posix_fadvise`；都移到 `zdon_os::prefetch_file()`。
+- Android/iOS：實體記憶體 ≥ 5.5 GB（「6 GB」手機）才預設開 texture pack、lazy upload、predecode、常駐貼圖，上限較小（predecode 128 MB／2 個工作、lazy 256 MB、pack 快取 512 MB、常駐 256 MB）；環境變數照舊可開關。
+- Linux 原本就建不起來（Z-DON 自己的 readahead 命名空間撞到 glibc 的 `readahead()`、navigator 在 `_WIN32` 外用了 `_wcsicmp`），一起修掉；WSL Ubuntu 24.04＋g++ 14 建置成功，xvfb 隱藏視窗跑標題、選曲兩次（第二次曲庫 3043 首全從快取、選曲 texture pack 360/360 命中）。
+- 確定性套件（Windows，Green）121/121 與 76be414 相同。
+- **沒編譯過**：macOS、iOS、Android 的程式（這台沒有 SDK）。
+- 沒做：macOS/Linux 的 vblank 限幀（CVDisplayLink/CADisplayLink、DRM vblank 都沒辦法在這裡跑，計時程式不能沒測就上）；依 GPU 速度調 `ZDON_PREUPLOAD_MS`（預算本來就是時間，慢的 GPU 每幀自然傳得少，要調的是幀的餘裕，跟 vblank 限幀綁在一起）；Linux/macOS 的 LibraryIndex（名字是 wstring、navigator 的快速路徑是 Windows 專用）。
+
 ## 2026-10-27 預先準備下一個畫面（predecode）：量測備註
 - 量法：Nijiiro（暫時改 config、關 skin 更新器，跑完逐位元組還原）、隱藏視窗、`ZDON_FRAME_SPIKE_MS=0.001`；選曲 → 1-2-3 Koi easy auto → 結算 → 選曲兩輪（scratchpad loop.sh）。同一個 exe 用 `ZDON_PREDECODE=0` 對照。
 - 遊戲載入幀的組成（關）：貼圖 350–375 ms（845 個檔、406 MB，其中上傳約 165 ms、解碼約 15 ms——解碼本來就跟上傳重疊）、音效 63–70 ms（123 個）、背景 Lua 207–640 ms（每次隨機選一套背景/舞者，量不出來也無法預先知道）、讀譜 0.3–0.5 ms、建 Player 11 ms。只先解碼：貼圖 357/350 ms（幾乎沒變）；加上先上傳：193–201 ms。剩下約 190 ms 是 texture.json／目錄列表兩次（規劃 65 ms、load_folder 再讀一次 json 27 ms）、ImagePrefetch 等待與物件建立，沒動。
