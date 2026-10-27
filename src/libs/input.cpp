@@ -21,6 +21,7 @@
 #include "test_mode.h"
 #include "texture.h"
 #include "time.h"
+#include "zdon_os.h"
 
 #ifndef __EMSCRIPTEN__
 #include <libremidi/libremidi.hpp>
@@ -797,13 +798,9 @@ void input_polling_thread() {
     auto window_start = last;
     while (input_thread_running) {
         poll_keyboard_once();
-#ifdef _WIN32
-        if (plain_sleep || !win32_precise_sleep_us(500)) {
+        if (plain_sleep || !zdon_os::precise_sleep_us(500)) {
             std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
-#else
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
-#endif
         if (stats) {
             const auto now = std::chrono::steady_clock::now();
             intervals.push_back(std::chrono::duration<double, std::milli>(now - last).count());

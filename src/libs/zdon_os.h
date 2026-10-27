@@ -19,4 +19,11 @@ namespace zdon_os {
     // priority would run the game's own jobs there too. Elsewhere a no-op.
     void job_priority_background(bool background);
 
+    // Sleeps for about `us` microseconds on a timer that wakes on time (the frame limiter and the input
+    // thread spin the rest). Windows: a high-resolution waitable timer (plain sleeps round up to the
+    // 15.6 ms tick). macOS/iOS: mach_wait_until, a hard deadline (nanosleep may be coalesced with other
+    // timers by up to its leeway). Returns false elsewhere (Linux sleeps are already precise): the
+    // caller then uses a normal sleep.
+    bool precise_sleep_us(long long us);
+
 } // namespace zdon_os

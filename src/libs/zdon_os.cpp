@@ -1,5 +1,7 @@
 #include "zdon_os.h"
 
+#include <cstdint>
+
 #if defined(_WIN32)
 #include "../platform/platform_windows.h"
 #ifndef NOMINMAX
@@ -16,6 +18,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #elif defined(__APPLE__) // macOS and iOS
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <sys/resource.h>
@@ -90,6 +93,31 @@ namespace zdon_os {
         pthread_set_qos_class_self_np(background ? QOS_CLASS_UTILITY : normal, 0);
 #else
         (void)background;
+#endif
+    }
+
+    bool precise_sleep_us(long long us) {
+#if defined(_WIN32)
+        return win32_precise_sleep_us(us);
+#elif defined(__APPLE__)
+        static const mach_timebase_info_data_t tb = [] {
+            mach_timebase_info_data_t t{};
+            mach_timebase_info(&t);
+            return t;
+        }();
+        if (tb.numer == 0 || tb.denom == 0) {
+            return false;
+        }
+        if (us <= 0) {
+            return true;
+        }
+        // ns -> ticks (125/3 ns per tick on Apple silicon, 1 on Intel)
+        const auto ticks = static_cast<uint64_t>(static_cast<double>(us) * 1000.0 * tb.denom / tb.numer);
+        mach_wait_until(mach_absolute_time() + ticks);
+        return true;
+#else
+        (void)us;
+        return false;
 #endif
     }
 

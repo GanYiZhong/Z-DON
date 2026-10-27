@@ -23,6 +23,7 @@
 #include "libs/text.h"
 #include "libs/texture_lazy.h"
 #include "libs/webcam.h"
+#include "libs/zdon_os.h"
 #include "objects/global/chara_3d.h"
 #include "platform/vblank_pacing.h"
 
@@ -799,13 +800,12 @@ static void run_frame() {
         }
         auto spin_start = L.next_frame_time - std::chrono::microseconds(500);
         if (spin_start > now) {
-#ifdef _WIN32
-            // the plain sleep overshoots by up to a 15.6 ms tick, which turned every other frame
-            // into a ~17 ms one (frames came as ~1 ms / ~17 ms pairs at any target)
-            if (!win32_precise_sleep_us(
-                    std::chrono::duration_cast<std::chrono::microseconds>(spin_start - now).count()))
-#endif
+            // the plain sleep overshoots by up to a 15.6 ms tick on Windows, which turned every other
+            // frame into a ~17 ms one (frames came as ~1 ms / ~17 ms pairs at any target)
+            if (!zdon_os::precise_sleep_us(
+                    std::chrono::duration_cast<std::chrono::microseconds>(spin_start - now).count())) {
                 std::this_thread::sleep_until(spin_start);
+            }
         }
         while (std::chrono::steady_clock::now() < L.next_frame_time) {
         }
