@@ -20,6 +20,10 @@
 #if defined(__linux__) || defined(__ANDROID__)
 #include <fcntl.h>
 #include <unistd.h>
+#elif defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -77,6 +81,32 @@ namespace readahead {
             ::posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED); // the kernel reads it in asynchronously
             ::close(fd);
             return true;
+#elif defined(__APPLE__)
+            // macOS/iOS: no posix_fadvise; F_RDADVISE asks for a range to be read in asynchronously
+            // (an int count, so a big file goes in 1 GB pieces)
+            const int fd = ::open(path.c_str(), O_RDONLY);
+            if (fd < 0) {
+                return true;
+            }
+            struct stat st{};
+            bool current = true;
+            if (::fstat(fd, &st) == 0) {
+                constexpr off_t kPiece = off_t{1} << 30;
+                for (off_t off = 0; off < st.st_size; off += kPiece) {
+                    if (superseded(gen)) {
+                        current = false;
+                        break;
+                    }
+                    struct radvisory ra{};
+                    ra.ra_offset = off;
+                    ra.ra_count = static_cast<int>(std::min<off_t>(kPiece, st.st_size - off));
+                    if (::fcntl(fd, F_RDADVISE, &ra) == -1) {
+                        break;
+                    }
+                }
+            }
+            ::close(fd);
+            return current;
 #else
             std::ifstream in(path, std::ios::binary);
             static thread_local std::vector<char> buf(1 << 20);
