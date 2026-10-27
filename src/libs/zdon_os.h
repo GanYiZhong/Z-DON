@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__) // Android, iOS too
 #define ZDON_POSIX_LIST_DIR 1 // list_dir below (Windows has win32_list_dir)
 #endif
 
@@ -36,6 +36,11 @@ namespace zdon_os {
     // caller then uses a normal sleep.
     bool precise_sleep_us(long long us);
 
+    // Asks the kernel to read the whole file into the page cache in the background: Linux/Android
+    // posix_fadvise(WILLNEED), macOS/iOS fcntl(F_RDADVISE) (an int count, so 1 GB per advisory).
+    // false where there is no such hint: the caller reads the file itself.
+    bool prefetch_file(const std::filesystem::path& path);
+
     // Physical memory in MB, 0 when it cannot be read.
     uint64_t physical_memory_mb();
 
@@ -56,7 +61,7 @@ namespace zdon_os {
     }
 
 #ifdef ZDON_POSIX_LIST_DIR
-    // One entry of a directory listing (readdir: the type comes with the name on the usual file systems).
+    // One entry of a directory listing (the type comes with the name on the usual file systems).
     struct DirEntry {
         std::string name;
         bool is_dir = false;  // a link: whether its target is a folder (as fs::directory_entry::is_directory)
@@ -68,10 +73,10 @@ namespace zdon_os {
         uint64_t ft_write = 0;
     };
 
-    // Lists `dir` (without "." and "..") in the order readdir returns it, which is the order
-    // fs::directory_iterator walks it in. Only an entry with an unknown type (some file systems do not
-    // say) or a link is stat'ed for its type; size and ft_write (of a link: its target's) are read for
-    // the files `want_stat` accepts (null: none). Returns false if the directory cannot be opened.
+    // Lists `dir` (without "." and "..") in fs::directory_iterator order (readdir's). Only an entry with an
+    // unknown type (some file systems do not say) or a link is stat'ed for its type; size and ft_write (of
+    // a link: its target's) are read, one stat, for the files `want_stat` accepts (null: none). Returns
+    // false if the directory cannot be opened.
     bool list_dir(const std::filesystem::path& dir, std::vector<DirEntry>& out,
                   bool (*want_stat)(std::string_view name) = nullptr);
 #endif

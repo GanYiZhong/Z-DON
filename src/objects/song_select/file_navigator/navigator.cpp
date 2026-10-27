@@ -2047,6 +2047,8 @@ bool Navigator::has_def_file(const std::filesystem::path& path) {
     };
 
     // From the library index when the startup walk listed the folder: the same answer without a stat
+    // (the index is only built on Windows)
+#ifdef _WIN32
     if (auto index = library_index()) {
         if (const LibraryIndex::Dir* listing = index->find(path)) {
             for (const LibraryIndex::Entry& e : listing->entries) {
@@ -2073,6 +2075,7 @@ bool Navigator::has_def_file(const std::filesystem::path& path) {
             return remember(false);
         }
     }
+#endif
 
     std::error_code ec;
     if (fs::exists(path / "box.def", ec)) {

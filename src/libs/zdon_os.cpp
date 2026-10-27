@@ -26,10 +26,10 @@
 #include <sys/sysctl.h>
 #endif
 
-#ifdef ZDON_POSIX_LIST_DIR
-#include <dirent.h>
+#if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace zdon_os {
@@ -129,6 +129,39 @@ namespace zdon_os {
 #endif
     }
 
+    bool prefetch_file(const std::filesystem::path& path) {
+#if defined(__linux__)
+        const int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            ::posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+            ::close(fd);
+        }
+        return true; // a file that does not open is not read the slow way either
+#elif defined(__APPLE__)
+        const int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) {
+            return true;
+        }
+        struct stat st{};
+        if (::fstat(fd, &st) == 0) {
+            constexpr off_t kPiece = off_t{1} << 30;
+            for (off_t off = 0; off < st.st_size; off += kPiece) {
+                struct radvisory ra{};
+                ra.ra_offset = off;
+                ra.ra_count = static_cast<int>(st.st_size - off < kPiece ? st.st_size - off : kPiece);
+                if (::fcntl(fd, F_RDADVISE, &ra) == -1) {
+                    break;
+                }
+            }
+        }
+        ::close(fd);
+        return true;
+#else
+        (void)path;
+        return false;
+#endif
+    }
+
     uint64_t physical_memory_mb() {
 #if defined(_WIN32)
         MEMORYSTATUSEX m{};
@@ -183,45 +216,28 @@ namespace zdon_os {
 
     bool list_dir(const std::filesystem::path& dir, std::vector<DirEntry>& out,
                   bool (*want_stat)(std::string_view name)) {
-        DIR* d = ::opendir(dir.c_str());
-        if (!d) {
+        // fs::directory_iterator rather than readdir: <dirent.h> resolves to raylib's Windows shim on this
+        // project's include path. libstdc++ and libc++ keep readdir's d_type in each entry, so the type
+        // costs no stat except for a link (or a file system that does not say).
+        std::error_code ec;
+        std::filesystem::directory_iterator iter(dir, ec);
+        if (ec) {
             return false;
         }
-        const int fd = ::dirfd(d);
-        while (const struct dirent* de = ::readdir(d)) {
-            const char* n = de->d_name;
-            if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
-                continue;
-            }
+        for (; !ec && iter != std::filesystem::directory_iterator(); iter.increment(ec)) {
             DirEntry e;
-            e.name = n;
-            struct stat st{};
-            unsigned char type = de->d_type;
-            bool have_stat = false;
-            if (type == DT_UNKNOWN) {
-                if (::fstatat(fd, n, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                    type = S_ISLNK(st.st_mode) ? DT_LNK : S_ISDIR(st.st_mode) ? DT_DIR : DT_REG;
-                    have_stat = type != DT_LNK;
-                }
-            }
-            if (type == DT_LNK) {
-                e.is_link = true;
-                have_stat = ::fstatat(fd, n, &st, 0) == 0; // the target (a broken link: not a folder)
-                e.is_dir = have_stat && S_ISDIR(st.st_mode);
-            } else {
-                e.is_dir = type == DT_DIR;
-            }
+            e.name = iter->path().filename().string();
+            std::error_code type_ec;
+            e.is_link = iter->is_symlink(type_ec);
+            e.is_dir = iter->is_directory(type_ec); // a link: its target (a broken link: not a folder)
             if (!e.is_dir && want_stat && want_stat(e.name)) {
-                if (!have_stat) {
-                    have_stat = ::fstatat(fd, n, &st, 0) == 0;
-                }
-                if (have_stat) {
+                struct stat st{};
+                if (::stat(iter->path().c_str(), &st) == 0) {
                     set_stat(e, st);
                 }
             }
             out.push_back(std::move(e));
         }
-        ::closedir(d);
         return true;
     }
 #endif

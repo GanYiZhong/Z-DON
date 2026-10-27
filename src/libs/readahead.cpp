@@ -15,16 +15,7 @@
 #include "global_data.h"
 #include "texture_pack.h"
 #include "texture_retain.h"
-#include "zdon_os.h"
-
-#if defined(__linux__) || defined(__ANDROID__)
-#include <fcntl.h>
-#include <unistd.h>
-#elif defined(__APPLE__)
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
+#include "zdon_os.h" // not <fcntl.h> here: glibc's readahead() would clash with this namespace
 
 namespace fs = std::filesystem;
 
@@ -72,42 +63,9 @@ namespace readahead {
 
         // Brings one file into the page cache; false when a newer request (or quit) came in.
         bool warm(const fs::path& path, uint64_t gen) {
-#if defined(__linux__) || defined(__ANDROID__)
-            (void)gen;
-            const int fd = ::open(path.c_str(), O_RDONLY);
-            if (fd < 0) {
-                return true;
+            if (zdon_os::prefetch_file(path)) {
+                return true; // the kernel reads it in asynchronously (Linux, Android, macOS, iOS)
             }
-            ::posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED); // the kernel reads it in asynchronously
-            ::close(fd);
-            return true;
-#elif defined(__APPLE__)
-            // macOS/iOS: no posix_fadvise; F_RDADVISE asks for a range to be read in asynchronously
-            // (an int count, so a big file goes in 1 GB pieces)
-            const int fd = ::open(path.c_str(), O_RDONLY);
-            if (fd < 0) {
-                return true;
-            }
-            struct stat st{};
-            bool current = true;
-            if (::fstat(fd, &st) == 0) {
-                constexpr off_t kPiece = off_t{1} << 30;
-                for (off_t off = 0; off < st.st_size; off += kPiece) {
-                    if (superseded(gen)) {
-                        current = false;
-                        break;
-                    }
-                    struct radvisory ra{};
-                    ra.ra_offset = off;
-                    ra.ra_count = static_cast<int>(std::min<off_t>(kPiece, st.st_size - off));
-                    if (::fcntl(fd, F_RDADVISE, &ra) == -1) {
-                        break;
-                    }
-                }
-            }
-            ::close(fd);
-            return current;
-#else
             std::ifstream in(path, std::ios::binary);
             static thread_local std::vector<char> buf(1 << 20);
             while (in.read(buf.data(), static_cast<std::streamsize>(buf.size())) || in.gcount() > 0) {
@@ -116,7 +74,6 @@ namespace readahead {
                 }
             }
             return true;
-#endif
         }
 
         // How many files are read at once. A hard drive serves several outstanding reads faster than
