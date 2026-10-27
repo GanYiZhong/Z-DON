@@ -4,6 +4,16 @@
 // Windows forwards to platform_windows; Linux/Android and macOS/iOS have their own versions; a
 // platform without one gets a no-op (or false: the caller keeps its portable code).
 
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#define ZDON_POSIX_LIST_DIR 1 // list_dir below (Windows has win32_list_dir)
+#endif
+
 namespace zdon_os {
 
     // Background mode for the calling thread, for the rest of its life (threads started for
@@ -25,5 +35,26 @@ namespace zdon_os {
     // timers by up to its leeway). Returns false elsewhere (Linux sleeps are already precise): the
     // caller then uses a normal sleep.
     bool precise_sleep_us(long long us);
+
+#ifdef ZDON_POSIX_LIST_DIR
+    // One entry of a directory listing (readdir: the type comes with the name on the usual file systems).
+    struct DirEntry {
+        std::string name;
+        bool is_dir = false;  // a link: whether its target is a folder (as fs::directory_entry::is_directory)
+        bool is_link = false; // a symbolic link
+        bool stat_ok = false; // size and ft_write are set
+        uint64_t size = 0;
+        // the last write as a Windows FILETIME (100 ns since 1601), the unit win32_list_dir gives:
+        // the song cache stores it, so a library shared with Windows keeps its rows
+        uint64_t ft_write = 0;
+    };
+
+    // Lists `dir` (without "." and "..") in the order readdir returns it, which is the order
+    // fs::directory_iterator walks it in. Only an entry with an unknown type (some file systems do not
+    // say) or a link is stat'ed for its type; size and ft_write (of a link: its target's) are read for
+    // the files `want_stat` accepts (null: none). Returns false if the directory cannot be opened.
+    bool list_dir(const std::filesystem::path& dir, std::vector<DirEntry>& out,
+                  bool (*want_stat)(std::string_view name) = nullptr);
+#endif
 
 } // namespace zdon_os

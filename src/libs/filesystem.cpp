@@ -3,6 +3,7 @@
 #include "library_index.h"
 #include "miniz.h" // IWYU pragma: keep
 #include "test_mode.h"
+#include "zdon_os.h"
 #ifdef SUPPORT_FUMEN
 #include "optional/gen3.h"
 #include "optional/gen4.h"
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <mutex>
 #include <spdlog/spdlog.h>
+#include <string_view>
 #include <unordered_set>
 
 #ifdef YATAIDON_PLATFORM_IOS
@@ -344,6 +346,73 @@ struct ChartWalk {
         move_names(index, dir_id, entries);
     }
 };
+#elif defined(ZDON_POSIX_LIST_DIR)
+// The same walk on Linux, Android and macOS/iOS: readdir gives each entry's type, so only links,
+// entries of unknown type and the chart files (their size and write time, for the song cache) are
+// stat'ed; the portable walk below stat'ed every entry and realpath'ed every folder, and the loading
+// screen stat'ed every chart twice more. Same paths in the same order as the portable walk (readdir
+// order, a folder before its contents). No library index (its names are wide strings, Windows only).
+static bool wants_stamp(std::string_view name) {
+    auto ends = [&](std::string_view ext) {
+        return name.size() > ext.size() && name.substr(name.size() - ext.size()) == ext;
+    };
+    return ends(".tja") || ends(".osu") || ends(".bin");
+}
+
+static SongFileStamp stamp_of(const zdon_os::DirEntry& e) {
+    if (!e.is_dir && !e.stat_ok) {
+        return {}; // not listed: the loading screen stats it
+    }
+    return {true, e.is_dir, e.is_link, static_cast<int64_t>(e.size), static_cast<int64_t>(e.ft_write)};
+}
+
+struct PosixChartWalk {
+    std::vector<fs::path>& songs;
+    std::vector<fs::path>* osz_out;
+    std::vector<SongFileStamp>* stamps;
+    // Resolved path of every folder entered: a link back to one of them is not followed again.
+    // A plain folder resolves to its parent's resolved path plus its name, so only links are resolved.
+    std::unordered_set<std::string> visited_dirs;
+
+    void walk(const fs::path& dir, const std::string& resolved, std::vector<zdon_os::DirEntry>& entries,
+              bool under_fumen) {
+        for (const zdon_os::DirEntry& e : entries) {
+            fs::path p = dir / e.name;
+            if (!e.is_dir) {
+                add_chart_file(songs, osz_out, p, under_fumen, stamps, stamp_of(e));
+                continue;
+            }
+            std::string child_resolved;
+            if (e.is_link) {
+                std::error_code ec;
+                child_resolved = fs::canonical(p, ec).string();
+                if (ec) {
+                    child_resolved.clear();
+                }
+            } else {
+                child_resolved = resolved + (resolved.ends_with('/') ? "" : "/") + e.name;
+            }
+            if (child_resolved.empty()) {
+                // Cannot prove this is not a loop -> do not recurse into it.
+                spdlog::warn("collect_charts_from: cannot canonicalize {}, skipping recursion", p.string());
+                continue;
+            }
+            if (!visited_dirs.insert(child_resolved).second) {
+                continue;
+            }
+#ifdef SUPPORT_FUMEN
+            if (gen4::find_data_root(p) == p || gen3::find_data_root(p) == p) {
+                continue;
+            }
+#endif
+            add_chart_file(songs, osz_out, p, under_fumen, stamps, stamp_of(e));
+            std::vector<zdon_os::DirEntry> children;
+            if (zdon_os::list_dir(p, children, stamps ? wants_stamp : nullptr)) {
+                walk(p, child_resolved, children, under_fumen || e.name == "fumen");
+            }
+        }
+    }
+};
 #endif
 
 static void collect_charts_from(const fs::path& path, std::vector<fs::path>& songs, std::vector<fs::path>* osz_out,
@@ -367,6 +436,22 @@ static void collect_charts_from(const fs::path& path, std::vector<fs::path>& son
         w.index_by_resolved.emplace(root, root_id);
     }
     w.walk(path, root, entries, under_fumen, root_id);
+#elif defined(ZDON_POSIX_LIST_DIR)
+    (void)index;
+    std::vector<zdon_os::DirEntry> entries;
+    if (!zdon_os::list_dir(path, entries, stamps ? wants_stamp : nullptr)) {
+        throw fs::filesystem_error("cannot open directory", path,
+                                   std::make_error_code(std::errc::no_such_file_or_directory));
+    }
+    PosixChartWalk w{songs, osz_out, stamps, {}};
+    std::error_code canon_ec;
+    std::string root = fs::canonical(path, canon_ec).string();
+    if (canon_ec) {
+        root = fs::absolute(path).lexically_normal().string();
+    } else {
+        w.visited_dirs.insert(root);
+    }
+    w.walk(path, root, entries, path_is_under_fumen(path));
 #else
     (void)index;
     // A symlinked directory that points back at one of its own ancestors would

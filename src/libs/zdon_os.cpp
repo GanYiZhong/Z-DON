@@ -24,6 +24,12 @@
 #include <sys/resource.h>
 #endif
 
+#ifdef ZDON_POSIX_LIST_DIR
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
 namespace zdon_os {
 
 #if defined(__linux__)
@@ -120,5 +126,66 @@ namespace zdon_os {
         return false;
 #endif
     }
+
+#ifdef ZDON_POSIX_LIST_DIR
+    namespace {
+        void set_stat(DirEntry& e, const struct stat& st) {
+#if defined(__APPLE__)
+            const struct timespec& t = st.st_mtimespec;
+#else
+            const struct timespec& t = st.st_mtim;
+#endif
+            constexpr int64_t kUnixEpochIn1601 = 11644473600; // seconds from 1601 to 1970
+            e.size = static_cast<uint64_t>(st.st_size);
+            e.ft_write = static_cast<uint64_t>((static_cast<int64_t>(t.tv_sec) + kUnixEpochIn1601) * 10000000 +
+                                               static_cast<int64_t>(t.tv_nsec) / 100);
+            e.stat_ok = true;
+        }
+    } // namespace
+
+    bool list_dir(const std::filesystem::path& dir, std::vector<DirEntry>& out,
+                  bool (*want_stat)(std::string_view name)) {
+        DIR* d = ::opendir(dir.c_str());
+        if (!d) {
+            return false;
+        }
+        const int fd = ::dirfd(d);
+        while (const struct dirent* de = ::readdir(d)) {
+            const char* n = de->d_name;
+            if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
+                continue;
+            }
+            DirEntry e;
+            e.name = n;
+            struct stat st{};
+            unsigned char type = de->d_type;
+            bool have_stat = false;
+            if (type == DT_UNKNOWN) {
+                if (::fstatat(fd, n, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+                    type = S_ISLNK(st.st_mode) ? DT_LNK : S_ISDIR(st.st_mode) ? DT_DIR : DT_REG;
+                    have_stat = type != DT_LNK;
+                }
+            }
+            if (type == DT_LNK) {
+                e.is_link = true;
+                have_stat = ::fstatat(fd, n, &st, 0) == 0; // the target (a broken link: not a folder)
+                e.is_dir = have_stat && S_ISDIR(st.st_mode);
+            } else {
+                e.is_dir = type == DT_DIR;
+            }
+            if (!e.is_dir && want_stat && want_stat(e.name)) {
+                if (!have_stat) {
+                    have_stat = ::fstatat(fd, n, &st, 0) == 0;
+                }
+                if (have_stat) {
+                    set_stat(e, st);
+                }
+            }
+            out.push_back(std::move(e));
+        }
+        ::closedir(d);
+        return true;
+    }
+#endif
 
 } // namespace zdon_os

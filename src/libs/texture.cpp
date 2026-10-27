@@ -24,6 +24,7 @@
 #include "texture_ondemand.h"
 #include "texture_pack.h"
 #include "texture_retain.h"
+#include "zdon_os.h"
 
 #ifdef _WIN32
 #include "../platform/platform_windows.h"
@@ -654,6 +655,13 @@ private:
         std::vector<Win32DirEntry> raw;
         l.ok = win32_list_dir(dir, raw);
         for (Win32DirEntry& e : raw) {
+            l.entries.push_back({dir / e.name, e.is_dir, e.size, e.ft_write});
+        }
+#elif defined(ZDON_POSIX_LIST_DIR)
+        // readdir's types instead of a stat per entry (two more per file for the texture packs)
+        std::vector<zdon_os::DirEntry> raw;
+        l.ok = zdon_os::list_dir(dir, raw, texture_pack::enabled() ? +[](std::string_view) { return true; } : nullptr);
+        for (zdon_os::DirEntry& e : raw) {
             l.entries.push_back({dir / e.name, e.is_dir, e.size, e.ft_write});
         }
 #else
