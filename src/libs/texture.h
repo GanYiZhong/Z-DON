@@ -83,6 +83,9 @@ struct TextureObject {
     std::optional<std::vector<Rect>> crop_data;
 
     float opaque_right = 0.0f;
+    // Z-DON texture density (screen.texture_density): the image's pixels per unit of width / height /
+    // x / y / x2 / y2, which are logical. Only the source rect is scaled by it (crop_data is in image pixels).
+    int density = 1;
     TextureObject(const std::string& name, int width, int height)
         : name(name), width(width), height(height), x{0}, y{0}, x2{width}, y2{height} {}
     virtual ~TextureObject() = default;
@@ -241,6 +244,10 @@ public:
     int screen_width{1280};
     int screen_height{720};
     float screen_scale{1.0};
+    // Z-DON: skin_config screen.texture_density (default 1). With d > 1 this skin's own PNGs and their
+    // texture.json numbers are in physical pixels (d per logical unit); the frame renders at d x the screen
+    // size (libs/density.h). skin_config and animation.json stay logical.
+    int texture_density{1};
     float draw_offset_x = 0.0f;
     float draw_offset_y = 0.0f;
 
@@ -302,7 +309,10 @@ public:
     BaseAnimation* get_animation(const int id, bool is_copy = false);
     BaseAnimation* get_animation(const int id, const std::string& screen_name);
 
-    void read_tex_obj_data(const Value& tex_mapping, TextureObject* tex_obj, float scale = 1.0f);
+    // density > 1: a texture of this skin with density (texture_density); default_size_scale (< 0: scale) scales the
+    // default x2 / y2 (the texture's own size)
+    void read_tex_obj_data(const Value& tex_mapping, TextureObject* tex_obj, float scale = 1.0f, int density = 1,
+                           float default_size_scale = -1.0f);
 
     void load_animations(const std::string& screen_name);
 

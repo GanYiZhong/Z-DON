@@ -7,6 +7,7 @@
 #include "libs/animation.h"
 #include "libs/audio.h"
 #include "libs/camera_utils.h"
+#include "libs/density.h"
 #include "libs/filesystem.h"
 #include "libs/fixed_step.h"
 #include "libs/global_data.h"
@@ -610,6 +611,9 @@ static void run_frame() {
         spdlog::info("Toggled borderless windowed mode");
     }
 
+    // Z-DON texture density: with a skin's texture_density > 1 the frame draws into a target of the screen size
+    // x density from here on, and the camera below maps onto it
+    density::begin_frame(global_data.camera.border_color);
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
     if (!global_data.skinless) {
         debug_menu.update(L.camera);
@@ -642,6 +646,7 @@ static void run_frame() {
     if (!screen) {
         end_blend_mode();
         end_mode_2d();
+        density::end_frame(global_data.camera.border_color);
         end_drawing();
         return;
     }
@@ -784,12 +789,13 @@ static void run_frame() {
 
         debug_menu.draw();
     }
-    ime_ui_draw(L.camera);
+    ime_ui_draw(density::to_window(L.camera));
 
     draw_outer_border(tex.screen_width, tex.screen_height, L.last_color);
 
     end_blend_mode();
     end_mode_2d();
+    density::end_frame(global_data.camera.border_color); // the density target into the window
     seg_mark(SEG_OVERLAY);
     const bool dump_done = dump_screen_tick();
     frame_stats_add(frame_start);
@@ -813,7 +819,7 @@ static void run_frame() {
 
     if (key_pressed(SDL_SCANCODE_F12)) {
         static int screenshot_counter = 0;
-        ray::Image image = load_image_from_screen();
+        ray::Image image = density::capture(); // the density target's full size
         if (L.current_screen == Screens::RESULT && tex.options[SCO::CROP_RESULT_SCREENSHOT]) {
             image_crop(&image, {0, 0, (float)image.width, (float)image.height / 2.0f});
         }
@@ -913,7 +919,7 @@ static bool dump_screen_tick() {
                                      : std::to_string(g_dump_screen.next) + "_" +
                                            std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
         if (!grabbed) {
-            shots.emplace_back(name, load_image_from_screen());
+            shots.emplace_back(name, density::capture()); // the density target's full size
             grabbed = true;
         } else {
             shots.emplace_back(name, image_copy(shots.back().second));

@@ -143,6 +143,11 @@ void TextureWrapper::init(const fs::path& skin_path) {
         screen_width = static_cast<int>(w);
         screen_height = static_cast<int>(h);
         screen_scale = w / 1280.0f;
+        texture_density = 1;
+        if (skin_config_file.HasMember("screen") && skin_config_file["screen"].HasMember("texture_density") &&
+            skin_config_file["screen"]["texture_density"].IsInt()) {
+            texture_density = std::clamp(skin_config_file["screen"]["texture_density"].GetInt(), 1, 4);
+        }
     }
 
     auto load_entry = [this](const std::string& name, const Value& v, float scale) {
@@ -329,7 +334,11 @@ BaseAnimation* TextureWrapper::get_animation(const int id, const std::string& sc
     return store_animation_copy(copied_animations, *it->second);
 }
 
-void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* tex_obj, float scale) {
+void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* tex_obj, float scale, int density,
+                                       float default_size_scale) {
+    if (default_size_scale < 0.0f) {
+        default_size_scale = scale;
+    }
     if (tex_mapping.IsArray()) {
         // Check if crop data exists in the first mapping (index 0)
         bool has_crop_in_first = tex_mapping.Size() > 0 && tex_mapping[0].IsObject() &&
@@ -358,8 +367,12 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
 
             int x = static_cast<int>(json_member(mapping, "x", 0) * scale);
             int y = static_cast<int>(json_member(mapping, "y", 0) * scale);
-            int x2 = static_cast<int>(json_member(mapping, "x2", tex_obj->width) * scale);
-            int y2 = static_cast<int>(json_member(mapping, "y2", tex_obj->height) * scale);
+            int x2 = mapping.HasMember("x2")
+                         ? static_cast<int>(json_member(mapping, "x2", tex_obj->width) * scale)
+                         : static_cast<int>(static_cast<double>(tex_obj->width) * default_size_scale);
+            int y2 = mapping.HasMember("y2")
+                         ? static_cast<int>(json_member(mapping, "y2", tex_obj->height) * scale)
+                         : static_cast<int>(static_cast<double>(tex_obj->height) * default_size_scale);
 
             tex_obj->x[i] = x;
             tex_obj->y[i] = y;
@@ -386,10 +399,22 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
 
         tex_obj->x = {static_cast<int>(json_member(tex_mapping, "x", 0) * scale)};
         tex_obj->y = {static_cast<int>(json_member(tex_mapping, "y", 0) * scale)};
-        tex_obj->x2 = {static_cast<int>(json_member(tex_mapping, "x2", tex_obj->width) * scale)};
-        tex_obj->y2 = {static_cast<int>(json_member(tex_mapping, "y2", tex_obj->height) * scale)};
+        tex_obj->x2 = {tex_mapping.HasMember("x2")
+                           ? static_cast<int>(json_member(tex_mapping, "x2", tex_obj->width) * scale)
+                           : static_cast<int>(static_cast<double>(tex_obj->width) * default_size_scale)};
+        tex_obj->y2 = {tex_mapping.HasMember("y2")
+                           ? static_cast<int>(json_member(tex_mapping, "y2", tex_obj->height) * scale)
+                           : static_cast<int>(static_cast<double>(tex_obj->height) * default_size_scale)};
 
         apply_frame_order(tex_obj, tex_mapping);
+    }
+
+    // Z-DON texture density: the numbers above are physical (scale is 1/density), the size becomes logical
+    // too; the source rect keeps sampling the whole image (draw_texture)
+    if (density > 1) {
+        tex_obj->density = density;
+        tex_obj->width /= density;
+        tex_obj->height /= density;
     }
 
     ray::TextureFilter filter = texture_filter::BILINEAR;
@@ -1056,7 +1081,8 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
         bool framed;
     };
 
-    auto load_from_path = [&](const fs::path& folder, float tex_scale, const std::unordered_set<std::string>* skip) {
+    auto load_from_path = [&](const fs::path& folder, float tex_scale, const std::unordered_set<std::string>* skip,
+                              int density) {
         fs::path tex_json = folder / "texture.json";
         if (!dirs.is_file(folder, "texture.json")) {
             return;
@@ -1134,7 +1160,9 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 } else if (!stash_to) {
                     auto existing = textures.find(tex_id);
                     if (existing != textures.end()) {
-                        read_tex_obj_data(m.value, existing->second.get(), tex_scale);
+                        // Z-DON texture density: this skin's numbers are physical, the ancestor's size is not
+                        read_tex_obj_data(m.value, existing->second.get(), tex_scale, 1,
+                                          density > 1 ? 1.0f : tex_scale);
                         ids_this_call.insert(tex_id);
                         ++loaded_count;
                     } else {
@@ -1246,7 +1274,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                         obj = std::make_shared<SingleTexture>(p.id, texs[0]);
                     }
 
-                    read_tex_obj_data(*p.mapping, obj.get(), tex_scale);
+                    read_tex_obj_data(*p.mapping, obj.get(), tex_scale, density);
 
                     if (!p.framed && !obj->crop_data.has_value() && p.mapping->IsObject() &&
                         !p.mapping->HasMember("x2")) {
@@ -1306,11 +1334,12 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
     for (size_t i = ancestor_graphics_paths.size(); i-- > 0;) {
         const fs::path dir = ancestor_graphics_paths[i] / screen_name / subset;
         if (dirs.is_file(dir, "texture.json")) {
-            load_from_path(dir, ancestor_scales[i], &skips[i]);
+            load_from_path(dir, ancestor_scales[i], &skips[i], 1);
         }
     }
     if (child_has_folder) {
-        load_from_path(own_dir, 1.0f, nullptr);
+        // Z-DON texture density: this skin's own texture.json numbers are physical pixels
+        load_from_path(own_dir, 1.0f / static_cast<float>(texture_density), nullptr, texture_density);
     }
 
     if (stash_to) {
@@ -2225,6 +2254,10 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     Rect source_rect;
     if (params.src.has_value()) {
         source_rect = params.src.value();
+        if (tex_obj->density != 1) { // a caller's src is logical, like the texture's width / height
+            const auto d = static_cast<float>(tex_obj->density);
+            source_rect = Rect{source_rect.x * d, source_rect.y * d, source_rect.width * d, source_rect.height * d};
+        }
     } else if (tex_obj->crop_data.has_value()) {
         try {
             source_rect = tex_obj->crop_data->at(params.frame);
@@ -2240,8 +2273,14 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
             throw;
         }
     } else {
-        const float width = static_cast<float>(tex_obj->width);
-        const float height = static_cast<float>(tex_obj->height);
+        float width = static_cast<float>(tex_obj->width);
+        float height = static_cast<float>(tex_obj->height);
+        if (tex_obj->density != 1) { // the whole image (width / height are logical, rounded down)
+            if (const Texture* raw = tex_obj->frame_texture_raw(params.frame)) {
+                width = static_cast<float>(raw->width);
+                height = static_cast<float>(raw->height);
+            }
+        }
         source_rect = Rect{0, 0, width * mirror_x, height * mirror_y};
     }
 

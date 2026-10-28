@@ -45,6 +45,12 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-10-29 貼圖密度（texture_density，skin 出 2x 圖、4K 繪製）
+- skin_config `screen.texture_density`（整數 1–4，預設 1）。d > 1 時：**只有這個 skin 自己的** PNG 與它的 texture.json（x、y、x2、y2、crop）是實體像素，載入時乘 1/d，`TextureObject::width/height`、`get_texture_info` 都是邏輯值，source rect 照樣取整張圖（`TextureObject::density`；呼叫端給的 src 視為邏輯值）；祖先 skin 的貼圖照舊縮放；skin_config、animation.json 維持邏輯座標。
+- 每幀畫進 (寬·d)x(高·d) 的 render target（`src/libs/density.*`、ray.h 的 `zdon_density`）：`get_render_width/height` 回報 target 大小，所以 Camera2D（zoom d）、scissor、Chara3D、影片檢查等全部自動是實體大小；巢狀 `end_texture_mode` 回到 target；最後等比例貼進視窗。滑鼠座標換算到 target、IME 區域換回視窗；F12 截圖與 `YATAIDON_DUMP_*` 讀 target（1920x1080、d=2 → 3840x2160）。OutlinedText 以 font_size·d 點陣化、外框 ·d，畫在邏輯大小。
+- 驗證：d=1 時 Nijiiro＋Green 六個情境 68 張與改動前逐位元相同；ProbeD2（Nijiiro 子 skin、d=2、無自己的圖）各畫面縮回 1080p 與 Nijiiro 平均差 0.4–2.3/255；自己的 2x 測試圖逐像素 1:1 出現在 4K 畫面（差 0）。演奏中 CPU 端每幀 p50 0.80 → 2.23 ms、private +150 MB（4K target＋2x 字型）。
+- 限制：debug menu、IME 文字仍是 raylib 預設字型放大；影片照原解析度放大；只覆寫祖先貼圖位置（無 PNG）的 texture.json 項目座標也算實體，crop 不支援。
+
 ## 2026-10-27 效能優化移植到其他平台（`src/libs/zdon_os.*`）
 - 背景執行緒：`zdon_os::background_thread()` 取代只有 Windows 的呼叫。Linux nice +10＋I/O best-effort 7（不用 idle class：遊戲有時會等這些讀取）；Android 只 nice +10（ioprio_set 不一定在 app 的 seccomp 白名單，被擋會直接殺 app）；macOS/iOS utility QoS＋`IOPOL_THROTTLE`。job pool 的可逆切換 `job_priority_background()`：macOS/iOS utility QoS 再切回原本的；Linux/Android 只有 RLIMIT_NICE（或 root）允許調回去時才 nice +10（一般使用者降了就調不回來，卡在低優先權的 worker 會拖到遊戲自己的工作），否則不動。WSL 實測：背景執行緒 ni=10 / best-effort 7。
 - 限幀與輸入執行緒的精準 sleep：macOS/iOS 用 `mach_wait_until`（iOS 本來就沒有限幀，只有輸入執行緒）；Linux 照舊。

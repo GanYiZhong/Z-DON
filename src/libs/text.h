@@ -119,6 +119,7 @@ inline std::string localized_text(const std::map<std::string, std::string>& valu
 class OutlinedText {
 private:
     std::string text;
+    int density = 1; // Z-DON texture density: font_size / outline_thickness are physical (x density)
     float font_size;
     float outline_thickness;
     float v_advance = 1.0f;

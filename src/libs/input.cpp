@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 #include "animation.h"
+#include "density.h"
 #include "ime_ui.h"
 #include "profiler.h"
 #include "spdlog/spdlog.h"
@@ -1121,7 +1122,7 @@ Vec2 mouse_position() {
     x = (float)ix;
     y = (float)iy;
 #endif
-    return {x, y};
+    return density::window_to_render({x, y}); // Z-DON texture density: the target's pixels
 }
 
 bool mouse_down(int button) {

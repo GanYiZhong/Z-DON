@@ -261,7 +261,7 @@ void main() {
         ray::BeginTextureMode(rt);
         ray::ClearBackground(Color::BLACK);
         draw({0.0f, 0.0f, (float)w, (float)h}, {0.0f, 0.0f, (float)w, (float)h});
-        ray::EndTextureMode();
+        end_texture_mode(); // back to the texture-density target, if the frame draws into one
         rlSetMatrixProjection(proj);
         rlSetMatrixModelview(view);
         ray::Image img = ray::LoadImageFromTexture(rt.texture);

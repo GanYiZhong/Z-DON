@@ -793,11 +793,17 @@ static bool in_rotate_set(const std::string& s) {
     return rotate_set.contains(s);
 }
 
-OutlinedText::OutlinedText(std::string text, int font_size, Color color, Color outline_color, bool is_vertical,
-                           float outline_thickness, float spacing, float v_advance, const std::string& font_name)
-    : text(std::move(text)), font_size(static_cast<float>(font_size)),
-      outline_thickness(outline_thickness * global_tex.screen_scale), v_advance(v_advance) {
+OutlinedText::OutlinedText(std::string text, int logical_font_size, Color color, Color outline_color, bool is_vertical,
+                           float outline_thickness, float logical_spacing, float v_advance,
+                           const std::string& font_name)
+    : text(std::move(text)), density(std::max(global_tex.texture_density, 1)),
+      font_size(static_cast<float>(logical_font_size * density)),
+      outline_thickness(outline_thickness * global_tex.screen_scale * static_cast<float>(density)),
+      v_advance(v_advance) {
     text_stats::Scope stat(text_stats::CTOR);
+    // Z-DON texture density: the text is rasterised at the physical size (x density) and drawn at the logical one
+    const int font_size = logical_font_size * density;
+    const float spacing = logical_spacing * static_cast<float>(density);
     worker_font = named_font_manager(font_name).copy_font(this->text, font_size, worker_glyphs);
 
     if (is_vertical) {
@@ -834,6 +840,8 @@ OutlinedText::OutlinedText(std::string text, int font_size, Color color, Color o
         width = max_w + pad * 2;
         height = line_advance * (float)(lines.size() - 1) + line_h + pad * 2;
     }
+    width /= static_cast<float>(density);
+    height /= static_cast<float>(density);
 
 #ifdef __EMSCRIPTEN__
     {
@@ -1083,8 +1091,8 @@ bool OutlinedText::upload_pending() {
     unload_image(*img);
 
     texture = tex;
-    width = (float)tex.width;
-    height = (float)tex.height - top_extra;
+    width = (float)tex.width / static_cast<float>(density);
+    height = ((float)tex.height - top_extra) / static_cast<float>(density);
     return true;
 }
 
@@ -1102,13 +1110,15 @@ void OutlinedText::draw(const DrawTextureParams& params) {
         return;
     }
 
-    Rect src = params.src.value_or(Rect{0, 0, (float)texture->width, (float)texture->height});
+    // Z-DON texture density: the texture is physical (x density), a caller's src and everything drawn logical
+    const auto d = static_cast<float>(density);
+    Rect src = params.src.value_or(Rect{0, 0, (float)texture->width / d, (float)texture->height / d});
     float dx = params.x + x_offset;
-    float dy = params.y + y_offset - top_extra;
+    float dy = params.y + y_offset - top_extra / d;
 
-    if (params.x2 == 0.0f && params.y2 == 0.0f) {
-        dx = roundf(dx);
-        dy = roundf(dy);
+    if (params.x2 == 0.0f && params.y2 == 0.0f) { // on whole (physical) pixels
+        dx = roundf(dx * d) / d;
+        dy = roundf(dy * d) / d;
     }
 
     // dst is sized off src (not the full texture) so a caller can pass a
@@ -1128,6 +1138,9 @@ void OutlinedText::draw(const DrawTextureParams& params) {
         log_lua_site(debug_draw_log.back(), script_lua_state());
     }
 
+    if (density != 1) {
+        src = {src.x * d, src.y * d, src.width * d, src.height * d};
+    }
     draw_texture_pro(*texture, src, dst, {0, 0}, 0.0f, fade(Color::WHITE, params.fade));
 }
 

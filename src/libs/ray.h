@@ -153,12 +153,24 @@ inline int get_screen_height() {
     return ray::GetScreenHeight();
 }
 
+// Z-DON texture density (libs/density.h): with screen.texture_density > 1 the frame renders into `target`
+// (the screen size x density), and the render size below is the target's
+namespace zdon_density {
+    inline bool on = false;    // density > 1: the render size is the target's
+    inline bool bound = false; // the frame is drawing into the target now
+    inline ray::RenderTexture2D target{};
+    // the target's letterboxed place in the window: window px = target px * scale + offset
+    inline float scale = 1.0f;
+    inline float off_x = 0.0f;
+    inline float off_y = 0.0f;
+} // namespace zdon_density
+
 inline int get_render_width() {
-    return ray::GetRenderWidth();
+    return zdon_density::on ? zdon_density::target.texture.width : ray::GetRenderWidth();
 }
 
 inline int get_render_height() {
-    return ray::GetRenderHeight();
+    return zdon_density::on ? zdon_density::target.texture.height : ray::GetRenderHeight();
 }
 
 inline int get_monitor_refresh_rate() {
@@ -403,6 +415,9 @@ inline void begin_texture_mode(ray::RenderTexture2D target) {
 
 inline void end_texture_mode() {
     ray::EndTextureMode();
+    if (zdon_density::bound) { // back to the frame's target, not the window
+        ray::BeginTextureMode(zdon_density::target);
+    }
 }
 
 namespace material_map {
