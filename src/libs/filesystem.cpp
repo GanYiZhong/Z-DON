@@ -702,6 +702,15 @@ std::vector<fs::path> resolve_skin_chain(const fs::path& graphics_path) {
             spdlog::warn("resolve_skin_chain: parent cycle at '{}'", parent.string());
             break;
         }
+        // A parent that is not installed ends the chain instead of failing the whole skin: a child that
+        // ships everything it draws (e.g. one built on a skin whose own parent the user never installed)
+        // still loads.
+        std::error_code ec;
+        if (!fs::is_regular_file(parent / "skin_config.json", ec)) {
+            spdlog::warn("resolve_skin_chain: parent skin '{}' is not installed; the chain stops at '{}'",
+                         parent.parent_path().string(), chain.back().string());
+            break;
+        }
         chain.push_back(parent);
     }
     return chain;
