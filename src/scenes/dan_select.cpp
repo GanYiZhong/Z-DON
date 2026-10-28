@@ -61,6 +61,10 @@ void DanSelectScreen::on_screen_start() {
     if (sd_boot.selected_dan_folder.empty() && (int)global_data.player_num < (int)global_data.dan_folder.size()) {
         sd_boot.selected_dan_folder = global_data.dan_folder[(int)global_data.player_num];
     }
+    if (!global_data.cli_dan.empty()) { // `--dan`: scan only that course
+        sd_boot.selected_dan_folder =
+            fs::is_directory(global_data.cli_dan) ? global_data.cli_dan : global_data.cli_dan.parent_path();
+    }
     fs::path dan_folder = sd_boot.selected_dan_folder;
 
     select_timer.reset();
@@ -310,6 +314,15 @@ std::optional<Screens> DanSelectScreen::update() {
     Screen::update();
     double current_ms = get_current_ms();
     publish_scan_state(current_ms);
+    if (!global_data.cli_dan.empty() && scan_ready) { // `--dan`: start the course as the confirm box would
+        for (size_t i = 0; i < dan_navigator.boxes.size(); i++) {
+            if (!dan_navigator.boxes[i]->is_back) {
+                global_data.cli_dan.clear();
+                dan_navigator.selected_index = (int)i;
+                return on_screen_end(Screens::GAME_DAN);
+            }
+        }
+    }
     allnet_indicator.update(current_ms);
     dan_navigator.update(current_ms);
     indicator->update(current_ms);

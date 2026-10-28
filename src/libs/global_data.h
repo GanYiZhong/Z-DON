@@ -253,6 +253,7 @@ struct GlobalData {
     int live_skip_count = -1;
     bool live_skip_used = false;
     bool force_auto_play = false;
+    fs::path cli_dan; // `--dan` (test): the course dan select starts as soon as its scan is done
     bool skinless = false;
     bool needs_onboarding = false;
     bool returned_from_result = false;

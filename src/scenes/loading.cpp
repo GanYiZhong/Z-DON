@@ -350,6 +350,9 @@ std::optional<Screens> LoadingScreen::update() {
 
     fade_in->update(get_current_ms());
     if (fade_in->is_finished) {
+        if (!global_data.cli_dan.empty()) {
+            return on_screen_end(Screens::DAN_SELECT); // `--dan`
+        }
         if (global_data.needs_onboarding) {
             return on_screen_end(Screens::ONBOARDING);
         }

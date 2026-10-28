@@ -163,6 +163,8 @@ Screens check_args(int argc, char* argv[]) {
     std::optional<int> difficulty;
     bool auto_play = false;
     bool practice = false;
+    bool two_player = false;
+    std::string dan_arg;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -171,12 +173,23 @@ Screens check_args(int argc, char* argv[]) {
             auto_play = true;
         } else if (arg == "--practice") {
             practice = true;
+        } else if (arg == "--2p") {
+            two_player = true;
+        } else if (arg == "--dan") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --dan requires a course path\n";
+                exit_now(1);
+            }
+            dan_arg = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: " << argv[0] << " <song_path> [difficulty] [--auto] [--practice]\n";
+            std::cout << "Usage: " << argv[0] << " <song_path> [difficulty] [--auto] [--practice] [--2p]\n";
+            std::cout << "       " << argv[0] << " --dan <dan.json or course folder>\n";
             std::cout << "  song_path   : Path to the TJA song file\n";
             std::cout << "  difficulty  : Difficulty level (optional, defaults to max difficulty)\n";
             std::cout << "  --auto      : Enable auto mode\n";
             std::cout << "  --practice  : Start in practice mode\n";
+            std::cout << "  --2p        : (test) both players play the song on auto, then the 2P result\n";
+            std::cout << "  --dan <path>: (test) load the library, then play that dan course on auto\n";
             std::cout << "Card reader (valid with or without song_path):\n";
             std::cout << "  --card-port <path>   : Serial port (default /dev/ttyUSB0)\n";
             std::cout << "  --card-baud <rate>   : Baud rate (default 38400)\n";
@@ -203,6 +216,19 @@ Screens check_args(int argc, char* argv[]) {
             std::cerr << "Error: Unexpected extra argument: " << arg << "\n";
             exit_now(1);
         }
+    }
+
+    if (!dan_arg.empty()) {
+        // the course's songs are found through the library: it loads first, then dan select starts the course
+        std::filesystem::path dan = path_from_arg(dan_arg);
+        std::error_code dan_ec;
+        if (dan.empty() || !std::filesystem::exists(dan, dan_ec) || !song_path.empty() || two_player || practice) {
+            std::cerr << "Error: --dan takes an existing dan.json or folder, without song_path/--2p/--practice\n";
+            exit_now(1);
+        }
+        global_data.cli_dan = std::filesystem::absolute(dan, dan_ec);
+        global_data.force_auto_play = true;
+        return Screens::LOADING;
     }
 
     if (song_path.empty()) {
@@ -258,7 +284,17 @@ Screens check_args(int argc, char* argv[]) {
         }
     }
 
+    if (two_player && practice) {
+        std::cerr << "Error: --2p and --practice cannot be combined\n";
+        exit_now(1);
+    }
     Screens current_screen = practice ? Screens::GAME_PRACTICE : Screens::GAME;
+    if (two_player) {
+        current_screen = Screens::GAME_2P;
+        global_data.session_data[(int)PlayerNum::P2].selected_song = path;
+        global_data.session_data[(int)PlayerNum::P2].selected_difficulty = selected_difficulty;
+        auto_play = true;
+    }
     global_data.session_data[(int)PlayerNum::P1].selected_song = std::move(path);
     global_data.session_data[(int)PlayerNum::P1].selected_difficulty = selected_difficulty;
     if (auto_play) {
