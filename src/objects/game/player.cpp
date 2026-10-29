@@ -43,7 +43,7 @@ Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_n
     }
     std::string player_id = get_player_id(player_num);
     auto pd = scores_manager.get_player_data(player_id);
-    nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", global_data.player_num, pd ? pd->dan : -1,
+    nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", player_num, pd ? pd->dan : -1,
                           pd ? pd->gold : false, pd ? pd->rainbow : false, pd ? pd->title_bg : 0);
     chara = make_chara_from_player_data(pd ? &*pd : nullptr, false, true);
     if (pd) {
