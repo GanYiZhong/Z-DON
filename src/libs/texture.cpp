@@ -279,6 +279,7 @@ static ray::Image decode_evicted(const fs::path& source);
 void TextureWrapper::unload_textures() {
     lua_texture_lookup.clear();
     texture_fallbacks.clear();
+    language_preferred.clear();
     textures.clear();
     loaded_subsets.clear();
     animations.clear();
@@ -1054,6 +1055,7 @@ private:
 void TextureWrapper::load_folder(const std::string& screen_name, const std::string& subset) {
     lua_texture_lookup.clear();
     texture_fallbacks.clear();
+    language_preferred.clear();
     // Subset leaf name is the key prefix used in textures[] (e.g. "notes_nijiiro" from "game/notes_nijiiro")
     const std::string subset_key = fs::path(subset).filename().string();
     const std::string dedup_key = screen_name + "/" + subset_key;
@@ -1359,6 +1361,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
 void TextureWrapper::unload_folder(const std::string& screen_name, const std::string& subset) {
     lua_texture_lookup.clear();
     texture_fallbacks.clear();
+    language_preferred.clear();
     const std::string subset_key = fs::path(subset).filename().string();
     const std::string dedup_key = screen_name + "/" + subset_key;
 
@@ -2189,7 +2192,31 @@ std::vector<std::string> TextureWrapper::language_variants(std::string_view name
     return out;
 }
 
+std::shared_ptr<TextureObject> TextureWrapper::preferred_variant(std::string_view name) {
+    auto opt = options.find(SCO::LANGUAGE_VARIANTS);
+    if (opt == options.end() || !opt->second || !global_data.config) {
+        return nullptr;
+    }
+    texture_fallback(name); // resets the caches when the language changed
+    if (auto it = language_preferred.find(name); it != language_preferred.end()) {
+        return it->second;
+    }
+    const std::string& lang = global_data.config->general.language;
+    std::shared_ptr<TextureObject> found;
+    const std::string suffix = "_" + lang;
+    if (!name.ends_with(suffix)) {
+        std::string variant = std::string(name) + suffix;
+        if (auto it = textures.find(variant); it != textures.end()) {
+            found = it->second;
+        }
+    }
+    return language_preferred.emplace(std::string(name), std::move(found)).first->second;
+}
+
 TextureObject* TextureWrapper::get_texture(std::string_view name) {
+    if (auto pref = preferred_variant(name)) {
+        return pref.get();
+    }
     auto it = textures.find(name);
     if (it != textures.end()) {
         return it->second.get();
@@ -2202,6 +2229,7 @@ TextureWrapper::TextureFallback& TextureWrapper::texture_fallback(std::string_vi
     const std::string& lang = global_data.config ? global_data.config->general.language : no_lang;
     if (texture_fallbacks_lang != lang) {
         texture_fallbacks.clear();
+        language_preferred.clear();
         texture_fallbacks_lang = lang;
     }
     if (auto it = texture_fallbacks.find(name); it != texture_fallbacks.end()) {
@@ -2219,6 +2247,9 @@ TextureWrapper::TextureFallback& TextureWrapper::texture_fallback(std::string_vi
 }
 
 std::shared_ptr<TextureObject> TextureWrapper::get_texture_shared(std::string_view name) {
+    if (auto pref = preferred_variant(name)) {
+        return pref;
+    }
     if (auto hit = textures.find(name); hit != textures.end()) {
         return hit->second;
     }

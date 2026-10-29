@@ -138,6 +138,7 @@ enum class SCO : unsigned int {
     CROP_RESULT_SCREENSHOT,
     LOADING_COUNTDOWN,
     DISABLE_RETRY_GAME,
+    LANGUAGE_VARIANTS, // Z-DON: C++ fixed-name textures prefer <name>_<lang> when the skin ships one
 };
 
 namespace std {
@@ -159,4 +160,5 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"crop_result_screenshot", SCO::CROP_RESULT_SCREENSHOT},
     {"loading_countdown", SCO::LOADING_COUNTDOWN},
     {"disable_retry_game", SCO::DISABLE_RETRY_GAME},
+    {"language_variants", SCO::LANGUAGE_VARIANTS},
 };

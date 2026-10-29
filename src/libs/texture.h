@@ -213,6 +213,10 @@ public:
     };
     std::unordered_map<std::string, TextureFallback, TexNameHash, std::equal_to<>> texture_fallbacks;
     std::string texture_fallbacks_lang;
+    // SCO::LANGUAGE_VARIANTS: name -> its <name>_<lang> texture (nullptr: none), for names the C++ draws
+    // without a language suffix. Cleared with texture_fallbacks.
+    std::unordered_map<std::string, std::shared_ptr<TextureObject>, TexNameHash, std::equal_to<>> language_preferred;
+    std::shared_ptr<TextureObject> preferred_variant(std::string_view name);
     // Lua tex.get_texture(path) results by the exact path string (nullptr = not found): skins call
     // it every frame. Emptied whenever `textures` changes, and when the language changes.
     std::unordered_map<std::string, std::shared_ptr<TextureObject>> lua_texture_lookup;
