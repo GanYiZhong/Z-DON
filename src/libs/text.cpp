@@ -23,24 +23,29 @@
 
 FontManager::FontManager() = default;
 
-void FontManager::init(const fs::path& font_path) {
+void FontManager::init(const fs::path& font_path, const fs::path& fallback_path) {
     std::scoped_lock lock(font_mutex);
     if (!exists(font_path)) {
         throw std::runtime_error("Failed to load font: " + font_path.string());
     }
     this->font_path = font_path;
     release_all_fonts();
-    {
+    auto read_font = [](const fs::path& p, std::vector<unsigned char>& out) {
         int size = 0;
-        unsigned char* data = load_file_data(font_path.string().c_str(), &size);
+        unsigned char* data = load_file_data(p.string().c_str(), &size);
         if (!data || size <= 0) {
             if (data) {
                 unload_file_data(data);
             }
-            throw std::runtime_error("Failed to read font data: " + font_path.string());
+            throw std::runtime_error("Failed to read font data: " + p.string());
         }
-        font_data.assign(data, data + size);
+        out.assign(data, data + size);
         unload_file_data(data);
+    };
+    read_font(font_path, font_data);
+    fallback_data.clear();
+    if (!fallback_path.empty() && exists(fallback_path)) {
+        read_font(fallback_path, fallback_data);
     }
 
     if (sentinel_texture.id == 0) {
@@ -215,6 +220,28 @@ bool FontManager::rasterize_new(SizedFont& entry, int font_size, const std::vect
         got.insert(g[i].value);
     }
     ray::UnloadFontData(g, count); // the cache holds converted copies
+
+    // Z-DON: an overlay font (screen.font_base) lacks most glyphs: the base font has them
+    if (!fallback_data.empty()) {
+        std::vector<int> rest;
+        for (int cp : cps) {
+            if (!got.contains(cp)) {
+                rest.push_back(cp);
+            }
+        }
+        if (!rest.empty()) {
+            int fb_count = 0;
+            ray::GlyphInfo* fg = ray::LoadFontData(fallback_data.data(), (int)fallback_data.size(), font_size,
+                                                   rest.data(), (int)rest.size(), ray::FONT_DEFAULT, &fb_count);
+            if (fg) {
+                for (int i = 0; i < fb_count; i++) {
+                    add_glyph(entry.cache, entry.index, make_glyph(fg[i], fg[i].value));
+                    got.insert(fg[i].value);
+                }
+                ray::UnloadFontData(fg, fb_count);
+            }
+        }
+    }
 
     std::vector<int> missing, alts;
     for (int cp : cps) {

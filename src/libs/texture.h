@@ -252,6 +252,9 @@ public:
     // texture.json numbers are in physical pixels (d per logical unit); the frame renders at d x the screen
     // size (libs/density.h). skin_config and animation.json stay logical.
     int texture_density{1};
+    // Z-DON: skin_config screen.font_base (e.g. "font.ttf"): the skin's language fonts (font_cn.ttf ...)
+    // hold only the glyphs that differ from this base font, which supplies every other glyph
+    std::string font_base;
     float draw_offset_x = 0.0f;
     float draw_offset_y = 0.0f;
 

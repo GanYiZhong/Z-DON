@@ -148,6 +148,11 @@ void TextureWrapper::init(const fs::path& skin_path) {
             skin_config_file["screen"]["texture_density"].IsInt()) {
             texture_density = std::clamp(skin_config_file["screen"]["texture_density"].GetInt(), 1, 4);
         }
+        font_base.clear();
+        if (skin_config_file.HasMember("screen") && skin_config_file["screen"].HasMember("font_base") &&
+            skin_config_file["screen"]["font_base"].IsString()) {
+            font_base = skin_config_file["screen"]["font_base"].GetString();
+        }
     }
 
     auto load_entry = [this](const std::string& name, const Value& v, float scale) {

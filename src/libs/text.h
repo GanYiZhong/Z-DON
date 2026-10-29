@@ -47,6 +47,9 @@ private:
     };
 
     std::vector<unsigned char> font_data; // the .ttf bytes, read once
+    // Z-DON: the base font's bytes when font_data is a language overlay (screen.font_base): glyphs the
+    // overlay lacks come from here (same metrics: the skin builds both from one family)
+    std::vector<unsigned char> fallback_data;
 
     bool rasterize_new(SizedFont& entry, int font_size, const std::vector<int>& cps);   // font_mutex held
     void update_atlas(SizedFont& entry, int font_size);                                 // font_mutex held
@@ -69,7 +72,7 @@ private:
 
 public:
     FontManager();
-    void init(const fs::path& font_path);
+    void init(const fs::path& font_path, const fs::path& fallback_path = {});
     void unload();
     // For DrawTextEx: aliases the manager's atlas, valid until the next get_font()/copy_font() call.
     ray::Font get_font(const std::string& text, int font_size);

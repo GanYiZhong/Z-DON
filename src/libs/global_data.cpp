@@ -99,7 +99,12 @@ void load_skin() {
         global_tex.init(root_skin_path / "Graphics");
         global_tex.load_screen_textures("global");
         script_manager.init(root_skin_path / "Scripts");
-        font_manager.init(font_path);
+        // Z-DON: screen.font_base: a language font of the skin is an overlay on its base font
+        fs::path font_fallback;
+        if (!tex.font_base.empty() && font_path.filename() != fs::path(tex.font_base)) {
+            font_fallback = root_skin_path / "Fonts" / tex.font_base;
+        }
+        font_manager.init(font_path, font_fallback);
         font_manager.load_text_config(root_skin_path);
         audio.init_audio_device(root_skin_path / "Sounds", global_data.config->audio, global_data.config->volume);
         debug_menu.load_fonts();
