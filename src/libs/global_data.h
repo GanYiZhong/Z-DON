@@ -198,6 +198,15 @@ struct ResultData {
     int prev_score = 0;
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;
+    std::vector<float> hit_offsets; // Z-DON: every judged hit's offset in ms (+ = late), in hit order
+};
+
+// Z-DON: live play data for skin Lua (src/libs/zdon_lua.cpp), written by Player / GameScreen
+struct ZdonLiveData {
+    double last_hit_offset_ms = 0.0;                    // the latest judged hit (+ = late)
+    double last_hit_at_ms = -1.0;                       // get_current_ms() of that hit; -1 = none yet
+    double song_end_ms = 0.0;                           // the last playable note's time on the chart clock
+    std::vector<std::pair<double, double>> gogo_ranges; // GOGO sections, chart ms (start, end)
 };
 
 struct SessionData {
@@ -218,6 +227,7 @@ struct SessionData {
     int genre_index = 0;
     std::string genre_label;
     ResultData result_data;
+    ZdonLiveData zdon_live;
     DanResultData dan_result_data;
     std::optional<std::map<double, int>> replay_input_log;
     std::string replay_username;
@@ -246,6 +256,7 @@ class PracticeTimer;
 struct GlobalData {
     std::shared_ptr<PracticeTimer> practice_timer; // session countdown, spans practice select + game
     int songs_played = 0;
+    double zdon_song_pos_ms = -1.0; // Z-DON: the playing song's chart clock (GameScreen::update); -1 = none
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;

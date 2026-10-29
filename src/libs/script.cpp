@@ -22,6 +22,7 @@
 #include "text.h"
 #include "texture_ondemand.h"
 #include "webcam.h"
+#include "zdon_lua.h"
 
 namespace {
     constexpr int LUA_SITE_MAX_LEVELS = 8;
@@ -1024,6 +1025,7 @@ void ScriptManager::register_lua_bindings() {
 
     lua["camera"] = camera_tbl;
 
+    register_zdon_lua_bindings(tex);
     register_song_select_lua_bindings(lua);
 
     cache_usertype_method_lookups(lua.lua_state());

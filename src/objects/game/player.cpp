@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
 #include <optional>
 #include <ranges>
@@ -149,6 +150,7 @@ ResultData Player::get_result_score() {
     result.total_drumroll = total_drumroll;
     result.hit_offset_sum_ms = hit_offset_sum_ms;
     result.hit_offset_count = hit_offset_count;
+    result.hit_offsets = hit_offsets;
     if (Gauge* g = active_gauge()) {
         result.gauge_length = g->get_length() * 0.87f;
         result.cleared = g->get_is_clear();
@@ -826,6 +828,41 @@ void Player::reset_chart() {
                     end_time = std::max(end_time, note.hit_ms);
                 }
             }
+        }
+    }
+
+    // Z-DON: the song's length and GOGO sections for the skin's progress bar (zdon_lua.cpp)
+    {
+        ZdonLiveData& live = global_data.session_data[(int)player_num].zdon_live;
+        live.song_end_ms = end_time;
+        live.gogo_ranges.clear();
+        live.last_hit_at_ms = -1.0;
+        std::vector<const TimelineObject*> gogo_events;
+        for (const TimelineObject& t : notes.timeline) {
+            if (t.gogo_time.has_value()) {
+                gogo_events.push_back(&t);
+            }
+        }
+        // GOGO written inside branches: the master route's sections (one route, as the bar shows one line)
+        for (const NoteList& section : this->branch_m) {
+            for (const TimelineObject& t : section.timeline) {
+                if (t.gogo_time.has_value()) {
+                    gogo_events.push_back(&t);
+                }
+            }
+        }
+        std::ranges::stable_sort(gogo_events, {}, &TimelineObject::start_time);
+        std::optional<double> open;
+        for (const TimelineObject* t : gogo_events) {
+            if (t->gogo_time.value() && !open) {
+                open = t->start_time;
+            } else if (!t->gogo_time.value() && open) {
+                live.gogo_ranges.emplace_back(*open, t->start_time);
+                open.reset();
+            }
+        }
+        if (open) {
+            live.gogo_ranges.emplace_back(*open, end_time);
         }
     }
 
@@ -1507,14 +1544,20 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
         return;
     }
 
-    auto record_hit_offset = [this, ms_from_start](const Note& note) {
-        if (modifiers.auto_play) {
+    auto record_hit_offset = [this, ms_from_start, current_ms](const Note& note) {
+        // Z-DON: ZDON_RECORD_AUTO_OFFSETS=1 records auto play too (hidden skin tests of the timing UI)
+        static const bool record_auto = std::getenv("ZDON_RECORD_AUTO_OFFSETS") != nullptr;
+        if (modifiers.auto_play && !record_auto) {
             return;
         }
 
         const double offset_ms = ms_from_start - note.hit_ms;
         hit_offset_sum_ms += offset_ms;
         hit_offset_count++;
+        hit_offsets.push_back(static_cast<float>(offset_ms));
+        ZdonLiveData& live = global_data.session_data[(int)player_num].zdon_live;
+        live.last_hit_offset_ms = offset_ms;
+        live.last_hit_at_ms = current_ms;
     };
 
     float good_window_ms;

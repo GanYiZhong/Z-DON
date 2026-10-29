@@ -16,6 +16,8 @@ struct GeneralConfig {
     bool song_timer = false;
     bool judge_counter = false;
     bool show_timing_offset = false;
+    bool zdon_hit_timing = true;    // Z-DON: per-hit early / late data for the skin (marks, result graph)
+    bool zdon_song_progress = true; // Z-DON: song position / GOGO sections for the skin's progress bar
     std::string log_level;
     int practice_mode_bar_delay = 0;
     std::string score_method;

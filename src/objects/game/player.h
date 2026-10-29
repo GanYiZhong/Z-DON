@@ -98,6 +98,7 @@ public:
         total_drumroll = 0;
         hit_offset_sum_ms = 0.0;
         hit_offset_count = 0;
+        hit_offsets.clear();
         was_gauge_full = false;
         was_gauge_clear = false;
         miss_streak = 0;
@@ -167,6 +168,7 @@ private:
     int total_drumroll{0};
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;
+    std::vector<float> hit_offsets; // Z-DON: each judged hit's offset (ResultData::hit_offsets)
     std::unordered_map<int, Judgments> note_judgments;
 
     float judge_x{0};

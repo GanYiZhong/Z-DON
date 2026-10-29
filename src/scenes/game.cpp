@@ -800,6 +800,7 @@ void GameScreen::update_gameplay(double current_ms) {
     for (auto& player : players) {
         player->update(clock.position(), current_ms, background);
     }
+    global_data.zdon_song_pos_ms = clock.position(); // Z-DON: the skin's song progress (zdon_lua.cpp)
 
     song_info.update(current_ms);
 }

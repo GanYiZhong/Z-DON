@@ -202,6 +202,12 @@
 - 正確性：全曲庫 12116 個難度序列化/還原逐欄位相同，損毀/截斷/多執行緒都測過。
 - 效能：每難度中位數 37.5 µs（解析）vs 35.4 µs（快取命中），42% 的難度命中反而較慢；光是把結果複製成 deque 就約 17 µs。快取檔整個曲庫 94 MB。收益感覺不到，不合併。
 
+## 2026-10-30 給 skin 的遊玩資料（src/libs/zdon_lua.cpp）
+- `tex.last_hit(pn)`：最近一擊的偏差 ms（+＝晚）、發生時間、良／可判定窗；`tex.hit_offsets(pn)`：整首每擊偏差（結算用）；開關 `[general] zdon_hit_timing`（預設開）。
+- `tex.song_progress(pn)`：譜面時間、最後一顆音符時間、GOGO 段落（含達人分歧內的 GOGO）；開關 `[general] zdon_song_progress`（預設開）。
+- `tex.best_score(pn)`：這次遊玩前存的最佳分（結算時才有值）；`SongBox:chart_stats(diff)`：音符數／長度／BPM 範圍，第一次要求時解析並存在 box 上。
+- 自動演奏預設不記偏差；測試 UI 時設 `ZDON_RECORD_AUTO_OFFSETS=1`。上游沒有這些函式，skin 要先檢查存在才呼叫（YataiDONSimpleStyle 就是這樣做）。
+
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。
 - PBO／共用 context 上傳執行緒：第一次畫到的同步上傳已用 warm-up 搬到前幾幀的空檔（見上表），剩載入那幀就畫到的那幾張（Nijiiro 選曲 10 張 7–10 ms，在 480–560 ms 的載入幀裡）。要再省只能把它們跟解碼重疊（載入時上傳）或另開 GL context，收益是載入幀的 1–2%，沒做。

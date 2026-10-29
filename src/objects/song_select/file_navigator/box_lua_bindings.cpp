@@ -85,6 +85,14 @@ void register_box_lua_bindings(sol::state& lua) {
             return course_table(info,
                                 diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
         },
+        // Z-DON: box:chart_stats(diff) -> { notes, length_ms, bpm_min, bpm_max } (box_song_stats.cpp)
+        "chart_stats",
+        [](SongBox& self, double diff, sol::this_state s) {
+            const SongBox::ChartStats& st = self.chart_stats(static_cast<int>(diff));
+            sol::state_view lua(s);
+            return lua.create_table_with("notes", st.notes, "length_ms", st.length_ms, "bpm_min", st.bpm_min, "bpm_max",
+                                         st.bpm_max);
+        },
         "has_preimage", [](SongBox& self) { return self.preimage.has_value(); },
         // the song's own image scaled into the rectangle (x, y, width, height)
         "draw_preimage",
