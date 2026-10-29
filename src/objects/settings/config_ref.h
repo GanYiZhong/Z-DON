@@ -125,6 +125,9 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "general/zdon_song_progress") {
         return &c->general.zdon_song_progress;
     }
+    if (path == "general/zdon_hit_timing_show") {
+        return &c->general.zdon_hit_timing_show;
+    }
     if (path == "general/practice_mode_bar_delay") {
         return &c->general.practice_mode_bar_delay;
     }

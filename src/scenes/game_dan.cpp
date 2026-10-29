@@ -622,6 +622,7 @@ std::optional<Screens> DanGameScreen::update() {
 
     if (!failed_out) {
         players[0]->update(clock.position(), current_ms, background);
+        global_data.zdon_song_pos_ms = clock.position(); // Z-DON: the skin's song progress (zdon_lua.cpp)
         song_max_combo = std::max(song_max_combo, players[0]->get_combo());
         song_info.update(current_ms);
         update_skip_dan();

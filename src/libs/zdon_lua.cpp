@@ -20,8 +20,9 @@ namespace {
 } // namespace
 
 void register_zdon_lua_bindings(sol::table& tex) {
-    // tex.last_hit(player_num) -> offset_ms (+ = late), at_ms (get_current_ms of the hit), good_ms, ok_ms;
-    // nil before the first judged hit or with [general] zdon_hit_timing off
+    // tex.last_hit(player_num) -> offset_ms (+ = late), at_ms (get_current_ms of the hit), good_ms, ok_ms,
+    // mark_ms (mark FAST / SLOW when |offset| > mark_ms: [general] zdon_hit_timing_show half = good / 2,
+    // ok = good, all = -1); nil before the first judged hit or with [general] zdon_hit_timing off
     tex.set_function("last_hit", [](int player_num, sol::this_state s) -> sol::variadic_results {
         sol::variadic_results r;
         if (!global_data.config->general.zdon_hit_timing || !valid_player(player_num)) {
@@ -36,6 +37,9 @@ void register_zdon_lua_bindings(sol::table& tex) {
         r.push_back({s, sol::in_place, live.last_hit_at_ms});
         r.push_back({s, sol::in_place, (double)good});
         r.push_back({s, sol::in_place, (double)ok});
+        const std::string& show = global_data.config->general.zdon_hit_timing_show;
+        const double mark = show == "all" ? -1.0 : show == "ok" ? (double)good : good * 0.5;
+        r.push_back({s, sol::in_place, mark});
         return r;
     });
 

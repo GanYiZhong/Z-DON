@@ -44,15 +44,20 @@ public:
     GenreIndex song_genre_index = GenreIndex::DEFAULT;
     std::string song_genre_label;
 
-    // Z-DON: one course's chart numbers for the skin's difficulty select (box_song_stats.cpp), parsed on the
-    // first request and kept
+    // Z-DON: one course's chart numbers for the skin's difficulty select (box_song_stats.cpp): parsed on a
+    // worker the first time they are asked for (empty until then), then kept on the box
     struct ChartStats {
         int notes = 0;          // don / ka notes (the master branch on branching charts)
         double length_ms = 0.0; // the last note's time
         double bpm_min = 0.0;
         double bpm_max = 0.0;
     };
+    struct ChartStatsJob {
+        std::atomic<bool> done{false};
+        ChartStats stats;
+    };
     std::array<std::optional<ChartStats>, 5> chart_stats_cache;
+    std::array<std::shared_ptr<ChartStatsJob>, 5> chart_stats_jobs;
     const ChartStats& chart_stats(int difficulty);
 
     SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser);

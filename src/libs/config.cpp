@@ -279,6 +279,7 @@ Config get_config() {
     config.general.show_timing_offset = config_file["general"]["show_timing_offset"].value_or(false);
     config.general.zdon_hit_timing = config_file["general"]["zdon_hit_timing"].value_or(true);
     config.general.zdon_song_progress = config_file["general"]["zdon_song_progress"].value_or(true);
+    config.general.zdon_hit_timing_show = config_file["general"]["zdon_hit_timing_show"].value_or("half");
     config.general.log_level = config_file["general"]["log_level"].value_or("info");
     config.general.practice_mode_bar_delay = config_file["general"]["practice_mode_bar_delay"].value_or(1);
     config.general.score_method = config_file["general"]["score_method"].value_or("shinuchi");
@@ -470,6 +471,7 @@ void save_config(const Config& config) {
                                                {"show_timing_offset", config.general.show_timing_offset},
                                                {"zdon_hit_timing", config.general.zdon_hit_timing},
                                                {"zdon_song_progress", config.general.zdon_song_progress},
+                                               {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
                                                {"log_level", config.general.log_level},
                                                {"practice_mode_bar_delay", config.general.practice_mode_bar_delay},
                                                {"score_method", config.general.score_method},

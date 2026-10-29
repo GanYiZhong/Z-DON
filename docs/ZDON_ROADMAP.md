@@ -206,7 +206,9 @@
 - `tex.last_hit(pn)`：最近一擊的偏差 ms（+＝晚）、發生時間、良／可判定窗；`tex.hit_offsets(pn)`：整首每擊偏差（結算用）；開關 `[general] zdon_hit_timing`（預設開）。
 - `tex.song_progress(pn)`：譜面時間、最後一顆音符時間、GOGO 段落（含達人分歧內的 GOGO）；開關 `[general] zdon_song_progress`（預設開）。
 - `tex.best_score(pn)`：這次遊玩前存的最佳分（結算時才有值）；`SongBox:chart_stats(diff)`：音符數／長度／BPM 範圍，第一次要求時解析並存在 box 上。
-- 自動演奏預設不記偏差；測試 UI 時設 `ZDON_RECORD_AUTO_OFFSETS=1`。上游沒有這些函式，skin 要先檢查存在才呼叫（YataiDONSimpleStyle 就是這樣做）。
+- 自動演奏預設不記偏差；測試 UI 時設 `ZDON_RECORD_AUTO_OFFSETS=1`。
+- `[general] zdon_hit_timing_show`（half／ok／all）：`tex.last_hit` 第 5 個回傳值＝快/慢門檻。`chart_stats` 改在 jobs 背景算（第一次回空值）。段位遊玩也更新 `zdon_song_pos_ms`。
+- 逐張貼圖密度：texture.json 項目加 `"density": n` 覆寫 skin 的 texture_density（n 小於 skin 時用 point filter）。SimpleStyle 的生成器把「2×2 完全同色」的圖存成 1 倍（528 張）並用 `frame_order` 去掉重複動畫格（675 檔）：109 格逐像素相同；冷硬碟（G:）遊玩畫面貼圖 1.6–2.0 s → 1.0–1.3 s、global 0.56–0.74 s → 0.32 s，遊玩畫面 VRAM 1128 → 353 MB。被引擎以次像素位置畫的貼圖（lane cover）point filter 會出接縫，要排除。上游沒有這些函式，skin 要先檢查存在才呼叫（YataiDONSimpleStyle 就是這樣做）。
 
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。

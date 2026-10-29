@@ -340,6 +340,16 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
     if (default_size_scale < 0.0f) {
         default_size_scale = scale;
     }
+    // Z-DON texture density: `"density": n` on the entry (or its first entry) overrides the skin's
+    // texture_density for this one texture: its image is n x logical (1 = logical size, for art that is
+    // blocky at the skin density, half or less the memory). Drawn point-filtered when n < the skin's.
+    int img_density = density;
+    const Value* first = tex_mapping.IsArray() ? (tex_mapping.Size() > 0 ? &tex_mapping[0] : nullptr) : &tex_mapping;
+    if (density > 1 && first != nullptr && first->IsObject() && first->HasMember("density") &&
+        (*first)["density"].IsInt()) {
+        img_density = std::clamp((*first)["density"].GetInt(), 1, density);
+        default_size_scale = 1.0f / static_cast<float>(img_density);
+    }
     if (tex_mapping.IsArray()) {
         // Check if crop data exists in the first mapping (index 0)
         bool has_crop_in_first = tex_mapping.Size() > 0 && tex_mapping[0].IsObject() &&
@@ -412,13 +422,13 @@ void TextureWrapper::read_tex_obj_data(const Value& tex_mapping, TextureObject* 
 
     // Z-DON texture density: the numbers above are physical (scale is 1/density), the size becomes logical
     // too; the source rect keeps sampling the whole image (draw_texture)
-    if (density > 1) {
-        tex_obj->density = density;
-        tex_obj->width /= density;
-        tex_obj->height /= density;
+    if (img_density > 1) {
+        tex_obj->density = img_density;
+        tex_obj->width /= img_density;
+        tex_obj->height /= img_density;
     }
 
-    ray::TextureFilter filter = texture_filter::BILINEAR;
+    ray::TextureFilter filter = img_density < density ? ray::TEXTURE_FILTER_POINT : texture_filter::BILINEAR;
     for (int i = 0; i < tex_obj->frame_count(); i++) {
         texture_lazy::set_filter(tex_obj->frame_texture_raw(i), filter);
     }
