@@ -108,8 +108,13 @@ public:
     bool fonts_loaded = false;
 
     void load_fonts() {
-        ui_font = load_font_ex(resolve_skin_path("Fonts/debug_ui.ttf").string().c_str(), 32, nullptr, 0);
-        code_font = load_font_ex(resolve_skin_path("Fonts/debug_code.ttf").string().c_str(), 32, nullptr, 0);
+        // Z-DON: a skin without debug fonts (in its chain) uses its main font.ttf for the menu
+        auto debug_font = [](const char* name) {
+            fs::path p = resolve_skin_path(fs::path("Fonts") / name);
+            return fs::exists(p) ? p : resolve_skin_path("Fonts/font.ttf");
+        };
+        ui_font = load_font_ex(debug_font("debug_ui.ttf").string().c_str(), 32, nullptr, 0);
+        code_font = load_font_ex(debug_font("debug_code.ttf").string().c_str(), 32, nullptr, 0);
         set_texture_filter(ui_font.texture, texture_filter::BILINEAR);
         set_texture_filter(code_font.texture, texture_filter::BILINEAR);
         fonts_loaded = true;

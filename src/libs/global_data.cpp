@@ -70,11 +70,21 @@ void load_skin() {
             font_candidates.push_back("Fonts/font_" + family->second + ".ttf");
         }
         font_candidates.emplace_back("Fonts/font.ttf");
+        // Z-DON: the skin's own fonts first (every candidate), then the parent skins': a skin that ships
+        // only font.ttf for a language is not overridden by a parent's font_<lang>.ttf
         fs::path font_path;
         for (const std::string& candidate : font_candidates) {
-            font_path = resolve_skin_path(candidate);
+            font_path = root_skin_path / candidate;
             if (fs::exists(font_path)) {
                 break;
+            }
+        }
+        if (!fs::exists(font_path)) {
+            for (const std::string& candidate : font_candidates) {
+                font_path = resolve_skin_path(candidate);
+                if (fs::exists(font_path)) {
+                    break;
+                }
             }
         }
         if (!fs::exists(font_path)) {
