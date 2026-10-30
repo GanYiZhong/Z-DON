@@ -94,6 +94,10 @@ private:
     float song_playback_rate() const override { return song_speed / 10.0f; }
 
     PracticePlayer* practice_player = nullptr; // non-owning, points into players[0]
+    // Z-DON: section loop (global_data.zdon_loop): start one at resume_practice, wrap at the B mark
+    void zdon_loop_start(int resume_bar_index);
+    void zdon_loop_update();
+    void seek_and_play_from_bar(int bar_index);
 
     int scrobble_index = 0;
     double scrobble_time = 0;

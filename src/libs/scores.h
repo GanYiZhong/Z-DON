@@ -79,6 +79,16 @@ inline Rank rank_for_score(int score) {
     return Rank::_WHITE;
 }
 
+// Z-DON: one stored play (recent_plays)
+struct PlayRecord {
+    int score = 0;
+    int crown = 0;
+    int good = 0;
+    int ok = 0;
+    int bad = 0;
+    int64_t played_at = 0;
+};
+
 struct Score {
     Crown crown;
     Rank rank;
@@ -154,6 +164,9 @@ public:
 
     int apply_remote_scores(const std::vector<RemoteScore>& scores, const std::string& player_id);
     std::optional<Score> get_score(const std::string& hash, int difficulty, const std::string& player_id);
+    // Z-DON: the player's last `limit` plays of one chart, oldest first (every play is in `scores`)
+    std::vector<PlayRecord> recent_plays(const std::string& hash, int difficulty, const std::string& player_id,
+                                         int limit);
     // out_score_id (optional) receives the new scores row id, or -1 if the insert failed.
     Score save_score(const std::string& hash, int difficulty, const std::string& player_id, Score score,
                      int64_t played_at, const std::string& modifiers_json, int64_t* out_score_id = nullptr);

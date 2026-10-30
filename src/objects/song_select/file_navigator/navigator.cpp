@@ -1411,7 +1411,12 @@ void Navigator::load_collection_difficulty(const fs::path& path, const BoxDef& b
     }
 
     if (crown_needed > 0) {
-        std::ranges::stable_partition(hits, [](const Hit& h) { return h.unmet; });
+        if (global_data.config->general.zdon_sort_filter) {
+            // Z-DON: "not cleared / not full combo / not donderful" lists only those songs
+            std::erase_if(hits, [](const Hit& h) { return !h.unmet; });
+        } else {
+            std::ranges::stable_partition(hits, [](const Hit& h) { return h.unmet; });
+        }
     }
 
     std::vector<fs::path> hit_paths;

@@ -602,6 +602,33 @@ std::optional<Score> ScoresManager::get_score(const std::string& hash, int diffi
     return std::nullopt;
 }
 
+std::vector<PlayRecord> ScoresManager::recent_plays(const std::string& hash, int difficulty,
+                                                    const std::string& player_id, int limit) {
+    std::vector<PlayRecord> out;
+    if (hash.empty() || limit <= 0) {
+        return out;
+    }
+    sqlite3_stmt* stmt;
+    const char* query = "SELECT score, crown, good, ok, bad, played_at FROM scores WHERE hash = ? AND difficulty = ? "
+                        "AND player_id = ? ORDER BY played_at DESC, score_id DESC LIMIT ?;";
+    if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("recent_plays: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return out;
+    }
+    sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, difficulty);
+    sqlite3_bind_text(stmt, 3, player_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, limit);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        out.push_back(PlayRecord{sqlite3_column_int(stmt, 0), sqlite3_column_int(stmt, 1), sqlite3_column_int(stmt, 2),
+                                 sqlite3_column_int(stmt, 3), sqlite3_column_int(stmt, 4),
+                                 sqlite3_column_int64(stmt, 5)});
+    }
+    sqlite3_finalize(stmt);
+    std::ranges::reverse(out);
+    return out;
+}
+
 Score ScoresManager::save_score(const std::string& hash, int difficulty, const std::string& player_id, Score score,
                                 int64_t played_at, const std::string& modifiers_json, int64_t* out_score_id) {
     if (out_score_id) {

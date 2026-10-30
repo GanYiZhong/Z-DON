@@ -1,5 +1,9 @@
 #include "zdon_lua.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
 #include "global_data.h"
@@ -19,7 +23,59 @@ namespace {
     }
 } // namespace
 
+std::optional<int> zdon_offset_suggestion(int player_num) {
+    if (!global_data.config->general.zdon_hit_timing || !valid_player(player_num)) {
+        return std::nullopt;
+    }
+    std::vector<float> offs = global_data.session_data[player_num].result_data.hit_offsets;
+    if (offs.size() < 50) {
+        return std::nullopt;
+    }
+    auto mid = offs.begin() + (std::ptrdiff_t)(offs.size() / 2);
+    std::nth_element(offs.begin(), mid, offs.end());
+    const int delta = (int)std::lround(*mid);
+    if (std::abs(delta) < 3) {
+        return std::nullopt;
+    }
+    return delta;
+}
+
+int zdon_apply_offset_suggestion(int player_num) {
+    if (!valid_player(player_num)) {
+        return 0;
+    }
+    ZdonLiveData& live = global_data.session_data[player_num].zdon_live;
+    if (live.offset_applied != 0) {
+        return 0;
+    }
+    std::optional<int> delta = zdon_offset_suggestion(player_num);
+    if (!delta) {
+        return 0;
+    }
+    global_data.config->general.audio_offset += *delta;
+    save_config(*global_data.config);
+    live.offset_applied = *delta;
+    return *delta;
+}
+
 void register_zdon_lua_bindings(sol::table& tex) {
+    // tex.offset_suggestion(player_num) -> change_ms (nil: none), audio_offset now, applied change (0: not yet)
+    tex.set_function("offset_suggestion", [](int player_num, sol::this_state s) -> sol::variadic_results {
+        sol::variadic_results r;
+        if (!valid_player(player_num)) {
+            return r;
+        }
+        const int applied = global_data.session_data[player_num].zdon_live.offset_applied;
+        std::optional<int> delta = zdon_offset_suggestion(player_num);
+        if (!delta && applied == 0) {
+            return r;
+        }
+        r.push_back({s, sol::in_place, (double)(delta ? *delta : applied)});
+        r.push_back({s, sol::in_place, (double)global_data.config->general.audio_offset});
+        r.push_back({s, sol::in_place, (double)applied});
+        return r;
+    });
+
     // tex.last_hit(player_num) -> offset_ms (+ = late), at_ms (get_current_ms of the hit), good_ms, ok_ms,
     // mark_ms (mark FAST / SLOW when |offset| > mark_ms: [general] zdon_hit_timing_show half = good / 2,
     // ok = good, all = -1); nil before the first judged hit or with [general] zdon_hit_timing off
@@ -83,6 +139,26 @@ void register_zdon_lua_bindings(sol::table& tex) {
         r.push_back({s, sol::in_place, global_data.zdon_song_pos_ms});
         r.push_back({s, sol::in_place, live.song_end_ms});
         r.push_back({s, sol::in_place, gogo});
+        return r;
+    });
+
+    // tex.practice_loop() -> active, a_bar, b_bar, passes, last_good, last_ok, last_bad (nil: no loop and no
+    // finished pass); bars are 0-based indices of the chart's bar lines
+    tex.set_function("practice_loop", [](sol::this_state s) -> sol::variadic_results {
+        sol::variadic_results r;
+        const auto& loop = global_data.zdon_loop;
+        if (!loop.active && !loop.has_last) {
+            return r;
+        }
+        r.push_back({s, sol::in_place, loop.active});
+        r.push_back({s, sol::in_place, (int)loop.a_bar});
+        r.push_back({s, sol::in_place, (int)loop.b_bar});
+        r.push_back({s, sol::in_place, (int)loop.passes});
+        if (loop.has_last) {
+            r.push_back({s, sol::in_place, (int)loop.last_good});
+            r.push_back({s, sol::in_place, (int)loop.last_ok});
+            r.push_back({s, sol::in_place, (int)loop.last_bad});
+        }
         return r;
     });
 

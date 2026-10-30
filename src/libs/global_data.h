@@ -207,6 +207,7 @@ struct ZdonLiveData {
     double last_hit_at_ms = -1.0;                       // get_current_ms() of that hit; -1 = none yet
     double song_end_ms = 0.0;                           // the last playable note's time on the chart clock
     std::vector<std::pair<double, double>> gogo_ranges; // GOGO sections, chart ms (start, end)
+    int offset_applied = 0; // the audio_offset change applied from this song's result (0: none yet)
 };
 
 struct SessionData {
@@ -257,6 +258,15 @@ struct GlobalData {
     std::shared_ptr<PracticeTimer> practice_timer; // session countdown, spans practice select + game
     int songs_played = 0;
     double zdon_song_pos_ms = -1.0; // Z-DON: the playing song's chart clock (GameScreen::update); -1 = none
+    // Z-DON: practice section loop (game_practice.cpp): resumed at a jump mark with a later mark, the play
+    // jumps back from the later mark to the first; `last_*` are the judgements of the last finished pass
+    struct ZdonPracticeLoop {
+        bool active = false;
+        int a_bar = -1, b_bar = -1; // bar indices (bars[]), A <= play < B
+        int passes = 0;
+        bool has_last = false;
+        int last_good = 0, last_ok = 0, last_bad = 0;
+    } zdon_loop;
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;

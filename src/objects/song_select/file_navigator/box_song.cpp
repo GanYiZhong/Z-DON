@@ -66,6 +66,9 @@ SongBox::SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser)
 }
 
 void SongBox::refresh_scores() {
+    for (auto& r : recent_plays_cache) {
+        r.reset();
+    }
     hashes = scores_manager.get_hashes(path);
 #ifdef SUPPORT_FUMEN
     bool cheap_hash = !std::holds_alternative<FumenParser>(parser.impl);

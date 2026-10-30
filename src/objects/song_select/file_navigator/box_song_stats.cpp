@@ -6,6 +6,7 @@
 #include <spdlog/spdlog.h>
 
 #include "../../../libs/jobs.h"
+#include "../../../libs/scores.h"
 #include "box_song.h"
 
 namespace {
@@ -66,5 +67,17 @@ const SongBox::ChartStats& SongBox::chart_stats(int difficulty) {
     }
     slot = job->stats;
     job.reset();
+    return slot.value();
+}
+
+const std::vector<PlayRecord>& SongBox::recent_plays(int difficulty) {
+    static const std::vector<PlayRecord> empty;
+    if (difficulty < 0 || difficulty >= (int)recent_plays_cache.size()) {
+        return empty;
+    }
+    std::optional<std::vector<PlayRecord>>& slot = recent_plays_cache[difficulty];
+    if (!slot.has_value()) {
+        slot = scores_manager.recent_plays(hashes[difficulty], difficulty, scores_manager.player_1, 10);
+    }
     return slot.value();
 }

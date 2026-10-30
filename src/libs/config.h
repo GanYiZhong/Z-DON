@@ -21,6 +21,9 @@ struct GeneralConfig {
     // Z-DON: which hits the skin marks FAST / SLOW: "half" (off by more than half the good window),
     // "ok" (outside the good window), "all" (every hit)
     std::string zdon_hit_timing_show = "half";
+    // Z-DON: the difficulty folder's "not cleared / FC / DFC" orders list only those songs (off: those first)
+    bool zdon_sort_filter = true;
+    bool zdon_practice_loop = true; // Z-DON: practice resumed at a jump mark loops to the next mark
     std::string log_level;
     int practice_mode_bar_delay = 0;
     std::string score_method;

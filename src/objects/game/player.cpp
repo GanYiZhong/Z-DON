@@ -837,6 +837,7 @@ void Player::reset_chart() {
         live.song_end_ms = end_time;
         live.gogo_ranges.clear();
         live.last_hit_at_ms = -1.0;
+        live.offset_applied = 0;
         std::vector<const TimelineObject*> gogo_events;
         for (const TimelineObject& t : notes.timeline) {
             if (t.gogo_time.has_value()) {

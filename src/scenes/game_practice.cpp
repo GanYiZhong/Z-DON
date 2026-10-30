@@ -57,6 +57,7 @@ void PracticeGameScreen::init_practice_textures() {
 
 void PracticeGameScreen::on_screen_start() {
     GameScreen::on_screen_start();
+    global_data.zdon_loop = {}; // Z-DON: no section loop carried over from the last practice
     init_practice_textures();
     menu.init_textures();
     pause_don_anim = (TextureResizeAnimation*)tex.get_animation(67, true);
@@ -224,6 +225,7 @@ void PracticeGameScreen::pause_practice() {
     }
 
     pause_playback();
+    global_data.zdon_loop.active = false; // Z-DON: a pause ends the section loop (the last pass stays shown)
 
     if (practice_player) {
         practice_player->paused = true;
@@ -261,21 +263,12 @@ void PracticeGameScreen::resume_practice() {
     }
 
     if (bars.empty()) {
+        global_data.zdon_loop = {};
         resume_playback();
     } else {
         int resume_bar_index = std::clamp(scrobble_index, 0, static_cast<int>(bars.size()) - 1);
-        int previous_bar_index = std::max(0, resume_bar_index - global_data.config->general.practice_mode_bar_delay);
-
-        double first_bar_time = bars[0].hit_ms;
-        double resume_time = bars[resume_bar_index].hit_ms - first_bar_time + start_delay;
-        double start_time = bars[previous_bar_index].hit_ms - first_bar_time + start_delay;
-
-        if (practice_player) {
-            practice_player->seek_to(resume_time);
-            practice_player->reset_performance();
-        }
-
-        resume_playback(start_time);
+        zdon_loop_start(resume_bar_index);
+        seek_and_play_from_bar(resume_bar_index);
     }
 
     if (practice_player) {
@@ -286,6 +279,67 @@ void PracticeGameScreen::resume_practice() {
     set_touch_drum_enabled(true);
     hide_cursor();
     resume_don_anim->start();
+}
+
+void PracticeGameScreen::seek_and_play_from_bar(int resume_bar_index) {
+    int previous_bar_index = std::max(0, resume_bar_index - global_data.config->general.practice_mode_bar_delay);
+
+    double first_bar_time = bars[0].hit_ms;
+    double resume_time = bars[resume_bar_index].hit_ms - first_bar_time + start_delay;
+    double start_time = bars[previous_bar_index].hit_ms - first_bar_time + start_delay;
+
+    if (practice_player) {
+        practice_player->seek_to(resume_time);
+        practice_player->reset_performance();
+    }
+
+    resume_playback(start_time);
+}
+
+// Z-DON: resumed exactly on a jump mark with a later mark set: loop A..B
+void PracticeGameScreen::zdon_loop_start(int resume_bar_index) {
+    auto& loop = global_data.zdon_loop;
+    loop = {};
+    if (!global_data.config->general.zdon_practice_loop) {
+        return;
+    }
+    if (std::ranges::find(jump_bars, resume_bar_index) == jump_bars.end()) {
+        return;
+    }
+    int next = -1;
+    for (int b : jump_bars) {
+        if (b > resume_bar_index && (next < 0 || b < next)) {
+            next = b;
+        }
+    }
+    if (next < 0 || next >= (int)bars.size()) {
+        return;
+    }
+    loop.active = true;
+    loop.a_bar = resume_bar_index;
+    loop.b_bar = next;
+}
+
+// Z-DON: at the B mark: keep the pass's judgements, go back to A (as a resume at A would)
+void PracticeGameScreen::zdon_loop_update() {
+    auto& loop = global_data.zdon_loop;
+    if (!loop.active || clock.is_paused() || bars.empty() || loop.b_bar >= (int)bars.size()) {
+        return;
+    }
+    const double b_time = bars[loop.b_bar].hit_ms - bars[0].hit_ms + start_delay;
+    if (clock.position() < b_time) {
+        return;
+    }
+    if (practice_player) {
+        ResultData r = practice_player->get_result_score();
+        loop.last_good = r.good;
+        loop.last_ok = r.ok;
+        loop.last_bad = r.bad;
+        loop.has_last = true;
+    }
+    loop.passes++;
+    pause_playback();
+    seek_and_play_from_bar(loop.a_bar);
 }
 
 void PracticeGameScreen::open_practice_menu() {
@@ -803,6 +857,7 @@ std::optional<Screens> PracticeGameScreen::update() {
     for (auto& player : players) {
         player->update(clock.position(), current_ms, background);
     }
+    zdon_loop_update();
     sync_branch_display();
 
     scrobble_move->update(current_ms);

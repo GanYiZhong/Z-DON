@@ -93,6 +93,19 @@ void register_box_lua_bindings(sol::state& lua) {
             return lua.create_table_with("notes", st.notes, "length_ms", st.length_ms, "bpm_min", st.bpm_min, "bpm_max",
                                          st.bpm_max);
         },
+        // Z-DON: box:recent_plays(diff) -> { {score, crown, good, ok, bad, played_at}, ... } oldest first (max 10)
+        "recent_plays",
+        [](SongBox& self, double diff, sol::this_state s) {
+            sol::state_view lua(s);
+            const std::vector<PlayRecord>& plays = self.recent_plays(static_cast<int>(diff));
+            sol::table t = lua.create_table((int)plays.size(), 0);
+            for (size_t i = 0; i < plays.size(); i++) {
+                const PlayRecord& p = plays[i];
+                t[i + 1] = lua.create_table_with("score", p.score, "crown", p.crown, "good", p.good, "ok", p.ok, "bad",
+                                                 p.bad, "played_at", (double)p.played_at);
+            }
+            return t;
+        },
         "has_preimage", [](SongBox& self) { return self.preimage.has_value(); },
         // the song's own image scaled into the rectangle (x, y, width, height)
         "draw_preimage",

@@ -1,6 +1,7 @@
 #include "result.h"
 
 #include "../libs/input.h"
+#include "../libs/zdon_lua.h"
 
 void ResultScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -74,6 +75,12 @@ void ResultScreen::begin_exit() {
 
 void ResultScreen::handle_input(double current_ms) {
     if (!fade_out) {
+        return;
+    }
+    // Z-DON: a kat on the result applies the timing suggestion (zdon_lua.cpp) to audio_offset, once per song
+    if ((menu_left_pressed() || menu_right_pressed()) && !exiting() &&
+        zdon_apply_offset_suggestion((int)global_data.player_num) != 0) {
+        audio.play_sound("kat", VolumePreset::SOUND);
         return;
     }
     if (!menu_confirm_pressed()) {

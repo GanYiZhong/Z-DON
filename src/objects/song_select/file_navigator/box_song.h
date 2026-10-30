@@ -59,6 +59,10 @@ public:
     std::array<std::optional<ChartStats>, 5> chart_stats_cache;
     std::array<std::shared_ptr<ChartStatsJob>, 5> chart_stats_jobs;
     const ChartStats& chart_stats(int difficulty);
+    // Z-DON: the last plays of one course (scores_manager.recent_plays), read once per box until
+    // refresh_scores() (box_song_stats.cpp)
+    std::array<std::optional<std::vector<PlayRecord>>, 5> recent_plays_cache;
+    const std::vector<PlayRecord>& recent_plays(int difficulty);
 
     SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser);
     ~SongBox() override {

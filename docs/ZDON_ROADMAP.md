@@ -210,6 +210,12 @@
 - `[general] zdon_hit_timing_show`（half／ok／all）：`tex.last_hit` 第 5 個回傳值＝快/慢門檻。`chart_stats` 改在 jobs 背景算（第一次回空值）。段位遊玩也更新 `zdon_song_pos_ms`。
 - 逐張貼圖密度：texture.json 項目加 `"density": n` 覆寫 skin 的 texture_density（n 小於 skin 時用 point filter）。SimpleStyle 的生成器把「2×2 完全同色」的圖存成 1 倍（528 張）並用 `frame_order` 去掉重複動畫格（675 檔）：109 格逐像素相同；冷硬碟（G:）遊玩畫面貼圖 1.6–2.0 s → 1.0–1.3 s、global 0.56–0.74 s → 0.32 s，遊玩畫面 VRAM 1128 → 353 MB。被引擎以次像素位置畫的貼圖（lane cover）point filter 會出接縫，要排除。上游沒有這些函式，skin 要先檢查存在才呼叫（YataiDONSimpleStyle 就是這樣做）。
 
+## 2026-10-31 判定建議、難度資料夾篩選、最近成績、區段循環
+- 判定時機建議：`tex.offset_suggestion(pn)` → 建議改量（整首偏差中位數，≥50 擊且 |中位數|≥3 ms 才給）、目前 audio_offset、是否已套用。結算畫面按左/右咔一次就把 audio_offset 加上建議值並存 config（每局一次）。
+- 難度資料夾（#COLLECTION:DIFFICULTY）`[general] zdon_sort_filter`（預設開）：只列未達成的譜面；關掉＝上游行為（未達成排前面）。
+- 最近成績：`SongBox:recent_plays(diff)` → 最多 10 筆（舊→新）{score, crown, good, ok, bad, played_at}，讀 scores 表，refresh_scores 時清快取。
+- 練習模式區段循環 `[general] zdon_practice_loop`（預設開）：從某個跳躍點繼續時，若後面還有跳躍點，就在 A→B 之間循環（到 B 記下這一輪良/可/不可、輪數 +1、跳回 A）；暫停即結束。`tex.practice_loop()` → active, a, b, passes, 上一輪良/可/不可。已用假按鍵隱藏測試驗證（小節 1–4 連跑 4 輪）。
+
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。
 - PBO／共用 context 上傳執行緒：第一次畫到的同步上傳已用 warm-up 搬到前幾幀的空檔（見上表），剩載入那幀就畫到的那幾張（Nijiiro 選曲 10 張 7–10 ms，在 480–560 ms 的載入幀裡）。要再省只能把它們跟解碼重疊（載入時上傳）或另開 GL context，收益是載入幀的 1–2%，沒做。
