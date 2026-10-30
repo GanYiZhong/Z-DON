@@ -46,10 +46,107 @@ void BaseOptionBox::draw_base() const {
     float text_y = t_title->y[0] + (t_title->y2[0] / 8.0f);
     name_text->draw({.x = text_x, .y = text_y});
 
+    // Z-DON: skin_config "settings_description" (x, y, font_size, width) overrides the hard-coded
+    // position / size (a pixel font needs its own grid size); the text wraps at the width (default: to
+    // the screen's right edge less the left margin's 1/10), between words or between CJK characters
     float desc_font_size = DESC_FONT_SIZE_BASE * tex.screen_scale;
+    float desc_x = DESC_X_BASE * tex.screen_scale;
+    float desc_y = DESC_Y_BASE * tex.screen_scale;
+    float max_w = 0.0f;
+    if (const SkinInfo* info = font_manager.get_text_info("settings_description")) {
+        if (info->font_size > 0) {
+            desc_font_size = (float)info->font_size;
+        }
+        if (info->x > 0) {
+            desc_x = info->x;
+        }
+        if (info->y > 0) {
+            desc_y = info->y;
+        }
+        max_w = info->width;
+    }
+    if (max_w <= 0) {
+        max_w = (float)tex.screen_width - desc_x * 1.1f;
+    }
     ray::Font font = font_manager.get_font(description_text, (int)desc_font_size);
-    draw_text_ex(font, description_text.c_str(), {DESC_X_BASE * tex.screen_scale, DESC_Y_BASE * tex.screen_scale},
-                 desc_font_size, 1, Color::BLACK);
+    if (desc_lines_for != description_text || desc_lines_size != desc_font_size || desc_lines_w != max_w) {
+        desc_lines = wrap_description(font, description_text, desc_font_size, max_w);
+        desc_lines_for = description_text;
+        desc_lines_size = desc_font_size;
+        desc_lines_w = max_w;
+    }
+    const float line_h = std::round(desc_font_size * 1.25f);
+    for (size_t i = 0; i < desc_lines.size(); i++) {
+        draw_text_ex(font, desc_lines[i].c_str(), {desc_x, desc_y + line_h * (float)i}, desc_font_size, 1,
+                     Color::BLACK);
+    }
+}
+
+// Z-DON: greedy wrap to max_w: break at spaces, or before any character that starts a CJK run
+std::vector<std::string> BaseOptionBox::wrap_description(const ray::Font& font, const std::string& text, float size,
+                                                         float max_w) {
+    std::vector<std::string> lines;
+    auto width = [&](const std::string& s) { return measure_text_ex(font, s.c_str(), size, 1).x; };
+    if (width(text) <= max_w) {
+        lines.push_back(text);
+        return lines;
+    }
+    auto is_cjk = [](uint32_t cp) {
+        return (cp >= 0x2E80 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+               (cp >= 0xFF00 && cp <= 0xFFEF);
+    };
+    // split into units: a word with its trailing space, or one CJK character
+    std::vector<std::string> units;
+    std::string cur;
+    size_t i = 0;
+    while (i < text.size()) {
+        const unsigned char c = (unsigned char)text[i];
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+        uint32_t cp = c;
+        if (len == 2) {
+            cp = ((c & 0x1F) << 6) | (text[i + 1] & 0x3F);
+        } else if (len == 3) {
+            cp = ((c & 0x0F) << 12) | ((text[i + 1] & 0x3F) << 6) | (text[i + 2] & 0x3F);
+        } else if (len == 4) {
+            cp = ((c & 0x07) << 18) | ((text[i + 1] & 0x3F) << 12) | ((text[i + 2] & 0x3F) << 6) | (text[i + 3] & 0x3F);
+        }
+        const std::string ch = text.substr(i, len);
+        i += len;
+        if (is_cjk(cp)) {
+            if (!cur.empty()) {
+                units.push_back(cur);
+                cur.clear();
+            }
+            units.push_back(ch);
+        } else {
+            cur += ch;
+            if (ch == " ") {
+                units.push_back(cur);
+                cur.clear();
+            }
+        }
+    }
+    if (!cur.empty()) {
+        units.push_back(cur);
+    }
+    std::string line;
+    for (const std::string& u : units) {
+        if (!line.empty() && width(line + u) > max_w) {
+            while (!line.empty() && line.back() == ' ') {
+                line.pop_back();
+            }
+            lines.push_back(line);
+            line.clear();
+            if (u == " ") {
+                continue;
+            }
+        }
+        line += u;
+    }
+    if (!line.empty()) {
+        lines.push_back(line);
+    }
+    return lines;
 }
 
 void BaseOptionBox::draw_centered(OutlinedText& text, int index) const {

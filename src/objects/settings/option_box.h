@@ -14,6 +14,13 @@
 class BaseOptionBox {
 protected:
     std::string description_text;
+    // Z-DON: the description wrapped to the box (option_box.cpp draw_base), rebuilt when text / size / width change
+    mutable std::vector<std::string> desc_lines;
+    mutable std::string desc_lines_for;
+    mutable float desc_lines_size = 0.0f;
+    mutable float desc_lines_w = 0.0f;
+    static std::vector<std::string> wrap_description(const ray::Font& font, const std::string& text, float size,
+                                                     float max_w);
     ConfigRef config_ref;
     std::unique_ptr<OutlinedText> name_text;
 
