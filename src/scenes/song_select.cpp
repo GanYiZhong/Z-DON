@@ -405,17 +405,6 @@ std::optional<Screens> SongSelectScreen::update() {
     return std::nullopt;
 }
 
-Screens SongSelectScreen::get_game_screen_target() {
-    // Z-DON: zdon_ai_battle plays 1P's song against the AI on the 2P lane (scenes/game_2p.cpp)
-    const auto& session = global_data.session_data[(int)global_data.player_num];
-    if (global_data.config->general.zdon_ai_battle && global_data.player_num == PlayerNum::P1 &&
-        !session.replay_input_log.has_value()) {
-        global_data.zdon_ai.requested = true;
-        return Screens::GAME_2P;
-    }
-    return Screens::GAME;
-}
-
 Screens SongSelectScreen::on_screen_end(Screens next_screen) {
     diff_sort_selector.reset();
     if (search_box) {

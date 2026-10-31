@@ -39,8 +39,9 @@ void BoxManager::build_board_list() {
         boxes.push_back(std::make_unique<Box>(dan_text, font_size, Screens::DAN_SELECT));
     }
     for (auto [screen, sc] :
-         {std::pair{Screens::PRACTICE_SELECT, "entry_practice"}, std::pair{Screens::ENTRY, "entry_costume"},
-          std::pair{Screens::SETTINGS, "entry_settings"}}) {
+         {std::pair{Screens::PRACTICE_SELECT, "entry_practice"},
+          std::pair{Screens::AI_SELECT, "entry_ai_battle"}, // Z-DON AI battle (no label in the skin: no board)
+          std::pair{Screens::ENTRY, "entry_costume"}, std::pair{Screens::SETTINGS, "entry_settings"}}) {
         // like the dan board: a skin that blanks the board's text leaves the board out
         std::string label = font_manager.get_text_label(sc);
         if (label.empty()) {
@@ -103,9 +104,10 @@ void BoxManager::change_board_list() {
     selected_box_index = 0;
 }
 
-// practice has no 2P mode: with two players in, its board is greyed out
+// practice and the AI battle have no 2P mode: with two players in, their boards are greyed out
 bool BoxManager::is_disabled(int index) const {
-    return is_2p && boxes[index]->location == Screens::PRACTICE_SELECT;
+    return is_2p &&
+           (boxes[index]->location == Screens::PRACTICE_SELECT || boxes[index]->location == Screens::AI_SELECT);
 }
 
 bool BoxManager::selection_allowed() const {

@@ -6,9 +6,9 @@
 #include "../libs/input.h"
 #include "../objects/game/zdon_ai.h"
 
-// Z-DON AI battle: leaving goes back to the 1P song select
+// Z-DON AI battle: leaving goes back to the AI song select
 static Screens zdon_song_select() {
-    return global_data.zdon_ai.active ? Screens::SONG_SELECT : Screens::SONG_SELECT_2P;
+    return global_data.zdon_ai.active ? Screens::AI_SELECT : Screens::SONG_SELECT_2P;
 }
 
 void Game2PScreen::release_chart_resources() {

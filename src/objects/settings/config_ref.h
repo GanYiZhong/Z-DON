@@ -134,9 +134,6 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "general/zdon_practice_loop") {
         return &c->general.zdon_practice_loop;
     }
-    if (path == "general/zdon_ai_battle") {
-        return &c->general.zdon_ai_battle;
-    }
     if (path == "general/zdon_ai_level") {
         return &c->general.zdon_ai_level;
     }

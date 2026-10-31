@@ -282,7 +282,6 @@ Config get_config() {
     config.general.zdon_hit_timing_show = config_file["general"]["zdon_hit_timing_show"].value_or("half");
     config.general.zdon_sort_filter = config_file["general"]["zdon_sort_filter"].value_or(true);
     config.general.zdon_practice_loop = config_file["general"]["zdon_practice_loop"].value_or(true);
-    config.general.zdon_ai_battle = config_file["general"]["zdon_ai_battle"].value_or(false);
     config.general.zdon_ai_level = std::clamp(config_file["general"]["zdon_ai_level"].value_or(5), 1, 10);
     config.general.log_level = config_file["general"]["log_level"].value_or("info");
     config.general.practice_mode_bar_delay = config_file["general"]["practice_mode_bar_delay"].value_or(1);
@@ -478,7 +477,6 @@ void save_config(const Config& config) {
                                                {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
                                                {"zdon_sort_filter", config.general.zdon_sort_filter},
                                                {"zdon_practice_loop", config.general.zdon_practice_loop},
-                                               {"zdon_ai_battle", config.general.zdon_ai_battle},
                                                {"zdon_ai_level", config.general.zdon_ai_level},
                                                {"log_level", config.general.log_level},
                                                {"practice_mode_bar_delay", config.general.practice_mode_bar_delay},

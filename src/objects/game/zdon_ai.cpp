@@ -205,5 +205,22 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.state = 0;
         b.section++;
     }
-    b.finished = b.section >= (int)b.bounds.size();
+    if (!b.finished && b.section >= (int)b.bounds.size()) {
+        b.finished = true;
+        // the next match's level follows this one: +1 after a win, -1 after a loss (the arcade raises its AI
+        // with the player's record the same way)
+        int wins_p = 0, wins_ai = 0, total = 0;
+        for (size_t i = 0; i < b.winners.size(); ++i) {
+            wins_p += b.winners[i] == 0;
+            wins_ai += b.winners[i] == 1;
+            total += b.points_p[i] - b.points_ai[i];
+        }
+        const int d = wins_p != wins_ai ? wins_p - wins_ai : total;
+        int& level = global_data.config->general.zdon_ai_level;
+        const int next = std::clamp(level + (d > 0 ? 1 : (d < 0 ? -1 : 0)), 1, 10);
+        if (next != level && !global_data.force_auto_play) { // never from auto play (tests)
+            level = next;
+            save_config(*global_data.config);
+        }
+    }
 }

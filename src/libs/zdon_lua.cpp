@@ -205,6 +205,9 @@ void register_zdon_lua_bindings(sol::table& tex) {
         return t;
     });
 
+    // tex.ai_level() -> the next AI battle's level (1..10; [general] zdon_ai_level, moved by each match's result)
+    tex.set_function("ai_level", []() -> int { return global_data.config->general.zdon_ai_level; });
+
     // tex.best_score(player_num) -> the saved best score of this song and course before this play (0 = none);
     // set when the result is saved, so it is meant for the result screen
     tex.set_function("best_score", [](int player_num) -> int {

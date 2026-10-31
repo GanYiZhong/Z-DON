@@ -219,9 +219,10 @@
 ## 2026-10-31 AI 對戰（src/objects/game/zdon_ai.*）
 - 參考 CHN05 AiEnsoInput／AiManager 的設計（數值自訂，不搬資料表）：每顆音符從常態分布抽敲擊時間，超出不可窗或「失手」機率＝漏打；標準差由等級（1: 34 ms … 10: 16 ms）起算，隨玩家良/可的偏差往玩家的平均/標準差靠（最多 70%，64 筆滑動）；區段內 AI 領先 6 分以上變鬆（σ×1.5、失手×2）、落後變緊（σ×0.7、失手×0.5），差距 ≤1 回到持平；連打/氣球 10+等級 下/秒。
 - 區段：開始第一幀依 don/ka 音符數平均切 3 段（≥200 顆切 5 段）；每段良 2 可 1，分高者勝；段數多者勝、同段數比總分。
-- 入口：`[general] zdon_ai_battle`（預設關）＋`zdon_ai_level`（1–10）→ 1P 選曲進 GAME_2P，2P lane 由 AI 打（P2 鍵盤無效）；CLI `--ai`（加 `--auto` 1P 自動）。AI 不存分數、結算名牌/角色用 AI 專屬資料，結束回 1P 選曲。`ZDON_AI_SEED` 固定亂數（測試用）。
+- 入口（照街機：主選單選模式，不是設定開關）：entry 的模式板「AI 對戰」（skin 文字 `entry_ai_battle`，沒有就不出板子；兩人入場時灰掉）→ `Screens::AI_SELECT`（AiSongSelectScreen，選曲 skin、不能 2P 加入）→ GAME_2P，2P lane 由 AI 打（P2 鍵盤無效）；CLI `--ai`（加 `--auto` 1P 自動）。AI 不存分數、結算名牌/角色用 AI 專屬資料，結束回 AI 選曲。`ZDON_AI_SEED` 固定亂數（測試用）。
+- 等級 `[general] zdon_ai_level`（1–10，預設 5）：每場贏 +1、輸 −1 並存檔（auto 不動）；`tex.ai_level()` 給選曲畫面顯示。
 - Lua：`tex.ai_battle()` → table（level、state、section、count、live_p/live_ai、wins_p/wins_ai、total_*、finished、result、sections[]）。
-- 上游的 Screens::AI_GAME / PlayerNum::AI 是空殼，沒用（skin 版面沿用 GAME_2P）。
+- 上游的 Screens::AI_GAME / PlayerNum::AI 是空殼，沒用（遊玩版面沿用 GAME_2P）；AI_SELECT 是 PyTaiko 留下的名字，Nijiiro 的 coin_overlay 與 entry 說明（entry_ai_battle_comment_*）已認得。
 
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。
