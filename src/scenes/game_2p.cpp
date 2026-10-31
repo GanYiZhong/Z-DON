@@ -4,6 +4,12 @@
 
 #include "../libs/animation.h"
 #include "../libs/input.h"
+#include "../objects/game/zdon_ai.h"
+
+// Z-DON AI battle: leaving goes back to the 1P song select
+static Screens zdon_song_select() {
+    return global_data.zdon_ai.active ? Screens::SONG_SELECT : Screens::SONG_SELECT_2P;
+}
 
 void Game2PScreen::release_chart_resources() {
     parser_2p.reset();
@@ -12,6 +18,16 @@ void Game2PScreen::release_chart_resources() {
 void Game2PScreen::initialize_chart(const fs::path& song) {
     start_delay = (song.extension() == ".osu") ? 0 : start_delay;
     int delay = static_cast<int>(start_delay);
+    // Z-DON AI battle (also on a restart): 2P plays 1P's chart
+    const bool ai_battle = global_data.zdon_ai.requested || global_data.zdon_ai.active;
+    global_data.zdon_ai.requested = false;
+    if (ai_battle) {
+        auto& s1 = global_data.session_data[(int)PlayerNum::P1];
+        auto& s2 = global_data.session_data[(int)PlayerNum::P2];
+        s2.selected_song = s1.selected_song;
+        s2.selected_difficulty = s1.selected_difficulty;
+        s2.song_hash = s1.song_hash;
+    }
     parser = std::make_shared<SongParser>(song, delay, PlayerNum::P1);
     parser_2p = std::make_shared<SongParser>(song, delay, PlayerNum::P2);
 
@@ -24,9 +40,19 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     players.push_back(std::make_unique<Player>(parser, PlayerNum::P1,
                                                global_data.session_data[(int)PlayerNum::P1].selected_difficulty, false,
                                                get_player_modifiers(PlayerNum::P1)));
-    players.push_back(std::make_unique<Player>(parser_2p, PlayerNum::P2,
-                                               global_data.session_data[(int)PlayerNum::P2].selected_difficulty, true,
-                                               get_player_modifiers(PlayerNum::P2)));
+    Modifiers mods_2p = get_player_modifiers(PlayerNum::P2);
+    if (ai_battle) {
+        mods_2p = get_player_modifiers(PlayerNum::P1); // the same speed / options as the player
+        mods_2p.auto_play = false;
+    }
+    players.push_back(std::make_unique<Player>(
+        parser_2p, PlayerNum::P2, global_data.session_data[(int)PlayerNum::P2].selected_difficulty, true, mods_2p));
+    if (ai_battle) {
+        const int level = global_data.config->general.zdon_ai_level;
+        players[1]->enable_zdon_ai(level);
+        players[1]->apply_replay_appearance(zdon_ai_player_data(level));
+        zdon_ai_battle_begin(level);
+    }
 
     players[0]->kusudama_partner = players[1].get();
     players[1]->kusudama_partner = players[0].get();
@@ -42,11 +68,14 @@ std::optional<Screens> Game2PScreen::update() {
 
     double current_time = get_current_ms();
     if (pause_menu.active()) {
-        return update_pause_menu(Screens::SONG_SELECT_2P); // Z-DON: pause menu (pause_menu.h)
+        return update_pause_menu(zdon_song_select()); // Z-DON: pause menu (pause_menu.h)
     }
     transition->update(current_time);
     clock.update(current_time);
     update_gameplay(current_time);
+    if (global_data.zdon_ai.active && players.size() == 2) {
+        zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
+    }
     result_transition.update(current_time);
 
     const double end_time = std::max(players[0]->end_time, players[1]->end_time);
@@ -70,7 +99,7 @@ std::optional<Screens> Game2PScreen::update() {
             open_pause_menu();
             return std::nullopt;
         }
-        return on_screen_end(Screens::SONG_SELECT_2P);
+        return on_screen_end(zdon_song_select());
     }
     const bool lost_focus = focus_lost();
     if (can_pause()) {

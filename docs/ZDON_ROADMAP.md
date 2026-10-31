@@ -216,6 +216,13 @@
 - 最近成績：`SongBox:recent_plays(diff)` → 最多 10 筆（舊→新）{score, crown, good, ok, bad, played_at}，讀 scores 表，refresh_scores 時清快取。
 - 練習模式區段循環 `[general] zdon_practice_loop`（預設開）：從某個跳躍點繼續時，若後面還有跳躍點，就在 A→B 之間循環（到 B 記下這一輪良/可/不可、輪數 +1、跳回 A）；暫停即結束。`tex.practice_loop()` → active, a, b, passes, 上一輪良/可/不可。已用假按鍵隱藏測試驗證（小節 1–4 連跑 4 輪）。
 
+## 2026-10-31 AI 對戰（src/objects/game/zdon_ai.*）
+- 參考 CHN05 AiEnsoInput／AiManager 的設計（數值自訂，不搬資料表）：每顆音符從常態分布抽敲擊時間，超出不可窗或「失手」機率＝漏打；標準差由等級（1: 34 ms … 10: 16 ms）起算，隨玩家良/可的偏差往玩家的平均/標準差靠（最多 70%，64 筆滑動）；區段內 AI 領先 6 分以上變鬆（σ×1.5、失手×2）、落後變緊（σ×0.7、失手×0.5），差距 ≤1 回到持平；連打/氣球 10+等級 下/秒。
+- 區段：開始第一幀依 don/ka 音符數平均切 3 段（≥200 顆切 5 段）；每段良 2 可 1，分高者勝；段數多者勝、同段數比總分。
+- 入口：`[general] zdon_ai_battle`（預設關）＋`zdon_ai_level`（1–10）→ 1P 選曲進 GAME_2P，2P lane 由 AI 打（P2 鍵盤無效）；CLI `--ai`（加 `--auto` 1P 自動）。AI 不存分數、結算名牌/角色用 AI 專屬資料，結束回 1P 選曲。`ZDON_AI_SEED` 固定亂數（測試用）。
+- Lua：`tex.ai_battle()` → table（level、state、section、count、live_p/live_ai、wins_p/wins_ai、total_*、finished、result、sections[]）。
+- 上游的 Screens::AI_GAME / PlayerNum::AI 是空殼，沒用（skin 版面沿用 GAME_2P）。
+
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。
 - PBO／共用 context 上傳執行緒：第一次畫到的同步上傳已用 warm-up 搬到前幾幀的空檔（見上表），剩載入那幀就畫到的那幾張（Nijiiro 選曲 10 張 7–10 ms，在 480–560 ms 的載入幀裡）。要再省只能把它們跟解碼重疊（載入時上傳）或另開 GL context，收益是載入幀的 1–2%，沒做。

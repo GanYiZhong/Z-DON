@@ -165,6 +165,7 @@ Screens check_args(int argc, char* argv[]) {
     bool auto_play = false;
     bool practice = false;
     bool two_player = false;
+    bool ai_battle = false; // Z-DON: --ai, the AI battle (2P lane = AI)
     std::string dan_arg;
 
     for (int i = 1; i < argc; i++) {
@@ -176,6 +177,8 @@ Screens check_args(int argc, char* argv[]) {
             practice = true;
         } else if (arg == "--2p") {
             two_player = true;
+        } else if (arg == "--ai") {
+            ai_battle = true;
         } else if (arg == "--dan") {
             if (i + 1 >= argc) {
                 std::cerr << "Error: --dan requires a course path\n";
@@ -190,6 +193,7 @@ Screens check_args(int argc, char* argv[]) {
             std::cout << "  --auto      : Enable auto mode\n";
             std::cout << "  --practice  : Start in practice mode\n";
             std::cout << "  --2p        : (test) both players play the song on auto, then the 2P result\n";
+            std::cout << "  --ai        : play the song against the AI (zdon_ai_level); --auto puts 1P on auto\n";
             std::cout << "  --dan <path>: (test) load the library, then play that dan course on auto\n";
             std::cout << "Card reader (valid with or without song_path):\n";
             std::cout << "  --card-port <path>   : Serial port (default /dev/ttyUSB0)\n";
@@ -285,6 +289,10 @@ Screens check_args(int argc, char* argv[]) {
         }
     }
 
+    if (ai_battle && (two_player || practice)) {
+        std::cerr << "Error: --ai cannot be combined with --2p or --practice\n";
+        exit_now(1);
+    }
     if (two_player && practice) {
         std::cerr << "Error: --2p and --practice cannot be combined\n";
         exit_now(1);
@@ -295,6 +303,10 @@ Screens check_args(int argc, char* argv[]) {
         global_data.session_data[(int)PlayerNum::P2].selected_song = path;
         global_data.session_data[(int)PlayerNum::P2].selected_difficulty = selected_difficulty;
         auto_play = true;
+    }
+    if (ai_battle) {
+        current_screen = Screens::GAME_2P; // Game2PScreen copies 1P's song to the AI's lane
+        global_data.zdon_ai.requested = true;
     }
     global_data.session_data[(int)PlayerNum::P1].selected_song = std::move(path);
     global_data.session_data[(int)PlayerNum::P1].selected_difficulty = selected_difficulty;

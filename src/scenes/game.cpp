@@ -760,6 +760,12 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         }
 
         for (const auto& player : players) {
+            if (player->is_zdon_ai()) {
+                // Z-DON AI battle: the AI's play is never saved to the 2P profile (and is no "new best")
+                auto& rd = global_data.session_data[(int)player->player_num].result_data;
+                rd.prev_score = rd.score;
+                continue;
+            }
             save_score(get_player_id(player->player_num), player->player_num);
         }
 

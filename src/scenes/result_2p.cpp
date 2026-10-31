@@ -43,7 +43,8 @@ std::optional<Screens> Result2PScreen::update() {
         fade_out->update(current_time);
         if (fade_out->is_finished) {
             global_data.returned_from_result = true;
-            return on_screen_end(Screens::SONG_SELECT_2P);
+            // Z-DON AI battle: back to the 1P song select
+            return on_screen_end(global_data.zdon_ai.active ? Screens::SONG_SELECT : Screens::SONG_SELECT_2P);
         }
     }
     return std::nullopt;

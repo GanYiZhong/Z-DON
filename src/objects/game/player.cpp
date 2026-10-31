@@ -525,6 +525,9 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     });
     score_counter.update(current_ms, score);
     autoplay_manager(ms_from_start, current_ms, background);
+    if (zdon_ai) {
+        zdon_ai_manager(ms_from_start, current_ms, background);
+    }
     handle_input(ms_from_start, current_ms, background);
     nameplate.update(current_ms);
     if (dan_gauge) {
@@ -1559,6 +1562,14 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
         ZdonLiveData& live = global_data.session_data[(int)player_num].zdon_live;
         live.last_hit_offset_ms = offset_ms;
         live.last_hit_at_ms = current_ms;
+        // Z-DON AI battle: the AI learns the player's timing
+        auto& ai = global_data.zdon_ai;
+        if (ai.active && !zdon_ai && player_num == PlayerNum::P1) {
+            if (ai.player_offsets.size() >= 64) {
+                ai.player_offsets.erase(ai.player_offsets.begin());
+            }
+            ai.player_offsets.push_back(static_cast<float>(offset_ms));
+        }
     };
 
     float good_window_ms;
@@ -1787,7 +1798,7 @@ void Player::spawn_hit_effects(DrumType drum_type, Side side) {
 }
 
 void Player::handle_input(double ms_from_start, double current_ms, std::optional<Background>& background) {
-    if (modifiers.auto_play) {
+    if (modifiers.auto_play || zdon_ai) {
         return;
     }
 

@@ -162,6 +162,49 @@ void register_zdon_lua_bindings(sol::table& tex) {
         return r;
     });
 
+    // tex.ai_battle() -> nil outside an AI battle (objects/game/zdon_ai.h), else a table:
+    //   level, state (0 even, 1 AI leads the section, 2 AI trails), section (1-based, count+1 when done), count,
+    //   live_p, live_ai (the open section's points), wins_p, wins_ai, finished, result (finished: "win" / "lose" /
+    //   "draw"; a tie in sections goes to the higher total), total_p, total_ai,
+    //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI / 2 draw, end_ms=}, ... }
+    tex.set_function("ai_battle", [](sol::this_state s) -> sol::object {
+        const auto& b = global_data.zdon_ai;
+        if (!b.active || b.bounds.empty()) {
+            return sol::lua_nil;
+        }
+        sol::state_view lua(s);
+        sol::table t = lua.create_table();
+        int wins_p = 0, wins_ai = 0, total_p = 0, total_ai = 0;
+        sol::table secs = lua.create_table((int)b.bounds.size(), 0);
+        for (size_t i = 0; i < b.bounds.size(); ++i) {
+            const bool open = (int)i == b.section;
+            const int p = open ? b.live_p : b.points_p[i];
+            const int a = open ? b.live_ai : b.points_ai[i];
+            wins_p += b.winners[i] == 0;
+            wins_ai += b.winners[i] == 1;
+            total_p += p;
+            total_ai += a;
+            secs[i + 1] = lua.create_table_with("p", p, "ai", a, "winner", b.winners[i], "end_ms", b.bounds[i]);
+        }
+        t["level"] = b.level;
+        t["state"] = b.state;
+        t["section"] = b.section + 1;
+        t["count"] = (int)b.bounds.size();
+        t["live_p"] = b.live_p;
+        t["live_ai"] = b.live_ai;
+        t["wins_p"] = wins_p;
+        t["wins_ai"] = wins_ai;
+        t["total_p"] = total_p;
+        t["total_ai"] = total_ai;
+        t["finished"] = b.finished;
+        if (b.finished) {
+            const int d = wins_p != wins_ai ? wins_p - wins_ai : total_p - total_ai;
+            t["result"] = d > 0 ? "win" : (d < 0 ? "lose" : "draw");
+        }
+        t["sections"] = secs;
+        return t;
+    });
+
     // tex.best_score(player_num) -> the saved best score of this song and course before this play (0 = none);
     // set when the result is saved, so it is meant for the result screen
     tex.set_function("best_score", [](int player_num) -> int {

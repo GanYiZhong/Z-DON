@@ -267,6 +267,21 @@ struct GlobalData {
         bool has_last = false;
         int last_good = 0, last_ok = 0, last_bad = 0;
     } zdon_loop;
+    // Z-DON AI battle (objects/game/zdon_ai.h): the 2P lane is played by an AI; the song is cut into sections,
+    // each won by the higher section score (good 2, ok 1), the match by the most sections
+    struct ZdonAiBattle {
+        bool requested = false; // the next GAME_2P starts as an AI battle (song select / --ai)
+        bool active = false;    // GAME_2P / RESULT_2P of an AI battle; cleared by the song select
+        int level = 5;
+        int state = 0;              // 0 even, 1 the AI leads the section (looser), 2 it trails (tighter)
+        std::vector<double> bounds; // each section's end, chart ms
+        std::vector<int> points_p, points_ai, winners; // per section; winners: -1 open, 0 player, 1 AI, 2 draw
+        int section = 0;
+        int base_p = 0, base_ai = 0; // the score totals at the current section's start
+        int live_p = 0, live_ai = 0; // the current section's points so far
+        bool finished = false;
+        std::vector<float> player_offsets; // the player's recent hit offsets (the AI copies their timing)
+    } zdon_ai;
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;

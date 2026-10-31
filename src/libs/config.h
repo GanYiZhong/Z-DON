@@ -24,6 +24,8 @@ struct GeneralConfig {
     // Z-DON: the difficulty folder's "not cleared / FC / DFC" orders list only those songs (off: those first)
     bool zdon_sort_filter = true;
     bool zdon_practice_loop = true; // Z-DON: practice resumed at a jump mark loops to the next mark
+    bool zdon_ai_battle = false;    // Z-DON: 1P songs are played against an AI on the 2P lane (zdon_ai.h)
+    int zdon_ai_level = 5;          // Z-DON: the AI's skill, 1..10
     std::string log_level;
     int practice_mode_bar_delay = 0;
     std::string score_method;

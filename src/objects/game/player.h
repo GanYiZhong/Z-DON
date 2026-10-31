@@ -118,6 +118,11 @@ public:
     }
     void set_is_dan(bool v) { is_dan = v; }
 
+    // Z-DON AI battle (zdon_ai.cpp): this player's hits come from an AI instead of the drums
+    void enable_zdon_ai(int level);
+    bool is_zdon_ai() const { return zdon_ai != nullptr; }
+    std::vector<double> zdon_note_times() const; // the don/ka notes' hit times, sorted
+
     void reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int new_difficulty);
 
     void spawn_ending_anim(Background* background = nullptr);
@@ -306,6 +311,8 @@ private:
     Gauge* active_gauge() { return dan_gauge ? dan_gauge : (gauge.has_value() ? &*gauge : nullptr); }
 
     void autoplay_manager(double ms_from_start, double current_ms, std::optional<Background>& background);
+    std::shared_ptr<struct ZdonAiDriver> zdon_ai;
+    void zdon_ai_manager(double ms_from_start, double current_ms, std::optional<Background>& background);
 
     void evaluate_branch(double current_ms);
 

@@ -2,11 +2,15 @@
 
 #include "../../libs/audio.h"
 #include "../../libs/scores.h"
+#include "../game/zdon_ai.h"
 
 ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     : player_num(player_num), has_2p(has_2p), is_2p(is_2p) {
     std::string player_id = get_player_id(player_num);
     auto pd = scores_manager.get_player_data(player_id);
+    if (global_data.zdon_ai.active && player_num == PlayerNum::P2) {
+        pd = zdon_ai_player_data(global_data.zdon_ai.level); // Z-DON AI battle
+    }
 
     chara = make_chara_from_player_data(pd ? &*pd : nullptr, is_2p);
     if (pd) {

@@ -75,7 +75,7 @@ protected:
 
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool is_2p_screen() { return false; }
-    virtual Screens get_game_screen_target() { return Screens::GAME; }
+    virtual Screens get_game_screen_target(); // Z-DON: GAME_2P for an AI battle (zdon_ai_battle)
 
 public:
     SongSelectScreen() : Screen("song_select") {}
