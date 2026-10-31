@@ -205,6 +205,10 @@ void register_zdon_lua_bindings(sol::table& tex) {
         return t;
     });
 
+    // tex.ai_active() -> true in an AI battle's GAME_2P / RESULT_2P from the first frame (tex.ai_battle() stays
+    // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
+    tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
+
     // tex.ai_level() -> the next AI battle's level (1..10; [general] zdon_ai_level, moved by each match's result)
     tex.set_function("ai_level", []() -> int { return global_data.config->general.zdon_ai_level; });
 

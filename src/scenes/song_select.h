@@ -72,6 +72,7 @@ protected:
     std::optional<Screens> poll_second_player_join(double current_ms);
 
     virtual void draw_overlays();
+    virtual void draw_extra_players() {} // Z-DON: after the player (AiSongSelectScreen: the AI on the 2P side)
 
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool is_2p_screen() { return false; }

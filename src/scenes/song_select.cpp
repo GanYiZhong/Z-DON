@@ -455,6 +455,7 @@ void SongSelectScreen::draw() {
     script->draw_footer();
 
     player->draw(state, false, navigator.get_diff_fade_in());
+    draw_extra_players();
 
     draw_overlays();
 
