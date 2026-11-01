@@ -87,6 +87,7 @@ namespace zhud {
                 {"reason_replay", {{"ja", "リプレイ"}, {"en", "Replay"}, {"zh", "回放"}, {"ko", "리플레이"}}},
                 {"reason_equal_speed", {{"ja", "等速"}, {"en", "Constant speed"}, {"zh", "等速"}, {"ko", "등속"}}},
                 {"reason_skip", {{"ja", "スキップ"}, {"en", "Skip"}, {"zh", "跳过"}, {"ko", "스킵"}}},
+                {"reason_record", {{"ja", "録画"}, {"en", "Recording"}, {"zh", "录像"}, {"ko", "녹화"}}},
                 {"search_genre",
                  {{"ja", "ジャンル：{0}"}, {"en", "Genre: {0}"}, {"zh", "类型：{0}"}, {"ko", "장르: {0}"}}},
                 {"search_course",

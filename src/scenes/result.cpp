@@ -1,6 +1,7 @@
 #include "result.h"
 
 #include "../libs/input.h"
+#include "../libs/zdon_record.h"
 #include "../objects/game/player.h"
 #include "../objects/global/zdon_hud.h"
 
@@ -160,6 +161,9 @@ std::optional<Screens> ResultScreen::update() {
 
 // Z-DON: "this score is not saved (auto, constant speed)" under each player's board (GameScreen::save_score)
 void ResultScreen::draw_unsaved_note() const {
+    if (zdon_record::active()) {
+        return; // not in the video
+    }
     const bool two = zdon_two_boards();
     for (int pn = 1; pn <= 2; ++pn) {
         if (!two && pn != (global_data.player_num == PlayerNum::P2 ? 2 : 1)) {

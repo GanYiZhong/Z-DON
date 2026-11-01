@@ -26,6 +26,7 @@
 #include "libs/texture_lazy.h"
 #include "libs/webcam.h"
 #include "libs/zdon_os.h"
+#include "libs/zdon_record.h"
 #include "objects/global/chara_3d.h"
 #include "platform/vblank_pacing.h"
 
@@ -173,7 +174,9 @@ Screens check_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
 
-        if (arg == "--auto") {
+        if (zdon_record::consume_arg(arg, i, argc)) {
+            continue; // read by zdon_record::prepare
+        } else if (arg == "--auto") {
             auto_play = true;
         } else if (arg == "--practice") {
             practice = true;
@@ -197,6 +200,8 @@ Screens check_args(int argc, char* argv[]) {
             std::cout << "  --2p        : (test) both players play the song on auto, then the 2P result\n";
             std::cout << "  --ai        : play the song against the AI (zdon_ai_level); --auto puts 1P on auto\n";
             std::cout << "  --dan <path>: (test) load the library, then play that dan course on auto\n";
+            std::cout << "  --record <out.mp4>    : render the play to a video, faster than real time (no hits\n";
+            std::cout << "                          unless --auto); --record-fps <n> (60), --record-result <s> (6)\n";
             std::cout << "Card reader (valid with or without song_path):\n";
             std::cout << "  --card-port <path>   : Serial port (default /dev/ttyUSB0)\n";
             std::cout << "  --card-baud <rate>   : Baud rate (default 38400)\n";
@@ -843,7 +848,7 @@ static void run_frame() {
     end_mode_2d();
     density::end_frame(global_data.camera.border_color); // the density target into the window
     seg_mark(SEG_OVERLAY);
-    const bool dump_done = dump_screen_tick();
+    const bool dump_done = dump_screen_tick() || zdon_record::frame(global_data.current_screen);
     frame_stats_add(frame_start);
     {
         PROFILE_SCOPE_N("present");
@@ -1047,6 +1052,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
     spdlog::info("Starting YataiDON");
+    zdon_record::prepare(argc, argv); // --record: a hidden fixed-step run (environment, before anything reads it)
     set_working_directory_to_executable();
     const bool had_config = std::filesystem::exists("config.toml");
     global_data.config = new Config(get_config());
@@ -1104,6 +1110,11 @@ int main(int argc, char* argv[]) {
     if (dump_chara_spec && *dump_chara_spec) {
         std::exit(
             dump_chara(dump_chara_spec)); // exit() like the label dump: the audio thread keeps a plain return alive
+    }
+    if (zdon_record::active() &&
+        (global_data.skinless || initial_screen == Screens::LOADING || !zdon_record::begin())) {
+        spdlog::error("[record] needs a skin and a song on the command line");
+        std::exit(1);
     }
     apply_queued_window_resize();
 
@@ -1216,6 +1227,7 @@ int main(int argc, char* argv[]) {
     shutdown_sdl_joysticks();
     delete g_loop;
     g_loop = nullptr;
+    const bool record_ok = zdon_record::end(); // encodes the rest and muxes the audio in
     // Cleanup needs a live SDL/OpenGL context and config.
     webcam.close();
     unload_skin();
@@ -1228,5 +1240,6 @@ int main(int argc, char* argv[]) {
     close_window();
 #endif
     spdlog::info("Game closed");
+    return record_ok ? 0 : 1;
 #endif
 }

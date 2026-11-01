@@ -142,6 +142,10 @@ std::vector<int> parseIntArray(const toml::array& arr);
 
 Config get_config();
 
+// Z-DON: true while the config in memory differs from the player's on purpose (a recording, zdon_record.h):
+// save_config writes nothing
+inline bool zdon_config_read_only = false;
+
 void save_config(const Config& config);
 
 // Writes a default config.toml (or dev-config.toml) when none exists yet, so

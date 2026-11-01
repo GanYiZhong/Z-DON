@@ -14,6 +14,7 @@
 #include "../libs/script.h"
 #include "../libs/test_mode.h"
 #include "../libs/text.h"
+#include "../libs/zdon_record.h"
 #include "../objects/global/zdon_hud.h"
 #include "../platform/vblank_pacing.h"
 
@@ -504,6 +505,9 @@ std::vector<std::string> GameScreen::zdon_unsaved_reasons(const Player& player) 
     }
     if (player.get_modifiers().equal_speed_bpm > 0) {
         r.emplace_back("equal_speed");
+    }
+    if (zdon_record::active()) {
+        r.emplace_back("record"); // a recording without hits is not a play
     }
     return r;
 }

@@ -267,3 +267,10 @@
   - SimpleStyle 吉祥物 `global/ss_mascot_k3/k6/k9`（22 套服裝 × 3 尺寸，共用貼圖的 50 MB/72 MB，每個畫面都在）：產生器改成一個精靈一個資料夾 `Graphics/ss_mascot/k<k>_<name>`，沒有畫面會載入它，Lua（ss_ui.lua `UI.TM`）要畫時才由 resolve_lua_texture 載入，texture_ondemand 下次跟著畫面預解碼（第二次起不再臨時載入）。共用貼圖 72→18 MB；選曲 ws 300→256、private 525→428、顯存 266→177；演奏 private 690→599、顯存 384→301。BC7 關閉時固定步進截圖與改前逐位元相同。
   - 還沒做：只在特定模式用的資料夾（practice、ai_battle、gauge_ai、dan_info、gauge_dan、SimpleStyle 的 ss_dan）在一般演奏也載入：SimpleStyle 約 33 MB、Nijiiro 約 18 MB（BC7 後）。要按模式略過得逐一確認各模式的 Lua 不會在 init 就查這些圖。其餘（balloon、kusudama、branch、各結尾動畫）看歌，不能略過。
 - density 2 畫到 3840×2160 再縮到螢幕：畫布本身 33 MB，改成螢幕大小的收益小（1440p 省約 18 MB），沒做。
+
+## 2026-11-01 錄影：指定歌曲/難度直接輸出影片（zdon_record）
+
+- `YataiDON.exe <song.tja> [難度] --record <out.mp4> [--auto] [--record-fps 60] [--record-result 6]`；沒 `--auto` = 完全不敲。`tools/record_video.bat <tja> [難度] [auto|nohit] [out]`（拖 .tja 上去＝魔王自動，輸出到 %USERPROFILE%\Videos），bat 也複製到 build/bin。
+- 做法：測試模式（YATAIDON_TEST：隱藏視窗、忽略真實輸入、失焦不暫停、不寫歌單）＋固定步進 1000/fps ms；每幀畫完讀回視窗（3 個 PBO 輪流、晚 2 幀取出，ffmpeg `-vf vflip`）→ 背景執行緒寫 ffmpeg stdin（h264_nvenc 直接吃 RGBA，否則 libx264）；音訊裝置暫停，主執行緒每幀叫 `AudioEngine::dev_mix_offline` 混剛好一幀的樣本（先等串流 ring、邊解邊播的長音效）寫 float WAV，最後 AAC mux。視窗＝skin 畫面大小（不全螢幕），audio_offset/visual_offset 歸 0、master 音量 100%（各類音量照設定），`zdon_config_read_only` 讓 save_config 不寫、成績因 "record" 不存、結算不畫「未保存」。失敗 exit code 1。
+- 實測 1080p60：crazylover 魔王 239 s 影片 74 s 錄完（約 3.2×）；每幀遊戲 3.1 ms、讀回 0.2、等 ffmpeg 1.6–2。同步：click 音軌測試譜（每 0.5 s 一顆）30/60/120 fps 打擊音都在 click 後 0.3 ms 內；一般譜面音符不在格上時晚最多一格（60 fps 0–16.7 ms）。
+- 抓到自動演奏補打的 bug：門檻 8 ms 讓一般 60 fps（16.7 ms）每幀都進補打，補打中不出聲 → 自動演奏 60 fps 約 7 成、30 fps 全部打擊音被吃掉（判定都良所以之前沒發現）。改成間隔 > 50 ms 才補打；卡頓測試結果不變（1P 999/0/0、AI 749/224/26）。上游 PR #352 同樣問題，修正 commit 在 YataiDON_autocatch（b7b1c6c，待使用者同意才推）。

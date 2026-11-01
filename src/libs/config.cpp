@@ -462,6 +462,9 @@ static toml::array int_array(const std::vector<int>& values) {
 }
 
 void save_config(const Config& config) {
+    if (zdon_config_read_only) {
+        return;
+    }
     fs::path config_path = config_file_path();
 
     toml::table config_table;

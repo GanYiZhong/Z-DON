@@ -268,8 +268,13 @@ public:
     // Z-DON dev hook YATAIDON_AUDIO_SELFTEST (audio_selftest.cpp)
     void run_selftest(const std::string& spec);
 
-private:
+    // Z-DON recording (zdon_record.h): the device paused, the main thread mixes each frame's audio
     void dev_pause_device(bool pause);
+    void dev_mix_offline(float* out, unsigned int frames);
+    double dev_sample_rate() const { return target_sample_rate; }
+    void dev_set_master_volume(float v) { master_volume.store(v); } // a recording plays at full volume
+
+private:
     void dev_wait_streams();                        // until every stream's decoder has caught up
     void dev_wait_decoded(const std::string& name); // until a progressive sound is fully decoded
 

@@ -473,11 +473,13 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     // Z-DON: a stalled frame (the window dragged: Windows blocks the loop while the song plays on) jumps the
     // clock past notes and rolls. Auto play walks the gap in small steps so it still hits every note on time and
     // keeps its roll speed; the hit sounds of the gap are skipped. The AI battle's 2P lane the same way.
+    // Only a stall: an ordinary frame (16.7 ms at 60 fps, 33 ms at 30) is played as it is, with its sounds.
     static const bool no_catchup = std::getenv("ZDON_NO_AUTO_CATCHUP") != nullptr; // tests: the old behaviour
     if ((modifiers.auto_play || zdon_ai) && !no_catchup) {
         constexpr double kStep = 4.0;
+        constexpr double kStallMs = 50.0;
         const double gap = ms_from_start - zdon_auto_last_ms;
-        if (gap > 2 * kStep && gap < 120000.0) {
+        if (gap > kStallMs && gap < 120000.0) {
             zdon_auto_catchup = true;
             for (double t = zdon_auto_last_ms + kStep; t < ms_from_start - kStep / 2; t += kStep) {
                 note_manager(t, background);

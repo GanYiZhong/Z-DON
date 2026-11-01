@@ -2926,6 +2926,32 @@ void AudioEngine::dev_wait_streams() {
     }
 }
 
+// Z-DON recording (zdon_record.h): the device is paused and the main thread is the mixer. Waits for what a
+// live callback would have had (the streams' rings, the decoded part of each playing long sound), then
+// mixes `frames` stereo frames into out.
+void AudioEngine::dev_mix_offline(float* out, unsigned int frames) {
+    dev_wait_streams();
+    const uint32_t n = slot_count.load(std::memory_order_acquire);
+    for (SoundId id = 0; id < n; id++) {
+        const SoundSlot& snd = *slot_at(id);
+        if (!snd.is_playing.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const SoundId owner = snd.owner.load(std::memory_order_acquire);
+        const sound* pcm = (owner == kNoSound ? snd : *slot_at(owner)).pcm.load(std::memory_order_acquire);
+        if (!pcm || !pcm->decode_job) {
+            continue;
+        }
+        const SoundDecodeJob& job = *pcm->decode_job;
+        const double need = snd.current_frame.load(std::memory_order_relaxed) +
+                            (double)frames * snd.pitch.load(std::memory_order_relaxed) + 1.0;
+        while (!job.done.load(std::memory_order_acquire) && job.frames_ready.load(std::memory_order_acquire) < need) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    mix(out, frames, this);
+}
+
 void AudioEngine::dev_wait_decoded(const std::string& name) {
     for (;;) {
         std::shared_ptr<SoundDecodeJob> job;
