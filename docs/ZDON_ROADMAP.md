@@ -259,3 +259,11 @@
 - 結果（第二次啟動、快取命中）：選曲 ws 779→300 MB、private 915→525、顯存 538→266；演奏 private 1318→690、顯存 958→384；共用貼圖 270→72 MB、演奏 355→95 MB。SimpleStyle 全 skin 1177→303 MB，快取檔 3.3 MB。固定步進截圖 on/off 比對：99.99% 像素差 ≤2/255、最大 5/255，版面不變；crazylover 魔王 auto 全良。
 - Nijiiro（漸層/手繪）在同樣門檻下只有 8.8% 的位元組過關（整體 PSNR 51.7 dB）。使用者決定放寬：門檻改成「每像素 ≤ 4/255，或整張 PSNR ≥ 45 dB（MSE ≤ 2.06，同樣以 alpha 加權）」，快取版本 2（舊快取自動重來）。Nijiiro 實測：選曲 ws 714→368、private 875→470、顯存 172→106 MB；演奏 private 1128→765、顯存 767→415 MB；快取檔約 30 MB（全 skin 估 131 MB，上限 256 MB）。固定步進截圖：演奏約 0.3% 像素差 > 8/255、最大 90，放大 4 倍目視分不出；分數/連段相同。
 - 未解：Nijiiro 選曲 BC7 關閉的即時隱藏跑，7 次有 2 次在進選曲約 1 秒後無聲結束（log 停在 nameplate 載入、沒有 Game closed、Event Log 無當機紀錄），之後 5 次重現不了；BC7 開著的 6 次都正常。
+
+## 2026-11-01 AI 對戰卡頓補打、沒畫到的貼圖
+
+- AI 對戰的 2P 也走自動演奏的卡頓補打（Player::update 的補打迴圈多跑 zdon_ai_manager，補打中不出打擊音）。dense 譜 AI Lv5、`ZDON_AI_SEED=7`、`ZDON_TEST_STALL=4000:300,9000:700,15000:1500,22000:250`：沒卡頓 良 749/可 224/不可 26；卡頓、修正前 732/225/42；修正後 749/224/26（與沒卡頓相同）。
+- 量測鉤子 `ZDON_TEX_USE_STATS=1`：每次換畫面（unload_textures）記下已上傳卻從沒交給 GL 的貼圖，依資料夾排（`[tex_use]`）。crazylover 魔王 auto 一首：SimpleStyle 演奏畫面已上傳 133 MB 中 109 MB 沒畫到、Nijiiro 132 MB 中 84 MB。大宗：
+  - SimpleStyle 吉祥物 `global/ss_mascot_k3/k6/k9`（22 套服裝 × 3 尺寸，共用貼圖的 50 MB/72 MB，每個畫面都在）：產生器改成一個精靈一個資料夾 `Graphics/ss_mascot/k<k>_<name>`，沒有畫面會載入它，Lua（ss_ui.lua `UI.TM`）要畫時才由 resolve_lua_texture 載入，texture_ondemand 下次跟著畫面預解碼（第二次起不再臨時載入）。共用貼圖 72→18 MB；選曲 ws 300→256、private 525→428、顯存 266→177；演奏 private 690→599、顯存 384→301。BC7 關閉時固定步進截圖與改前逐位元相同。
+  - 還沒做：只在特定模式用的資料夾（practice、ai_battle、gauge_ai、dan_info、gauge_dan、SimpleStyle 的 ss_dan）在一般演奏也載入：SimpleStyle 約 33 MB、Nijiiro 約 18 MB（BC7 後）。要按模式略過得逐一確認各模式的 Lua 不會在 init 就查這些圖。其餘（balloon、kusudama、branch、各結尾動畫）看歌，不能略過。
+- density 2 畫到 3840×2160 再縮到螢幕：畫布本身 33 MB，改成螢幕大小的收益小（1440p 省約 18 MB），沒做。

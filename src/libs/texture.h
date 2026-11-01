@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -104,7 +105,21 @@ struct TextureObject {
         if (t && t->id == 0) {
             texture_lazy::upload(t);
         }
+        if (zdon_tex_use_stats && t) {
+            zdon_tex_used().insert(t);
+        }
         return t;
+    }
+
+    // Z-DON dev stat (ZDON_TEX_USE_STATS=1): the textures handed to GL since the screen loaded; the unload logs
+    // the uploaded ones that never were (TextureWrapper::unload_textures)
+    static inline const bool zdon_tex_use_stats = [] {
+        const char* v = std::getenv("ZDON_TEX_USE_STATS");
+        return v && *v == '1';
+    }();
+    static std::unordered_set<const Texture*>& zdon_tex_used() {
+        static auto* s = new std::unordered_set<const Texture*>();
+        return *s;
     }
 
     // The frame's texture as it is (id 0 while the upload is pending; width / height / format are set):

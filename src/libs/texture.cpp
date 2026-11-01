@@ -283,6 +283,46 @@ void TextureWrapper::init(const fs::path& skin_path) {
 
 static ray::Image decode_evicted(const fs::path& source);
 void TextureWrapper::unload_textures() {
+    if (TextureObject::zdon_tex_use_stats) {
+        // uploaded (id != 0) and never handed to GL since the load, by folder
+        std::map<std::string, std::pair<int, double>> unused;
+        int used_n = 0;
+        double used_mb = 0;
+        std::unordered_set<const Texture*> seen;
+        for (const auto& [name, obj] : textures) {
+            for (int f = 0; f < obj->frame_count(); ++f) {
+                const Texture* t = obj->frame_texture_raw(f);
+                if (!t || t->id == 0 || !seen.insert(t).second) {
+                    continue;
+                }
+                const double mb = ray::GetPixelDataSize(t->width, t->height, t->format) / 1048576.0;
+                if (TextureObject::zdon_tex_used().contains(t)) {
+                    ++used_n;
+                    used_mb += mb;
+                    continue;
+                }
+                const size_t slash = name.rfind('/');
+                auto& u = unused[slash == std::string::npos ? std::string("-") : name.substr(0, slash)];
+                ++u.first;
+                u.second += mb;
+            }
+        }
+        int n = 0;
+        double mb = 0;
+        std::vector<std::pair<double, std::string>> top;
+        for (const auto& [folder, u] : unused) {
+            n += u.first;
+            mb += u.second;
+            top.emplace_back(u.second, fmt::format("{} {} ({:.1f} MB)", folder, u.first, u.second));
+        }
+        std::ranges::sort(top, std::greater<>());
+        spdlog::info("[tex_use] {}: drawn {} ({:.1f} MB), uploaded but never drawn {} ({:.1f} MB)",
+                     global_data.current_screen, used_n, used_mb, n, mb);
+        for (size_t i = 0; i < top.size() && i < 25; ++i) {
+            spdlog::info("[tex_use]   {}", top[i].second);
+        }
+        TextureObject::zdon_tex_used().clear();
+    }
     lua_texture_lookup.clear();
     texture_fallbacks.clear();
     language_preferred.clear();
