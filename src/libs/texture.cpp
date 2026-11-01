@@ -21,6 +21,7 @@
 #include "profiler.h"
 #include "script.h"
 #include "text.h"
+#include "texture_bc7.h"
 #include "texture_ondemand.h"
 #include "texture_pack.h"
 #include "texture_retain.h"
@@ -588,6 +589,7 @@ namespace {
                 unload_image(ref);
             }
         }
+        texture_bc7::compress(image); // Z-DON: BC7 when the cache has its blocks
         return image;
     }
 

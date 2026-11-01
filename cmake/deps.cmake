@@ -102,6 +102,9 @@ execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/
 # test runs (YATAIDON_TEST=1) create theirs hidden
 execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-sdl-hidden-window.patch
                         -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+# Z-DON: BC7 textures (PIXELFORMAT_COMPRESSED_BPTC_RGBA, GL 4.2 / GL_ARB_texture_compression_bptc; src/libs/texture_bc7.h)
+execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-bptc.patch
+                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
 # three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
 target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
 if(IOS)
@@ -544,6 +547,19 @@ if(NOT EMSCRIPTEN)  # no curl/SSL on web; browser build has no cpr users
   )
   FetchContent_MakeAvailable(cpr)
 endif()
+
+# Z-DON: bc7enc (Richard Geldreich, MIT / public domain): the BC7 encoder and decoder of src/libs/texture_bc7.cpp.
+# Only the two sources are built (the repository's own CMakeLists builds its test tool).
+message(STATUS "Fetching bc7enc...")
+FetchContent_Declare(
+    bc7enc
+    GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
+    GIT_TAG        b9438627eef73a1157e84201b6fa6eb2ffd6d9f0
+    SOURCE_SUBDIR  no-cmake
+)
+FetchContent_MakeAvailable(bc7enc)
+add_library(bc7enc STATIC ${bc7enc_SOURCE_DIR}/bc7enc.cpp ${bc7enc_SOURCE_DIR}/bc7decomp.cpp)
+target_include_directories(bc7enc SYSTEM PUBLIC ${bc7enc_SOURCE_DIR})
 
 # miniz (ZIP reading, used for .osz extraction)
 message(STATUS "Fetching miniz...")

@@ -377,7 +377,14 @@ inline void image_draw_image_pro(ray::Image* dst, ray::Image src, Rect src_rec, 
     ray::ImageDrawImagePro(dst, src, src_rec, dst_rec, origin, rotation, {tint.r, tint.g, tint.b, tint.a});
 }
 
+namespace texture_bc7 {
+    Rect alpha_border(const ray::Image& image);
+}
+
 inline Rect get_image_alpha_border(ray::Image image, float threshold) {
+    if (image.format == ray::PIXELFORMAT_COMPRESSED_BPTC_RGBA && threshold == 0.0f) {
+        return texture_bc7::alpha_border(image); // Z-DON: the border before compression
+    }
     return ray::GetImageAlphaBorder(image, threshold);
 }
 

@@ -235,6 +235,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     sol2::sol2
     SQLite3_lib
     miniz
+    bc7enc
 )
 
 if(NOT EMSCRIPTEN)

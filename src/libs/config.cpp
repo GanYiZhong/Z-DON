@@ -431,6 +431,7 @@ Config get_config() {
     config.video.target_fps = config_file["video"]["target_fps"].value_or(-1);
     config.video.vsync = config_file["video"]["vsync"].value_or(kDefaultVsync);
 
+    config.video.zdon_texture_compression = config_file["video"]["zdon_texture_compression"].value_or(true);
     return config;
 }
 
@@ -561,7 +562,8 @@ void save_config(const Config& config) {
     config_table.insert("video", toml::table{{"fullscreen", config.video.fullscreen},
                                              {"borderless", config.video.borderless},
                                              {"target_fps", config.video.target_fps},
-                                             {"vsync", config.video.vsync}});
+                                             {"vsync", config.video.vsync},
+                                             {"zdon_texture_compression", config.video.zdon_texture_compression}});
 
     // main saves at every start (for migrated fields): a file that already holds the same text is
     // left alone (the same text mode read as it is written)

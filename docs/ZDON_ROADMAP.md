@@ -229,3 +229,13 @@
 - PBO／共用 context 上傳執行緒：第一次畫到的同步上傳已用 warm-up 搬到前幾幀的空檔（見上表），剩載入那幀就畫到的那幾張（Nijiiro 選曲 10 張 7–10 ms，在 480–560 ms 的載入幀裡）。要再省只能把它們跟解碼重疊（載入時上傳）或另開 GL context，收益是載入幀的 1–2%，沒做。
 - `PlaybackClock` 與 vblank 限幀：已讓 synchronize 用實測的刷新週期（02f375d）；更深的整合會改變演奏時鐘，等於判定行為改動，不做。
 - 譜面音符改成不用 deque：約 90 處參考/迭代器語意要改，每幀的迭代早已走 vector，收益小，不做。
+
+## 2026-11-01 BC7 壓縮貼圖（texture_bc7）
+
+- 占用分析（SimpleStyle、2560×1440 無邊框、不限幀率，隱藏即時跑）：選曲 ws 779 / private 915 MB / 顯存 538 MB；演奏 private 1315 / 顯存 958 MB。程式本體約 100 MB，其餘幾乎都是貼圖：共用 270 MB、演奏 355 MB（解碼後 RGBA），private 約貼圖的 1.7–2 倍（推測 NVIDIA GL 驅動在系統記憶體另留一份）。CPU 每幀工作約 1 ms。
+- 做法：skin 貼圖解碼後在 load_image 結尾轉 BC7（GL_COMPRESSED_RGBA_BPTC_UNORM，raylib patch `cmake/patches/raylib-bptc.patch` 新增 PIXELFORMAT_COMPRESSED_BPTC_RGBA）。編碼器 bc7enc（bc7enc_rdo b943862，只編 bc7enc.cpp/bc7decomp.cpp）。每張圖編完逐 block 解回比對，可見像素任一通道誤差 > 4/255 就整張留 RGBA。
+- 快取 `cache/bc7/textures.bin`：以解碼後像素的 64-bit hash 為 key（任何 skin/子 skin/改過的檔都對得上），blocks 以 deflate 存、用到才從檔案讀。沒命中時這次照傳 RGBA，Background 工作編碼，下次載入才用（第一次載入不變慢）。開關 `[video] zdon_texture_compression`（預設 true）、`ZDON_BC7=0/1`；GL 沒有 4.2 / ARB_texture_compression_bptc 就自動關。
+- 透明邊界（opaque_right 用）：壓縮前從 RGBA 算，用 blocks 的 hash 記住；查不到就解 blocks 算。
+- 結果（第二次啟動、快取命中）：選曲 ws 779→300 MB、private 915→525、顯存 538→266；演奏 private 1318→690、顯存 958→384；共用貼圖 270→72 MB、演奏 355→95 MB。SimpleStyle 全 skin 1177→303 MB，快取檔 3.3 MB。固定步進截圖 on/off 比對：99.99% 像素差 ≤2/255、最大 5/255，版面不變；crazylover 魔王 auto 全良。
+- Nijiiro（漸層/手繪）在同樣門檻下只有 8.8% 的位元組過關（整體 PSNR 51.7 dB）。使用者決定放寬：門檻改成「每像素 ≤ 4/255，或整張 PSNR ≥ 45 dB（MSE ≤ 2.06，同樣以 alpha 加權）」，快取版本 2（舊快取自動重來）。Nijiiro 實測：選曲 ws 714→368、private 875→470、顯存 172→106 MB；演奏 private 1128→765、顯存 767→415 MB；快取檔約 30 MB（全 skin 估 131 MB，上限 256 MB）。固定步進截圖：演奏約 0.3% 像素差 > 8/255、最大 90，放大 4 倍目視分不出；分數/連段相同。
+- 未解：Nijiiro 選曲 BC7 關閉的即時隱藏跑，7 次有 2 次在進選曲約 1 秒後無聲結束（log 停在 nameplate 載入、沒有 Game closed、Event Log 無當機紀錄），之後 5 次重現不了；BC7 開著的 6 次都正常。

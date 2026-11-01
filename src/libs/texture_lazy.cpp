@@ -445,7 +445,8 @@ namespace texture_lazy {
             return;
         }
         Pending& p = it->second;
-        if (image.width != t->width || image.height != t->height || image.format != t->format) {
+        // (the format may differ: Z-DON BC7 hands back blocks for an image made as RGBA8 before they were encoded)
+        if (image.width != t->width || image.height != t->height) {
             // the file changed since the texture was made: its object was set up for the old size
             spdlog::warn("Lazy texture upload: {} changed on disk ({}x{} -> {}x{})", p.source.string(), t->width,
                          t->height, image.width, image.height);

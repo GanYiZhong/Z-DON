@@ -116,6 +116,7 @@ struct VideoConfig {
     int target_fps = 60;
     bool vsync = true;
 };
+    bool zdon_texture_compression = true; // Z-DON: skin textures as BC7 (texture_bc7.h)
 
 struct Config {
     GeneralConfig general;

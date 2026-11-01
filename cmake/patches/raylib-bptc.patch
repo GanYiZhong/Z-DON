@@ -1,0 +1,137 @@
+--- a/src/raylib.h	2026-11-01 05:03:40.138104800 +0800
++++ b/src/raylib.h	2026-11-01 05:03:40.882264200 +0800
+@@ -874,7 +874,8 @@
+     PIXELFORMAT_COMPRESSED_PVRT_RGB,        // 4 bpp
+     PIXELFORMAT_COMPRESSED_PVRT_RGBA,       // 4 bpp
+     PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA,   // 8 bpp
+-    PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA    // 2 bpp
++    PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA,   // 2 bpp
++    PIXELFORMAT_COMPRESSED_BPTC_RGBA        // 8 bpp (BC7; Z-DON)
+ } PixelFormat;
+ 
+ // Texture parameters: filter mode
+--- a/src/rlgl.h	2026-11-01 05:03:40.252904700 +0800
++++ b/src/rlgl.h	2026-11-01 05:03:41.000324700 +0800
+@@ -477,7 +477,8 @@
+     RL_PIXELFORMAT_COMPRESSED_PVRT_RGB,            // 4 bpp
+     RL_PIXELFORMAT_COMPRESSED_PVRT_RGBA,           // 4 bpp
+     RL_PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA,       // 8 bpp
+-    RL_PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA        // 2 bpp
++    RL_PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA,       // 2 bpp
++    RL_PIXELFORMAT_COMPRESSED_BPTC_RGBA            // 8 bpp (BC7; Z-DON)
+ } rlPixelFormat;
+ 
+ // Texture parameters: filter mode
+@@ -717,6 +718,7 @@
+ RLAPI void rlLoadExtensions(void *loader);              // Load OpenGL extensions (loader function required)
+ RLAPI void *rlGetProcAddress(const char *procName);     // Get OpenGL procedure address
+ RLAPI int rlGetVersion(void);                           // Get current OpenGL version
++RLAPI bool rlIsTextureCompressionBPTCSupported(void);   // Z-DON: BC7 textures can be loaded (GL 4.2 or GL_ARB_texture_compression_bptc)
+ RLAPI void rlSetFramebufferWidth(int width);            // Set current framebuffer width
+ RLAPI int rlGetFramebufferWidth(void);                  // Get default framebuffer width
+ RLAPI void rlSetFramebufferHeight(int height);          // Set current framebuffer height
+@@ -1096,6 +1098,7 @@
+         bool texCompETC2;                   // ETC2/EAC texture compression support (GL_ARB_ES3_compatibility)
+         bool texCompPVRT;                   // PVR texture compression support (GL_IMG_texture_compression_pvrtc)
+         bool texCompASTC;                   // ASTC texture compression support (GL_KHR_texture_compression_astc_hdr, GL_KHR_texture_compression_astc_ldr)
++        bool texCompBPTC;                   // BC7 texture compression support (GL 4.2, GL_ARB_texture_compression_bptc)
+         bool texMirrorClamp;                // Clamp mirror wrap mode supported (GL_EXT_texture_mirror_clamp)
+         bool texAnisoFilter;                // Anisotropic texture filtering support (GL_EXT_texture_filter_anisotropic)
+         bool computeShader;                 // Compute shaders support (GL_ARB_compute_shader)
+@@ -2527,6 +2530,18 @@
+     RLGL.ExtSupported.texCompASTC = GLAD_GL_KHR_texture_compression_astc_hdr && GLAD_GL_KHR_texture_compression_astc_ldr;
+     RLGL.ExtSupported.texCompDXT = GLAD_GL_EXT_texture_compression_s3tc;  // Texture compression: DXT
+     RLGL.ExtSupported.texCompETC2 = GLAD_GL_ARB_ES3_compatibility;        // Texture compression: ETC2/EAC
++    // Z-DON: texture compression: BC7 (core in GL 4.2, else the ARB extension)
++    RLGL.ExtSupported.texCompBPTC = GLAD_GL_VERSION_4_2;
++    if (!RLGL.ExtSupported.texCompBPTC)
++    {
++        GLint extCount = 0;
++        glGetIntegerv(GL_NUM_EXTENSIONS, &extCount);
++        for (int i = 0; i < extCount; i++)
++        {
++            const char *ext = (const char *)glGetStringi(GL_EXTENSIONS, i);
++            if ((ext != NULL) && (strcmp(ext, "GL_ARB_texture_compression_bptc") == 0)) RLGL.ExtSupported.texCompBPTC = true;
++        }
++    }
+     #if defined(GRAPHICS_API_OPENGL_43)
+     RLGL.ExtSupported.computeShader = GLAD_GL_ARB_compute_shader;
+     RLGL.ExtSupported.ssbo = GLAD_GL_ARB_shader_storage_buffer_object;
+@@ -2763,6 +2778,7 @@
+     if (RLGL.ExtSupported.texCompETC2) TRACELOG(RL_LOG_INFO, "GL: ETC2/EAC compressed textures supported");
+     if (RLGL.ExtSupported.texCompPVRT) TRACELOG(RL_LOG_INFO, "GL: PVRT compressed textures supported");
+     if (RLGL.ExtSupported.texCompASTC) TRACELOG(RL_LOG_INFO, "GL: ASTC compressed textures supported");
++    if (RLGL.ExtSupported.texCompBPTC) TRACELOG(RL_LOG_INFO, "GL: BPTC (BC7) compressed textures supported");
+     if (RLGL.ExtSupported.computeShader) TRACELOG(RL_LOG_INFO, "GL: Compute shaders supported");
+     if (RLGL.ExtSupported.ssbo) TRACELOG(RL_LOG_INFO, "GL: Shader storage buffer objects supported");
+ #endif
+@@ -3402,6 +3418,12 @@
+         TRACELOG(RL_LOG_WARNING, "GL: ASTC compressed texture format not supported");
+         return id;
+     }
++
++    if ((!RLGL.ExtSupported.texCompBPTC) && (format == RL_PIXELFORMAT_COMPRESSED_BPTC_RGBA))
++    {
++        TRACELOG(RL_LOG_WARNING, "GL: BPTC compressed texture format not supported");
++        return id;
++    }
+ #endif
+ #endif // GRAPHICS_API_OPENGL_11
+ 
+@@ -3785,6 +3807,7 @@
+         case RL_PIXELFORMAT_COMPRESSED_PVRT_RGBA: if (RLGL.ExtSupported.texCompPVRT) *glInternalFormat = GL_COMPRESSED_RGBA_PVRTC_4BPPV1_IMG; break;  // NOTE: Requires PowerVR GPU
+         case RL_PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA: if (RLGL.ExtSupported.texCompASTC) *glInternalFormat = GL_COMPRESSED_RGBA_ASTC_4x4_KHR; break;  // NOTE: Requires OpenGL ES 3.1 or OpenGL 4.3
+         case RL_PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA: if (RLGL.ExtSupported.texCompASTC) *glInternalFormat = GL_COMPRESSED_RGBA_ASTC_8x8_KHR; break;  // NOTE: Requires OpenGL ES 3.1 or OpenGL 4.3
++        case RL_PIXELFORMAT_COMPRESSED_BPTC_RGBA: if (RLGL.ExtSupported.texCompBPTC) *glInternalFormat = 0x8E8C; break;  // GL_COMPRESSED_RGBA_BPTC_UNORM, OpenGL 4.2
+     #endif
+         default: TRACELOG(RL_LOG_WARNING, "TEXTURE: Current format not supported (%i)", format); break;
+     }
+@@ -5178,6 +5201,7 @@
+         case RL_PIXELFORMAT_COMPRESSED_PVRT_RGBA: return "PVRT_RGBA"; break;           // 4 bpp
+         case RL_PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA: return "ASTC_4x4_RGBA"; break;   // 8 bpp
+         case RL_PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA: return "ASTC_8x8_RGBA"; break;   // 2 bpp
++        case RL_PIXELFORMAT_COMPRESSED_BPTC_RGBA: return "BPTC_RGBA"; break;           // 8 bpp
+         default: return "UNKNOWN"; break;
+     }
+ }
+@@ -5422,6 +5446,15 @@
+ 
+ #endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2
+ 
++bool rlIsTextureCompressionBPTCSupported(void)
++{
++#if !defined(GRAPHICS_API_OPENGL_11)
++    return RLGL.ExtSupported.texCompBPTC;
++#else
++    return false;
++#endif
++}
++
+ // Get pixel data size in bytes (image or texture)
+ // NOTE: Size depends on pixel format
+ static int rlGetPixelDataSize(int width, int height, int format)
+@@ -5462,7 +5495,8 @@
+         case RL_PIXELFORMAT_COMPRESSED_DXT3_RGBA:
+         case RL_PIXELFORMAT_COMPRESSED_DXT5_RGBA:
+         case RL_PIXELFORMAT_COMPRESSED_ETC2_EAC_RGBA:
+-        case RL_PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA: // 16 bytes per each 4x4 block
++        case RL_PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA:
++        case RL_PIXELFORMAT_COMPRESSED_BPTC_RGBA: // 16 bytes per each 4x4 block
+         {
+             int blockWidth = (width + 3)/4;
+             int blockHeight = (height + 3)/4;
+--- a/src/rtextures.c	2026-11-01 05:03:40.356461400 +0800
++++ b/src/rtextures.c	2026-11-01 05:03:41.002882600 +0800
+@@ -5743,6 +5743,12 @@
+         case PIXELFORMAT_COMPRESSED_ETC2_EAC_RGBA:
+         case PIXELFORMAT_COMPRESSED_ASTC_4x4_RGBA: bpp = 8; break;
+         case PIXELFORMAT_COMPRESSED_ASTC_8x8_RGBA: bpp = 2; break;
++        case PIXELFORMAT_COMPRESSED_BPTC_RGBA:
++        {
++            // Z-DON: whole 4x4 blocks, as the GL upload counts them (the others round down)
++            unsigned long long blocks = (unsigned long long)((width + 3)/4)*((height + 3)/4);
++            return (blocks*16 < INT_MAX)? (int)(blocks*16) : 0;
++        }
+         default: break;
+     }
+ 

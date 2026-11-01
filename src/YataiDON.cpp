@@ -22,6 +22,7 @@
 #include "libs/song_parser.h"
 #include "libs/test_mode.h"
 #include "libs/text.h"
+#include "libs/texture_bc7.h"
 #include "libs/texture_lazy.h"
 #include "libs/webcam.h"
 #include "libs/zdon_os.h"
@@ -1090,6 +1091,7 @@ int main(int argc, char* argv[]) {
         scores_manager.player_1_data = *pd;
     }
     if (auto pd = scores_manager.get_player_data(scores_manager.player_2)) {
+    texture_bc7::init(global_data.config->video.zdon_texture_compression);
         scores_manager.player_2_data = *pd;
     }
 
@@ -1198,3 +1200,4 @@ int main(int argc, char* argv[]) {
     spdlog::info("Game closed");
 #endif
 }
+    texture_bc7::shutdown();
