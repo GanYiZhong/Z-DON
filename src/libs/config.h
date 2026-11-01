@@ -25,6 +25,7 @@ struct GeneralConfig {
     bool zdon_sort_filter = true;
     bool zdon_practice_loop = true; // Z-DON: practice resumed at a jump mark loops to the next mark
     int zdon_ai_level = 5;          // Z-DON AI battle (zdon_ai.h): the AI's skill 1..10, +1 per match won, -1 per loss
+    int zdon_ai_wins = 0;           // Z-DON AI battle: matches won so far
     std::string log_level;
     int practice_mode_bar_delay = 0;
     std::string score_method;
@@ -115,8 +116,8 @@ struct VideoConfig {
     bool borderless = false;
     int target_fps = 60;
     bool vsync = true;
-};
     bool zdon_texture_compression = true; // Z-DON: skin textures as BC7 (texture_bc7.h)
+};
 
 struct Config {
     GeneralConfig general;

@@ -61,7 +61,8 @@ Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_n
 }
 
 void Player::apply_replay_appearance(const PlayerData& pd) {
-    nameplate = Nameplate(pd.username, pd.title, player_num, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
+    nameplate = Nameplate(pd.username, pd.title, zdon_ai ? PlayerNum::AI : player_num, pd.dan, pd.gold, pd.rainbow,
+                          pd.title_bg);
     chara = make_chara_from_player_data(&pd, false, true);
     chara->set_don_colors(pd.chara_color_1, pd.chara_color_2, pd.chara_color_3);
     chara->apply_face(pd.chara_face_index);
@@ -469,7 +470,6 @@ void Player::evaluate_branch(double current_ms) {
 void Player::update(double ms_from_start, double current_ms, std::optional<Background>& background) {
     bg_hook = background.has_value() ? &background.value() : nullptr;
 
-    note_manager(ms_from_start, background);
     // Z-DON: a stalled frame (the window dragged: Windows blocks the loop while the song plays on) jumps the
     // clock past notes and rolls. Auto play walks the gap in small steps so it still hits every note on time and
     // keeps its roll speed; the hit sounds of the gap are skipped.
@@ -492,6 +492,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     }
     zdon_auto_last_ms = ms_from_start;
 
+    note_manager(ms_from_start, background);
     combo_display.update(current_ms, combo);
     if (combo_announce.has_value()) {
         combo_announce->update(current_ms);
@@ -868,7 +869,6 @@ void Player::reset_chart() {
         live.song_end_ms = end_time;
         live.gogo_ranges.clear();
         live.last_hit_at_ms = -1.0;
-        live.offset_applied = 0;
         std::vector<const TimelineObject*> gogo_events;
         for (const TimelineObject& t : notes.timeline) {
             if (t.gogo_time.has_value()) {
@@ -1685,6 +1685,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             }
             lane_hit_effect = LaneHitEffect(drum_type, Judgments::GOOD);
             note_judgments[curr_note.index] = Judgments::GOOD;
+            note_offsets[curr_note.index] = static_cast<float>(ms_from_start - curr_note.hit_ms);
             good_count++;
             score += base_score;
             score_counter.add_popup(base_score, true);
@@ -1704,6 +1705,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             draw_judge_list.emplace_back(Judgments::OK, big);
             lane_hit_effect = LaneHitEffect(drum_type, Judgments::OK);
             note_judgments[curr_note.index] = Judgments::OK;
+            note_offsets[curr_note.index] = static_cast<float>(ms_from_start - curr_note.hit_ms);
             ok_count++;
             score += 10 * std::floor(base_score / 2 / 10);
             score_counter.add_popup(10 * std::floor(base_score / 2 / 10), true);
@@ -1729,6 +1731,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             record_hit_offset(note);
             lane.pop_front();
             note_judgments[note.index] = Judgments::BAD;
+            note_offsets[note.index] = static_cast<float>(ms_from_start - note.hit_ms);
             auto it = std::ranges::lower_bound(draw_note_buffer, note.index, {}, &Note::index);
             if (it != draw_note_buffer.end() && *it == note) {
                 draw_note_buffer.erase(it);
@@ -2041,6 +2044,20 @@ void Player::draw_notes(double current_ms, float y) {
 
     const float notes_y = tex.get_skin_config(SC::GAME_NOTES)->y;
     const float moji_y = tex.get_skin_config(SC::GAME_MOJI)->y;
+    // Z-DON hidden / sudden: how much of a don / ka note (and its moji) shows at x
+    auto zdon_fade_alpha = [&](float x) -> float {
+        const int f = modifiers.zdon_fade;
+        if (f <= 0) {
+            return 1.0f;
+        }
+        constexpr float band = 0.08f; // the fade, in lane widths
+        const float line = JudgePos::X + judge_x;
+        const float p = (x - line) / std::max(1.0f, tex.screen_width - JudgePos::X); // 0 = judge line, 1 = edge
+        if (f <= 3) {
+            return std::clamp((p - 0.25f * f) / band, 0.0f, 1.0f);
+        }
+        return std::clamp((1.0f - 0.25f * (f - 3) - p) / band, 0.0f, 1.0f);
+    };
     note_positions.assign(draw_note_buffer.size(), std::nullopt); // reverse order, as drawn
     size_t slot = 0;
     for (auto it = draw_note_buffer.rbegin(); it != draw_note_buffer.rend(); ++it, ++slot) {
@@ -2057,7 +2074,16 @@ void Player::draw_notes(double current_ms, float y) {
         } else if (note.type == NoteType::BALLOON_HEAD) {
             draw_balloon(current_ms, y, note, current_eighth, false);
         } else if (note.display) {
-            tex.draw_texture(note_tex_ids[(int)note.type], {.frame = current_eighth % 2,
+            const bool dim = zdon_dim_range &&
+                             (note.hit_ms < zdon_dim_range->first - 1.0 || note.hit_ms >= zdon_dim_range->second - 1.0);
+            const float alpha = zdon_fade_alpha(pos->first);
+            if (alpha <= 0.0f) {
+                continue;
+            }
+            Color tint = dim ? Color{120, 120, 128, 255} : Color::WHITE;
+            tint.a = static_cast<unsigned char>(255.0f * alpha);
+            tex.draw_texture(note_tex_ids[(int)note.type], {.color = tint,
+                                                            .frame = current_eighth % 2,
                                                             .center = true,
                                                             .x = pos->first - (t_notes_9->width / 2.0f),
                                                             .y = pos->second + notes_y});
@@ -2076,9 +2102,11 @@ void Player::draw_notes(double current_ms, float y) {
             draw_drumroll(current_ms, y, note, current_eighth, true);
         } else if (note.type == NoteType::BALLOON_HEAD) {
             draw_balloon(current_ms, y, note, current_eighth, true);
-        } else {
-            tex.draw_texture(t_moji,
-                             {.frame = note.moji, .x = pos->first - (t_moji->width / 2.0f), .y = moji_y + pos->second});
+        } else if (const float alpha = zdon_fade_alpha(pos->first); alpha > 0.0f) {
+            tex.draw_texture(t_moji, {.color = fade(Color::WHITE, alpha),
+                                      .frame = note.moji,
+                                      .x = pos->first - (t_moji->width / 2.0f),
+                                      .y = moji_y + pos->second});
         }
     }
 }
@@ -2251,6 +2279,7 @@ void Player::seek_to(double resume_time) {
 
     reset_chart();
     resume_filter_ms = resume_time;
+    zdon_auto_last_ms = -1e18;
 
     while (!timeline.empty() && timeline.front().start_time <= resume_time) {
         TimelineObject entry = timeline.front();
@@ -2273,4 +2302,3 @@ void Player::seek_to(double resume_time) {
     std::erase_if(draw_note_list,
                   [resume_time, boundary_eps](const Note& n) { return n.hit_ms < resume_time - boundary_eps; });
 }
-    zdon_auto_last_ms = -1e18;

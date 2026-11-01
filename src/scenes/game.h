@@ -88,6 +88,16 @@ public:
     virtual std::string background_scene_preset() const { return scene_preset; }
 
     virtual Modifiers get_player_modifiers(PlayerNum pn);
+    static std::vector<std::string> zdon_unsaved_reasons(const Player& player);
+    // Z-DON PB pace: this play's score over the song (saved when it is a new best) and the best play's
+    struct ZdonGhost {
+        bool loaded = false;
+        std::vector<std::pair<float, int>> best, rec;
+        int last = -1;
+    };
+    std::array<ZdonGhost, 4> zdon_ghost; // by PlayerNum
+    void zdon_ghost_update();
+    void zdon_draw_ghost() const;
 
     Screens on_screen_end(Screens next_screen) override;
 

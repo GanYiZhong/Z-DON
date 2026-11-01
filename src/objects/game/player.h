@@ -78,7 +78,16 @@ public:
         auto it = note_judgments.find(note_index);
         return it != note_judgments.end() ? std::optional<Judgments>(it->second) : std::nullopt;
     }
+    // Z-DON: the hit's offset from the note (ms, + = late), for the practice pause view
+    std::optional<float> get_note_offset(int note_index) const {
+        auto it = note_offsets.find(note_index);
+        return it != note_offsets.end() ? std::optional<float>(it->second) : std::nullopt;
+    }
     bool is_auto_play() const { return modifiers.auto_play; }
+    // Z-DON: auto play was on at some point of this run (the score is not saved; GameScreen::save_score)
+    bool zdon_auto_used() const { return auto_used || modifiers.auto_play; }
+    // Z-DON practice loop: notes outside [first, second) chart ms are drawn grey (nullopt: none)
+    std::optional<std::pair<double, double>> zdon_dim_range;
     bool is_replay() const { return replay_active; }
     void load_replay(const std::map<double, InputLogType>& log) {
         replay_log.assign(log.begin(), log.end());
@@ -90,7 +99,10 @@ public:
     void cut_to_end(double now, int prev_good = 0, int prev_ok = 0, int prev_bad = 0);
     bool was_skipped() const { return skipped_run; }
     const Modifiers& get_modifiers() const { return modifiers; }
-    void set_auto_play(bool value) { modifiers.auto_play = value; }
+    void set_auto_play(bool value) {
+        auto_used = auto_used || value;
+        modifiers.auto_play = value;
+    }
     void reset_performance() {
         good_count = ok_count = bad_count = 0;
         combo = max_combo = 0;
@@ -103,6 +115,7 @@ public:
         was_gauge_clear = false;
         miss_streak = 0;
         note_judgments.clear();
+        note_offsets.clear();
         last_reported_score = -1;
         last_reported_gogo = -1;
         if (judge_counter) {
@@ -175,6 +188,8 @@ private:
     int hit_offset_count = 0;
     std::vector<float> hit_offsets; // Z-DON: each judged hit's offset (ResultData::hit_offsets)
     std::unordered_map<int, Judgments> note_judgments;
+    std::unordered_map<int, float> note_offsets; // Z-DON: get_note_offset
+    bool auto_used = false;                      // Z-DON: zdon_auto_used
 
     float judge_x{0};
     float judge_y{0};
@@ -233,6 +248,9 @@ private:
     std::string branch_condition;
 
     double resume_filter_ms = -1e18;
+    // Z-DON auto play catch-up: where the last update was, and true while replaying a stalled gap
+    double zdon_auto_last_ms = -1e18;
+    bool zdon_auto_catchup = false;
 
     std::string don_hitsound;
     std::string kat_hitsound;
@@ -248,9 +266,6 @@ private:
 
     void init_player_textures();
 
-    // Z-DON auto play catch-up: where the last update was, and true while replaying a stalled gap
-    double zdon_auto_last_ms = -1e18;
-    bool zdon_auto_catchup = false;
     TextureObject* t_lane_background = nullptr;
     TextureObject* t_ai_lane_background = nullptr;
     TextureObject* t_lane_hit_circle = nullptr;

@@ -35,7 +35,7 @@ public:
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();
         const PlayerData pd = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
-        ai_plate = Nameplate(pd.username, pd.title, PlayerNum::P2, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
+        ai_plate = Nameplate(pd.username, pd.title, PlayerNum::AI, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
         ai_chara = make_chara_from_player_data(&pd, true);
         ai_chara->set_don_colors(pd.chara_color_1, pd.chara_color_2, pd.chara_color_3);
         ai_chara->set_anim(AnimIndex::DON_SELECT_LOOP);

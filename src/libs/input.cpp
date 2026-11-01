@@ -832,6 +832,18 @@ void dev_inject_key(int key) {
         if (sc != SDL_SCANCODE_UNKNOWN) {
             key = sc;
         }
+    } else if (key >= 256) {
+        // raylib's special keys (Esc, Enter, arrows, F1..F12)
+        static const std::unordered_map<int, int> special = {{256, SDL_SCANCODE_ESCAPE}, {257, SDL_SCANCODE_RETURN},
+                                                             {258, SDL_SCANCODE_TAB},    {259, SDL_SCANCODE_BACKSPACE},
+                                                             {262, SDL_SCANCODE_RIGHT},  {263, SDL_SCANCODE_LEFT},
+                                                             {264, SDL_SCANCODE_DOWN},   {265, SDL_SCANCODE_UP},
+                                                             {266, SDL_SCANCODE_PAGEUP}, {267, SDL_SCANCODE_PAGEDOWN}};
+        if (auto it = special.find(key); it != special.end()) {
+            key = it->second;
+        } else if (key >= 290 && key <= 301) {
+            key = SDL_SCANCODE_F1 + (key - 290);
+        }
     }
     // YATAIDON_FAKE_KEYS_RAW=1: the key also reaches the per-frame keyboard queue (key_pressed /
     // key_pressed_next), as a real key press does -- for testing keybind capture.
@@ -1065,6 +1077,21 @@ static void dev_push_frame_key(int scancode) {
     pending.key_queue.push_back(scancode);
 }
 
+// Z-DON dev hook (YATAIDON_FAKE_MOUSE): from now on the mouse is at x, y (render px); button > 0 is pressed
+// and wheel scrolled in the next frame. No OS input.
+static bool dev_mouse_set = false;
+static Vec2 dev_mouse_pos = {0, 0};
+
+void dev_inject_mouse(float x, float y, int button, float wheel) {
+    std::scoped_lock lock(frame_mutex);
+    dev_mouse_set = true;
+    dev_mouse_pos = {x, y};
+    if (button > 0 && button < (int)pending.mouse_pressed.size()) {
+        pending.mouse_pressed.set(button);
+    }
+    pending.wheel += wheel;
+}
+
 void poll_input_events() {
     if (!frame_watch_registered) {
         SDL_AddEventWatch(frame_event_watch, nullptr);
@@ -1113,6 +1140,12 @@ float mouse_wheel() {
 }
 
 Vec2 mouse_position() {
+    {
+        std::scoped_lock lock(frame_mutex);
+        if (dev_mouse_set) {
+            return dev_mouse_pos;
+        }
+    }
     float x = 0.0f, y = 0.0f;
 #ifndef YATAIDON_USE_SDL2
     SDL_GetMouseState(&x, &y);

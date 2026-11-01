@@ -114,6 +114,9 @@ void SongSelectScreen::handle_input_search() {
     if (!search_box) {
         return;
     }
+    if (zdon_search_input()) {
+        return;
+    }
     auto result = player->handle_input_search();
     search_box->current_search = player->search_string;
     if (result) {
@@ -305,6 +308,7 @@ void SongSelectScreen::update_diff_sort(double current_time) {
 
 void SongSelectScreen::start_search() {
     search_box.emplace();
+    zdon_search = {};
     // The don key that opened the search (F/J) is also a typed character still
     // queued in raylib's char buffer; drop it so it does not land in the query.
     while (char_pressed() > 0) {
@@ -470,6 +474,7 @@ void SongSelectScreen::draw() {
     }
     if (search_box) {
         search_box->draw(script.get());
+        zdon_draw_search();
     }
     if (game_transition.has_value()) {
         game_transition->draw();

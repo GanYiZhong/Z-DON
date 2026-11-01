@@ -3425,3 +3425,93 @@ std::optional<fs::path> Navigator::find_song_by_title(const std::string& title, 
 }
 
 Navigator navigator;
+
+// ---------------------------------------------------------------- Z-DON song search panel (scenes/song_select.cpp)
+
+// the top genre folder a song sits in (its box.def name), cached; -1 / "" when it has none
+std::pair<int, std::string> Navigator::zdon_genre_of(const fs::path& song_path) {
+    const std::string key = song_path.string();
+    if (auto it = zdon_genre_cache.find(key); it != zdon_genre_cache.end()) {
+        return it->second;
+    }
+    std::pair<int, std::string> g{-1, ""};
+    fs::path cur = song_path;
+    while (true) {
+        fs::path folder = find_box_def_folder(cur);
+        if (folder.empty()) {
+            break;
+        }
+        const BoxDef def = parse_box_def(folder);
+        g = {(int)def.genre_index, def.name};
+        if (std::ranges::contains(root_paths, folder.parent_path())) {
+            break;
+        }
+        cur = folder;
+    }
+    zdon_genre_cache.emplace(key, g);
+    return g;
+}
+
+// the genres of the library, in first-seen order
+std::vector<std::string> Navigator::zdon_genres() {
+    std::vector<std::string> out;
+    if (!song_files_ready) {
+        return out;
+    }
+    for (const auto& [key, song_path] : song_files) {
+        const std::string name = zdon_genre_of(song_path).second;
+        if (!name.empty() && !std::ranges::contains(out, name)) {
+            out.push_back(name);
+        }
+    }
+    return out;
+}
+
+std::vector<fs::path> Navigator::zdon_search(const std::string& query, const std::string& genre, int course, int level,
+                                             size_t limit, size_t& total) {
+    std::vector<fs::path> hits;
+    total = 0;
+    if (!song_files_ready) {
+        return hits;
+    }
+    const std::string q = search_fold(query);
+    for (const auto& [key, song_path] : song_files) {
+        const std::string p = song_path.string();
+        if (!q.empty()) {
+            auto st = song_search_text.find(p);
+            const std::string& text = (st != song_search_text.end()) ? st->second : search_fold(key.first);
+            if (!text.contains(q)) {
+                continue;
+            }
+        }
+        if (course >= 0 || level > 0) {
+            auto lv = song_levels.find(p);
+            if (lv == song_levels.end()) {
+                continue;
+            }
+            bool ok = false;
+            for (int c = 0; c < 5 && !ok; ++c) {
+                ok = (course < 0 || c == course) && lv->second[c] >= 0 && (level <= 0 || lv->second[c] == level);
+            }
+            if (!ok) {
+                continue;
+            }
+        }
+        if (!genre.empty() && zdon_genre_of(song_path).second != genre) {
+            continue;
+        }
+        total++;
+        if (hits.size() < limit) {
+            hits.push_back(song_path);
+        }
+    }
+    return hits;
+}
+
+std::array<int, 5> Navigator::zdon_levels_of(const fs::path& song_path) const {
+    auto it = song_levels.find(song_path.string());
+    if (it == song_levels.end()) {
+        return {-1, -1, -1, -1, -1};
+    }
+    return it->second;
+}

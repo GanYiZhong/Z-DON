@@ -8,6 +8,7 @@ private:
 
 protected:
     double reveal_end_ms() override;
+    bool zdon_two_boards() const override { return true; }
 
 public:
     Result2PScreen() = default;

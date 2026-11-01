@@ -230,6 +230,12 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
     if (key_pressed(SDL_SCANCODE_F5)) {
         navigator.load_current_directory(navigator.current_path);
     }
+    // Z-DON: F2 opens the song search from anywhere on the wheel
+    if (key_pressed(SDL_SCANCODE_F2)) {
+        search_guard = true;
+        search_guard_until_ms = current_ms + 150.0;
+        return SongSelectState::SEARCHING;
+    }
 
     bool navigated = false;
     if (key_pressed(SDL_SCANCODE_LCTRL) || (l_kat && current_ms <= last_moved + 50)) {

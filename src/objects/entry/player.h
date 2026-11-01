@@ -9,6 +9,7 @@
 #include "../global/nameplate.h"
 #include "box_manager.h"
 #include "costume_menu.h"
+#include "zdon_outfit_menu.h"
 
 class EntryPlayer : public LuaScript {
 private:
@@ -36,6 +37,7 @@ private:
 public:
     PlayerNum player_num;
     std::optional<CostumeMenu> costume_menu;
+    std::optional<ZdonOutfitMenu> outfit_menu; // Z-DON: the 2D outfit picker (skins without 3D characters)
 
     EntryPlayer(PlayerNum player_num, int side, BoxManager* box_manager);
     void start_animations(bool hold_cloud = false);

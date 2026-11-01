@@ -668,7 +668,7 @@ std::optional<Screens> EntryScreen::update() {
     if (state == EntryState::SELECT_COSTUME) {
         bool any_open = false;
         for (auto& player : players) {
-            if (player && player->costume_menu.has_value()) {
+            if (player && (player->costume_menu.has_value() || player->outfit_menu.has_value())) {
                 any_open = true;
                 break;
             }

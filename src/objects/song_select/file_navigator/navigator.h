@@ -46,6 +46,7 @@ private:
     // song path -> level per course 0..4 (-1 = course absent), filled by the same scan; the
     // difficulty filter reads this instead of re-parsing every chart on disk
     std::unordered_map<std::string, std::array<int, 5>> song_levels;
+    std::unordered_map<std::string, std::pair<int, std::string>> zdon_genre_cache; // zdon_genre_of
     int open_index;
     bool is_init = false;
     bool is_preloaded = false;
@@ -202,6 +203,13 @@ public:
     Statistics get_statistics(const fs::path& path);
 
     std::optional<fs::path> find_song_by_title(const std::string& title, const std::string& subtitle);
+
+    // Z-DON song search panel (scenes/song_select_zdon_search.cpp)
+    std::vector<fs::path> zdon_search(const std::string& query, const std::string& genre, int course, int level,
+                                      size_t limit, size_t& total);
+    std::vector<std::string> zdon_genres();
+    std::pair<int, std::string> zdon_genre_of(const fs::path& song_path);
+    std::array<int, 5> zdon_levels_of(const fs::path& song_path) const;
     size_t song_file_count() const { return song_files.size(); }
 
     void move_left();

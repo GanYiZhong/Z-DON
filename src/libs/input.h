@@ -61,6 +61,7 @@ double get_last_input_ms();
 void clear_input_buffers();
 // Dev hook (YATAIDON_FAKE_KEYS): queue a key press as if typed in the game window
 void dev_inject_key(int key);
+void dev_inject_mouse(float x, float y, int button, float wheel); // Z-DON dev hook
 void shutdown_sdl_joysticks();
 
 // Platform-independent keyboard visibility control

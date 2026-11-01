@@ -733,6 +733,35 @@ static void run_frame() {
                 pos = comma + 1;
             }
         }
+        // Z-DON dev hook: YATAIDON_FAKE_MOUSE="<ms>:<x>:<y>:<button>:<wheel>,..." (render px; button 0 = move)
+        static const char* fake_mouse = std::getenv("YATAIDON_FAKE_MOUSE");
+        static std::vector<std::array<double, 5>> fake_mice;
+        static bool fake_mouse_parsed = false;
+        if (fake_mouse && *fake_mouse && !fake_mouse_parsed) {
+            fake_mouse_parsed = true;
+            std::string f(fake_mouse);
+            for (size_t pos = 0; pos < f.size();) {
+                size_t comma = f.find(',', pos);
+                std::string item = f.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                std::array<double, 5> v = {};
+                std::sscanf(item.c_str(), "%lf:%lf:%lf:%lf:%lf", &v[0], &v[1], &v[2], &v[3], &v[4]);
+                fake_mice.push_back(v);
+                if (comma == std::string::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+        }
+        for (auto it = fake_mice.begin(); it != fake_mice.end();) {
+            if (since >= (*it)[0]) {
+                spdlog::info("[devmouse] {:.0f},{:.0f} button {} wheel {} at {:.0f}", (*it)[1], (*it)[2], (*it)[3],
+                             (*it)[4], since);
+                dev_inject_mouse((float)(*it)[1], (float)(*it)[2], (int)(*it)[3], (float)(*it)[4]);
+                it = fake_mice.erase(it);
+            } else {
+                ++it;
+            }
+        }
         ime_ui_dev_tick(since);
         for (auto it = fake_keys.begin(); it != fake_keys.end();) {
             if (since >= it->first) {
@@ -1062,6 +1091,7 @@ int main(int argc, char* argv[]) {
 
     ime_ui_set_hint();
     init_window(1280, 720, "YataiDON");
+    texture_bc7::init(global_data.config->video.zdon_texture_compression);
     ime_ui_install();
     try {
         load_skin();
@@ -1091,7 +1121,6 @@ int main(int argc, char* argv[]) {
         scores_manager.player_1_data = *pd;
     }
     if (auto pd = scores_manager.get_player_data(scores_manager.player_2)) {
-    texture_bc7::init(global_data.config->video.zdon_texture_compression);
         scores_manager.player_2_data = *pd;
     }
 
@@ -1190,6 +1219,7 @@ int main(int argc, char* argv[]) {
     // Cleanup needs a live SDL/OpenGL context and config.
     webcam.close();
     unload_skin();
+    texture_bc7::shutdown();
     delete global_data.config;
     global_data.config = nullptr;
 #if defined(__linux__) && !defined(__ANDROID__)
@@ -1200,4 +1230,3 @@ int main(int argc, char* argv[]) {
     spdlog::info("Game closed");
 #endif
 }
-    texture_bc7::shutdown();

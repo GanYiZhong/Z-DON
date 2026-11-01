@@ -46,6 +46,11 @@ protected:
     void update_input_and_timeout(double current_ms);
 
     void draw_overlay();
+    void draw_unsaved_note() const; // Z-DON
+    bool zdon_hist_open[3] = {};    // Z-DON: the hit timing panel, by player
+    void zdon_hist_input();
+    void zdon_draw_hist() const;
+    virtual bool zdon_two_boards() const { return false; } // Z-DON: Result2PScreen
 
     void draw_song_info();
 

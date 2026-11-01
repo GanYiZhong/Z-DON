@@ -65,9 +65,9 @@ PlayerData zdon_ai_player_data(int level) {
     PlayerData pd;
     pd.username = "AI";
     pd.title = "Lv." + std::to_string(level);
-    pd.chara_color_1 = Color{0x5A, 0x6E, 0x8C, 0xFF};
-    pd.chara_color_2 = Color{0x68, 0xBF, 0xC0, 0xFF};
-    pd.chara_color_3 = Color{0xF9, 0xF0, 0xE1, 0xFF};
+    pd.chara_color_1 = Color{0x3C, 0x46, 0x56, 0xFF}; // body: dark steel
+    pd.chara_color_2 = Color{0xB9, 0xC6, 0xD4, 0xFF}; // face: silver
+    pd.chara_color_3 = Color{0x7C, 0xE8, 0xF5, 0xFF}; // rim: cyan glow
     return pd;
 }
 
@@ -180,6 +180,8 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
     }
     const int tp = section_points(player);
     const int ta = section_points(ai);
+    b.judge_p = {player.get_good(), player.get_ok(), player.get_bad(), player.get_total_drumroll()};
+    b.judge_ai = {ai.get_good(), ai.get_ok(), ai.get_bad(), ai.get_total_drumroll()};
     b.live_p = tp - b.base_p;
     b.live_ai = ta - b.base_ai;
 
@@ -218,7 +220,8 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         const int d = wins_p != wins_ai ? wins_p - wins_ai : total;
         int& level = global_data.config->general.zdon_ai_level;
         const int next = std::clamp(level + (d > 0 ? 1 : (d < 0 ? -1 : 0)), 1, 10);
-        if (next != level && !global_data.force_auto_play) { // never from auto play (tests)
+        if (!global_data.force_auto_play) { // never from auto play (tests)
+            global_data.config->general.zdon_ai_wins += d > 0 ? 1 : 0;
             level = next;
             save_config(*global_data.config);
         }

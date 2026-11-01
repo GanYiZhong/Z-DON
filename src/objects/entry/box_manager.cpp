@@ -2,6 +2,7 @@
 
 #include "../../libs/global_data.h"
 #include "../../libs/text.h"
+#include "zdon_outfit_menu.h"
 
 static constexpr int ENTRY_FADE_OUT_ANIM_ID = 9;
 
@@ -47,8 +48,8 @@ void BoxManager::build_board_list() {
         if (label.empty()) {
             continue;
         }
-        // no 3D characters: nothing to dress up, so no costume board
-        if (screen == Screens::ENTRY && tex.options[SCO::DISABLE_CHARA_3D]) {
+        // no 3D characters: nothing to dress up, so no costume board (Z-DON: unless the skin has 2D outfits)
+        if (screen == Screens::ENTRY && tex.options[SCO::DISABLE_CHARA_3D] && zdon_outfit_count() == 0) {
             continue;
         }
         box_locations.push_back(screen);

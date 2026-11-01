@@ -211,7 +211,7 @@
 - 逐張貼圖密度：texture.json 項目加 `"density": n` 覆寫 skin 的 texture_density（n 小於 skin 時用 point filter）。SimpleStyle 的生成器把「2×2 完全同色」的圖存成 1 倍（528 張）並用 `frame_order` 去掉重複動畫格（675 檔）：109 格逐像素相同；冷硬碟（G:）遊玩畫面貼圖 1.6–2.0 s → 1.0–1.3 s、global 0.56–0.74 s → 0.32 s，遊玩畫面 VRAM 1128 → 353 MB。被引擎以次像素位置畫的貼圖（lane cover）point filter 會出接縫，要排除。上游沒有這些函式，skin 要先檢查存在才呼叫（YataiDONSimpleStyle 就是這樣做）。
 
 ## 2026-10-31 判定建議、難度資料夾篩選、最近成績、區段循環
-- 判定時機建議：`tex.offset_suggestion(pn)` → 建議改量（整首偏差中位數，≥50 擊且 |中位數|≥3 ms 才給）、目前 audio_offset、是否已套用。結算畫面按左/右咔一次就把 audio_offset 加上建議值並存 config（每局一次）。
+- ~~判定時機建議~~（2026-10-31 使用者要求移除：結算畫面不再提示、不改 audio_offset；`tex.offset_suggestion` 已拿掉）。
 - 難度資料夾（#COLLECTION:DIFFICULTY）`[general] zdon_sort_filter`（預設開）：只列未達成的譜面；關掉＝上游行為（未達成排前面）。
 - 最近成績：`SongBox:recent_plays(diff)` → 最多 10 筆（舊→新）{score, crown, good, ok, bad, played_at}，讀 scores 表，refresh_scores 時清快取。
 - 練習模式區段循環 `[general] zdon_practice_loop`（預設開）：從某個跳躍點繼續時，若後面還有跳躍點，就在 A→B 之間循環（到 B 記下這一輪良/可/不可、輪數 +1、跳回 A）；暫停即結束。`tex.practice_loop()` → active, a, b, passes, 上一輪良/可/不可。已用假按鍵隱藏測試驗證（小節 1–4 連跑 4 輪）。
@@ -223,6 +223,26 @@
 - 等級 `[general] zdon_ai_level`（1–10，預設 5）：每場贏 +1、輸 −1 並存檔（auto 不動）；`tex.ai_level()` 給選曲畫面顯示。
 - Lua：`tex.ai_battle()` → table（level、state、section、count、live_p/live_ai、wins_p/wins_ai、total_*、finished、result、sections[]）。
 - 上游的 Screens::AI_GAME / PlayerNum::AI 是空殼，沒用（遊玩版面沿用 GAME_2P）；AI_SELECT 是 PyTaiko 留下的名字，Nijiiro 的 coin_overlay 與 entry 說明（entry_ai_battle_comment_*）已認得。
+
+## 2026-10-31 特訓（參考 PaulSimulator 的特訓模式）、等速、成績旗標、搜尋面板
+- 共用：`objects/global/zdon_hud.*`（引擎自己畫的小面板＋快取文字，日英中韓內建字串，skin 的 `zdon_<key>` 文字可覆寫），所以任何 skin 都看得到。
+- 特訓暫停時：數字鍵輸入小節號（Enter 跳、Backspace 刪、Esc 取消，輸入框開著時鼓不作用）；F6 把整首固定成 普通→玄人→達人→自動（分歧譜才有；重新開始仍保留）；音符上方顯示每一下的偏差 ms（藍＝早、橘＝晚，兩排錯開）。
+- 循環：A→B 之外的音符變灰（`Player::zdon_dim_range`）；只有 A 沒有後面的點＝A 到曲末循環（曲末＋1.5 s 跳回 A，`zdon_loop.to_end`）；每次繼續/循環至少 2 秒預備（往前多退幾小節）、音樂 0.9 秒淡入。
+- 資訊列：目前 BPM（倍速時顯示換算後）、分歧狀態、暫停時的按鍵說明；預設左下，skin 可用 `"zdon_practice_info": {"x", "y"}` 指定左上角（Nijiiro 放在上方紫帶）。
+- 等速＝選曲的演奏選項多一列「等速」（使用者要求放 song option、不用熱鍵）：每個玩家各自記住，存在 Z-DON 自己的表 `zdon_player_options`（key equal_speed，不加 players 欄位，上游 scores.db 不受影響）；開著時每顆音符改用 #BPM、#SCROLL 1，#BMSCROLL/#HBSCROLL 譜也一樣改成一般捲動（判定時間不變），演奏畫面右下角「等速」標籤。Nijiiro 面板多一列時把 7 列的框圖再往下接一段。
+- 成績有效旗標：`GameScreen::zdon_unsaved_reasons()` 集中判斷（自動演奏［中途開過也算］、回放、等速）→ 不存並記在 `session_data.zdon_unsaved`，結算畫面在該玩家下方顯示「本次成績不保存（…）」；段位道場也用同一個判斷（不存、不算段位）。
+- 選曲搜尋面板：搜尋框開著時（輪盤上任何地方按 F2 也能開）即時列出最多 8 首（標題、類型、難度★），Tab 類型、F3 難度、PgUp/PgDn 星級、↑↓ 選、Enter 直接跳到那首（沒選時 Enter 照舊開搜尋資料夾；只用篩選沒打字時 Enter 跳第一首）。
+- 測試鉤子：`YATAIDON_FAKE_KEYS` 補上 raylib 特殊鍵（Esc/Enter/Tab/Backspace/方向/PgUp/PgDn/F1–F12）轉 SDL；要讓 `key_pressed` 收到要加 `YATAIDON_FAKE_KEYS_RAW=1`。
+
+## 2026-11-01 判定分布、隱藏/突現、自己最佳、搜尋滑鼠、特訓鼓手勢
+- 結算判定分布：有記錄偏差時（自動演奏預設不記）結算右下角提示「咔：判定分布」，該玩家敲咔開/關面板：可窗內的偏差直方圖（良窗內金色）、0 線與平均線、平均/標準差、早/晚數；開著時不會自動離開結算。skin 可用 `"zdon_hit_histogram": {x, y}` 指定 1P 面板左上角（2P 版面固定兩側）。
+- 選項面板新增兩列（存在 `zdon_player_options`：`fade` 0–6、`ghost`）：「隱藏／突現」關、隱藏 25/50/75%（音符在離判定線該比例的跑道處淡出）、突現 25/50/75%（音符到剩該比例才淡入），淡化帶 8% 跑道寬，只作用在咚/咔與其文字（連打、氣球照常）；存分照常（跟ドロン一樣是限制）。「自己最佳」開：演奏中跑道下方右側顯示「自己最佳 ±N」＝目前分數減掉最佳那次在同一時刻的分數（2P 版面 1P 的放在跑道上方）；skin 可用 `"zdon_ghost": {x, y}` 指定。每次遊玩都記分數曲線（分數改變時記一點），存分且分數高於舊最佳時寫進 `zdon_ghost`（hash, difficulty, player_id, "ms:分數;…"）；自動演奏不顯示、不寫。只有一般/2P 遊玩（段位、特訓不用）。
+- Nijiiro 選項框：列數多於 7 時上移並重畫框的列段（上回已做）；這回修正 selector.lua 在面板沒開時 `modifier_offset()` 為 nil 的算術錯誤（上回引入，每幀報錯）。SimpleStyle 的面板是逐列畫的，產生器把 Nijiiro 的重畫段拿掉、只保留上移。
+- 搜尋面板滑鼠：滑過結果列＝選取（滑鼠有移動才改，不搶鍵盤的選取），點擊＝跳到該曲，滾輪上下移選取；篩選列改成三個可點的小塊（左鍵下一個、右鍵上一個）。Ctrl+V 貼上原本就有（poll_text_edit）。
+- 特訓暫停時的鼓操作：有分歧的譜，左右咚 80 ms 內同時打＝切分歧（同 F6）；單邊咚在 80 ms 後才繼續（沒分歧的譜照舊立刻繼續）。同方向咔在 250 ms 內連敲：第 4 下起每下 4 小節、第 8 下起 8 小節。暫停時資訊列多一行「小節 n／總數」。
+- 測試鉤子：`YATAIDON_FAKE_MOUSE="<ms>:<x>:<y>:<按鍵>:<滾輪>,..."`（render px，按鍵 0＝只移動），之後 mouse_position 回報該位置。
+
+- 自動演奏卡頓補打：拖曳視窗等造成主迴圈卡住時，時鐘一次跳過好幾顆音符與連打。Player::update 在 auto 時把跳過的區間以 4 ms 一步重跑 note_manager/timeline/autoplay（補打不出聲）。測試鉤子 ZDON_TEST_STALL="<歌曲 ms>:<ms>,..."、ZDON_NO_AUTO_CATCHUP=1（舊行為）。即時跑 4 次卡頓（0.25–1.5 s）：dense 舊 977/1/21 → 新 999/0/0；longroll 舊 156/0/12、連打 73 → 新 168/0/0、連打 82（同無卡頓）。
 
 ## 還可以做的
 - 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。

@@ -49,6 +49,25 @@ protected:
 
     std::optional<SearchBox> search_box;
 
+    // Z-DON song search panel (song_select_zdon_search.cpp): live results under the search box
+    struct ZdonSearch {
+        std::string key; // the query + filters the results are for
+        int genre = -1, course = -1, level = 0, sel = -1;
+        bool asked = false;
+        std::vector<std::string> genres;
+        std::vector<fs::path> hits;
+        std::vector<std::pair<std::string, std::string>> lines; // title, genre + course
+        size_t total = 0;
+        // the mouse: where the last draw put the rows and the genre / course / level chips (virtual px)
+        std::vector<Rect> row_rects;
+        Rect chips[3] = {};
+        Vec2 last_mouse = {-1, -1};
+    } zdon_search;
+    void zdon_search_step_filter(int which, int dir);
+    void zdon_search_refresh();
+    bool zdon_search_input();
+    void zdon_draw_search();
+
     virtual void select_song(SongBox* song);
 
     virtual void handle_input(double current_ms);

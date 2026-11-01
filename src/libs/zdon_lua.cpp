@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "../objects/entry/zdon_outfit_menu.h"
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
 #include "global_data.h"
@@ -23,59 +24,7 @@ namespace {
     }
 } // namespace
 
-std::optional<int> zdon_offset_suggestion(int player_num) {
-    if (!global_data.config->general.zdon_hit_timing || !valid_player(player_num)) {
-        return std::nullopt;
-    }
-    std::vector<float> offs = global_data.session_data[player_num].result_data.hit_offsets;
-    if (offs.size() < 50) {
-        return std::nullopt;
-    }
-    auto mid = offs.begin() + (std::ptrdiff_t)(offs.size() / 2);
-    std::nth_element(offs.begin(), mid, offs.end());
-    const int delta = (int)std::lround(*mid);
-    if (std::abs(delta) < 3) {
-        return std::nullopt;
-    }
-    return delta;
-}
-
-int zdon_apply_offset_suggestion(int player_num) {
-    if (!valid_player(player_num)) {
-        return 0;
-    }
-    ZdonLiveData& live = global_data.session_data[player_num].zdon_live;
-    if (live.offset_applied != 0) {
-        return 0;
-    }
-    std::optional<int> delta = zdon_offset_suggestion(player_num);
-    if (!delta) {
-        return 0;
-    }
-    global_data.config->general.audio_offset += *delta;
-    save_config(*global_data.config);
-    live.offset_applied = *delta;
-    return *delta;
-}
-
 void register_zdon_lua_bindings(sol::table& tex) {
-    // tex.offset_suggestion(player_num) -> change_ms (nil: none), audio_offset now, applied change (0: not yet)
-    tex.set_function("offset_suggestion", [](int player_num, sol::this_state s) -> sol::variadic_results {
-        sol::variadic_results r;
-        if (!valid_player(player_num)) {
-            return r;
-        }
-        const int applied = global_data.session_data[player_num].zdon_live.offset_applied;
-        std::optional<int> delta = zdon_offset_suggestion(player_num);
-        if (!delta && applied == 0) {
-            return r;
-        }
-        r.push_back({s, sol::in_place, (double)(delta ? *delta : applied)});
-        r.push_back({s, sol::in_place, (double)global_data.config->general.audio_offset});
-        r.push_back({s, sol::in_place, (double)applied});
-        return r;
-    });
-
     // tex.last_hit(player_num) -> offset_ms (+ = late), at_ms (get_current_ms of the hit), good_ms, ok_ms,
     // mark_ms (mark FAST / SLOW when |offset| > mark_ms: [general] zdon_hit_timing_show half = good / 2,
     // ok = good, all = -1); nil before the first judged hit or with [general] zdon_hit_timing off
@@ -166,6 +115,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
     //   level, state (0 even, 1 AI leads the section, 2 AI trails), section (1-based, count+1 when done), count,
     //   live_p, live_ai (the open section's points), wins_p, wins_ai, finished, result (finished: "win" / "lose" /
     //   "draw"; a tie in sections goes to the higher total), total_p, total_ai,
+    //   judge_p, judge_ai = { good, ok, bad, drumroll }
     //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI / 2 draw, end_ms=}, ... }
     tex.set_function("ai_battle", [](sol::this_state s) -> sol::object {
         const auto& b = global_data.zdon_ai;
@@ -192,6 +142,8 @@ void register_zdon_lua_bindings(sol::table& tex) {
         t["count"] = (int)b.bounds.size();
         t["live_p"] = b.live_p;
         t["live_ai"] = b.live_ai;
+        t["judge_p"] = lua.create_table_with(1, b.judge_p[0], 2, b.judge_p[1], 3, b.judge_p[2], 4, b.judge_p[3]);
+        t["judge_ai"] = lua.create_table_with(1, b.judge_ai[0], 2, b.judge_ai[1], 3, b.judge_ai[2], 4, b.judge_ai[3]);
         t["wins_p"] = wins_p;
         t["wins_ai"] = wins_ai;
         t["total_p"] = total_p;
@@ -211,6 +163,18 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.ai_level() -> the next AI battle's level (1..10; [general] zdon_ai_level, moved by each match's result)
     tex.set_function("ai_level", []() -> int { return global_data.config->general.zdon_ai_level; });
+
+    // tex.outfit(player_num) -> the player's 2D outfit in this skin (0 = plain; skin_config "zdon_outfits",
+    // objects/entry/zdon_outfit_menu.h)
+    tex.set_function("outfit", [](int player_num) -> int {
+        if (player_num != 1 && player_num != 2) {
+            return 0;
+        }
+        return zdon_player_outfit(static_cast<PlayerNum>(player_num));
+    });
+
+    // tex.ai_wins() -> AI battles won so far ([general] zdon_ai_wins)
+    tex.set_function("ai_wins", []() -> int { return global_data.config->general.zdon_ai_wins; });
 
     // tex.best_score(player_num) -> the saved best score of this song and course before this play (0 = none);
     // set when the result is saved, so it is meant for the result screen

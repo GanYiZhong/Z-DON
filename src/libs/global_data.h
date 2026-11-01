@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <filesystem>
@@ -207,7 +208,6 @@ struct ZdonLiveData {
     double last_hit_at_ms = -1.0;                       // get_current_ms() of that hit; -1 = none yet
     double song_end_ms = 0.0;                           // the last playable note's time on the chart clock
     std::vector<std::pair<double, double>> gogo_ranges; // GOGO sections, chart ms (start, end)
-    int offset_applied = 0; // the audio_offset change applied from this song's result (0: none yet)
 };
 
 struct SessionData {
@@ -229,6 +229,9 @@ struct SessionData {
     std::string genre_label;
     ResultData result_data;
     ZdonLiveData zdon_live;
+    // Z-DON: why the last song's score was not saved (GameScreen::zdon_unsaved_reasons: "auto", "replay",
+    // "equal_speed"); empty = saved. The result screens show it.
+    std::vector<std::string> zdon_unsaved;
     DanResultData dan_result_data;
     std::optional<std::map<double, int>> replay_input_log;
     std::string replay_username;
@@ -263,6 +266,7 @@ struct GlobalData {
     struct ZdonPracticeLoop {
         bool active = false;
         int a_bar = -1, b_bar = -1; // bar indices (bars[]), A <= play < B
+        bool to_end = false;        // no later mark: A .. the song's end (b_bar = the last bar)
         int passes = 0;
         bool has_last = false;
         int last_good = 0, last_ok = 0, last_bad = 0;
@@ -277,8 +281,9 @@ struct GlobalData {
         std::vector<double> bounds; // each section's end, chart ms
         std::vector<int> points_p, points_ai, winners; // per section; winners: -1 open, 0 player, 1 AI, 2 draw
         int section = 0;
-        int base_p = 0, base_ai = 0; // the score totals at the current section's start
-        int live_p = 0, live_ai = 0; // the current section's points so far
+        int base_p = 0, base_ai = 0;              // the score totals at the current section's start
+        int live_p = 0, live_ai = 0;              // the current section's points so far
+        std::array<int, 4> judge_p{}, judge_ai{}; // good, ok, bad, drumroll hits so far (score boards)
         bool finished = false;
         std::vector<float> player_offsets; // the player's recent hit offsets (the AI copies their timing)
     } zdon_ai;

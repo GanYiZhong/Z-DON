@@ -226,6 +226,10 @@ public:
     // is still playing from the previous one)
     uint64_t sound_play_count(const std::string& name);
     void set_sound_volume(const std::string& name, float volume);
+    // Z-DON: a category's live volume (what play_sound(name, preset) plays at)
+    float preset_level(VolumePreset preset) const {
+        return category_volume[(int)preset].load(std::memory_order_relaxed);
+    }
     void set_sound_pan(const std::string& name, float pan);
     void set_sound_pitch(const std::string& name, float pitch);
     float get_sound_time_played(const std::string& name) const;

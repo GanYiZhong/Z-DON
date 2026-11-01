@@ -418,7 +418,7 @@ int DanGameScreen::exam_tier(const Exam& exam, int value) {
 }
 
 void DanGameScreen::save_song_score(DanResultSong& song_res) {
-    if (players[0]->is_auto_play() || players[0]->is_replay()) {
+    if (!zdon_unsaved_reasons(*players[0]).empty()) { // Z-DON: auto, replay, constant speed
         return;
     }
     const SessionData& sd = global_data.session_data[(int)global_data.player_num];
@@ -473,7 +473,7 @@ void DanGameScreen::save_result_data(bool all_failed) {
     const int course_songs = std::min((int)sd.selected_dan.size(), 3);
 
     sd.dan_result_data.dan_color = dan_color;
-    sd.dan_result_data.unranked = players[0]->is_auto_play() || players[0]->is_replay();
+    sd.dan_result_data.unranked = !zdon_unsaved_reasons(*players[0]).empty();
     sd.dan_result_data.dan_rank = sd.dan_rank;
     sd.dan_result_data.dan_index = sd.dan_index;
     sd.dan_result_data.dan_index_max = sd.dan_index_max;

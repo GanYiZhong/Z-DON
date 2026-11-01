@@ -26,8 +26,9 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     if (!sd.result_data.cleared) {
         chara->set_anim(AnimIndex::DON_MISS_NORMAL);
     }
-    nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", player_num, pd ? pd->dan : -1,
-                          pd ? pd->gold : false, pd ? pd->rainbow : false, pd ? pd->title_bg : 0);
+    const bool ai_plate = global_data.zdon_ai.active && player_num == PlayerNum::P2; // Z-DON AI battle
+    nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", ai_plate ? PlayerNum::AI : player_num,
+                          pd ? pd->dan : -1, pd ? pd->gold : false, pd ? pd->rainbow : false, pd ? pd->title_bg : 0);
     update_list = {{"good", sd.result_data.good},
                    {"ok", sd.result_data.ok},
                    {"bad", sd.result_data.bad},

@@ -1,7 +1,8 @@
 #include "result.h"
 
 #include "../libs/input.h"
-#include "../libs/zdon_lua.h"
+#include "../objects/game/player.h"
+#include "../objects/global/zdon_hud.h"
 
 void ResultScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -77,12 +78,6 @@ void ResultScreen::handle_input(double current_ms) {
     if (!fade_out) {
         return;
     }
-    // Z-DON: a kat on the result applies the timing suggestion (zdon_lua.cpp) to audio_offset, once per song
-    if ((menu_left_pressed() || menu_right_pressed()) && !exiting() &&
-        zdon_apply_offset_suggestion((int)global_data.player_num) != 0) {
-        audio.play_sound("kat", VolumePreset::SOUND);
-        return;
-    }
     if (!menu_confirm_pressed()) {
         return;
     }
@@ -107,6 +102,7 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     if (!fade_out || exiting()) {
         return;
     }
+    zdon_hist_input();
 
     if (skip_enabled_ms == 0 && fade_in.has_value() && fade_in->is_finished()) {
         skip_enabled_ms =
@@ -118,7 +114,8 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     }
 
     double reveal_end = reveal_end_ms();
-    if (reveal_end > 0 && !exiting() && current_ms >= reveal_end + kWaitEffectEndMs + kAutoNextSceneMs) {
+    const bool hist_open = zdon_hist_open[1] || zdon_hist_open[2]; // Z-DON: no timeout while it is read
+    if (reveal_end > 0 && !exiting() && !hist_open && current_ms >= reveal_end + kWaitEffectEndMs + kAutoNextSceneMs) {
         begin_exit();
     }
 }
@@ -161,7 +158,163 @@ std::optional<Screens> ResultScreen::update() {
     return std::nullopt;
 }
 
+// Z-DON: "this score is not saved (auto, constant speed)" under each player's board (GameScreen::save_score)
+void ResultScreen::draw_unsaved_note() const {
+    const bool two = zdon_two_boards();
+    for (int pn = 1; pn <= 2; ++pn) {
+        if (!two && pn != (global_data.player_num == PlayerNum::P2 ? 2 : 1)) {
+            continue;
+        }
+        const auto& why = global_data.session_data[pn].zdon_unsaved;
+        if (why.empty()) {
+            continue;
+        }
+        std::string list;
+        for (const std::string& r : why) {
+            list += (list.empty() ? "" : zhud::text("list_sep")) + zhud::text("reason_" + r);
+        }
+        OutlinedText& t = zhud::label(zhud::text("unsaved", list), 24, Color{255, 226, 120, 255});
+        const float s = tex.screen_scale;
+        const float cx = two ? tex.screen_width * (pn == 1 ? 0.25f : 0.75f) : tex.screen_width / 2.0f;
+        const float w = t.width + 32 * s;
+        const float h = t.height + 12 * s;
+        const float y = tex.screen_height - h - 64 * s;
+        zhud::panel(cx - w / 2, y, w, h, 0.8f, fade(Color{255, 226, 120, 255}, 0.7f));
+        t.draw({.x = cx - t.width / 2, .y = y + 6 * s});
+    }
+}
+
+// Z-DON: a kat opens / closes the player's hit timing panel (only with recorded hits)
+void ResultScreen::zdon_hist_input() {
+    for (int pn = 1; pn <= 2; ++pn) {
+        if (global_data.session_data[pn].result_data.hit_offsets.empty()) {
+            continue;
+        }
+        const PlayerNum who = zdon_two_boards() ? static_cast<PlayerNum>(pn) : global_data.player_num;
+        if (!zdon_two_boards() && pn != (global_data.player_num == PlayerNum::P2 ? 2 : 1)) {
+            continue;
+        }
+        if (is_l_kat_pressed(who) || is_r_kat_pressed(who)) {
+            zdon_hist_open[pn] = !zdon_hist_open[pn];
+            audio.play_sound("kat", VolumePreset::SOUND);
+        }
+    }
+}
+
+// the hits' offsets in bins across the OK window (gold inside GOOD), mean, SD, early / late; or a small hint
+void ResultScreen::zdon_draw_hist() const {
+    const bool two = zdon_two_boards();
+    const float s = tex.screen_scale;
+    bool hint = false;
+    for (int pn = 1; pn <= 2; ++pn) {
+        if (!two && pn != (global_data.player_num == PlayerNum::P2 ? 2 : 1)) {
+            continue;
+        }
+        const SessionData& sd = global_data.session_data[pn];
+        const std::vector<float>& off = sd.result_data.hit_offsets;
+        if (off.empty()) {
+            continue;
+        }
+        if (!zdon_hist_open[pn]) {
+            hint = true;
+            continue;
+        }
+        const bool easy = sd.selected_difficulty <= (int)Difficulty::NORMAL;
+        const float good = easy ? Timing::GOOD_EASY : Timing::GOOD;
+        const float ok = easy ? Timing::OK_EASY : Timing::OK;
+        const float bin_ms = std::max(2.0f, std::round(ok / 25.0f));
+        const int half = static_cast<int>(std::ceil(ok / bin_ms));
+        std::vector<int> bins(2 * half + 1, 0);
+        double sum = 0, sum2 = 0;
+        int early = 0, late = 0;
+        for (float o : off) {
+            sum += o;
+            sum2 += (double)o * o;
+            early += o < 0;
+            late += o > 0;
+            const int b = std::clamp(static_cast<int>(std::lround(o / bin_ms)), -half, half);
+            bins[b + half]++;
+        }
+        const double mean = sum / off.size();
+        const double sd_ms = std::sqrt(std::max(0.0, sum2 / off.size() - mean * mean));
+        const int peak = std::max(1, *std::ranges::max_element(bins));
+
+        const float w = (two ? 600 : 760) * s;
+        const float graph_h = 170 * s;
+        OutlinedText& title = zhud::label(zhud::text("hist_title") + "（" + std::to_string(off.size()) + "）", 24,
+                                          Color{255, 226, 120, 255});
+        auto fmt1 = [](double v) {
+            const long long t = std::llround(v * 10);
+            return std::string(t < 0   ? "-"
+                               : t > 0 ? "+"
+                                       : "") +
+                   std::to_string(std::llabs(t) / 10) + "." + std::to_string(std::llabs(t) % 10);
+        };
+        OutlinedText& stats =
+            zhud::label(zhud::text("hist_stats", fmt1(mean), fmt1(sd_ms).substr(fmt1(sd_ms)[0] == '+' ? 1 : 0)), 20);
+        OutlinedText& counts = zhud::label(zhud::text("hist_counts", std::to_string(early), std::to_string(late)), 20,
+                                           Color{200, 206, 220, 255});
+        const float h = 14 * s + title.height + 6 * s + graph_h + 26 * s + stats.height + 4 * s + 12 * s;
+        const float cx = two ? tex.screen_width * (pn == 1 ? 0.25f : 0.75f) : tex.screen_width / 2.0f;
+        float x = cx - w / 2;
+        float y = (tex.screen_height - h) / 2;
+        if (auto cfg = tex.skin_config_by_name.find("zdon_hit_histogram");
+            !two && cfg != tex.skin_config_by_name.end()) {
+            x = cfg->second.x;
+            y = cfg->second.y;
+        }
+        zhud::panel(x, y, w, h, 0.9f, fade(Color{255, 226, 120, 255}, 0.6f));
+        title.draw({.x = x + 20 * s, .y = y + 12 * s});
+        counts.draw({.x = x + w - 20 * s - counts.width, .y = y + 14 * s});
+
+        const float gx = x + 24 * s;
+        const float gw = w - 48 * s;
+        const float gy = y + 14 * s + title.height + 6 * s;
+        const float bw = gw / bins.size();
+        const float ms_to_x = gw / (2 * half * bin_ms + bin_ms);
+        const float zero_x = gx + gw / 2;
+        draw_rectangle(Rect{zero_x - good * ms_to_x, gy, 2 * good * ms_to_x, graph_h}, Color{255, 226, 120, 28});
+        for (size_t b = 0; b < bins.size(); ++b) {
+            if (bins[b] == 0) {
+                continue;
+            }
+            const float center = (static_cast<int>(b) - half) * bin_ms;
+            const float bh = graph_h * bins[b] / peak;
+            const Color c = std::abs(center) <= good ? Color{255, 196, 64, 255} : Color{190, 196, 214, 255};
+            draw_rectangle(Rect{gx + b * bw + 1 * s, gy + graph_h - bh, std::max(1.0f, bw - 2 * s), bh}, c);
+        }
+        draw_rectangle(Rect{zero_x - 1 * s, gy, 2 * s, graph_h}, fade(Color::WHITE, 0.8f));
+        const float mean_x = zero_x + static_cast<float>(mean) * ms_to_x;
+        draw_rectangle(Rect{mean_x - 1 * s, gy, 2 * s, graph_h}, Color{120, 196, 255, 220});
+        draw_rectangle(Rect{gx, gy + graph_h, gw, 1 * s}, fade(Color::WHITE, 0.5f));
+        const int ok_i = static_cast<int>(std::lround(ok));
+        const int good_i = static_cast<int>(std::lround(good));
+        const std::pair<float, std::string> ticks[] = {{-ok, "-" + std::to_string(ok_i)},
+                                                       {-good, "-" + std::to_string(good_i)},
+                                                       {0.0f, "0"},
+                                                       {good, "+" + std::to_string(good_i)},
+                                                       {ok, "+" + std::to_string(ok_i)}};
+        for (const auto& [ms, label] : ticks) {
+            OutlinedText& tk = zhud::label(label, 16, Color{200, 206, 220, 255});
+            const float tx = std::clamp(zero_x + ms * ms_to_x - tk.width / 2, gx, gx + gw - tk.width);
+            tk.draw({.x = tx, .y = gy + graph_h + 4 * s});
+        }
+        stats.draw({.x = x + (w - stats.width) / 2, .y = gy + graph_h + 26 * s});
+    }
+    if (hint) {
+        OutlinedText& t = zhud::label(zhud::text("hist_hint"), 18, Color{200, 206, 220, 255});
+        const float w = t.width + 20 * s;
+        const float h = t.height + 6 * s;
+        const float x = tex.screen_width - w - 12 * s;
+        const float y = tex.screen_height - h - 12 * s;
+        zhud::panel(x, y, w, h, 0.6f);
+        t.draw({.x = x + 10 * s, .y = y + 3 * s});
+    }
+}
+
 void ResultScreen::draw_overlay() {
+    draw_unsaved_note();
+    zdon_draw_hist();
     if (fade_in.has_value()) {
         fade_in->draw();
     }

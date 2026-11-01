@@ -283,6 +283,7 @@ Config get_config() {
     config.general.zdon_sort_filter = config_file["general"]["zdon_sort_filter"].value_or(true);
     config.general.zdon_practice_loop = config_file["general"]["zdon_practice_loop"].value_or(true);
     config.general.zdon_ai_level = std::clamp(config_file["general"]["zdon_ai_level"].value_or(5), 1, 10);
+    config.general.zdon_ai_wins = std::max(0, config_file["general"]["zdon_ai_wins"].value_or(0));
     config.general.log_level = config_file["general"]["log_level"].value_or("info");
     config.general.practice_mode_bar_delay = config_file["general"]["practice_mode_bar_delay"].value_or(1);
     config.general.score_method = config_file["general"]["score_method"].value_or("shinuchi");
@@ -430,8 +431,8 @@ Config get_config() {
     config.video.borderless = config_file["video"]["borderless"].value_or(false);
     config.video.target_fps = config_file["video"]["target_fps"].value_or(-1);
     config.video.vsync = config_file["video"]["vsync"].value_or(kDefaultVsync);
-
     config.video.zdon_texture_compression = config_file["video"]["zdon_texture_compression"].value_or(true);
+
     return config;
 }
 
@@ -479,6 +480,7 @@ void save_config(const Config& config) {
                                                {"zdon_sort_filter", config.general.zdon_sort_filter},
                                                {"zdon_practice_loop", config.general.zdon_practice_loop},
                                                {"zdon_ai_level", config.general.zdon_ai_level},
+                                               {"zdon_ai_wins", config.general.zdon_ai_wins},
                                                {"log_level", config.general.log_level},
                                                {"practice_mode_bar_delay", config.general.practice_mode_bar_delay},
                                                {"score_method", config.general.score_method},

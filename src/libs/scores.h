@@ -28,6 +28,9 @@ struct PlayerData {
     bool modifier_inverse = false;
     int modifier_random = 0;
     bool modifier_skip = false;
+    bool modifier_equal_speed = false; // Z-DON: in zdon_player_options (key "equal_speed"), not a players column
+    int modifier_zdon_fade = 0;        // Z-DON: zdon_player_options "fade" (Modifiers::zdon_fade)
+    bool modifier_ghost = false;       // Z-DON: zdon_player_options "ghost"
     int neiro_index = 0;
     Color chara_color_1 = Color{0x68, 0xBF, 0xC0, 0xFF};
     Color chara_color_2 = Color{0xF9, 0x47, 0x28, 0xFF};
@@ -144,6 +147,7 @@ private:
     std::mutex song_meta_mutex;
     std::unordered_map<std::string, SongCacheEntry> song_meta;
     mutable std::mutex maps_mutex;
+    std::map<std::pair<std::string, std::string>, int> outfit_cache; // Z-DON: get_outfit, read every frame
     std::unordered_map<fs::path, std::array<std::string, 5>> path_to_hashes;
     std::unordered_map<std::string, fs::path> single_hash_to_path;
     std::unordered_map<std::string, fs::path> diff_hash_to_path;
@@ -167,6 +171,17 @@ public:
     // Z-DON: the player's last `limit` plays of one chart, oldest first (every play is in `scores`)
     std::vector<PlayRecord> recent_plays(const std::string& hash, int difficulty, const std::string& player_id,
                                          int limit);
+    // Z-DON 2D outfits (objects/entry/zdon_outfit_menu.h): a player's outfit per skin, -1 = never picked
+    int get_outfit(const std::string& player_id, const std::string& skin);
+    // Z-DON per-player options (table zdon_player_options): get / set an integer by key
+    int get_zdon_option(const std::string& player_id, const std::string& key, int fallback = 0);
+    void set_zdon_option(const std::string& player_id, const std::string& key, int value);
+    // Z-DON PB pace (table zdon_ghost): the best play's score over the song, as (chart ms, score) points
+    std::vector<std::pair<float, int>> get_zdon_ghost(const std::string& hash, int difficulty,
+                                                      const std::string& player_id);
+    void set_zdon_ghost(const std::string& hash, int difficulty, const std::string& player_id,
+                        const std::vector<std::pair<float, int>>& points);
+    void set_outfit(const std::string& player_id, const std::string& skin, int outfit);
     // out_score_id (optional) receives the new scores row id, or -1 if the insert failed.
     Score save_score(const std::string& hash, int difficulty, const std::string& player_id, Score score,
                      int64_t played_at, const std::string& modifiers_json, int64_t* out_score_id = nullptr);
@@ -236,5 +251,8 @@ inline Modifiers player_data_to_modifiers(const PlayerData& pd) {
     m.inverse = pd.modifier_inverse;
     m.random = pd.modifier_random;
     m.skip = pd.modifier_skip;
+    m.equal_speed = pd.modifier_equal_speed;
+    m.zdon_fade = pd.modifier_zdon_fade;
+    m.zdon_ghost = pd.modifier_ghost;
     return m;
 }

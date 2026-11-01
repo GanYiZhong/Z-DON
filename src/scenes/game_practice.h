@@ -182,7 +182,15 @@ private:
     std::optional<Screens> handle_menu_action(PracticeMenu::Action action);
     std::optional<Screens> global_keys_practice();
     void animate_scrobble_to(int new_index);
-    void scrobble_step_bar(bool right);
+    void scrobble_step_bar(bool right, int count = 1);
+    // Z-DON drum gestures while paused: both dons together = branch, quick kats = bigger steps
+    double zdon_don_wait_ms = -1.0;
+    bool zdon_don_right = false;
+    double zdon_scrub_last_ms = -1e9;
+    bool zdon_scrub_right = false;
+    int zdon_scrub_run = 0;
+    void zdon_cycle_branch();
+    bool zdon_don_gesture(bool l, bool r);
 
     float get_scrobble_position_x(const Note& note, double current_ms) const;
     Color moji_judgment_color(int note_index) const;
@@ -190,4 +198,21 @@ private:
     void draw_drumroll_scrobble(const Note& head, double current_ms) const;
     void draw_balloon_scrobble(const Note& head, double current_ms) const;
     void draw_notes_scrobble(double current_ms) const;
+
+    // Z-DON practice extras (Paul-style tokkun): F6 forces a branch for the whole song, number keys jump to
+    // a bar, the music fades in after each (re)start, the info strip (tempo, branch, keys), hit offsets in
+    // the pause view
+    int zdon_branch_force = -1; // -1 = decided by the play, else a BranchDifficulty
+    bool zdon_bar_input_open = false;
+    std::string zdon_bar_input;
+    double zdon_fade_start = -1.0;
+    std::vector<std::pair<double, double>> zdon_tempo; // (hit_ms, bpm) of every note before modifiers
+    bool zdon_has_branches() const;
+    void zdon_apply_branch_force();
+    bool zdon_practice_keys(); // true: the keys of this frame are used up
+    void zdon_update_fade(double current_ms);
+    double zdon_bpm_at(double hit_ms) const;
+    void zdon_draw_info() const;
+    void zdon_draw_bar_input() const;
+    void zdon_draw_offset(const Note& note, float x) const;
 };

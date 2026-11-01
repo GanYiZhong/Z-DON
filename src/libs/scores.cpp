@@ -830,6 +830,162 @@ std::optional<SongCacheEntry> ScoresManager::get_song_meta(const std::string& pa
     return it->second;
 }
 
+// Z-DON only (upstream does not know the table): per-player options of Z-DON's own (constant speed, ...)
+static void ensure_option_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_player_options (player_id TEXT NOT NULL, key TEXT NOT NULL, "
+                 "value INTEGER NOT NULL, PRIMARY KEY (player_id, key));",
+                 nullptr, nullptr, nullptr);
+}
+
+int ScoresManager::get_zdon_option(const std::string& player_id, const std::string& key, int fallback) {
+    ensure_option_table(db_fsd);
+    int value = fallback;
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "SELECT value FROM zdon_player_options WHERE player_id = ? AND key = ?;", -1, &stmt,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            value = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return value;
+}
+
+void ScoresManager::set_zdon_option(const std::string& player_id, const std::string& key, int value) {
+    if (player_id.empty()) {
+        return;
+    }
+    ensure_option_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT OR REPLACE INTO zdon_player_options (player_id, key, value) VALUES (?, ?, ?);", -1,
+                           &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("set_zdon_option: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, value);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+// Z-DON only: the PB pace points of each chart and player, "ms:score;ms:score;..."
+static void ensure_ghost_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_ghost (hash TEXT NOT NULL, difficulty INTEGER NOT NULL, "
+                 "player_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (hash, difficulty, player_id));",
+                 nullptr, nullptr, nullptr);
+}
+
+std::vector<std::pair<float, int>> ScoresManager::get_zdon_ghost(const std::string& hash, int difficulty,
+                                                                 const std::string& player_id) {
+    std::vector<std::pair<float, int>> points;
+    ensure_ghost_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "SELECT data FROM zdon_ghost WHERE hash = ? AND difficulty = ? AND player_id = ?;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return points;
+    }
+    sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, difficulty);
+    sqlite3_bind_text(stmt, 3, player_id.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* data = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        for (const char* p = data; p && *p;) {
+            char* end = nullptr;
+            const float ms = std::strtof(p, &end);
+            if (end == p || *end != ':') {
+                break;
+            }
+            p = end + 1;
+            const long v = std::strtol(p, &end, 10);
+            if (end == p) {
+                break;
+            }
+            points.emplace_back(ms, static_cast<int>(v));
+            p = *end == ';' ? end + 1 : end;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return points;
+}
+
+void ScoresManager::set_zdon_ghost(const std::string& hash, int difficulty, const std::string& player_id,
+                                   const std::vector<std::pair<float, int>>& points) {
+    if (player_id.empty() || hash.empty() || points.empty()) {
+        return;
+    }
+    ensure_ghost_table(db_fsd);
+    std::string data;
+    data.reserve(points.size() * 12);
+    for (const auto& [ms, v] : points) {
+        data += std::to_string(static_cast<long long>(std::lround(ms))) + ':' + std::to_string(v) + ';';
+    }
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT OR REPLACE INTO zdon_ghost (hash, difficulty, player_id, data) VALUES (?, ?, ?, ?);",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("set_zdon_ghost: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, difficulty);
+    sqlite3_bind_text(stmt, 3, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, data.c_str(), -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+// Z-DON only (upstream does not know the table): 2D outfits, see get_outfit
+static void ensure_outfit_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_outfits (player_id TEXT NOT NULL, skin TEXT NOT NULL, "
+                 "outfit INTEGER NOT NULL, PRIMARY KEY (player_id, skin));",
+                 nullptr, nullptr, nullptr);
+}
+
+int ScoresManager::get_outfit(const std::string& player_id, const std::string& skin) {
+    const auto key = std::make_pair(player_id, skin);
+    if (auto it = outfit_cache.find(key); it != outfit_cache.end()) {
+        return it->second;
+    }
+    int outfit = -1; // no pick yet
+    ensure_outfit_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "SELECT outfit FROM zdon_outfits WHERE player_id = ? AND skin = ?;", -1, &stmt,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, skin.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            outfit = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    outfit_cache[key] = outfit;
+    return outfit;
+}
+
+void ScoresManager::set_outfit(const std::string& player_id, const std::string& skin, int outfit) {
+    ensure_outfit_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "INSERT OR REPLACE INTO zdon_outfits (player_id, skin, outfit) VALUES (?, ?, ?);",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("set_outfit: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, skin.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, outfit);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    outfit_cache[std::make_pair(player_id, skin)] = outfit;
+    spdlog::info("outfit_save: player_id={} skin={} outfit={}", player_id, skin, outfit);
+}
+
 // Z-DON only (upstream does not know the table): dan song note counts, see DanNoteCount
 static void ensure_dan_note_count_table(sqlite3* db) {
     sqlite3_exec(db,
@@ -1214,6 +1370,9 @@ std::optional<PlayerData> ScoresManager::get_player_data(const std::string& play
     p.modifier_skip = sqlite3_column_int(stmt, 23);
 
     sqlite3_finalize(stmt);
+    p.modifier_equal_speed = get_zdon_option(player_id, "equal_speed") != 0;
+    p.modifier_zdon_fade = std::clamp(get_zdon_option(player_id, "fade"), 0, 6);
+    p.modifier_ghost = get_zdon_option(player_id, "ghost") != 0;
     return p;
 }
 
@@ -1267,6 +1426,9 @@ void ScoresManager::save_player_data(const PlayerData& player) {
     }
 
     sqlite3_finalize(stmt);
+    set_zdon_option(player.player_id, "equal_speed", player.modifier_equal_speed ? 1 : 0);
+    set_zdon_option(player.player_id, "fade", player.modifier_zdon_fade);
+    set_zdon_option(player.player_id, "ghost", player.modifier_ghost ? 1 : 0);
 }
 
 static void ensure_dan_table(sqlite3* db) {

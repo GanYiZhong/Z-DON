@@ -26,7 +26,8 @@ struct ZdonAiDriver {
     double draw_offset(double bad_window_ms); // NaN = miss
 };
 
-// the AI's nameplate / character ("AI", "Lv.N", its own colors)
+// the AI's nameplate / character ("AI", "Lv.N", a metal Don's colors); its nameplate is built with
+// PlayerNum::AI (skins draw their AI plate: global/nameplate/ai)
 PlayerData zdon_ai_player_data(int level);
 
 // a new battle (the player's learned timing is kept)

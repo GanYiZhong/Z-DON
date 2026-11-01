@@ -14,6 +14,7 @@
 #include "../libs/script.h"
 #include "../libs/test_mode.h"
 #include "../libs/text.h"
+#include "../objects/global/zdon_hud.h"
 #include "../platform/vblank_pacing.h"
 
 void GameScreen::on_screen_start() {
@@ -91,6 +92,9 @@ Modifiers GameScreen::get_player_modifiers(PlayerNum pn) {
     Modifiers m = player_data_to_modifiers(scores_manager.get_player_data(get_player_id(pn)).value_or(PlayerData{}));
     if (global_data.force_auto_play) {
         m.auto_play = true; // `--auto`
+    }
+    if (m.equal_speed) {
+        m.equal_speed_bpm = (parser && parser->metadata.bpm > 0) ? parser->metadata.bpm : 120.0;
     }
     return m;
 }
@@ -489,17 +493,39 @@ void GameScreen::update_background(double current_ms) {
     }
 }
 
+// Z-DON: every reason a play's score is not saved, in one place (keys of zdon_hud's "reason_<key>")
+std::vector<std::string> GameScreen::zdon_unsaved_reasons(const Player& player) {
+    std::vector<std::string> r;
+    if (player.zdon_auto_used()) {
+        r.emplace_back("auto");
+    }
+    if (player.is_replay()) {
+        r.emplace_back("replay");
+    }
+    if (player.get_modifiers().equal_speed_bpm > 0) {
+        r.emplace_back("equal_speed");
+    }
+    return r;
+}
+
 void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) {
     Player* target = nullptr;
     for (const auto& player : players) {
         if (player && player->player_num == player_num) {
-            if (player->is_auto_play() || player->is_replay()) {
-                return;
-            }
             target = player.get();
         }
     }
     if (!target) {
+        return;
+    }
+    std::vector<std::string>& unsaved = global_data.session_data[(int)player_num].zdon_unsaved;
+    unsaved = zdon_unsaved_reasons(*target);
+    if (!unsaved.empty()) {
+        std::string why;
+        for (const std::string& r : unsaved) {
+            why += (why.empty() ? "" : ", ") + r;
+        }
+        spdlog::info("Score of player {} not saved: {}", (int)player_num, why);
         return;
     }
 
@@ -537,6 +563,12 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         int64_t played_at = unix_now();
         std::string modifiers_json = modifiers_to_json(target->get_modifiers());
         scores_manager.save_score(hash, session_data.selected_difficulty, player_id, score, played_at, modifiers_json);
+        // Z-DON PB pace: a new best keeps its score curve
+        if (auto& g = zdon_ghost[std::clamp((int)player_num, 0, 3)];
+            !run_skipped && !g.rec.empty() && (!prev_score || score.score > prev_score->score)) {
+            g.rec.emplace_back(static_cast<float>(std::max<double>(clock.position(), g.rec.back().first)), score.score);
+            scores_manager.set_zdon_ghost(hash, session_data.selected_difficulty, player_id, g.rec);
+        }
         PlayerData pd = scores_manager.get_player_data(player_id).value_or(PlayerData{});
         if (global_data.config->general.score_method != ScoreMethod::GEN3) {
             std::string access_code;
@@ -763,6 +795,7 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         for (const auto& player : players) {
             if (player->is_zdon_ai()) {
                 // Z-DON AI battle: the AI's play is never saved to the 2P profile (and is no "new best")
+                global_data.session_data[(int)player->player_num].zdon_unsaved.clear();
                 auto& rd = global_data.session_data[(int)player->player_num].result_data;
                 rd.prev_score = rd.score;
                 continue;
@@ -804,10 +837,34 @@ void GameScreen::update_gameplay(double current_ms) {
     resync_song(current_ms);
     update_background(current_ms);
 
+    // Z-DON test hook: ZDON_TEST_STALL="<song ms>:<ms>,..." blocks the loop once there, as dragging the window
+    // does (the auto play catch-up in Player::update)
+    static std::vector<std::pair<double, int>> stalls = [] {
+        std::vector<std::pair<double, int>> v;
+        if (const char* e = std::getenv("ZDON_TEST_STALL")) {
+            std::string spec = e;
+            for (size_t a = 0; a < spec.size();) {
+                size_t b = spec.find(',', a);
+                b = b == std::string::npos ? spec.size() : b;
+                const std::string item = spec.substr(a, b - a);
+                if (const size_t c = item.find(':'); c != std::string::npos) {
+                    v.emplace_back(std::atof(item.substr(0, c).c_str()), std::atoi(item.substr(c + 1).c_str()));
+                }
+                a = b + 1;
+            }
+        }
+        return v;
+    }();
+    if (!stalls.empty() && clock.position() >= stalls.front().first) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(stalls.front().second));
+        stalls.erase(stalls.begin());
+    }
+
     for (auto& player : players) {
         player->update(clock.position(), current_ms, background);
     }
     global_data.zdon_song_pos_ms = clock.position(); // Z-DON: the skin's song progress (zdon_lua.cpp)
+    zdon_ghost_update();
 
     song_info.update(current_ms);
 }
@@ -837,29 +894,6 @@ std::optional<Screens> GameScreen::update() {
         const double transition_delay = global_data.config->general.fast_transitions
                                             ? kFastResultTransitionDelayMs
                                             : (players[0]->was_skipped() ? 2800.0 : 8533.34);
-    // Z-DON test hook: ZDON_TEST_STALL="<song ms>:<ms>,..." blocks the loop once there, as dragging the window
-    // does (the auto play catch-up in Player::update)
-    static std::vector<std::pair<double, int>> stalls = [] {
-        std::vector<std::pair<double, int>> v;
-        if (const char* e = std::getenv("ZDON_TEST_STALL")) {
-            std::string spec = e;
-            for (size_t a = 0; a < spec.size();) {
-                size_t b = spec.find(',', a);
-                b = b == std::string::npos ? spec.size() : b;
-                const std::string item = spec.substr(a, b - a);
-                if (const size_t c = item.find(':'); c != std::string::npos) {
-                    v.emplace_back(std::atof(item.substr(0, c).c_str()), std::atoi(item.substr(c + 1).c_str()));
-                }
-                a = b + 1;
-            }
-        }
-        return v;
-    }();
-    if (!stalls.empty() && clock.position() >= stalls.front().first) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(stalls.front().second));
-        stalls.erase(stalls.begin());
-    }
-
 
         end_song(players[0]->end_time, transition_delay, BackgroundNotification::Enabled);
     }
@@ -874,6 +908,19 @@ void GameScreen::draw_overlay(bool with_song_info) {
     if (with_song_info) {
         song_info.draw();
     }
+    // Z-DON: a "constant speed" chip while it is on, and the toggle's message
+    if (!players.empty() && players[0]->get_modifiers().equal_speed_bpm > 0) {
+        const float s = tex.screen_scale;
+        OutlinedText& t = zhud::label(zhud::text("equal_speed"), 22, Color{255, 226, 120, 255});
+        const float w = t.width + 24 * s;
+        const float h = t.height + 8 * s;
+        const float x = tex.screen_width - w - 12 * s;
+        const float y = tex.screen_height - h - 12 * s;
+        zhud::panel(x, y, w, h, 0.75f, fade(Color{255, 226, 120, 255}, 0.7f));
+        t.draw({.x = x + 12 * s, .y = y + 4 * s});
+    }
+    zdon_draw_ghost();
+    zhud::draw_toast();
     draw_skip();
     bool over_transition = false;
     if (!transition->is_finished()) {
@@ -889,6 +936,75 @@ void GameScreen::draw_overlay(bool with_song_info) {
     }
     if (result_transition.is_started) {
         result_transition.draw();
+    }
+}
+
+// Z-DON PB pace: record this play's score whenever it changes; the best play's curve is read on the first frame
+void GameScreen::zdon_ghost_update() {
+    const double t = clock.position();
+    for (const auto& player : players) {
+        if (!player || player->is_zdon_ai()) {
+            continue;
+        }
+        ZdonGhost& g = zdon_ghost[std::clamp((int)player->player_num, 0, 3)];
+        if (!g.loaded) {
+            g.loaded = true;
+            if (player->get_modifiers().zdon_ghost && !player->get_modifiers().auto_play) {
+                const SessionData& sd = global_data.session_data[(int)player->player_num];
+                g.best = scores_manager.get_zdon_ghost(sd.song_hash, sd.selected_difficulty,
+                                                       get_player_id(player->player_num));
+            }
+        }
+        if (!g.rec.empty() && t < g.rec.back().first - 500.0) {
+            g.rec.clear(); // restarted
+            g.last = -1;
+        }
+        const int score = player->get_result_score().score;
+        if (score != g.last) {
+            g.last = score;
+            g.rec.emplace_back(static_cast<float>(t), score);
+        }
+    }
+}
+
+static std::string zdon_signed_thousands(int v) {
+    std::string d = std::to_string(std::abs(v));
+    for (int i = (int)d.size() - 3; i > 0; i -= 3) {
+        d.insert((size_t)i, ",");
+    }
+    return (v > 0 ? "+" : v < 0 ? "-" : "±") + d;
+}
+
+// "PB +1,230" at the right end of each lane (a skin's "zdon_ghost": {x, y} = the 1P chip's top left)
+void GameScreen::zdon_draw_ghost() const {
+    const double t = clock.position();
+    for (size_t i = 0; i < players.size(); ++i) {
+        const auto& player = players[i];
+        if (!player) {
+            continue;
+        }
+        const ZdonGhost& g = zdon_ghost[std::clamp((int)player->player_num, 0, 3)];
+        if (g.best.empty()) {
+            continue;
+        }
+        auto it = std::ranges::upper_bound(g.best, static_cast<float>(t), {}, &std::pair<float, int>::first);
+        const int best = it == g.best.begin() ? 0 : std::prev(it)->second;
+        const int diff = player->get_result_score().score - best;
+        const Color c = diff > 0 ? Color{120, 236, 140, 255} : diff < 0 ? Color{255, 120, 110, 255} : Color::WHITE;
+        OutlinedText& txt = zhud::label(zhud::text("ghost_diff", zdon_signed_thousands(diff)), 24, c);
+        const float s = tex.screen_scale;
+        const float w = txt.width + 24 * s;
+        const float h = txt.height + 8 * s;
+        const float lane_y = i == 0 ? 184 * s : tex.get_skin_config(SC::GAME_P2_Y)->y;
+        // under the lane (169 px tall at 720p in both arcade skins); 2P play: 1P's over its lane, 2P's lane stays clear
+        float x = tex.screen_width - w - 12 * s;
+        float y = players.size() == 2 && i == 0 ? lane_y - h - 6 * s : lane_y + 174 * s;
+        if (auto cfg = tex.skin_config_by_name.find("zdon_ghost"); cfg != tex.skin_config_by_name.end()) {
+            x = cfg->second.x;
+            y = cfg->second.y + (lane_y - 184 * s);
+        }
+        zhud::panel(x, y, w, h, 0.72f, fade(c, 0.7f));
+        txt.draw({.x = x + 12 * s, .y = y + 4 * s});
     }
 }
 

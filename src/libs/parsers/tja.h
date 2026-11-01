@@ -27,6 +27,13 @@ struct Modifiers {
     int random = 0;
     int subdiff = 0;
     bool skip = false;
+    // Z-DON constant speed (song option): every note moves at equal_speed_bpm (the song's #BPM), straight left,
+    // whatever #BPMCHANGE / #SCROLL / #BMSCROLL / #HBSCROLL say
+    bool equal_speed = false;
+    double equal_speed_bpm = 0.0;
+    // Z-DON hidden / sudden (song option): 0 off, 1-3 hidden 25 / 50 / 75 % of the lane, 4-6 sudden 25 / 50 / 75 %
+    int zdon_fade = 0;
+    bool zdon_ghost = false; // Z-DON: the player's best play's score at the same moment, shown as +/- (game.cpp)
 };
 
 enum class NoteType : int {

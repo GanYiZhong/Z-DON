@@ -180,6 +180,7 @@ void SongSelect2PScreen::draw() {
     }
     if (search_box) {
         search_box->draw(script.get());
+        zdon_draw_search();
     }
     if (game_transition.has_value()) {
         game_transition->draw();

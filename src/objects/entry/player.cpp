@@ -75,9 +75,17 @@ void EntryPlayer::update(double current_time) {
     if (costume_menu) {
         costume_menu->update(current_time);
     }
+    if (outfit_menu) {
+        outfit_menu->update(current_time);
+    }
 }
 
 void EntryPlayer::open_costume_menu() {
+    if (tex.options[SCO::DISABLE_CHARA_3D] && zdon_outfit_count() > 0) {
+        outfit_menu.emplace(player_num); // Z-DON: no 3D characters, the skin's own outfits
+        audio.play_sound("select_costume", VolumePreset::VOICE);
+        return;
+    }
     costume_menu.emplace(player_num);
     audio.play_sound("select_costume", VolumePreset::VOICE);
     preset_seq_applied = 0;
@@ -93,6 +101,9 @@ void EntryPlayer::draw_drum() {
 void EntryPlayer::draw_costume_menu() {
     if (costume_menu) {
         costume_menu->draw();
+    }
+    if (outfit_menu) {
+        outfit_menu->draw();
     }
 }
 
@@ -110,6 +121,14 @@ float EntryPlayer::get_nameplate_fadein() {
 }
 
 void EntryPlayer::handle_input() {
+    if (outfit_menu) {
+        outfit_menu->handle_input();
+        if (outfit_menu->confirmed) {
+            outfit_menu.reset();
+            audio.play_sound("costume_select_" + std::to_string((int)player_num) + "p", VolumePreset::VOICE);
+        }
+        return;
+    }
     if (costume_menu) {
         costume_menu->handle_input();
         if (int seq = costume_menu->get_preset_seq(); seq != preset_seq_applied) {

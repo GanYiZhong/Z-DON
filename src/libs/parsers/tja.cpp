@@ -1615,6 +1615,17 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
         modifier_random(notes, modifiers.random);
     }
 
+    if (modifiers.equal_speed && modifiers.equal_speed_bpm > 0) {
+        // Z-DON constant speed: #BPMCHANGE / #SCROLL no longer change how fast a note comes, and a #BMSCROLL /
+        // #HBSCROLL chart scrolls as a normal one (the timing does not change: hit_ms stays)
+        notes.scroll_type = ScrollType::NMSCROLL;
+        for (auto& note : notes.notes) {
+            note.bpm = modifiers.equal_speed_bpm;
+            note.scroll_x = 1.0;
+            note.scroll_y = 0.0;
+        }
+    }
+
     modifier_speed(notes, modifiers.speed);
 
     modifier_moji(notes);

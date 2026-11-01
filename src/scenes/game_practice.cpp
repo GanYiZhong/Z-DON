@@ -8,6 +8,7 @@
 #include "../libs/animation.h"
 #include "../libs/input.h"
 #include "../objects/global/practice_timer.h"
+#include "../objects/global/zdon_hud.h"
 
 // Forward declaration for set_touch_drum_enabled from input.cpp
 extern void set_touch_drum_enabled(bool enabled);
@@ -88,6 +89,10 @@ Screens PracticeGameScreen::on_screen_end(Screens next_screen) {
     bars.clear();
     scrobble_note_list.clear();
     markers.clear();
+    zdon_branch_force = -1;
+    zdon_bar_input_open = false;
+    zdon_bar_input.clear();
+    zdon_fade_start = -1.0;
     hide_cursor();                // Hide cursor when leaving practice mode
     set_touch_drum_enabled(true); // Re-enable touch drum (input + drawing) when leaving practice mode
     return GameScreen::on_screen_end(next_screen);
@@ -108,6 +113,19 @@ void PracticeGameScreen::create_players() {
 void PracticeGameScreen::initialize_practice_chart() {
     int difficulty = global_data.session_data[(int)global_data.player_num].selected_difficulty;
     auto [notes, bm, be, bn] = parser->notes_to_position(difficulty);
+    // Z-DON: the chart's own tempo per note, before constant speed rewrites note.bpm (the info strip)
+    zdon_tempo.clear();
+    for (const Note& n : notes.notes) {
+        zdon_tempo.emplace_back(n.hit_ms, n.bpm);
+    }
+    for (const auto* branch : {&bm, &be, &bn}) {
+        for (const NoteList& section : *branch) {
+            for (const Note& n : section.notes) {
+                zdon_tempo.emplace_back(n.hit_ms, n.bpm);
+            }
+        }
+    }
+    std::ranges::sort(zdon_tempo);
     // This used to set the TJA parser's scroll_disabled here, after the parse. The screen's parser is never
     // parsed again (initialize_chart makes a new one), and the player had its own copy, so it changed nothing. The
     // player now shares this parser, and setting it would change the player's later re-parses.
@@ -261,6 +279,7 @@ void PracticeGameScreen::resume_practice() {
     if (!clock.is_paused()) {
         return;
     }
+    zdon_don_wait_ms = -1.0;
 
     if (bars.empty()) {
         global_data.zdon_loop = {};
@@ -283,6 +302,10 @@ void PracticeGameScreen::resume_practice() {
 
 void PracticeGameScreen::seek_and_play_from_bar(int resume_bar_index) {
     int previous_bar_index = std::max(0, resume_bar_index - global_data.config->general.practice_mode_bar_delay);
+    // Z-DON: at least 2 s of run-up before the bar (fast songs: more bars)
+    while (previous_bar_index > 0 && bars[resume_bar_index].hit_ms - bars[previous_bar_index].hit_ms < 2000.0) {
+        previous_bar_index--;
+    }
 
     double first_bar_time = bars[0].hit_ms;
     double resume_time = bars[resume_bar_index].hit_ms - first_bar_time + start_delay;
@@ -294,6 +317,9 @@ void PracticeGameScreen::seek_and_play_from_bar(int resume_bar_index) {
     }
 
     resume_playback(start_time);
+    // Z-DON: the music fades in over the run-up instead of starting mid-note at full volume
+    zdon_fade_start = get_current_ms();
+    zdon_update_fade(zdon_fade_start);
 }
 
 // Z-DON: resumed exactly on a jump mark with a later mark set: loop A..B
@@ -312,11 +338,15 @@ void PracticeGameScreen::zdon_loop_start(int resume_bar_index) {
             next = b;
         }
     }
-    if (next < 0 || next >= (int)bars.size()) {
-        return;
-    }
     loop.active = true;
     loop.a_bar = resume_bar_index;
+    if (next < 0 || next >= (int)bars.size()) {
+        // Z-DON: only A: loop from A to the end of the song
+        loop.b_bar = (int)bars.size() - 1;
+        loop.to_end = true;
+        zhud::toast(zhud::text("loop_to_end", std::to_string(resume_bar_index + 1)));
+        return;
+    }
     loop.b_bar = next;
 }
 
@@ -326,7 +356,8 @@ void PracticeGameScreen::zdon_loop_update() {
     if (!loop.active || clock.is_paused() || bars.empty() || loop.b_bar >= (int)bars.size()) {
         return;
     }
-    const double b_time = bars[loop.b_bar].hit_ms - bars[0].hit_ms + start_delay;
+    const double b_time = loop.to_end ? (players.empty() ? 0.0 : players[0]->end_time) + 1500.0
+                                      : bars[loop.b_bar].hit_ms - bars[0].hit_ms + start_delay;
     if (clock.position() < b_time) {
         return;
     }
@@ -343,6 +374,7 @@ void PracticeGameScreen::zdon_loop_update() {
 }
 
 void PracticeGameScreen::open_practice_menu() {
+    zdon_don_wait_ms = -1.0;
     menu_don_anim->start();
     menu.open_menu();
 }
@@ -366,6 +398,9 @@ void PracticeGameScreen::change_practice_speed(bool down, bool up) {
 void PracticeGameScreen::restart_practice() {
     restart_song();
     initialize_practice_chart();
+    if (zdon_branch_force >= 0) {
+        zdon_apply_branch_force();
+    }
     hide_cursor();                // Hide cursor on restart
     set_touch_drum_enabled(true); // Re-enable touch drum (input + drawing) on restart
     menu.close();
@@ -425,7 +460,7 @@ void PracticeGameScreen::animate_scrobble_to(int new_index) {
     scrobble_move->start();
 }
 
-void PracticeGameScreen::scrobble_step_bar(bool right) {
+void PracticeGameScreen::scrobble_step_bar(bool right, int count) {
     if (bars.empty()) {
         return;
     }
@@ -443,8 +478,8 @@ void PracticeGameScreen::scrobble_step_bar(bool right) {
             practice_player->spawn_scrobble_effect(DrumType::KAT, Side::LEFT, player_idx);
         }
     }
-    int new_index = right ? (scrobble_index + 1) % (int)bars.size()
-                          : ((scrobble_index > 0) ? scrobble_index - 1 : (int)bars.size() - 1);
+    const int n = (int)bars.size();
+    int new_index = right ? (scrobble_index + count) % n : ((scrobble_index - count) % n + n) % n;
     animate_scrobble_to(new_index);
 }
 
@@ -653,6 +688,9 @@ static bool other_don_pressed(PlayerNum self) {
 }
 
 std::optional<Screens> PracticeGameScreen::global_keys_practice() {
+    if (zdon_practice_keys()) {
+        return std::nullopt;
+    }
     if (check_key_pressed(global_data.config->keys.restart_key)) {
         restart_practice();
         return std::nullopt;
@@ -798,7 +836,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
             return std::nullopt;
         }
 
-        if (is_l_don_pressed(global_data.player_num) || is_r_don_pressed(global_data.player_num)) {
+        if (zdon_don_gesture(is_l_don_pressed(global_data.player_num), is_r_don_pressed(global_data.player_num))) {
             resume_practice();
         }
 
@@ -813,7 +851,13 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
         bool scrobble_right = is_r_kat_pressed(global_data.player_num);
 
         if (!bars.empty() && (scrobble_left || scrobble_right)) {
-            scrobble_step_bar(!scrobble_left && scrobble_right);
+            // Z-DON: quick kats the same way move 4, then 8 bars a hit
+            const bool right = !scrobble_left && scrobble_right;
+            const double now = get_current_ms();
+            zdon_scrub_run = (right == zdon_scrub_right && now - zdon_scrub_last_ms < 250.0) ? zdon_scrub_run + 1 : 1;
+            zdon_scrub_right = right;
+            zdon_scrub_last_ms = now;
+            scrobble_step_bar(right, zdon_scrub_run >= 8 ? 8 : zdon_scrub_run >= 4 ? 4 : 1);
         }
     }
 
@@ -859,6 +903,17 @@ std::optional<Screens> PracticeGameScreen::update() {
     }
     zdon_loop_update();
     sync_branch_display();
+    zdon_update_fade(current_ms);
+    if (practice_player) {
+        const auto& loop = global_data.zdon_loop;
+        if (loop.active && loop.a_bar >= 0 && loop.a_bar < (int)bars.size() && loop.b_bar < (int)bars.size()) {
+            practice_player->zdon_dim_range =
+                std::make_pair(bars[loop.a_bar].hit_ms,
+                               loop.to_end ? std::numeric_limits<double>::infinity() : bars[loop.b_bar].hit_ms);
+        } else {
+            practice_player->zdon_dim_range.reset();
+        }
+    }
 
     scrobble_move->update(current_ms);
     if (scrobble_move->is_started && scrobble_move->is_finished) {
@@ -1045,6 +1100,7 @@ void PracticeGameScreen::draw_notes_scrobble(double current_ms) const {
                                       .frame = note.moji,
                                       .x = moji_x,
                                       .y = tex.get_skin_config(SC::GAME_MOJI)->y + y});
+            zdon_draw_offset(note, get_scrobble_position_x(note, current_ms));
         }
     }
 
@@ -1253,5 +1309,246 @@ void PracticeGameScreen::draw() {
         session->draw();
     }
 
+    zdon_draw_info();
+    if (zdon_bar_input_open) {
+        zdon_draw_bar_input();
+    }
     draw_overlay(false);
+}
+
+// ---------------------------------------------------------------- Z-DON practice extras
+
+bool PracticeGameScreen::zdon_has_branches() const {
+    return !branch_m_all.empty() || !branch_e_all.empty() || !branch_n_all.empty();
+}
+
+// the forced branch for every checkpoint (or none: the play decides again from the next resume on)
+void PracticeGameScreen::zdon_apply_branch_force() {
+    if (!practice_player) {
+        return;
+    }
+    const size_t checkpoints = std::max({branch_m_all.size(), branch_e_all.size(), branch_n_all.size()});
+    if (zdon_branch_force < 0) {
+        practice_player->branch_history.clear();
+    } else {
+        practice_player->branch_history.assign(checkpoints, static_cast<BranchDifficulty>(zdon_branch_force));
+    }
+    branch_display_synced = (size_t)-1;
+    sync_branch_display();
+}
+
+static int zdon_digit_pressed() {
+    static constexpr SDL_Scancode row[10] = {SDL_SCANCODE_0, SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3,
+                                             SDL_SCANCODE_4, SDL_SCANCODE_5, SDL_SCANCODE_6, SDL_SCANCODE_7,
+                                             SDL_SCANCODE_8, SDL_SCANCODE_9};
+    static constexpr SDL_Scancode pad[10] = {SDL_SCANCODE_KP_0, SDL_SCANCODE_KP_1, SDL_SCANCODE_KP_2, SDL_SCANCODE_KP_3,
+                                             SDL_SCANCODE_KP_4, SDL_SCANCODE_KP_5, SDL_SCANCODE_KP_6, SDL_SCANCODE_KP_7,
+                                             SDL_SCANCODE_KP_8, SDL_SCANCODE_KP_9};
+    for (int d = 0; d < 10; ++d) {
+        if (key_pressed(row[d]) || key_pressed(pad[d])) {
+            return d;
+        }
+    }
+    return -1;
+}
+
+static const char* zdon_branch_key(int force) {
+    static constexpr const char* names[] = {"branch_normal", "branch_expert", "branch_master"};
+    return force < 0 ? "branch_auto" : names[std::clamp(force, 0, 2)];
+}
+
+bool PracticeGameScreen::zdon_practice_keys() {
+    if (!clock.is_paused() || menu.open) {
+        return false;
+    }
+    if (zdon_bar_input_open) {
+        // the typed bar number: Enter jumps, Backspace erases, Esc closes; the drums wait meanwhile
+        const int d = zdon_digit_pressed();
+        if (d >= 0 && zdon_bar_input.size() < 4) {
+            zdon_bar_input += static_cast<char>('0' + d);
+            audio.play_sound("kat", VolumePreset::SOUND);
+        }
+        if (key_pressed(SDL_SCANCODE_BACKSPACE) && !zdon_bar_input.empty()) {
+            zdon_bar_input.pop_back();
+        }
+        if (key_pressed(SDL_SCANCODE_ESCAPE)) {
+            zdon_bar_input_open = false;
+        }
+        if (key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_KP_ENTER)) {
+            const int n = zdon_bar_input.empty() ? 0 : std::stoi(zdon_bar_input);
+            if (n >= 1 && n <= (int)bars.size()) {
+                audio.play_sound("don", VolumePreset::SOUND);
+                animate_scrobble_to(n - 1);
+                zdon_bar_input_open = false;
+            } else {
+                audio.play_sound("kat", VolumePreset::SOUND);
+                zhud::toast(zhud::text("bar_missing", zdon_bar_input));
+                zdon_bar_input.clear();
+            }
+        }
+        clear_input_buffers(); // nothing typed here reaches the drums
+        return true;
+    }
+    if (const int d = zdon_digit_pressed(); d >= 0 && !bars.empty()) {
+        zdon_bar_input_open = true;
+        zdon_bar_input = d > 0 ? std::string(1, static_cast<char>('0' + d)) : std::string();
+        audio.play_sound("kat", VolumePreset::SOUND);
+        return true;
+    }
+    // F6: the branch for the whole song: decided by the play -> normal -> advanced -> master
+    if (key_pressed(SDL_SCANCODE_F6) && zdon_has_branches()) {
+        zdon_cycle_branch();
+        return true;
+    }
+    return false;
+}
+
+void PracticeGameScreen::zdon_cycle_branch() {
+    zdon_branch_force = zdon_branch_force >= (int)BranchDifficulty::MASTER ? -1 : zdon_branch_force + 1;
+    zdon_apply_branch_force();
+    audio.play_sound("don", VolumePreset::SOUND);
+    zhud::toast(zhud::text("branch", zhud::text(zdon_branch_key(zdon_branch_force))));
+}
+
+// a paused 1P don: on a chart with branches, both dons within 80 ms switch the branch and one don resumes
+// once the 80 ms are over (true = resume now)
+bool PracticeGameScreen::zdon_don_gesture(bool l, bool r) {
+    if (!zdon_has_branches()) {
+        return l || r;
+    }
+    constexpr double WINDOW_MS = 80.0;
+    const double now = get_current_ms();
+    if (zdon_don_wait_ms >= 0) {
+        if (zdon_don_right ? l : r) {
+            zdon_don_wait_ms = -1.0;
+            zdon_cycle_branch();
+            return false;
+        }
+        if (now - zdon_don_wait_ms >= WINDOW_MS) {
+            zdon_don_wait_ms = -1.0;
+            return true;
+        }
+        return false;
+    }
+    if (l && r) {
+        zdon_cycle_branch();
+        return false;
+    }
+    if (l || r) {
+        zdon_don_wait_ms = now;
+        zdon_don_right = r;
+    }
+    return false;
+}
+
+void PracticeGameScreen::zdon_update_fade(double current_ms) {
+    if (zdon_fade_start < 0 || !song_music) {
+        return;
+    }
+    static constexpr double FADE_MS = 900.0;
+    const double t = std::clamp((current_ms - zdon_fade_start) / FADE_MS, 0.0, 1.0);
+    audio.set_sound_volume(*song_music, audio.preset_level(VolumePreset::MUSIC) * static_cast<float>(t));
+    if (t >= 1.0) {
+        zdon_fade_start = -1.0;
+    }
+}
+
+double PracticeGameScreen::zdon_bpm_at(double hit_ms) const {
+    if (zdon_tempo.empty()) {
+        return players.empty() ? 0.0 : players[0]->bpm;
+    }
+    auto it = std::ranges::upper_bound(zdon_tempo, hit_ms + 0.5, {}, &std::pair<double, double>::first);
+    return it == zdon_tempo.begin() ? zdon_tempo.front().second : std::prev(it)->second;
+}
+
+static std::string zdon_fmt_tempo(double v) {
+    const long long tenths = std::llround(v * 10.0);
+    std::string t = std::to_string(tenths / 10);
+    if (tenths % 10 != 0) {
+        t += "." + std::to_string(std::llabs(tenths % 10));
+    }
+    return t;
+}
+
+// "BPM 158  x0.8 -> 126", the branch (charts with branches), and the keys while paused: bottom left, or
+// with its top left at a skin's  "zdon_practice_info": { "x": .., "y": .. }
+void PracticeGameScreen::zdon_draw_info() const {
+    if (bars.empty()) {
+        return;
+    }
+    const float s = tex.screen_scale;
+    const double at = clock.is_paused() ? bars[std::clamp(scrobble_index, 0, (int)bars.size() - 1)].hit_ms
+                                        : clock.position() + bars[0].hit_ms - start_delay;
+    const double bpm = zdon_bpm_at(at);
+    std::string tempo = zhud::text("bpm", zdon_fmt_tempo(bpm));
+    if (song_speed != 10) {
+        tempo += "  x" + zdon_fmt_tempo(song_speed / 10.0) + " → " + zdon_fmt_tempo(bpm * song_speed / 10.0);
+    }
+    std::vector<OutlinedText*> lines = {&zhud::label(tempo, 22)};
+    if (clock.is_paused()) {
+        lines.push_back(
+            &zhud::label(zhud::text("bar_pos", std::to_string(std::clamp(scrobble_index, 0, (int)bars.size() - 1) + 1),
+                                    std::to_string(bars.size())),
+                         22));
+    }
+    if (zdon_has_branches()) {
+        lines.push_back(&zhud::label(zhud::text("branch", zhud::text(zdon_branch_key(zdon_branch_force))), 22,
+                                     zdon_branch_force < 0 ? Color::WHITE : Color{255, 226, 120, 255}));
+    }
+    if (clock.is_paused() && !menu.open) {
+        lines.push_back(&zhud::label(zhud::text("practice_keys"), 18, Color{200, 206, 220, 255}));
+    }
+    float w = 0;
+    float h = 8 * s;
+    for (auto* t : lines) {
+        w = std::max(w, t->width);
+        h += t->height + 2 * s;
+    }
+    w += 24 * s;
+    float x = 10 * s;
+    float y = tex.screen_height - h - 10 * s;
+    if (auto it = tex.skin_config_by_name.find("zdon_practice_info"); it != tex.skin_config_by_name.end()) {
+        x = it->second.x;
+        y = it->second.y;
+    }
+    zhud::panel(x, y, w, h, 0.72f);
+    y += 4 * s;
+    for (auto* t : lines) {
+        t->draw({.x = x + 12 * s, .y = y});
+        y += t->height + 2 * s;
+    }
+}
+
+void PracticeGameScreen::zdon_draw_bar_input() const {
+    const float s = tex.screen_scale;
+    const bool blink = static_cast<long long>(get_current_ms() / 400) % 2 == 0;
+    OutlinedText& t = zhud::label(zhud::text("bar_input", zdon_bar_input + (blink ? "_" : " ")), 44);
+    OutlinedText& hint =
+        zhud::label(zhud::text("bar_input_hint", std::to_string(bars.size())), 20, Color{200, 206, 220, 255});
+    const float w = std::max({t.width, hint.width, 360 * s}) + 48 * s;
+    const float h = t.height + hint.height + 30 * s;
+    const float x = (tex.screen_width - w) / 2.0f;
+    const float y = tex.screen_height * 0.45f;
+    zhud::panel(x, y, w, h, 0.9f, Color{255, 226, 120, 220});
+    t.draw({.x = x + (w - t.width) / 2.0f, .y = y + 10 * s});
+    hint.draw({.x = x + (w - hint.width) / 2.0f, .y = y + 18 * s + t.height});
+}
+
+// the hit's offset over a note in the pause view: blue = early (-), orange = late (+); two rows so close notes
+// do not cover each other
+void PracticeGameScreen::zdon_draw_offset(const Note& note, float x) const {
+    if (!practice_player) {
+        return;
+    }
+    const std::optional<float> off = practice_player->get_note_offset(note.index);
+    if (!off) {
+        return;
+    }
+    const int ms = static_cast<int>(std::lround(*off));
+    const Color c = ms <= -1 ? Color{120, 196, 255, 255} : ms >= 1 ? Color{255, 150, 90, 255} : Color::WHITE;
+    OutlinedText& t = zhud::label((ms > 0 ? "+" : "") + std::to_string(ms), 18, c);
+    const float s = tex.screen_scale;
+    const float top = tex.get_skin_config(SC::GAME_NOTES)->y + 184 * s;
+    const float row = (note.index % 2) ? t.height : 0.0f;
+    t.draw({.x = x - t.width / 2.0f, .y = top - t.height - row + 4 * s});
 }

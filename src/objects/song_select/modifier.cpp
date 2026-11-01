@@ -5,6 +5,7 @@
 
 #include "../../libs/audio.h"
 #include "../../libs/filesystem.h"
+#include "../global/zdon_hud.h"
 
 const std::array<std::string, 5> ModifierSelector::BASE_MOD_NAMES = {"auto", "speed", "display", "inverse", "random"};
 
@@ -19,6 +20,8 @@ static bool PlayerData::* find_bool_modifier(std::string_view name) {
         {"display", &PlayerData::modifier_display},
         {"inverse", &PlayerData::modifier_inverse},
         {"skip", &PlayerData::modifier_skip},
+        {"equal_speed", &PlayerData::modifier_equal_speed}, // Z-DON
+        {"ghost", &PlayerData::modifier_ghost},             // Z-DON
     };
 
     const auto modifier = std::ranges::find(modifiers, name, &BoolModifier::name);
@@ -46,6 +49,9 @@ ModifierSelector::ModifierSelector(PlayerNum player_num, PlayerData* player) : p
     language = global_data.config->general.language;
 
     mod_names.assign(BASE_MOD_NAMES.begin(), BASE_MOD_NAMES.end());
+    mod_names.emplace_back("equal_speed"); // Z-DON constant speed
+    mod_names.emplace_back("zdon_fade");   // Z-DON hidden / sudden
+    mod_names.emplace_back("ghost");       // Z-DON PB pace
     if (tex.options[SCO::OPTION_SKIP_ROW]) {
         mod_names.emplace_back("skip");
     }
@@ -191,6 +197,8 @@ void ModifierSelector::step(int dir) {
         step_neiro(dir);
     } else if (mod_name == "random") {
         player->modifier_random = (player->modifier_random + dir + 3) % 3;
+    } else if (mod_name == "zdon_fade") {
+        player->modifier_zdon_fade = (player->modifier_zdon_fade + dir + 7) % 7;
     } else {
         set_bool(current_mod_index, !get_bool(current_mod_index));
     }
@@ -208,6 +216,15 @@ void ModifierSelector::right() {
 std::string ModifierSelector::row_label(const std::string& n) const {
     if (std::ranges::contains(BASE_MOD_NAMES, n) || n == "skip" || n == "neiro") {
         return font_manager.get_text_label("modifier_name_" + n);
+    }
+    // Z-DON rows: the skin's modifier_name_<row>, else built in
+    static const std::pair<const char*, const char*> zdon_rows[] = {
+        {"equal_speed", "equal_speed"}, {"zdon_fade", "fade"}, {"ghost", "ghost"}};
+    for (const auto& [row, key] : zdon_rows) {
+        if (n == row) {
+            std::string s = tex.skin_text(std::string("modifier_name_") + row, language);
+            return s.empty() ? zhud::text(key) : s;
+        }
     }
     return std::string();
 }
@@ -243,6 +260,13 @@ std::vector<ModifierSelector::ModRow> ModifierSelector::lua_rows() {
             }
             r.state = player->modifier_random;
             r.changed = player->modifier_random != 0;
+        } else if (n == "zdon_fade") {
+            const int f = player->modifier_zdon_fade;
+            r.value = f == 0   ? font_manager.get_text_label("modifier_text_false")
+                      : f <= 3 ? zhud::text("fade_hidden", std::to_string(25 * f))
+                               : zhud::text("fade_sudden", std::to_string(25 * (f - 3)));
+            r.state = f;
+            r.changed = f != 0;
         } else {
             bool v = get_bool(i);
             r.state = v ? 1 : 0;
