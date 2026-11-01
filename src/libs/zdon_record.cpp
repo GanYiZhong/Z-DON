@@ -159,7 +159,7 @@ void main() {
             long long recorded = 0;    // frames this process encoded
             std::vector<int> tracks;   // --record-tracks: one difficulty per lane
             double sync_end_ms = 0;    // --record-sync-end: the song ends no earlier (a lane of a composite)
-            bool no_music = false;     // --record-no-music: hits and voices only (a lane of a composite)
+            bool no_music = false;     // --record-no-music: the hit sounds only (a lane of a composite)
         };
         State s;
 
@@ -483,9 +483,9 @@ void main() {
         audio.dev_pause_device(true); // the frames below mix the audio, in step with the picture
         audio.dev_set_master_volume(1.0f);
         s.rate = audio.dev_sample_rate();
-        if (s.no_music) { // the song once in a stacked recording: the first course's lane has it
-            VolumeConfig v = c.volume;
-            v.music = 0.0f;
+        if (s.no_music) { // the song, voices and screen sounds once in a stacked recording: the first lane has them
+            VolumeConfig v = c.volume; // hitsound kept: hits, balloon and kusudama pops
+            v.sound = v.music = v.voice = v.attract_mode = 0.0f;
             audio.set_volume_presets(v);
         }
 
@@ -757,8 +757,8 @@ void main() {
         // --record-tracks with 3 to 5 courses: each course is recorded on its own (a 1P game, all at once, every
         // song held until the longest course ends), then the gauge and lane band of each is cut out and the bands
         // are stacked top to bottom (scaled down to the frame height when they do not fit) over a blurred copy of
-        // the first course's video. The sound: the first course's (with the song) and the other courses' hits (their
-        // music muted, --record-no-music), summed and limited.
+        // the first course's video. The sound: the first course's (with the song) and the other courses' hit sounds
+        // (everything else muted, --record-no-music), summed and limited.
         bool compose_tracks(const std::vector<std::string>& base, double chart_end_ms, long long total,
                             std::chrono::steady_clock::time_point started) {
             const fs::path dir = s.out.parent_path();

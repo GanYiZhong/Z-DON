@@ -64,7 +64,8 @@ namespace zdon_record {
     // --record-sync-end <ms> (a course of a stacked recording): the song does not end before ms (the longest
     // course's last note), so every course reaches its result screen at the same frame
     double sync_end_ms();
-    // --record-no-music (the other courses of a stacked recording): the song muted, hits and voices kept
+    // --record-no-music (the other courses of a stacked recording): only the hit sounds (hits, balloon and kusudama
+    // pops); the song, voices and screen sounds are the first course's
 
     // every frame, after the frame is complete in the window and before it is presented: the picture and
     // one frame of audio. true when the recording is done.
