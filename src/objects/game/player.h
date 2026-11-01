@@ -248,6 +248,9 @@ private:
 
     void init_player_textures();
 
+    // Z-DON auto play catch-up: where the last update was, and true while replaying a stalled gap
+    double zdon_auto_last_ms = -1e18;
+    bool zdon_auto_catchup = false;
     TextureObject* t_lane_background = nullptr;
     TextureObject* t_ai_lane_background = nullptr;
     TextureObject* t_lane_hit_circle = nullptr;

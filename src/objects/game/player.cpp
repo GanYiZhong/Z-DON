@@ -302,7 +302,9 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             hit_type = DrumType::DON;
             autoplay_hit_side = autoplay_hit_side == Side::LEFT ? Side::RIGHT : Side::LEFT;
             spawn_hit_effects(hit_type, autoplay_hit_side);
-            audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_auto_catchup) {
+                audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            }
             check_note(ms_from_start, hit_type, current_ms, background);
         }
     } else {
@@ -325,7 +327,9 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             const size_t remaining = don_notes.size();
             hit_type = DrumType::DON;
             autoplay_hit(hit_type, don_notes.front().type == NoteType::DON_L);
-            audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_auto_catchup) {
+                audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            }
             check_note(ms_from_start, hit_type, current_ms, background);
             last_note_hit = current_ms;
             if (don_notes.size() == remaining) {
@@ -340,7 +344,9 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             const size_t remaining = kat_notes.size();
             hit_type = DrumType::KAT;
             autoplay_hit(hit_type, kat_notes.front().type == NoteType::KAT_L);
-            audio.play_sound(kat_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_auto_catchup) {
+                audio.play_sound(kat_hitsound_id, VolumePreset::HITSOUND);
+            }
             check_note(ms_from_start, hit_type, current_ms, background);
             if (kat_notes.size() == remaining) {
                 break;
@@ -464,6 +470,28 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     bg_hook = background.has_value() ? &background.value() : nullptr;
 
     note_manager(ms_from_start, background);
+    // Z-DON: a stalled frame (the window dragged: Windows blocks the loop while the song plays on) jumps the
+    // clock past notes and rolls. Auto play walks the gap in small steps so it still hits every note on time and
+    // keeps its roll speed; the hit sounds of the gap are skipped.
+    static const bool no_catchup = std::getenv("ZDON_NO_AUTO_CATCHUP") != nullptr; // tests: the old behaviour
+    if (modifiers.auto_play && !no_catchup) {
+        constexpr double kStep = 4.0;
+        const double gap = ms_from_start - zdon_auto_last_ms;
+        if (gap > 2 * kStep && gap < 120000.0) {
+            zdon_auto_catchup = true;
+            for (double t = zdon_auto_last_ms + kStep; t < ms_from_start - kStep / 2; t += kStep) {
+                note_manager(t, background);
+                handle_timeline(t);
+                autoplay_manager(t, current_ms, background);
+                if (is_branch) {
+                    evaluate_branch(t);
+                }
+            }
+            zdon_auto_catchup = false;
+        }
+    }
+    zdon_auto_last_ms = ms_from_start;
+
     combo_display.update(current_ms, combo);
     if (combo_announce.has_value()) {
         combo_announce->update(current_ms);
@@ -2245,3 +2273,4 @@ void Player::seek_to(double resume_time) {
     std::erase_if(draw_note_list,
                   [resume_time, boundary_eps](const Note& n) { return n.hit_ms < resume_time - boundary_eps; });
 }
+    zdon_auto_last_ms = -1e18;

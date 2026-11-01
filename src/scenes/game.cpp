@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <thread>
 
 #include "../libs/animation.h"
 #include "../libs/filesystem.h"
@@ -836,6 +837,29 @@ std::optional<Screens> GameScreen::update() {
         const double transition_delay = global_data.config->general.fast_transitions
                                             ? kFastResultTransitionDelayMs
                                             : (players[0]->was_skipped() ? 2800.0 : 8533.34);
+    // Z-DON test hook: ZDON_TEST_STALL="<song ms>:<ms>,..." blocks the loop once there, as dragging the window
+    // does (the auto play catch-up in Player::update)
+    static std::vector<std::pair<double, int>> stalls = [] {
+        std::vector<std::pair<double, int>> v;
+        if (const char* e = std::getenv("ZDON_TEST_STALL")) {
+            std::string spec = e;
+            for (size_t a = 0; a < spec.size();) {
+                size_t b = spec.find(',', a);
+                b = b == std::string::npos ? spec.size() : b;
+                const std::string item = spec.substr(a, b - a);
+                if (const size_t c = item.find(':'); c != std::string::npos) {
+                    v.emplace_back(std::atof(item.substr(0, c).c_str()), std::atoi(item.substr(c + 1).c_str()));
+                }
+                a = b + 1;
+            }
+        }
+        return v;
+    }();
+    if (!stalls.empty() && clock.position() >= stalls.front().first) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(stalls.front().second));
+        stalls.erase(stalls.begin());
+    }
+
 
         end_song(players[0]->end_time, transition_delay, BackgroundNotification::Enabled);
     }
