@@ -100,7 +100,9 @@ void Player::zdon_ai_manager(double ms_from_start, double current_ms, std::optio
             ai.next_roll_ms = std::max(ai.next_roll_ms + interval, ms_from_start - interval);
             autoplay_hit_side = autoplay_hit_side == Side::LEFT ? Side::RIGHT : Side::LEFT;
             spawn_hit_effects(DrumType::DON, autoplay_hit_side);
-            audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_auto_catchup) {
+                audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+            }
             check_note(ms_from_start, DrumType::DON, current_ms, background);
         }
         return;
@@ -129,7 +131,9 @@ void Player::zdon_ai_manager(double ms_from_start, double current_ms, std::optio
                 autoplay_hit_side = autoplay_hit_side == Side::LEFT ? Side::RIGHT : Side::LEFT;
                 spawn_hit_effects(type, autoplay_hit_side);
             }
-            audio.play_sound(k == 0 ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_auto_catchup) {
+                audio.play_sound(k == 0 ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
+            }
             const size_t before = lane.size();
             check_note(note.hit_ms + off, type, current_ms, background);
             if (lane.size() == before) {
