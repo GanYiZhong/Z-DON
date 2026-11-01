@@ -16,6 +16,8 @@ static const char* mode_key(Screens location) {
         return "entry_practice";
     case Screens::AI_SELECT:
         return "entry_ai_battle";
+    case Screens::RECORD_SELECT:
+        return "entry_record";
     case Screens::ENTRY:
         return "entry_costume";
     case Screens::SETTINGS:

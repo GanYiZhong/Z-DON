@@ -837,6 +837,9 @@ void GameScreen::update_gameplay(double current_ms) {
         start_song(clock.position());
         reset_input_lock();
     }
+    if (zdon_record::active() && !players.empty()) {
+        zdon_record::note_song(clock.position(), players[0]->end_time); // the recording's progress
+    }
 
     resync_song(current_ms);
     update_background(current_ms);

@@ -274,3 +274,12 @@
 - 做法：測試模式（YATAIDON_TEST：隱藏視窗、忽略真實輸入、失焦不暫停、不寫歌單）＋固定步進 1000/fps ms；每幀畫完讀回視窗（3 個 PBO 輪流、晚 2 幀取出，ffmpeg `-vf vflip`）→ 背景執行緒寫 ffmpeg stdin（h264_nvenc 直接吃 RGBA，否則 libx264）；音訊裝置暫停，主執行緒每幀叫 `AudioEngine::dev_mix_offline` 混剛好一幀的樣本（先等串流 ring、邊解邊播的長音效）寫 float WAV，最後 AAC mux。視窗＝skin 畫面大小（不全螢幕），audio_offset/visual_offset 歸 0、master 音量 100%（各類音量照設定），`zdon_config_read_only` 讓 save_config 不寫、成績因 "record" 不存、結算不畫「未保存」。失敗 exit code 1。
 - 實測 1080p60：crazylover 魔王 239 s 影片 74 s 錄完（約 3.2×）；每幀遊戲 3.1 ms、讀回 0.2、等 ffmpeg 1.6–2。同步：click 音軌測試譜（每 0.5 s 一顆）30/60/120 fps 打擊音都在 click 後 0.3 ms 內；一般譜面音符不在格上時晚最多一格（60 fps 0–16.7 ms）。
 - 抓到自動演奏補打的 bug：門檻 8 ms 讓一般 60 fps（16.7 ms）每幀都進補打，補打中不出聲 → 自動演奏 60 fps 約 7 成、30 fps 全部打擊音被吃掉（判定都良所以之前沒發現）。改成間隔 > 50 ms 才補打；卡頓測試結果不變（1P 999/0/0、AI 749/224/26）。上游 PR #352 同樣問題，修正 commit 在 YataiDON_autocatch（b7b1c6c，待使用者同意才推）。
+
+## 2026-11-01 錄影模式（主選單模式板，RECORD_SELECT）
+
+- 使用者選：主選單模式板＋等待畫面。entry「錄影模式」板（skin 文字 `entry_record`，沒有就不出板；2P 時灰掉）→ `Screens::RECORD_SELECT`（RecordSongSelectScreen，選曲 skin，`scenes/song_select_record.*`）。決定難度不進演奏：引擎畫的視窗選「自動演奏／不敲擊」→ 以 `--record --record-status cache/record/status.txt` 開自己當隱藏子程序（`libs/zdon_record_job.cpp`：CreateProcessW＋kill-on-close Job Object，ffmpeg 一起收；POSIX posix_spawn）→ 等待視窗顯示進度（子程序依譜面位置/結束時間寫 0..1，結算畫面算最後 5%）→ 完成顯示檔名，咚＝檔案總管選取、咔＝返回；返回鍵＝中止並刪檔。輸出 `%USERPROFILE%\Videos\YataiDON\<曲名>_<Easy..Ura>_<auto|nohit>[ (n)].mp4`。
+- 等待中主程式每幀睡 30 ms、master 音量 0（預覽聲）；錄影程序寫 record.log（不蓋 latest.log），並清掉從父程序繼承的開發鉤子（JUMP_SCREEN、FAKE_KEYS 等，測試時曾讓子程序 30 幀就跳走）。
+- SimpleStyle：v2_standalone `entry_record`＋comment 1/2、entry/box.lua COMMENTS、coin_overlay/guide_panel 的畫面表加 RECORD_SELECT。
+- 實測（測試資料夾、假按鍵）：万戈イムーーノ十 魔王 auto 147.8 s 影片 62 s 完成；不敲擊中途取消，子程序/ffmpeg 都結束、檔案清掉。
+- 發現：build/bin 的 Nijiiro 在 11-01 00:33 被換成沒有 Z-DON 等速列修正的版本（modifier.lua 的 7 列以上重畫、selector.lua 的 mod_lift / nil 修正；有修正的版本在 D:\GitHubRepos
+j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次把那兩個檔換回已安裝的版本；產生器的該補丁改成 optional。Nijiiro 本身待使用者決定。

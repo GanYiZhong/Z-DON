@@ -66,6 +66,7 @@
 #include "scenes/song_select_2p.h"
 #include "scenes/song_select_ai.h"
 #include "scenes/song_select_practice.h"
+#include "scenes/song_select_record.h"
 #include "scenes/title.h"
 
 void draw_outer_border(int screen_width, int screen_height, Color last_color) {
@@ -381,7 +382,8 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<Game2PScreen>(screens, except, Screens::GAME_2P);
     put_screen<PracticeGameScreen>(screens, except, Screens::GAME_PRACTICE);
     put_screen<PracticeSongSelectScreen>(screens, except, Screens::PRACTICE_SELECT);
-    put_screen<AiSongSelectScreen>(screens, except, Screens::AI_SELECT); // Z-DON AI battle
+    put_screen<AiSongSelectScreen>(screens, except, Screens::AI_SELECT);         // Z-DON AI battle
+    put_screen<RecordSongSelectScreen>(screens, except, Screens::RECORD_SELECT); // Z-DON recording mode
     put_screen<ResultScreen>(screens, except, Screens::RESULT);
     put_screen<Result2PScreen>(screens, except, Screens::RESULT_2P);
     put_screen<DanSelectScreen>(screens, except, Screens::DAN_SELECT);
@@ -710,6 +712,8 @@ static void run_frame() {
                     debug_menu.requested_screen = Screens::PRACTICE_SELECT;
                 } else if (name == "ai_select") {
                     debug_menu.requested_screen = Screens::AI_SELECT;
+                } else if (name == "record_select") {
+                    debug_menu.requested_screen = Screens::RECORD_SELECT;
                 } else if (name == "settings") {
                     debug_menu.requested_screen = Screens::SETTINGS;
                 }

@@ -104,6 +104,9 @@ namespace zdon_record {
             std::chrono::steady_clock::time_point started, frame_end;
             double next_log_s = 10.0;
             double ms_game = 0, ms_read = 0, ms_queue = 0, ms_audio = 0; // totals, for the progress log
+
+            fs::path status;                   // --record-status
+            double song_pos = 0, song_end = 0; // note_song
         };
         State s;
 
@@ -282,7 +285,22 @@ namespace zdon_record {
             spdlog::info("[record] {}x{}", w, h);
             return true;
         }
+        // the song is 95 % of the work, the result screen the rest
+        void write_status(double progress) {
+            if (s.status.empty()) {
+                return;
+            }
+            if (FILE* f = open_file(s.status)) {
+                std::fprintf(f, "%.4f\n", progress);
+                std::fclose(f);
+            }
+        }
     } // namespace
+
+    void note_song(double position_ms, double end_ms) {
+        s.song_pos = position_ms;
+        s.song_end = end_ms;
+    }
 
     void prepare(int argc, char** argv) {
         for (int i = 1; i < argc; i++) {
@@ -294,6 +312,8 @@ namespace zdon_record {
                 s.fps = std::clamp(std::atoi(argv[++i]), 1, 240);
             } else if (a == "--record-result" && i + 1 < argc) {
                 s.result_s = std::clamp(std::atof(argv[++i]), 0.0, 600.0);
+            } else if (a == "--record-status" && i + 1 < argc) {
+                s.status = fs::absolute(utf8_path(argv[++i]));
             }
         }
         if (!s.active) {
@@ -302,6 +322,12 @@ namespace zdon_record {
         // before anything reads them (fixed_step::step_ms and zdon_test_mode keep the first value)
         set_env("YATAIDON_TEST", "1");
         set_env("YATAIDON_FIXED_STEP_MS", std::to_string(1000.0 / s.fps));
+        // dev hooks a parent test run (the recording mode) may hand down: they would drive this run instead
+        for (const char* hook :
+             {"YATAIDON_JUMP_SCREEN", "YATAIDON_FAKE_KEYS", "YATAIDON_FAKE_MOUSE", "YATAIDON_DUMP_FRAMES",
+              "YATAIDON_DUMP_SCREEN", "YATAIDON_DUMP_CHARA", "YATAIDON_FORCE_AUTO", "ZDON_TEST_STALL"}) {
+            set_env(hook, "");
+        }
         zdon_config_read_only = true; // the overrides below stay in memory
     }
 
@@ -310,7 +336,7 @@ namespace zdon_record {
     }
 
     bool consume_arg(const std::string& arg, int& i, int argc) {
-        if (arg == "--record" || arg == "--record-fps" || arg == "--record-result") {
+        if (arg == "--record" || arg == "--record-fps" || arg == "--record-result" || arg == "--record-status") {
             i = std::min(i + 1, argc - 1);
             return true;
         }
@@ -414,6 +440,12 @@ namespace zdon_record {
         const bool game = screen.starts_with("GAME");
         const bool result = screen.find("RESULT") != std::string::npos;
         s.played = s.played || game;
+        if (s.frames % 15 == 0) {
+            const double result_total = std::max(1.0, s.result_s * s.fps);
+            write_status(result           ? 0.95 + 0.05 * std::min(1.0, (double)s.result_frames / result_total)
+                         : s.song_end > 0 ? 0.95 * std::clamp(s.song_pos / s.song_end, 0.0, 1.0)
+                                          : 0.0);
+        }
         if (result) {
             return ++s.result_frames >= (long long)std::llround(s.result_s * s.fps);
         }

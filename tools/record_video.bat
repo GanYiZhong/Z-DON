@@ -27,7 +27,7 @@ if /i "%MODE%"=="auto" set "AUTO=--auto"
 echo recording "%SONG%" difficulty %DIFF% (%MODE%) to "%OUT%" ...
 "%EXE%" "%SONG%" %DIFF% %AUTO% --record "%OUT%"
 if errorlevel 1 (
-    echo failed: see latest.log next to YataiDON.exe
+    echo failed: see record.log next to YataiDON.exe
     pause
     exit /b 1
 )

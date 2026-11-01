@@ -7,6 +7,8 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
+
+#include "zdon_record.h"
 #ifdef __ANDROID__
 #include <spdlog/sinks/android_sink.h>
 #endif
@@ -125,7 +127,9 @@ void setup_logging(const std::string& log_level_str) {
         console_sink->set_pattern("[%^%l%$] %n: %v");
 #endif
 
-        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("latest.log", true);
+        // Z-DON: a recording (--record, often a child of the running game) keeps the game's latest.log
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+            zdon_record::active() ? "record.log" : "latest.log", true);
         file_sink->set_pattern("[%H:%M:%S.%e] [%l] %n: %v");
 
         auto dup_filter = std::make_shared<spdlog::sinks::dup_filter_sink_mt>(std::chrono::seconds(5));
