@@ -865,7 +865,7 @@ static void run_frame() {
         }
 
         // tear-free pacing: the extra (input) frames of a refresh are not presented
-        if (!next_screen.has_value() && vblank_pacing::present_this_frame()) {
+        if (!next_screen.has_value() && vblank_pacing::present_this_frame() && !zdon_record::skip_present()) {
             vblank_pacing::before_present();
             swap_screen_buffer();
         }
@@ -1093,6 +1093,9 @@ int main(int argc, char* argv[]) {
     set_window_flags(flags);
     quiet_raylib_log();
     setup_logging(global_data.config->general.log_level);
+    if (zdon_record::coordinating()) {
+        return zdon_record::coordinate(argc, argv) ? 0 : 1; // parallel recording: the parts do the work
+    }
     // The library walk only reads the disk: it runs while the window opens and the skin loads, and the
     // loading screen picks it up (not with a song on the command line, which skips that screen).
     if (initial_screen == Screens::LOADING && !(dump_chara_spec && *dump_chara_spec)) {

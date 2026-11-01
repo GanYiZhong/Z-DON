@@ -128,8 +128,11 @@ void setup_logging(const std::string& log_level_str) {
 #endif
 
         // Z-DON: a recording (--record, often a child of the running game) keeps the game's latest.log
-        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-            zdon_record::active() ? "record.log" : "latest.log", true);
+        const std::string log_name = !zdon_record::active() ? "latest.log"
+                                     : zdon_record::part() >= 0
+                                         ? "record_part" + std::to_string(zdon_record::part()) + ".log"
+                                         : "record.log";
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_name, true);
         file_sink->set_pattern("[%H:%M:%S.%e] [%l] %n: %v");
 
         auto dup_filter = std::make_shared<spdlog::sinks::dup_filter_sink_mt>(std::chrono::seconds(5));

@@ -275,6 +275,15 @@
 - 實測 1080p60：crazylover 魔王 239 s 影片 74 s 錄完（約 3.2×）；每幀遊戲 3.1 ms、讀回 0.2、等 ffmpeg 1.6–2。同步：click 音軌測試譜（每 0.5 s 一顆）30/60/120 fps 打擊音都在 click 後 0.3 ms 內；一般譜面音符不在格上時晚最多一格（60 fps 0–16.7 ms）。
 - 抓到自動演奏補打的 bug：門檻 8 ms 讓一般 60 fps（16.7 ms）每幀都進補打，補打中不出聲 → 自動演奏 60 fps 約 7 成、30 fps 全部打擊音被吃掉（判定都良所以之前沒發現）。改成間隔 > 50 ms 才補打；卡頓測試結果不變（1P 999/0/0、AI 749/224/26）。上游 PR #352 同樣問題，修正 commit 在 YataiDON_autocatch（b7b1c6c，待使用者同意才推）。
 
+## 2026-11-01 錄影加速：GPU NV12＋分段並行
+
+- 使用者選 B+A。crazylover 魔王 239 s 影片（1080p60、NVENC）：單一程序 RGBA 89 s → NV12 70 s → 預設 3 段並行 **53 s**（2 段 55–58、4 段 51、6 段 49：GPU/NVENC 搶滿，3 段起持平，預設 `kDefaultJobs = 3`）。
+- B（NV12）：shader 把畫面轉成 W/4 × 1.5H 的 RGBA8 目標（亮度列每 texel 4 個 Y，色度列 U0V0U1V1；BT.709 limited；畫時關 blend，alpha 是資料），ffmpeg 收 3 MB/幀而不是 8 MB。色彩標記要放在**輸入**端（`-pix_fmt nv12 -color_range tv -colorspace bt709 ...`），放輸出端會逐幀轉換（69 fps 對 ~180）。寬非 4 的倍數或 shader 失敗就退回 RGBA；`ZDON_RECORD_RGBA=1` 強制 RGBA。對 RGBA 版 PSNR 36 dB、色彩正確。
+- A（分段）：協調程序（不開視窗）用譜面最後一個音符（含分歧）＋20 s 開場/轉場＋結算秒數估總幀數，平分給 N 個子程序（`--record-part k --record-range a b --record-jobs 1 --record-status cache/record/part<k>.txt`，kill-on-close Job）；子程序從頭跑固定步進，到起始幀前**照畫但不 present、不讀回、不編碼**，音訊照混但丟掉；最後一段跑到自然結束。合併：concat demuxer 直接複製影像，WAV 段接起來（跳 44 byte 標頭）一次 AAC mux。log：協調 record.log、各段 record_part<k>.log。
+- 快轉時一開始連 draw 都跳過，結果分段處畫面不一致：SimpleStyle 的 `Combo:draw` 才呼叫 `Play.combo`（最大連擊停在 0）、吉祥物反應在 draw 觸發（動畫格錯開）。skin 在 draw 裡改狀態很常見，所以改成照畫，只省 present（多約 3 s）。驗證：3/4 段對單一程序，影像 14360 幀沒有一幀低於 40 dB（平均 59–71 dB，差異是 NVENC 分段 GOP），聲音解碼後逐樣本相同。
+- 錄影時 density skin（SimpleStyle 2×）直接畫在 1920×1080 視窗，不再畫進 3840×2160 目標再縮（`density::factor()` 錄影時回 1；`ZDON_RECORD_FULL_DENSITY=1` 恢復）。對 4K 路徑 Y PSNR 42 dB，像素風看不出差別；4 段 55.9 → 45 s。順帶：4K 路徑在進結算那一幀有一張全黑幀，新路徑沒有。
+- 測試注意：test_ss_fixgame_zh 的 config.toml 原檔音量全 0，錄出來是靜音（不是 bug）；驗聲音要暫時調高再還原。
+
 ## 2026-11-01 錄影模式（主選單模式板，RECORD_SELECT）
 
 - 使用者選：主選單模式板＋等待畫面。entry「錄影模式」板（skin 文字 `entry_record`，沒有就不出板；2P 時灰掉）→ `Screens::RECORD_SELECT`（RecordSongSelectScreen，選曲 skin，`scenes/song_select_record.*`）。決定難度不進演奏：引擎畫的視窗選「自動演奏／不敲擊」→ 以 `--record --record-status cache/record/status.txt` 開自己當隱藏子程序（`libs/zdon_record_job.cpp`：CreateProcessW＋kill-on-close Job Object，ffmpeg 一起收；POSIX posix_spawn）→ 等待視窗顯示進度（子程序依譜面位置/結束時間寫 0..1，結算畫面算最後 5%）→ 完成顯示檔名，咚＝檔案總管選取、咔＝返回；返回鍵＝中止並刪檔。輸出 exe 旁的 `Records\<曲名>_<Easy..Ura>_<auto|nohit>[ (n)].mp4`（11-01 使用者指定；原本是 Videos\YataiDON）。

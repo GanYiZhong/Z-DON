@@ -1,9 +1,11 @@
 #include "density.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 #include "texture.h"
+#include "zdon_record.h"
 
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
 using ray::Matrix;
@@ -11,6 +13,15 @@ using ray::Matrix;
 
 namespace density {
     int factor() {
+        // a recording draws straight into its window (the video's size): the skin's high-density textures are
+        // drawn scaled down there, not into a target 4x the video's pixels (a GPU-bound parallel recording)
+        static const bool record_full = [] {
+            const char* v = std::getenv("ZDON_RECORD_FULL_DENSITY");
+            return v && *v == '1';
+        }();
+        if (zdon_record::active() && !record_full) {
+            return 1;
+        }
         return std::max(tex.texture_density, 1);
     }
 

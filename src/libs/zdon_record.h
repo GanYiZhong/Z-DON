@@ -1,7 +1,9 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <vector>
 
 // Z-DON: renders a chart straight to a video file, faster than real time, instead of recording a play.
 //
@@ -36,6 +38,24 @@ namespace zdon_record {
     // the game screen, every frame of a recording: where the song is (chart ms) and where it ends
     void note_song(double position_ms, double end_ms);
 
+    // ---- parallel recording (--record-jobs N, default kDefaultJobs) ----
+    // The recording is split by frame into N parts recorded at once by child processes (--record-part k
+    // --record-range <first> <end>): each runs the game from the start on the fixed clock, without presenting,
+    // reading back or encoding until its first frame (it still draws: skins keep state in draw, e.g. the max
+    // combo, and mixes the audio, so the state at the seam is the one a single run has), records its frames
+    // into <out>.part<k>.mp4 / .wav, and stops at its end frame (the last part at the recording's natural end).
+    // The process that was asked for the recording only coordinates: it estimates the length from the chart's
+    // last note, starts the parts, sums their progress and joins them (concat demuxer, copied video; the WAV
+    // parts appended) before the AAC mux. 3 parts: more do not help (GPU / NVENC bound).
+    constexpr int kDefaultJobs = 3;
+    // after check_args and the log setup, before the window: true when this process coordinates parts
+    bool coordinating();
+    // runs the parts and joins them; the process exits with !result
+    bool coordinate(int argc, char** argv);
+    // run_frame: true while this part runs up to its first frame (the frame is drawn, not presented)
+    bool skip_present();
+    int part(); // this process's part (-1: not a part)
+
     // every frame, after the frame is complete in the window and before it is presented: the picture and
     // one frame of audio. true when the recording is done.
     bool frame(const std::string& screen);
@@ -65,4 +85,8 @@ namespace zdon_record {
     void export_cancel(); // stops the child and removes what it wrote
     void export_forget(); // after Done / Failed: back to None
     void show_in_folder(const std::filesystem::path& file);
+
+    // zdon_record_job.cpp: runs this exe once per argument list (UTF-8), hidden, all at once, in a kill-on-close
+    // job; calls tick about four times a second until every one has exited. true when all exited with 0.
+    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<void()>& tick);
 } // namespace zdon_record

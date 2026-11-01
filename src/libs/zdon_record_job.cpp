@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -252,6 +253,103 @@ namespace zdon_record {
         if (j.state != ExportState::Running) {
             j = {};
         }
+    }
+
+    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<void()>& tick) {
+#ifdef _WIN32
+        const std::wstring exe = exe_path().wstring();
+        const std::wstring cwd = exe_path().parent_path().wstring();
+        HANDLE job = CreateJobObjectW(nullptr, nullptr);
+        if (job) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION lim{};
+            lim.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(job, JobObjectExtendedLimitInformation, &lim, sizeof(lim));
+        }
+        std::vector<HANDLE> procs;
+        bool ok = true;
+        for (const std::vector<std::string>& a : args) {
+            std::wstring cmd = L"\"" + exe + L"\"";
+            for (const std::string& s : a) {
+                cmd += L" \"" + utf8_path(s).wstring() + L"\"";
+            }
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi{};
+            if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                                nullptr, cwd.c_str(), &si, &pi)) {
+                ok = false;
+                break;
+            }
+            if (job) {
+                AssignProcessToJobObject(job, pi.hProcess);
+            }
+            ResumeThread(pi.hThread);
+            CloseHandle(pi.hThread);
+            procs.push_back(pi.hProcess);
+        }
+        while (ok) {
+            const DWORD r = WaitForMultipleObjects((DWORD)procs.size(), procs.data(), TRUE, 250);
+            tick();
+            if (r != WAIT_TIMEOUT) {
+                break;
+            }
+        }
+        for (HANDLE p : procs) {
+            DWORD code = 1;
+            if (!ok) {
+                TerminateProcess(p, 1);
+            }
+            WaitForSingleObject(p, INFINITE);
+            GetExitCodeProcess(p, &code);
+            ok = ok && code == 0;
+            CloseHandle(p);
+        }
+        if (job) {
+            CloseHandle(job);
+        }
+        return ok;
+#else
+        const std::string exe = exe_path().string();
+        std::vector<pid_t> pids;
+        bool ok = true;
+        for (const std::vector<std::string>& a : args) {
+            std::vector<std::string> all = {exe};
+            all.insert(all.end(), a.begin(), a.end());
+            std::vector<char*> argv;
+            for (std::string& s : all) {
+                argv.push_back(s.data());
+            }
+            argv.push_back(nullptr);
+            pid_t pid = -1;
+            if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ) != 0) {
+                ok = false;
+                break;
+            }
+            pids.push_back(pid);
+        }
+        size_t left = pids.size();
+        std::vector<bool> done(pids.size(), false);
+        while (ok && left > 0) {
+            for (size_t i = 0; i < pids.size(); i++) {
+                int st = 0;
+                if (!done[i] && waitpid(pids[i], &st, WNOHANG) == pids[i]) {
+                    done[i] = true;
+                    left--;
+                    ok = ok && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+                }
+            }
+            tick();
+            usleep(250000);
+        }
+        for (size_t i = 0; i < pids.size(); i++) {
+            if (!done[i]) {
+                kill(pids[i], SIGTERM);
+                int st = 0;
+                waitpid(pids[i], &st, 0);
+            }
+        }
+        return ok;
+#endif
     }
 
     void show_in_folder(const fs::path& file) {
