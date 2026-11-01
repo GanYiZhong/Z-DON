@@ -8,7 +8,7 @@
 // Z-DON: renders a chart straight to a video file, faster than real time, instead of recording a play.
 //
 //   YataiDON.exe <song.tja> [difficulty] --record <out.mp4> [--auto] [--record-fps <n>] [--record-result <s>]
-//                [--record-status <file>]
+//                [--record-status <file>] [--record-tracks <course>,<course>[,...]]
 //
 // Without --auto nothing hits (every note passes: a "no input" video). The run is a test-style one
 // (YATAIDON_TEST: hidden window, real input ignored, the player's lists untouched) on the fixed-step clock
@@ -55,6 +55,15 @@ namespace zdon_record {
     // run_frame: true while this part runs up to its first frame (the frame is drawn, not presented)
     bool skip_present();
     int part(); // this process's part (-1: not a part)
+
+    // ---- several lanes (--record-tracks <course>,<course>[,...], 2 to 5 courses of the song) ----
+    // 2: the 2P game screen (1P plays the first course, 2P the second); 3 to 5: each course recorded as a 1P game
+    // at once, then their gauge + lane bands stacked top to bottom in one video (the skins place everything else
+    // for a lane at 1P's place, so N lanes in one game screen overlap). Empty: one lane.
+    const std::vector<int>& tracks();
+    // --record-sync-end <ms> (a course of a stacked recording): the song does not end before ms (the longest
+    // course's last note), so every course reaches its result screen at the same frame
+    double sync_end_ms();
 
     // every frame, after the frame is complete in the window and before it is presented: the picture and
     // one frame of audio. true when the recording is done.

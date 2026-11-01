@@ -297,6 +297,22 @@ Screens check_args(int argc, char* argv[]) {
         }
     }
 
+    // Z-DON: --record-tracks, a lane per course (zdon_record.h)
+    const std::vector<int>& record_tracks = zdon_record::tracks();
+    if (!record_tracks.empty()) {
+        if (record_tracks.size() > 5 || two_player || practice || ai_battle) {
+            std::cerr << "Error: --record-tracks takes 1 to 5 courses, without --2p/--practice/--ai\n";
+            exit_now(1);
+        }
+        for (const int course : record_tracks) {
+            if (!tja.metadata.course_data.contains(course)) {
+                std::cerr << "Error: Invalid difficulty in --record-tracks: " << course << "\n";
+                exit_now(1);
+            }
+        }
+        selected_difficulty = record_tracks[0];
+    }
+
     if (ai_battle && (two_player || practice)) {
         std::cerr << "Error: --ai cannot be combined with --2p or --practice\n";
         exit_now(1);
@@ -311,6 +327,11 @@ Screens check_args(int argc, char* argv[]) {
         global_data.session_data[(int)PlayerNum::P2].selected_song = path;
         global_data.session_data[(int)PlayerNum::P2].selected_difficulty = selected_difficulty;
         auto_play = true;
+    }
+    if (record_tracks.size() == 2) { // 1P and 2P, without the --2p auto play
+        current_screen = Screens::GAME_2P;
+        global_data.session_data[(int)PlayerNum::P2].selected_song = path;
+        global_data.session_data[(int)PlayerNum::P2].selected_difficulty = record_tracks[1];
     }
     if (ai_battle) {
         current_screen = Screens::GAME_2P; // Game2PScreen copies 1P's song to the AI's lane

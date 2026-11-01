@@ -838,7 +838,8 @@ void GameScreen::update_gameplay(double current_ms) {
         reset_input_lock();
     }
     if (zdon_record::active() && !players.empty()) {
-        zdon_record::note_song(clock.position(), players[0]->end_time); // the recording's progress
+        // the recording's progress (a course of a stacked recording ends with the longest course)
+        zdon_record::note_song(clock.position(), std::max(players[0]->end_time, zdon_record::sync_end_ms()));
     }
 
     resync_song(current_ms);
@@ -897,12 +898,14 @@ std::optional<Screens> GameScreen::update() {
         return on_screen_end(Screens::RESULT);
     }
 
-    if (clock.position() >= players[0]->end_time) {
+    // Z-DON: a course of a stacked recording ends with the longest course (zdon_record.h --record-tracks)
+    const double song_end = std::max(players[0]->end_time, zdon_record::sync_end_ms());
+    if (clock.position() >= song_end) {
         const double transition_delay = global_data.config->general.fast_transitions
                                             ? kFastResultTransitionDelayMs
                                             : (players[0]->was_skipped() ? 2800.0 : 8533.34);
 
-        end_song(players[0]->end_time, transition_delay, BackgroundNotification::Enabled);
+        end_song(song_end, transition_delay, BackgroundNotification::Enabled);
     }
     if (global_data.config->limits.song_limit <= 0) {
         return global_keys();

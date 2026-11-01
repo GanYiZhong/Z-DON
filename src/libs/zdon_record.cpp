@@ -13,6 +13,7 @@
 #include <mutex>
 #include <spdlog/spdlog.h>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "audio.h"
@@ -156,6 +157,8 @@ void main() {
             long long range_first = 0; // --record-range: this part's first frame
             long long range_end = -1;  //   and the frame after its last (-1: the natural end)
             long long recorded = 0;    // frames this process encoded
+            std::vector<int> tracks;   // --record-tracks: one difficulty per lane
+            double sync_end_ms = 0;    // --record-sync-end: the song ends no earlier (a lane of a composite)
         };
         State s;
 
@@ -394,6 +397,18 @@ void main() {
             } else if (a == "--record-range" && i + 2 < argc) {
                 s.range_first = std::max(0LL, std::atoll(argv[++i]));
                 s.range_end = std::atoll(argv[++i]);
+            } else if (a == "--record-sync-end" && i + 1 < argc) {
+                s.sync_end_ms = std::max(0.0, std::atof(argv[++i]));
+            } else if (a == "--record-tracks" && i + 1 < argc) {
+                s.tracks.clear();
+                const std::string v = argv[++i];
+                for (size_t p = 0; p <= v.size();) {
+                    const size_t q = std::min(v.find(',', p), v.size());
+                    if (q > p) {
+                        s.tracks.push_back(std::atoi(v.substr(p, q - p).c_str()));
+                    }
+                    p = q + 1;
+                }
             }
         }
         if (!s.active) {
@@ -417,7 +432,8 @@ void main() {
 
     bool consume_arg(const std::string& arg, int& i, int argc) {
         if (arg == "--record" || arg == "--record-fps" || arg == "--record-result" || arg == "--record-status" ||
-            arg == "--record-jobs" || arg == "--record-part") {
+            arg == "--record-jobs" || arg == "--record-part" || arg == "--record-tracks" ||
+            arg == "--record-sync-end") {
             i = std::min(i + 1, argc - 1);
             return true;
         }
@@ -429,7 +445,11 @@ void main() {
     }
 
     bool coordinating() {
-        return s.active && s.part < 0 && s.jobs > 1;
+        return s.active && s.part < 0 && (s.jobs > 1 || s.tracks.size() >= 3);
+    }
+
+    double sync_end_ms() {
+        return s.active ? s.sync_end_ms : 0.0;
     }
 
     bool skip_present() {
@@ -438,6 +458,10 @@ void main() {
 
     int part() {
         return s.part;
+    }
+
+    const std::vector<int>& tracks() {
+        return s.tracks;
     }
 
     bool begin() {
@@ -696,6 +720,118 @@ void main() {
             std::fclose(f);
             return total;
         }
+
+        // a video's frame size (0: unknown), from the ffprobe next to the ffmpeg in use
+        std::pair<int, int> probe_size(const fs::path& video) {
+            fs::path probe = utf8_path(ffmpeg());
+            probe.replace_filename("ffprobe" + utf8(probe.extension()));
+            const std::string cmd = "\"" + (probe.has_parent_path() ? utf8(probe) : std::string("ffprobe")) +
+                                    "\" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 " +
+                                    quoted(video);
+#ifdef _WIN32
+            FILE* p = _wpopen(wide_command(cmd).c_str(), L"r");
+#else
+            FILE* p = popen(cmd.c_str(), "r");
+#endif
+            int w = 0, h = 0;
+            if (p) {
+                if (std::fscanf(p, "%d,%d", &w, &h) != 2) {
+                    w = h = 0;
+                }
+                close_pipe(p);
+            }
+            return {w, h};
+        }
+
+        // --record-tracks with 3 to 5 courses: each course is recorded on its own (a 1P game, all at once, every
+        // song held until the longest course ends), then the gauge and lane band of each is cut out and the bands
+        // are stacked top to bottom (scaled down to the frame height when they do not fit) over a blurred copy of
+        // the first course's video. The sound is the first course's.
+        bool compose_tracks(const std::vector<std::string>& base, double chart_end_ms, long long total,
+                            std::chrono::steady_clock::time_point started) {
+            const fs::path dir = s.out.parent_path();
+            const std::string stem = utf8(s.out.stem());
+            const fs::path status_dir = fs::absolute("cache") / "record";
+            std::error_code ec;
+            fs::create_directories(status_dir, ec);
+            const size_t n = s.tracks.size();
+            std::vector<std::vector<std::string>> args;
+            std::vector<fs::path> videos, wavs, statuses;
+            for (size_t k = 0; k < n; k++) {
+                videos.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".mp4"));
+                wavs.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".wav"));
+                statuses.push_back(status_dir / ("part" + std::to_string(k) + ".txt"));
+                fs::remove(statuses.back(), ec);
+                std::vector<std::string> a = base;
+                // a part over the whole range: its video and WAV are left for this process
+                a.insert(a.end(),
+                         {"--record-tracks", std::to_string(s.tracks[k]), "--record", utf8(videos.back()),
+                          "--record-part", std::to_string(k), "--record-range", "0", "-1", "--record-jobs", "1",
+                          "--record-fps", std::to_string(s.fps), "--record-result", "0", "--record-status",
+                          utf8(statuses.back()), "--record-sync-end", std::to_string(chart_end_ms)});
+                args.push_back(std::move(a));
+            }
+            spdlog::info("[record] {}: {} courses", utf8(s.out), n);
+            auto cleanup = [&] {
+                for (size_t k = 0; k < n; k++) {
+                    fs::remove(videos[k], ec);
+                    fs::remove(wavs[k], ec);
+                    fs::remove(statuses[k], ec);
+                }
+            };
+
+            // the courses' recordings: 90 % of the progress (the result screen is not recorded)
+            const double frames = std::max(1.0, (double)n * (double)(total - (long long)(s.result_s * s.fps)));
+            const bool ok = run_children(args, [&] {
+                double done = 0;
+                for (const fs::path& st : statuses) {
+                    done += read_number(st);
+                }
+                write_status(std::min(0.9, 0.9 * done / frames));
+            });
+            const auto [w, h] = ok ? probe_size(videos[0]) : std::pair<int, int>{0, 0};
+            if (!ok || w <= 0 || h <= 0) {
+                spdlog::error(ok ? "[record] cannot read the courses' videos"
+                                 : "[record] a course failed (record_part<k>.log)");
+                cleanup();
+                return false;
+            }
+            write_status(0.9);
+
+            // the band: from the gauge above the lane to the lane's bottom (the lane is 184..360 at 720p)
+            const auto even = [](double v) { return 2 * (int)std::lround(v / 2.0); };
+            const int band_y = even(h * 136.0 / 720.0);
+            const int band_h = even(h * 224.0 / 720.0);
+            const int stack_h = std::min(h, (int)n * band_h);
+            // the backdrop is blurred at a fifth of the size (a full-size blur was 4x the whole job's time)
+            std::string fc = "[0:v]split=2[bgsrc][s0];[bgsrc]scale=iw/5:-2,boxblur=6:1,eq=brightness=-0.2,scale=" +
+                             std::to_string(w) + ":" + std::to_string(h) + "[bg];";
+            std::string stack;
+            for (size_t k = 0; k < n; k++) {
+                const std::string in = k == 0 ? "[s0]" : "[" + std::to_string(k) + ":v]";
+                fc += in + "crop=iw:" + std::to_string(band_h) + ":0:" + std::to_string(band_y) + "[c" +
+                      std::to_string(k) + "];";
+                stack += "[c" + std::to_string(k) + "]";
+            }
+            fc += stack + "vstack=inputs=" + std::to_string(n) + ",scale=-2:" + std::to_string(stack_h) +
+                  "[st];[bg][st]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]";
+            std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y";
+            for (const fs::path& v : videos) {
+                cmd += " -i " + quoted(v);
+            }
+            cmd += " -i " + quoted(wavs[0]) + " -filter_complex \"" + fc + "\" -map \"[v]\" -map " + std::to_string(n) +
+                   ":a " + video_codec() + " -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
+            const int rc = run(cmd);
+            cleanup();
+            if (rc != 0) {
+                spdlog::error("[record] stacking the courses failed ({})", rc);
+                return false;
+            }
+            write_status(1.0);
+            const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            spdlog::info("[record] done: {} ({} courses, {:.1f} s)", utf8(s.out), n, real);
+            return true;
+        }
     } // namespace
 
     // the recording past the chart's last note besides the result screen: before the song and after it
@@ -711,16 +847,22 @@ void main() {
         double chart_end_ms = 0;
         try {
             SongParser parser(sd.selected_song);
-            auto [notes, branch_m, branch_e, branch_n] = parser.notes_to_position(sd.selected_difficulty);
-            for (const Note& n : notes.notes) {
-                if (n.type != NoteType::BARLINE) {
-                    chart_end_ms = std::max(chart_end_ms, n.hit_ms);
-                }
+            std::vector<int> courses = s.tracks;
+            if (courses.empty()) {
+                courses.push_back(sd.selected_difficulty);
             }
-            for (const auto* branch : {&branch_m, &branch_e, &branch_n}) {
-                for (const NoteList& section : *branch) {
-                    for (const Note& n : section.notes) {
+            for (const int course : courses) { // the song lasts until its longest lane ends
+                auto [notes, branch_m, branch_e, branch_n] = parser.notes_to_position(course);
+                for (const Note& n : notes.notes) {
+                    if (n.type != NoteType::BARLINE) {
                         chart_end_ms = std::max(chart_end_ms, n.hit_ms);
+                    }
+                }
+                for (const auto* branch : {&branch_m, &branch_e, &branch_n}) {
+                    for (const NoteList& section : *branch) {
+                        for (const Note& n : section.notes) {
+                            chart_end_ms = std::max(chart_end_ms, n.hit_ms);
+                        }
                     }
                 }
             }
@@ -744,6 +886,16 @@ void main() {
                 continue; // past the option's values
             }
             base.push_back(a);
+        }
+        if (s.tracks.size() >= 3) {
+            return compose_tracks(base, chart_end_ms, total, started);
+        }
+        if (!s.tracks.empty()) {
+            std::string v;
+            for (const int t : s.tracks) {
+                v += (v.empty() ? "" : ",") + std::to_string(t);
+            }
+            base.insert(base.end(), {"--record-tracks", v});
         }
         const fs::path dir = s.out.parent_path();
         const std::string stem = utf8(s.out.stem());
