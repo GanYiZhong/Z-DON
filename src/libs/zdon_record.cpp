@@ -159,6 +159,7 @@ void main() {
             long long recorded = 0;    // frames this process encoded
             std::vector<int> tracks;   // --record-tracks: one difficulty per lane
             double sync_end_ms = 0;    // --record-sync-end: the song ends no earlier (a lane of a composite)
+            bool no_music = false;     // --record-no-music: hits and voices only (a lane of a composite)
         };
         State s;
 
@@ -397,6 +398,8 @@ void main() {
             } else if (a == "--record-range" && i + 2 < argc) {
                 s.range_first = std::max(0LL, std::atoll(argv[++i]));
                 s.range_end = std::atoll(argv[++i]);
+            } else if (a == "--record-no-music") {
+                s.no_music = true;
             } else if (a == "--record-sync-end" && i + 1 < argc) {
                 s.sync_end_ms = std::max(0.0, std::atof(argv[++i]));
             } else if (a == "--record-tracks" && i + 1 < argc) {
@@ -431,6 +434,9 @@ void main() {
     }
 
     bool consume_arg(const std::string& arg, int& i, int argc) {
+        if (arg == "--record-no-music") {
+            return true;
+        }
         if (arg == "--record" || arg == "--record-fps" || arg == "--record-result" || arg == "--record-status" ||
             arg == "--record-jobs" || arg == "--record-part" || arg == "--record-tracks" ||
             arg == "--record-sync-end") {
@@ -477,6 +483,11 @@ void main() {
         audio.dev_pause_device(true); // the frames below mix the audio, in step with the picture
         audio.dev_set_master_volume(1.0f);
         s.rate = audio.dev_sample_rate();
+        if (s.no_music) { // the song once in a stacked recording: the first course's lane has it
+            VolumeConfig v = c.volume;
+            v.music = 0.0f;
+            audio.set_volume_presets(v);
+        }
 
         std::error_code ec;
         fs::create_directories(s.out.parent_path(), ec);
@@ -746,7 +757,8 @@ void main() {
         // --record-tracks with 3 to 5 courses: each course is recorded on its own (a 1P game, all at once, every
         // song held until the longest course ends), then the gauge and lane band of each is cut out and the bands
         // are stacked top to bottom (scaled down to the frame height when they do not fit) over a blurred copy of
-        // the first course's video. The sound is the first course's.
+        // the first course's video. The sound: the first course's (with the song) and the other courses' hits (their
+        // music muted, --record-no-music), summed and limited.
         bool compose_tracks(const std::vector<std::string>& base, double chart_end_ms, long long total,
                             std::chrono::steady_clock::time_point started) {
             const fs::path dir = s.out.parent_path();
@@ -769,6 +781,9 @@ void main() {
                           "--record-part", std::to_string(k), "--record-range", "0", "-1", "--record-jobs", "1",
                           "--record-fps", std::to_string(s.fps), "--record-result", "0", "--record-status",
                           utf8(statuses.back()), "--record-sync-end", std::to_string(chart_end_ms)});
+                if (k > 0) {
+                    a.emplace_back("--record-no-music");
+                }
                 args.push_back(std::move(a));
             }
             spdlog::info("[record] {}: {} courses", utf8(s.out), n);
@@ -819,8 +834,16 @@ void main() {
             for (const fs::path& v : videos) {
                 cmd += " -i " + quoted(v);
             }
-            cmd += " -i " + quoted(wavs[0]) + " -filter_complex \"" + fc + "\" -map \"[v]\" -map " + std::to_string(n) +
-                   ":a " + video_codec() + " -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
+            // every lane's hits over the song (the other lanes have no music): summed, then limited
+            std::string mix;
+            for (size_t k = 0; k < n; k++) {
+                cmd += " -i " + quoted(wavs[k]);
+                mix += "[" + std::to_string(n + k) + ":a]";
+            }
+            fc += ";" + mix + "amix=inputs=" + std::to_string(n) +
+                  ":normalize=0:duration=longest,alimiter=limit=0.95:level=0:latency=1[a]";
+            cmd += " -filter_complex \"" + fc + "\" -map \"[v]\" -map \"[a]\" " + video_codec() +
+                   " -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
             const int rc = run(cmd);
             cleanup();
             if (rc != 0) {
