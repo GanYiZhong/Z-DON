@@ -85,10 +85,12 @@ namespace zdon_record {
         double progress = 0.0; // 0..1
         std::filesystem::path out;
     };
-    // where a recording of this song goes: Records/<title>_<course>_<auto|nohit>[ (n)].mp4 next to the exe
-    std::filesystem::path export_path(const std::string& title, int difficulty, bool autoplay);
+    // where a recording of this song goes: Records/<title>_<course>[+<course>...]_<auto|nohit>[ (n)].mp4 next
+    // to the exe
+    std::filesystem::path export_path(const std::string& title, const std::vector<int>& courses, bool autoplay);
     // starts recording song / difficulty into out (false: the child could not start)
-    bool export_start(const std::filesystem::path& song, int difficulty, bool autoplay,
+    // courses: one lane each, the first on top (more than one: --record-tracks)
+    bool export_start(const std::filesystem::path& song, const std::vector<int>& courses, bool autoplay,
                       const std::filesystem::path& out);
     ExportStatus export_poll();
     void export_cancel(); // stops the child and removes what it wrote

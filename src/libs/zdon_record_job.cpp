@@ -117,10 +117,12 @@ namespace zdon_record {
         }
     } // namespace
 
-    fs::path export_path(const std::string& title, int difficulty, bool autoplay) {
-        static const char* courses[] = {"Easy", "Normal", "Hard", "Oni", "Ura"};
-        const std::string course =
-            difficulty >= 0 && difficulty <= 4 ? courses[difficulty] : std::to_string(difficulty);
+    fs::path export_path(const std::string& title, const std::vector<int>& courses, bool autoplay) {
+        static const char* names[] = {"Easy", "Normal", "Hard", "Oni", "Ura"};
+        std::string course;
+        for (const int c : courses) {
+            course += (course.empty() ? "" : "+") + (c >= 0 && c <= 4 ? std::string(names[c]) : std::to_string(c));
+        }
         const fs::path dir = records_dir();
         const std::string base = file_safe(title) + "_" + course + "_" + (autoplay ? "auto" : "nohit");
         fs::path p = dir / utf8_path(base + ".mp4");
@@ -131,9 +133,14 @@ namespace zdon_record {
         return p;
     }
 
-    bool export_start(const fs::path& song, int difficulty, bool autoplay, const fs::path& out) {
-        if (j.state == ExportState::Running) {
+    bool export_start(const fs::path& song, const std::vector<int>& courses, bool autoplay, const fs::path& out) {
+        if (j.state == ExportState::Running || courses.empty()) {
             return false;
+        }
+        const int difficulty = courses[0];
+        std::string tracks; // several lanes: --record-tracks (zdon_record.h)
+        for (const int c : courses) {
+            tracks += (tracks.empty() ? "" : ",") + std::to_string(c);
         }
         j = {};
         j.out = out;
@@ -148,6 +155,9 @@ namespace zdon_record {
         std::wstring cmd = q(exe) + L" " + q(song.wstring()) + L" " + std::to_wstring(difficulty) +
                            (autoplay ? L" --auto" : L"") + L" --record " + q(out.wstring()) + L" --record-status " +
                            q(j.status.wstring());
+        if (courses.size() > 1) {
+            cmd += L" --record-tracks " + fs::path(tracks).wstring();
+        }
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
@@ -173,6 +183,9 @@ namespace zdon_record {
             args.emplace_back("--auto");
         }
         args.insert(args.end(), {"--record", out.string(), "--record-status", j.status.string()});
+        if (courses.size() > 1) {
+            args.insert(args.end(), {"--record-tracks", tracks});
+        }
         std::vector<char*> argv;
         for (std::string& a : args) {
             argv.push_back(a.data());

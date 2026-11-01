@@ -23,8 +23,28 @@ void RecordSongSelectScreen::select_song(SongBox* box) {
     song = box->path;
     difficulty = (int)player->selected_difficulty;
     title = box->text_name;
-    choice = 0;
+    cursor = 0;
+    available.clear();
+    ticked = {};
+    for (int c = 0; c < (int)ticked.size(); c++) {
+        if (box->course_info(c).has_course) {
+            available.push_back(c);
+        }
+    }
+    if (difficulty >= 0 && difficulty < (int)ticked.size()) {
+        ticked[difficulty] = true;
+    }
     modal = Modal::Choose;
+}
+
+std::vector<int> RecordSongSelectScreen::lanes() const {
+    std::vector<int> v = {difficulty};
+    for (int c = (int)ticked.size() - 1; c >= 0; c--) {
+        if (ticked[c] && c != difficulty) {
+            v.push_back(c);
+        }
+    }
+    return v;
 }
 
 void RecordSongSelectScreen::close_modal() {
@@ -37,21 +57,31 @@ void RecordSongSelectScreen::close_modal() {
 
 void RecordSongSelectScreen::update_modal() {
     const int back = global_data.config->keys.back_key;
-    const bool kat = is_l_kat_pressed() || is_r_kat_pressed();
+    const bool l_kat = is_l_kat_pressed();
+    const bool r_kat = is_r_kat_pressed();
+    const bool kat = l_kat || r_kat;
     const bool don = is_l_don_pressed() || is_r_don_pressed();
     const bool cancel = check_key_pressed(back);
     switch (modal) {
     case Modal::Choose:
         if (cancel) {
             close_modal();
-        } else if (kat) {
-            choice ^= 1;
+        } else if (kat) { // left / right through auto, no hits and the courses
+            const int n = 2 + (int)available.size();
+            cursor = (cursor + (r_kat ? 1 : n - 1)) % n;
             audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (don && cursor >= 2) { // tick a course to record with the decided one (that one stays)
+            const int c = available[cursor - 2];
+            if (c != difficulty) {
+                ticked[c] = !ticked[c];
+            }
+            audio.play_sound("don", VolumePreset::SOUND);
         } else if (don) {
             audio.play_sound("don", VolumePreset::SOUND);
-            out = zdon_record::export_path(title, difficulty, choice == 0);
+            const bool autoplay = cursor == 0;
+            out = zdon_record::export_path(title, lanes(), autoplay);
             progress = 0.0;
-            if (zdon_record::export_start(song, difficulty, choice == 0, out)) {
+            if (zdon_record::export_start(song, lanes(), autoplay, out)) {
                 modal = Modal::Running;
                 audio.dev_set_master_volume(0.0f); // the preview, while the window waits
             } else {
@@ -129,7 +159,7 @@ void RecordSongSelectScreen::draw_modal() {
     const float u = tex.screen_width / 1920.0f;
     const float cx = tex.screen_width / 2.0f;
     draw_rectangle(0, 0, tex.screen_width, tex.screen_height, fade(Color::BLACK, 0.55f));
-    const float w = 900 * u, h = 330 * u;
+    const float w = 900 * u, h = (modal == Modal::Choose ? 470 : 330) * u;
     const float x = cx - w / 2, y = tex.screen_height / 2.0f - h / 2;
     zhud::panel(x, y, w, h, 0.92f, Color{255, 226, 120, 200});
 
@@ -138,7 +168,11 @@ void RecordSongSelectScreen::draw_modal() {
         t.draw({.x = cx - t.width / 2, .y = ty});
         return t.height;
     };
-    centered(title + "  " + zhud::course_name(difficulty), 30, y + 24 * u);
+    std::string courses;
+    for (const int c : lanes()) {
+        courses += (courses.empty() ? "" : " + ") + zhud::course_name(c);
+    }
+    centered(title + "  " + courses, 30, y + 24 * u);
 
     const Color gold{255, 226, 120, 255};
     switch (modal) {
@@ -149,10 +183,30 @@ void RecordSongSelectScreen::draw_modal() {
         for (int i = 0; i < 2; i++) {
             const float bx = cx - bw - gap / 2 + i * (bw + gap);
             const float by = y + 130 * u;
-            const bool sel = choice == i;
+            const bool sel = cursor == i;
             zhud::panel(bx, by, bw, bh, sel ? 0.95f : 0.6f, sel ? gold : Color{255, 255, 255, 90});
             OutlinedText& t = zhud::label(zhud::text(keys[i]), 32, sel ? gold : Color{170, 170, 170, 255});
             t.draw({.x = bx + bw / 2 - t.width / 2, .y = by + bh / 2 - t.height / 2});
+        }
+        // the courses to record together, one lane each (the decided one always)
+        centered(zhud::text("rec_courses"), 22, y + 225 * u, Color{200, 200, 200, 255});
+        const float cw = 150 * u, ch = 56 * u, cgap = 16 * u;
+        const float row = available.size() * cw + (available.size() - 1) * cgap;
+        for (size_t i = 0; i < available.size(); i++) {
+            const int c = available[i];
+            const float bx = cx - row / 2 + i * (cw + cgap);
+            const float by = y + 265 * u;
+            const bool sel = cursor == 2 + (int)i;
+            const bool on = ticked[c];
+            // ticked: a green fill (no tick glyph: not every skin's font has one)
+            const Color edge = sel ? gold : on ? Color{140, 220, 140, 220} : Color{255, 255, 255, 90};
+            zhud::panel(bx, by, cw, ch, sel ? 0.95f : 0.6f, edge);
+            if (on) {
+                draw_rectangle((int)(bx + 4 * u), (int)(by + 4 * u), (int)(cw - 8 * u), (int)(ch - 8 * u),
+                               Color{70, 150, 80, 200});
+            }
+            OutlinedText& t = zhud::label(zhud::course_name(c), 24, on ? Color::WHITE : Color{150, 150, 150, 255});
+            t.draw({.x = bx + cw / 2 - t.width / 2, .y = by + ch / 2 - t.height / 2});
         }
         centered(zhud::text("rec_keys_choose"), 22, y + h - 50 * u, Color{200, 200, 200, 255});
         break;
