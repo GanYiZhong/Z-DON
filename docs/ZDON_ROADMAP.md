@@ -293,6 +293,17 @@
 - 錄影時 density skin（SimpleStyle 2×）直接畫在 1920×1080 視窗，不再畫進 3840×2160 目標再縮（`density::factor()` 錄影時回 1；`ZDON_RECORD_FULL_DENSITY=1` 恢復）。對 4K 路徑 Y PSNR 42 dB，像素風看不出差別；4 段 55.9 → 45 s。順帶：4K 路徑在進結算那一幀有一張全黑幀，新路徑沒有。
 - 測試注意：test_ss_fixgame_zh 的 config.toml 原檔音量全 0，錄出來是靜音（不是 bug）；驗聲音要暫時調高再還原。
 
+## 2026-11-01 錄影再加速＋批次佇列（使用者選 1+2+4+7）
+
+- **錄影不 present**：錄影子程序的視窗是隱藏的，畫面在 present 之前就讀回，所以每一幀都不 present（`skip_present()` 錄影時一律 true；`ZDON_RECORD_PRESENT=1` 恢復，A/B 用）。原本「遊戲」那段每幀 1.9–5.6 ms 其實是卡在 present／SwapBuffers。對有 present 的版本：5 軌 PSNR 平均 64.5 dB、只有 1 幀 44.9。crazylover 239 s：單一程序 70 → 55 s、3 段 54.5 → 45.6 s（4 段 42.9、6 段 42.0，維持 3）。
+- **多軌只錄軌道條（1）**：每個難度的子程序加 `--record-band <軌數>`，在 GPU 上把魂量表＋軌道那一條（720p y 136–360）用 LINEAR blit 縮到它在疊圖裡的大小（5 軌 1080p：1236×216），第一個難度再加 `--record-backdrop`，在條下面多放一張 1/5 的整個畫面（384×216）當模糊背景來源。版面算法 `band_layout()` 兩邊共用，子程序把視窗大小與格式寫進 `<out>.size`。
+- **管線直送合成（2）**：子程序不再各自編 mp4，改把原始 NV12 幀寫進命名管線（`--record-pipe`；Windows `\\.\pipe\zdon-record-<pid>-<k>`、POSIX mkfifo，`fifo_writer` 先建管線、寫 .size、等讀端），協調程序等所有 .size 出現就開一個 ffmpeg 同時讀 N 條管線，邊錄邊疊、只編碼一次；錄完再 amix 各軌 WAV mux 進去。協調程序 90 s 內等不到管線、或 ffmpeg 失敗 → `run_children` 的 tick 回 false 停掉所有子程序。注意：boxblur 會把 NV12 交錯色度當成半寬平面（背景右半變綠），所以每個輸入先 `format=yuv420p`。
+- **AAC**：ffmpeg 內建 aac（twoloop）3 分鐘音訊要 11.6 s，換 Windows 的 `aac_mf` 2.2 s（偵測得到才用，否則 `aac -aac_coder fast` 4.1 s）；對原 WAV SNR 47 dB（twoloop 42），延遲對齊 0。所有錄影的 mux 都受惠。
+- **結果**：Abyss of hell 5 難度 1080p（179 s 影片）**130 → 36.5 s**（錄＋疊 33.6 s、聲音 2.9 s）；3 難度不敲擊 38.8 s，聲音對單軌逐樣本相同（最大差 9e-7）；2 難度（2P 畫面）25.7 s。合成畫面對舊版 51 dB、版面相同。
+- **批次佇列（4）＋剩餘時間（7）**：錄影視窗按咔＝丟到背景，選曲照常可用，左上角面板顯示「录像中 N%  剩余约 m:ss」、進度條、佇列數；背景中再決定的歌（選項視窗提示改成「咚：加入队列」）排進佇列，一個錄完自動開下一個；返回鍵在選曲時叫回錄影視窗（不會離開畫面），視窗裡返回＝全部中止。全部錄完：視窗開著時顯示「录像全部完成：N 个（失败 M 个）」＋最後一個檔名，在背景時顯示 6 秒提示。剩餘時間＝已用時間×(1−p)/p（p<2% 或未滿 2 s 不顯示）。面板放左上：右上角是 skin 的計時器/連線圖示。
+- **修掉的舊 bug**：取消或遊戲在錄影中途關掉，`.part<k>.mp4/.wav` 會留在 Records（原本只刪 .video.tmp/.audio.tmp，而且關遊戲時根本沒取消）。現在主程式結束時呼叫 `export_cancel()`，刪 `<stem>.part*/track*/video.tmp.mp4/audio.tmp.wav`；剛被終止的子程序會鎖檔一下（job 的 ActiveProcesses 歸零時還鎖著），所以刪不掉就每 100 ms 重試、最多 3 s。實測：中途關遊戲、返回全部中止都清乾淨、沒有殘留程序。POSIX 取消只 SIGTERM 協調程序（子程序不跟著死），沒處理。
+- 假按鍵實測（SimpleStyle、測試資料夾）：錄第一首 → 背景 → 排第二首（提示「已加入队列（第 1 个）」）→ 返回叫回視窗 → 兩部依序完成、提示「录像全部完成：2 个（失败 0 个）」。
+
 ## 2026-11-01 錄影模式（主選單模式板，RECORD_SELECT）
 
 - 使用者選：主選單模式板＋等待畫面。entry「錄影模式」板（skin 文字 `entry_record`，沒有就不出板；2P 時灰掉）→ `Screens::RECORD_SELECT`（RecordSongSelectScreen，選曲 skin，`scenes/song_select_record.*`）。決定難度不進演奏：引擎畫的視窗選「自動演奏／不敲擊」→ 以 `--record --record-status cache/record/status.txt` 開自己當隱藏子程序（`libs/zdon_record_job.cpp`：CreateProcessW＋kill-on-close Job Object，ffmpeg 一起收；POSIX posix_spawn）→ 等待視窗顯示進度（子程序依譜面位置/結束時間寫 0..1，結算畫面算最後 5%）→ 完成顯示檔名，咚＝檔案總管選取、咔＝返回；返回鍵＝中止並刪檔。輸出 exe 旁的 `Records\<曲名>_<Easy..Ura>_<auto|nohit>[ (n)].mp4`（11-01 使用者指定；原本是 Videos\YataiDON）。

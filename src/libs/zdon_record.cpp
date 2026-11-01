@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <spdlog/spdlog.h>
 #include <thread>
@@ -56,7 +58,8 @@ namespace zdon_record {
                                                       unsigned int);
             static constexpr unsigned int PIXEL_PACK_BUFFER = 0x88EB, STREAM_READ = 0x88E1, RGBA = 0x1908,
                                           UNSIGNED_BYTE = 0x1401, MAP_READ_BIT = 0x0001, READ_FRAMEBUFFER = 0x8CA8,
-                                          DRAW_FRAMEBUFFER = 0x8CA9, COLOR_BUFFER_BIT = 0x4000, NEAREST = 0x2600;
+                                          DRAW_FRAMEBUFFER = 0x8CA9, COLOR_BUFFER_BIT = 0x4000, NEAREST = 0x2600,
+                                          LINEAR = 0x2601;
             GenBuffers gen = nullptr;
             DeleteBuffers del = nullptr;
             BindBuffer bind = nullptr;
@@ -160,8 +163,34 @@ void main() {
             std::vector<int> tracks;   // --record-tracks: one difficulty per lane
             double sync_end_ms = 0;    // --record-sync-end: the song ends no earlier (a lane of a composite)
             bool no_music = false;     // --record-no-music: the hit sounds only (a lane of a composite)
+            int band_lanes = 0;        // --record-band: only this lane's band, scaled for a stack of that many
+            bool backdrop = false;     // --record-backdrop: and the picture at a fifth of the size below it
+            std::string fifo;          // --record-pipe: the raw frames go there (the stacking ffmpeg reads them)
+
+            int enc_w = 0, enc_h = 0; // the encoded frame (the window's, or the band's)
+            bool via_copy = false;    // the frame is put together in copy_rt (NV12 or a band)
         };
         State s;
+
+        // a stacked recording's frame, from the courses' window size and the number of lanes
+        struct BandLayout {
+            int src_y = 0, src_h = 0; // the band in the window: from the gauge above the lane to the lane's bottom
+            int out_w = 0, out_h = 0; // the band in the stack (scaled down when the lanes do not fit the height)
+            int bg_w = 0, bg_h = 0;   // the backdrop's source: the picture at a fifth of the size
+        };
+        BandLayout band_layout(int w, int h, int lanes) {
+            const auto even = [](double v) { return 2 * (int)std::lround(v / 2.0); };
+            const auto four = [](double v) { return 4 * std::max(1, (int)std::lround(v / 4.0)); };
+            BandLayout b;
+            b.src_y = even(h * 136.0 / 720.0); // the lane is 184..360 at 720p
+            b.src_h = even(h * 224.0 / 720.0);
+            const double scale = std::min(1.0, (double)h / (std::max(1, lanes) * b.src_h));
+            b.out_w = four(w * scale);
+            b.out_h = std::max(2, even(b.src_h * scale));
+            b.bg_w = four(w / 5.0);
+            b.bg_h = even(h / 5.0);
+            return b;
+        }
 
         fs::path utf8_path(const std::string& v) {
             return fs::path(std::u8string(reinterpret_cast<const char8_t*>(v.data()), v.size()));
@@ -225,6 +254,21 @@ void main() {
                 return "-c:v h264_nvenc -preset p5 -rc vbr -cq 19 -b:v 0";
             }
             return "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p";
+        }
+
+        // the AAC encoder for the mux: Windows' (aac_mf) when this ffmpeg has it, else ffmpeg's with the fast coder.
+        // ffmpeg's default (twoloop) took 11.6 s for 3 minutes of sound, most of a stacked recording's mux; fast
+        // 4.1 s, aac_mf 2.2 s (and the closest to the WAV: 47 dB SNR against twoloop's 42)
+        std::string audio_codec() {
+            static const std::string codec = [] {
+                const std::string probe = "\"" + ffmpeg() +
+                                          "\" -hide_banner -loglevel error -f lavfi -i sine=d=0.2 -c:a aac_mf "
+                                          "-b:a 320k -f null - >" +
+                                          kNull + " 2>&1";
+                return run(probe) == 0 ? std::string("-c:a aac_mf -b:a 320k")
+                                       : std::string("-c:a aac -aac_coder fast -b:a 320k");
+            }();
+            return codec;
         }
 
         void write_wav_header(FILE* f, double rate, uint64_t data_bytes) {
@@ -318,29 +362,69 @@ void main() {
                 spdlog::error("[record] the GL driver has no pixel buffer objects");
                 return false;
             }
+            const bool blits = s.gl.bind_fb && s.gl.blit;
+            s.enc_w = w;
+            s.enc_h = h;
+            if (s.band_lanes > 0) {
+                if (!blits) {
+                    spdlog::error("[record] the GL driver cannot blit: no band recording");
+                    return false;
+                }
+                const BandLayout b = band_layout(w, h, s.band_lanes);
+                s.enc_w = b.out_w;
+                s.enc_h = b.out_h + (s.backdrop ? b.bg_h : 0);
+            }
+            const int ew = s.enc_w, eh = s.enc_h;
             const char* rgba_env = std::getenv("ZDON_RECORD_RGBA"); // A/B: the RGBA path
-            s.nv12 = s.gl.bind_fb && s.gl.blit && w % 4 == 0 && h % 2 == 0 && !(rgba_env && *rgba_env == '1');
+            s.nv12 = blits && ew % 4 == 0 && eh % 2 == 0 && !(rgba_env && *rgba_env == '1');
             if (s.nv12) {
                 s.shader = ray::LoadShaderFromMemory(nullptr, kNv12Shader);
                 if (s.shader.id == 0 || s.shader.id == rlGetShaderIdDefault()) {
                     spdlog::warn("[record] the NV12 shader did not compile; recording RGBA");
                     s.nv12 = false;
                 } else {
-                    const int size[2] = {w, h};
+                    const int size[2] = {ew, eh};
                     ray::SetShaderValue(s.shader, ray::GetShaderLocation(s.shader, "srcSize"), size,
                                         ray::SHADER_UNIFORM_IVEC2);
-                    s.copy_rt = ray::LoadRenderTexture(w, h);
-                    s.nv12_rt = ray::LoadRenderTexture(w / 4, h * 3 / 2);
+                    s.nv12_rt = ray::LoadRenderTexture(ew / 4, eh * 3 / 2);
                 }
             }
-            s.frame_bytes = s.nv12 ? (size_t)w * h * 3 / 2 : (size_t)w * h * 4;
+            s.via_copy = s.nv12 || s.band_lanes > 0;
+            if (s.via_copy) {
+                s.copy_rt = ray::LoadRenderTexture(ew, eh);
+                ray::BeginTextureMode(s.copy_rt); // the backdrop's row right of the small picture stays black
+                ray::ClearBackground(ray::Color{0, 0, 0, 255});
+                ray::EndTextureMode();
+            }
+            s.frame_bytes = s.nv12 ? (size_t)ew * eh * 3 / 2 : (size_t)ew * eh * 4;
             s.gl.gen(kPbo, s.pbo.data());
             for (unsigned int b : s.pbo) {
                 s.gl.bind(Gl::PIXEL_PACK_BUFFER, b);
                 s.gl.data(Gl::PIXEL_PACK_BUFFER, (std::ptrdiff_t)s.frame_bytes, nullptr, Gl::STREAM_READ);
             }
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, 0);
-            const std::string size = std::to_string(w) + "x" + std::to_string(h);
+            // a band: the window's size and the frame format, for the coordinator (once the pipe can be opened)
+            const auto write_size = [&] {
+                if (s.band_lanes > 0) {
+                    fs::path size_file = s.out;
+                    if (FILE* f = open_file(size_file.replace_extension(".size"))) {
+                        std::fprintf(f, "%d %d %s\n", w, h, s.nv12 ? "nv12" : "rgba");
+                        std::fclose(f);
+                    }
+                }
+            };
+            if (!s.fifo.empty()) {
+                s.video = fifo_writer(s.fifo, write_size);
+                if (!s.video) {
+                    spdlog::error("[record] cannot open the pipe {}", s.fifo);
+                    return false;
+                }
+                s.writer = std::thread(writer_main);
+                spdlog::info("[record] {}x{} {} into {}", ew, eh, s.nv12 ? "NV12" : "RGBA", s.fifo);
+                return true;
+            }
+            write_size();
+            const std::string size = std::to_string(ew) + "x" + std::to_string(eh);
             // NV12 rows are top first already; GL's RGBA rows come bottom first and ffmpeg flips them. The NV12
             // colour is declared on the input: declared on the output, ffmpeg converted every frame (69 fps)
             const std::string input =
@@ -357,7 +441,8 @@ void main() {
                 return false;
             }
             s.writer = std::thread(writer_main);
-            spdlog::info("[record] {}x{} {}", w, h, s.nv12 ? "NV12" : "RGBA");
+            spdlog::info("[record] {}x{} {}{}", ew, eh, s.nv12 ? "NV12" : "RGBA",
+                         s.band_lanes > 0 ? (s.backdrop ? " (band + backdrop)" : " (band)") : "");
             return true;
         }
         // the song is 95 % of the work, the result screen the rest
@@ -400,6 +485,12 @@ void main() {
                 s.range_end = std::atoll(argv[++i]);
             } else if (a == "--record-no-music") {
                 s.no_music = true;
+            } else if (a == "--record-backdrop") {
+                s.backdrop = true;
+            } else if (a == "--record-pipe" && i + 1 < argc) {
+                s.fifo = argv[++i];
+            } else if (a == "--record-band" && i + 1 < argc) {
+                s.band_lanes = std::clamp(std::atoi(argv[++i]), 1, 5);
             } else if (a == "--record-sync-end" && i + 1 < argc) {
                 s.sync_end_ms = std::max(0.0, std::atof(argv[++i]));
             } else if (a == "--record-tracks" && i + 1 < argc) {
@@ -434,12 +525,12 @@ void main() {
     }
 
     bool consume_arg(const std::string& arg, int& i, int argc) {
-        if (arg == "--record-no-music") {
+        if (arg == "--record-no-music" || arg == "--record-backdrop") {
             return true;
         }
         if (arg == "--record" || arg == "--record-fps" || arg == "--record-result" || arg == "--record-status" ||
             arg == "--record-jobs" || arg == "--record-part" || arg == "--record-tracks" ||
-            arg == "--record-sync-end") {
+            arg == "--record-sync-end" || arg == "--record-band" || arg == "--record-pipe") {
             i = std::min(i + 1, argc - 1);
             return true;
         }
@@ -459,7 +550,12 @@ void main() {
     }
 
     bool skip_present() {
-        return s.active && s.part >= 0 && s.frames < s.range_first;
+        // the window is hidden and the frame is read back before the present: nothing to show
+        static const bool present = [] {
+            const char* v = std::getenv("ZDON_RECORD_PRESENT"); // A/B: present every frame
+            return v && *v == '1';
+        }();
+        return s.active && (!present || (s.part >= 0 && s.frames < s.range_first));
     }
 
     int part() {
@@ -604,19 +700,33 @@ void main() {
                 s.ms_queue += ms_since(tq);
             }
             const auto t1 = clk::now();
-            int rw = w, rh = h;
-            if (s.nv12) {
-                // the window's frame into copy_rt, then the shader packs it into nv12_rt
+            const int ew = s.enc_w, eh = s.enc_h;
+            int rw = ew, rh = eh;
+            if (s.via_copy) {
+                // the window's frame (or its band, and the small picture below it) into copy_rt; GL rows go up
                 s.gl.bind_fb(Gl::READ_FRAMEBUFFER, 0);
                 s.gl.bind_fb(Gl::DRAW_FRAMEBUFFER, s.copy_rt.id);
-                s.gl.blit(0, 0, w, h, 0, 0, w, h, Gl::COLOR_BUFFER_BIT, Gl::NEAREST);
+                if (s.band_lanes > 0) {
+                    const BandLayout b = band_layout(w, h, s.band_lanes);
+                    s.gl.blit(0, h - b.src_y - b.src_h, w, h - b.src_y, 0, eh - b.out_h, ew, eh, Gl::COLOR_BUFFER_BIT,
+                              Gl::LINEAR);
+                    if (s.backdrop) {
+                        s.gl.blit(0, 0, w, h, 0, 0, b.bg_w, b.bg_h, Gl::COLOR_BUFFER_BIT, Gl::LINEAR);
+                    }
+                } else {
+                    s.gl.blit(0, 0, w, h, 0, 0, w, h, Gl::COLOR_BUFFER_BIT, Gl::NEAREST);
+                }
                 s.gl.bind_fb(Gl::DRAW_FRAMEBUFFER, 0);
-                rw = w / 4;
-                rh = h * 3 / 2;
+                s.gl.bind_fb(Gl::READ_FRAMEBUFFER, s.copy_rt.id);
+            }
+            if (s.nv12) { // the shader packs copy_rt into nv12_rt
+                s.gl.bind_fb(Gl::READ_FRAMEBUFFER, 0);
+                rw = ew / 4;
+                rh = eh * 3 / 2;
                 ray::BeginTextureMode(s.nv12_rt);
                 rlDisableColorBlend(); // the alpha byte is data
                 ray::BeginShaderMode(s.shader);
-                ray::DrawTexturePro(s.copy_rt.texture, ray::Rectangle{0, 0, (float)w, (float)h},
+                ray::DrawTexturePro(s.copy_rt.texture, ray::Rectangle{0, 0, (float)ew, (float)eh},
                                     ray::Rectangle{0, 0, (float)rw, (float)rh}, ray::Vector2{0, 0}, 0.0f,
                                     ray::Color{255, 255, 255, 255});
                 ray::EndShaderMode();
@@ -628,7 +738,7 @@ void main() {
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, s.pbo[slot]);
             s.gl.read(0, 0, rw, rh, Gl::RGBA, Gl::UNSIGNED_BYTE, nullptr);
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, 0);
-            if (s.nv12) {
+            if (s.via_copy) {
                 s.gl.bind_fb(Gl::READ_FRAMEBUFFER, 0);
             }
             s.in_flight.push_back(slot);
@@ -665,7 +775,7 @@ void main() {
         s.cv.notify_all();
         s.writer.join();
         s.gl.del(kPbo, s.pbo.data());
-        const int vrc = close_pipe(s.video);
+        const int vrc = s.fifo.empty() ? close_pipe(s.video) : std::fclose(s.video);
         s.video = nullptr;
         if (vrc != 0 || s.pipe_failed) {
             spdlog::error("[record] ffmpeg failed encoding the video ({}); the parts are {} and {}", vrc,
@@ -679,8 +789,8 @@ void main() {
             return true;
         }
         const std::string mux = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y -i " + quoted(s.video_tmp) +
-                                " -i " + quoted(s.audio_tmp) +
-                                " -c:v copy -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
+                                " -i " + quoted(s.audio_tmp) + " -c:v copy " + audio_codec() +
+                                " -shortest -movflags +faststart " + quoted(s.out);
         if (const int rc = run(mux); rc != 0) {
             spdlog::error("[record] ffmpeg failed muxing ({}); the parts are {} and {}", rc, utf8(s.video_tmp),
                           utf8(s.audio_tmp));
@@ -732,33 +842,34 @@ void main() {
             return total;
         }
 
-        // a video's frame size (0: unknown), from the ffprobe next to the ffmpeg in use
-        std::pair<int, int> probe_size(const fs::path& video) {
-            fs::path probe = utf8_path(ffmpeg());
-            probe.replace_filename("ffprobe" + utf8(probe.extension()));
-            const std::string cmd = "\"" + (probe.has_parent_path() ? utf8(probe) : std::string("ffprobe")) +
-                                    "\" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 " +
-                                    quoted(video);
+        // a stacked recording's course's frame: the window's size and the frame format (<out>.size, written by the
+        // course once its pipe exists); false while it is not there
+        bool read_band_size(const fs::path& file, int& w, int& h, bool& nv12) {
 #ifdef _WIN32
-            FILE* p = _wpopen(wide_command(cmd).c_str(), L"r");
+            FILE* f = _wfopen(file.wstring().c_str(), L"rb");
 #else
-            FILE* p = popen(cmd.c_str(), "r");
+            FILE* f = std::fopen(file.c_str(), "rb");
 #endif
-            int w = 0, h = 0;
-            if (p) {
-                if (std::fscanf(p, "%d,%d", &w, &h) != 2) {
-                    w = h = 0;
-                }
-                close_pipe(p);
+            if (!f) {
+                return false;
             }
-            return {w, h};
+            char fmt[16] = {};
+            const bool ok = std::fscanf(f, "%d %d %15s", &w, &h, fmt) == 3 && w > 0 && h > 0;
+            std::fclose(f);
+            nv12 = std::string(fmt) == "nv12";
+            return ok;
         }
 
         // --record-tracks with 3 to 5 courses: each course is recorded on its own (a 1P game, all at once, every
-        // song held until the longest course ends), then the gauge and lane band of each is cut out and the bands
-        // are stacked top to bottom (scaled down to the frame height when they do not fit) over a blurred copy of
-        // the first course's video. The sound: the first course's (with the song) and the other courses' hit sounds
-        // (everything else muted, --record-no-music), summed and limited.
+        // song held until the longest course ends) as only its gauge and lane band, scaled on the GPU to its size
+        // in the stack (--record-band), the first course with its picture at a fifth of the size below the band
+        // (--record-backdrop). The courses write their raw frames into pipes (--record-pipe) that one ffmpeg reads
+        // while they record: it stacks the bands top to bottom over the small picture, blurred and darkened, and
+        // encodes once. The sound: the first course's (with the song) and the other courses' hit sounds
+        // (everything else muted, --record-no-music), summed and limited, muxed in afterwards.
+        // 5 courses of a 179 s 1080p chart: 36.5 s; 130 s when every course encoded its whole picture and ffmpeg
+        // decoded, cropped and scaled them afterwards (and the hidden windows presented every frame).
+        constexpr double kStackStartS = 90.0; // the courses open their pipes within this, or the recording fails
         bool compose_tracks(const std::vector<std::string>& base, double chart_end_ms, long long total,
                             std::chrono::steady_clock::time_point started) {
             const fs::path dir = s.out.parent_path();
@@ -768,91 +879,165 @@ void main() {
             fs::create_directories(status_dir, ec);
             const size_t n = s.tracks.size();
             std::vector<std::vector<std::string>> args;
-            std::vector<fs::path> videos, wavs, statuses;
+            std::vector<fs::path> outs, wavs, sizes, statuses;
+            std::vector<std::string> pipes;
             for (size_t k = 0; k < n; k++) {
-                videos.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".mp4"));
-                wavs.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".wav"));
+                // the course's --record path: only its WAV and .size are written next to it
+                outs.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".mp4"));
+                wavs.push_back(fs::path(outs.back()).replace_extension(".wav"));
+                sizes.push_back(fs::path(outs.back()).replace_extension(".size"));
                 statuses.push_back(status_dir / ("part" + std::to_string(k) + ".txt"));
+                pipes.push_back(fifo_name((int)k));
                 fs::remove(statuses.back(), ec);
+                fs::remove(sizes.back(), ec);
                 std::vector<std::string> a = base;
-                // a part over the whole range: its video and WAV are left for this process
-                a.insert(a.end(),
-                         {"--record-tracks", std::to_string(s.tracks[k]), "--record", utf8(videos.back()),
-                          "--record-part", std::to_string(k), "--record-range", "0", "-1", "--record-jobs", "1",
-                          "--record-fps", std::to_string(s.fps), "--record-result", "0", "--record-status",
-                          utf8(statuses.back()), "--record-sync-end", std::to_string(chart_end_ms)});
-                if (k > 0) {
-                    a.emplace_back("--record-no-music");
-                }
+                a.insert(a.end(), {"--record-tracks",
+                                   std::to_string(s.tracks[k]),
+                                   "--record",
+                                   utf8(outs.back()),
+                                   "--record-part",
+                                   std::to_string(k),
+                                   "--record-range",
+                                   "0",
+                                   "-1",
+                                   "--record-jobs",
+                                   "1",
+                                   "--record-fps",
+                                   std::to_string(s.fps),
+                                   "--record-result",
+                                   "0",
+                                   "--record-status",
+                                   utf8(statuses.back()),
+                                   "--record-sync-end",
+                                   std::to_string(chart_end_ms),
+                                   "--record-band",
+                                   std::to_string(n),
+                                   "--record-pipe",
+                                   pipes.back()});
+                a.emplace_back(k == 0 ? "--record-backdrop" : "--record-no-music");
                 args.push_back(std::move(a));
             }
+            const fs::path video_tmp = dir / utf8_path(stem + ".video.tmp.mp4");
             spdlog::info("[record] {}: {} courses", utf8(s.out), n);
             auto cleanup = [&] {
                 for (size_t k = 0; k < n; k++) {
-                    fs::remove(videos[k], ec);
                     fs::remove(wavs[k], ec);
+                    fs::remove(sizes[k], ec);
                     fs::remove(statuses[k], ec);
+#ifndef _WIN32
+                    fs::remove(pipes[k], ec);
+#endif
                 }
+                fs::remove(video_tmp, ec);
             };
 
-            // the courses' recordings: 90 % of the progress (the result screen is not recorded)
+            // the stacking ffmpeg, once every course's pipe is there
+            std::thread stacker;
+            std::atomic<bool> stack_done{false};
+            int stack_rc = -1;
+            auto start_stacking = [&]() -> bool {
+                int w = 0, h = 0;
+                std::vector<bool> nv12(n);
+                for (size_t k = 0; k < n; k++) {
+                    bool v = false;
+                    if (!read_band_size(sizes[k], w, h, v)) {
+                        return false;
+                    }
+                    nv12[k] = v;
+                }
+                const BandLayout b = band_layout(w, h, (int)n);
+                std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y";
+                std::string fc, stack;
+                for (size_t k = 0; k < n; k++) {
+                    const std::string size =
+                        std::to_string(b.out_w) + "x" + std::to_string(b.out_h + (k == 0 ? b.bg_h : 0));
+                    // as the courses' own encoders took them (start_video): NV12 top first, GL's RGBA bottom first
+                    cmd += nv12[k] ? " -f rawvideo -pix_fmt nv12 -color_range tv -colorspace bt709 -color_primaries "
+                                     "bt709 -color_trc bt709 -s " +
+                                         size
+                                   : " -f rawvideo -pix_fmt rgba -s " + size;
+                    cmd += " -framerate " + std::to_string(s.fps) + " -i \"" + pipes[k] + "\"";
+                    const std::string in = "[" + std::to_string(k) + ":v]";
+                    const std::string lane = "[l" + std::to_string(k) + "]";
+                    // planar from here: boxblur took NV12's interleaved chroma for a half-width plane (a green half)
+                    fc += in + (nv12[k] ? "format=yuv420p" : "vflip,format=yuv420p") + lane + ";";
+                    if (k > 0) {
+                        stack += lane;
+                    }
+                }
+                // the first course's band, and its small picture blurred into the backdrop (a full-size blur was
+                // 4x the whole job's time); the bands are already their size in the stack
+                fc += "[l0]split=2[s0][bgsrc];[s0]crop=" + std::to_string(b.out_w) + ":" + std::to_string(b.out_h) +
+                      ":0:0[c0];[bgsrc]crop=" + std::to_string(b.bg_w) + ":" + std::to_string(b.bg_h) +
+                      ":0:" + std::to_string(b.out_h) + ",boxblur=6:1,eq=brightness=-0.2,scale=" + std::to_string(w) +
+                      ":" + std::to_string(h) + ":flags=fast_bilinear[bg];[c0]" + stack +
+                      "vstack=inputs=" + std::to_string(n) +
+                      "[st];[bg][st]overlay=(W-w)/2:(H-h)/2:format=yuv420,format=yuv420p[v]";
+                cmd += " -filter_complex \"" + fc + "\" -map \"[v]\" " + video_codec() + " -an " + quoted(video_tmp);
+                stacker = std::thread([&, cmd] {
+                    stack_rc = run(cmd);
+                    stack_done = true;
+                });
+                spdlog::info("[record] stacking {}x{} lanes of {}x{}", w, h, b.out_w, b.out_h);
+                return true;
+            };
+
             const double frames = std::max(1.0, (double)n * (double)(total - (long long)(s.result_s * s.fps)));
+            bool stacking = false;
             const bool ok = run_children(args, [&] {
                 double done = 0;
                 for (const fs::path& st : statuses) {
                     done += read_number(st);
                 }
-                write_status(std::min(0.9, 0.9 * done / frames));
+                write_status(std::min(0.97, 0.97 * done / frames));
+                if (!stacking) {
+                    stacking = start_stacking();
+                    const double waited =
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+                    if (!stacking && waited > kStackStartS) {
+                        spdlog::error("[record] the courses did not open their pipes in {:.0f} s", kStackStartS);
+                        return false;
+                    }
+                }
+                return !(stack_done && stack_rc != 0); // the stacking failed: stop the courses
             });
-            const auto [w, h] = ok ? probe_size(videos[0]) : std::pair<int, int>{0, 0};
-            if (!ok || w <= 0 || h <= 0) {
-                spdlog::error(ok ? "[record] cannot read the courses' videos"
-                                 : "[record] a course failed (record_part<k>.log)");
+            if (stacker.joinable()) {
+                stacker.join(); // the courses closed their pipes (or were stopped): ffmpeg ends
+            }
+            if (!ok || stack_rc != 0) {
+                if (!ok) {
+                    spdlog::error("[record] a course failed (record_part<k>.log)");
+                } else {
+                    spdlog::error("[record] stacking the courses failed ({})", stack_rc);
+                }
                 cleanup();
                 return false;
             }
-            write_status(0.9);
+            const auto stacked = std::chrono::steady_clock::now();
 
-            // the band: from the gauge above the lane to the lane's bottom (the lane is 184..360 at 720p)
-            const auto even = [](double v) { return 2 * (int)std::lround(v / 2.0); };
-            const int band_y = even(h * 136.0 / 720.0);
-            const int band_h = even(h * 224.0 / 720.0);
-            const int stack_h = std::min(h, (int)n * band_h);
-            // the backdrop is blurred at a fifth of the size (a full-size blur was 4x the whole job's time)
-            std::string fc = "[0:v]split=2[bgsrc][s0];[bgsrc]scale=iw/5:-2,boxblur=6:1,eq=brightness=-0.2,scale=" +
-                             std::to_string(w) + ":" + std::to_string(h) + "[bg];";
-            std::string stack;
-            for (size_t k = 0; k < n; k++) {
-                const std::string in = k == 0 ? "[s0]" : "[" + std::to_string(k) + ":v]";
-                fc += in + "crop=iw:" + std::to_string(band_h) + ":0:" + std::to_string(band_y) + "[c" +
-                      std::to_string(k) + "];";
-                stack += "[c" + std::to_string(k) + "]";
-            }
-            fc += stack + "vstack=inputs=" + std::to_string(n) + ",scale=-2:" + std::to_string(stack_h) +
-                  "[st];[bg][st]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]";
-            std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y";
-            for (const fs::path& v : videos) {
-                cmd += " -i " + quoted(v);
-            }
             // every lane's hits over the song (the other lanes have no music): summed, then limited
+            std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y -i " + quoted(video_tmp);
             std::string mix;
             for (size_t k = 0; k < n; k++) {
                 cmd += " -i " + quoted(wavs[k]);
-                mix += "[" + std::to_string(n + k) + ":a]";
+                mix += "[" + std::to_string(k + 1) + ":a]";
             }
-            fc += ";" + mix + "amix=inputs=" + std::to_string(n) +
-                  ":normalize=0:duration=longest,alimiter=limit=0.95:level=0:latency=1[a]";
-            cmd += " -filter_complex \"" + fc + "\" -map \"[v]\" -map \"[a]\" " + video_codec() +
-                   " -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
+            cmd += " -filter_complex \"" + mix + "amix=inputs=" + std::to_string(n) +
+                   ":normalize=0:duration=longest,alimiter=limit=0.95:level=0:latency=1[a]\" -map 0:v -map \"[a]\" "
+                   "-c:v copy " +
+                   audio_codec() + " -shortest -movflags +faststart " + quoted(s.out);
             const int rc = run(cmd);
             cleanup();
             if (rc != 0) {
-                spdlog::error("[record] stacking the courses failed ({})", rc);
+                spdlog::error("[record] muxing the courses' sound failed ({})", rc);
                 return false;
             }
             write_status(1.0);
-            const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-            spdlog::info("[record] done: {} ({} courses, {:.1f} s)", utf8(s.out), n, real);
+            const auto now = std::chrono::steady_clock::now();
+            spdlog::info("[record] done: {} ({} courses, {:.1f} s: {:.1f} s recording and stacking, {:.1f} s sound)",
+                         utf8(s.out), n, std::chrono::duration<double>(now - started).count(),
+                         std::chrono::duration<double>(stacked - started).count(),
+                         std::chrono::duration<double>(now - stacked).count());
             return true;
         }
     } // namespace
@@ -955,6 +1140,7 @@ void main() {
                 next_log += 10.0;
                 spdlog::info("[record] {:.0f} s recorded in {:.0f} s", done / s.fps, real);
             }
+            return true;
         });
         auto cleanup = [&] {
             for (size_t k = 0; k < videos.size(); k++) {
@@ -1001,8 +1187,8 @@ void main() {
         write_wav_header(wf, rate, wav_bytes);
         std::fclose(wf);
         const std::string mux = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y -f concat -safe 0 -i " +
-                                quoted(list) + " -i " + quoted(wav) +
-                                " -c:v copy -c:a aac -b:a 320k -shortest -movflags +faststart " + quoted(s.out);
+                                quoted(list) + " -i " + quoted(wav) + " -c:v copy " + audio_codec() +
+                                " -shortest -movflags +faststart " + quoted(s.out);
         const int rc = parts > 0 ? run(mux) : -1;
         cleanup();
         fs::remove(list, ec);

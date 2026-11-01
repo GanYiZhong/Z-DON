@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -52,7 +53,8 @@ namespace zdon_record {
     bool coordinating();
     // runs the parts and joins them; the process exits with !result
     bool coordinate(int argc, char** argv);
-    // run_frame: true while this part runs up to its first frame (the frame is drawn, not presented)
+    // run_frame: true when the frame is drawn and not presented: a recording's window is hidden (ZDON_RECORD_PRESENT=1
+    // presents its recorded frames)
     bool skip_present();
     int part(); // this process's part (-1: not a part)
 
@@ -66,6 +68,10 @@ namespace zdon_record {
     double sync_end_ms();
     // --record-no-music (the other courses of a stacked recording): only the hit sounds (hits, balloon and kusudama
     // pops); the song, voices and screen sounds are the first course's
+    // --record-band <lanes> (a course of a stacked recording of that many lanes): the video is only this lane's
+    // band (gauge + lane), already scaled on the GPU to its size in the stack; --record-backdrop (the first course)
+    // adds the whole picture at a fifth of the size under the band, for the stack's blurred backdrop. The window's
+    // size goes to <out>.size ("<w> <h>"): the coordinator lays the stack out from it (band_layout).
 
     // every frame, after the frame is complete in the window and before it is presented: the picture and
     // one frame of audio. true when the recording is done.
@@ -100,6 +106,12 @@ namespace zdon_record {
     void show_in_folder(const std::filesystem::path& file);
 
     // zdon_record_job.cpp: runs this exe once per argument list (UTF-8), hidden, all at once, in a kill-on-close
-    // job; calls tick about four times a second until every one has exited. true when all exited with 0.
-    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<void()>& tick);
+    // job; calls tick about four times a second until every one has exited (tick false: stops them all). true when
+    // all exited with 0.
+    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<bool()>& tick);
+    // a pipe a stacked recording's course writes its raw frames into and the stacking ffmpeg reads (--record-pipe):
+    // fifo_name is a name unique to this process and lane; fifo_writer creates it, calls created (the reader may
+    // open it from then on), waits for the reader and returns the writing end (nullptr: failed)
+    std::string fifo_name(int lane);
+    FILE* fifo_writer(const std::string& name, const std::function<void()>& created);
 } // namespace zdon_record

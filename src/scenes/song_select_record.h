@@ -1,5 +1,7 @@
 #pragma once
 #include <array>
+#include <chrono>
+#include <deque>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -11,6 +13,9 @@
 // hits (and which other courses of the song to record with it, one lane each), then the game records it to a video in a
 // hidden child process (zdon_record.h export_*) while a progress window waits, and the song select comes back with the
 // saved file's place. Drawn by the engine (zdon_hud), the same in every skin.
+// The progress window can go to the background (Kat): the song select works while the recording runs (a corner panel
+// shows its progress, Back brings the window back), and songs decided meanwhile are queued and recorded one after
+// another. Leaving the screen stops them all.
 class RecordSongSelectScreen : public SongSelectScreen {
     enum class Modal {
         None,
@@ -28,12 +33,32 @@ class RecordSongSelectScreen : public SongSelectScreen {
     std::array<bool, 5> ticked{};   // the courses recorded together (1 to 5)
     std::vector<int> lanes() const; // the ticked courses: the decided one, then the rest hardest first
     std::string title;
-    std::filesystem::path out;
-    double progress = 0.0;
 
+    // a decided recording, waiting for the one before it
+    struct Job {
+        std::filesystem::path song;
+        std::vector<int> courses;
+        bool autoplay = false;
+        std::string title;
+    };
+    std::deque<Job> queue;
+    bool running = false; // a recording runs (in the window or in the background)
+    Job current;
+    std::filesystem::path out; // the running (or last) recording's file
+    double progress = 0.0;
+    std::chrono::steady_clock::time_point run_started;
+    int batch_saved = 0, batch_failed = 0; // since the queue was last empty
+    std::string toast;                     // a short note over the song select (queued, all done)
+    std::chrono::steady_clock::time_point toast_until;
+
+    bool start(const Job& job); // false: the child could not start
+    void poll();                // every frame while running: the next queued one when one ends
+    std::string eta() const;    // the time left, "m:ss" ("" while it cannot tell yet)
+    void show_toast(const std::string& s, double seconds);
     void close_modal();
     void update_modal();
     void draw_modal();
+    void draw_background_panel();
 
 protected:
     void select_song(SongBox* song) override;

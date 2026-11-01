@@ -1256,6 +1256,7 @@ int main(int argc, char* argv[]) {
     delete g_loop;
     g_loop = nullptr;
     const bool record_ok = zdon_record::end(); // encodes the rest and muxes the audio in
+    zdon_record::export_cancel();              // the recording mode's recording, if the game quit during it
     // Cleanup needs a live SDL/OpenGL context and config.
     webcam.close();
     unload_skin();

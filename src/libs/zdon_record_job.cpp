@@ -16,10 +16,13 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #else
 #include <csignal>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
@@ -91,13 +94,37 @@ namespace zdon_record {
             return (exe.empty() ? fs::current_path() : exe.parent_path()) / "Records";
         }
 
+        // the output and what its recording leaves next to it: <stem>.video.tmp.mp4 / .audio.tmp.wav / .parts.txt,
+        // and the parts' and courses' <stem>.part<k>.* / .track<k>.*
         void remove_outputs() {
             std::error_code ec;
-            for (const char* ext : {".video.tmp.mp4", ".audio.tmp.wav"}) {
-                fs::path p = j.out;
-                fs::remove(p.replace_extension(ext), ec);
+            const std::u8string stem = j.out.stem().u8string() + u8".";
+            std::vector<fs::path> doomed = {j.out};
+            for (const fs::directory_entry& e : fs::directory_iterator(j.out.parent_path(), ec)) {
+                const std::u8string name = e.path().filename().u8string();
+                if (!name.starts_with(stem)) {
+                    continue;
+                }
+                const std::u8string rest = name.substr(stem.size());
+                if (rest.starts_with(u8"part") || rest.starts_with(u8"track") || rest == u8"video.tmp.mp4" ||
+                    rest == u8"audio.tmp.wav") {
+                    doomed.push_back(e.path());
+                }
             }
-            fs::remove(j.out, ec);
+            // a killed part may hold its files for a moment after the job counts it gone: retry for up to 3 s
+            for (int attempt = 0; attempt < 30 && !doomed.empty(); attempt++) {
+                if (attempt > 0) {
+#ifdef _WIN32
+                    Sleep(100);
+#else
+                    usleep(100000);
+#endif
+                }
+                std::erase_if(doomed, [&](const fs::path& p) {
+                    fs::remove(p, ec);
+                    return !fs::exists(p, ec);
+                });
+            }
         }
 
         double read_progress() {
@@ -242,7 +269,7 @@ namespace zdon_record {
         }
 #ifdef _WIN32
         if (j.job) {
-            TerminateJobObject(j.job, 1); // the child and its ffmpeg
+            TerminateJobObject(j.job, 1); // the child, its parts and their ffmpegs
             CloseHandle(j.job);
             j.job = nullptr;
         } else {
@@ -251,7 +278,6 @@ namespace zdon_record {
         WaitForSingleObject(j.process, 5000);
         CloseHandle(j.process);
         j.process = nullptr;
-        Sleep(200); // ffmpeg's handles on the parts
 #else
         kill(j.pid, SIGTERM);
         int st = 0;
@@ -268,7 +294,7 @@ namespace zdon_record {
         }
     }
 
-    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<void()>& tick) {
+    bool run_children(const std::vector<std::vector<std::string>>& args, const std::function<bool()>& tick) {
 #ifdef _WIN32
         const std::wstring exe = exe_path().wstring();
         const std::wstring cwd = exe_path().parent_path().wstring();
@@ -302,7 +328,10 @@ namespace zdon_record {
         }
         while (ok) {
             const DWORD r = WaitForMultipleObjects((DWORD)procs.size(), procs.data(), TRUE, 250);
-            tick();
+            if (!tick()) {
+                ok = false; // the children are stopped below
+                break;
+            }
             if (r != WAIT_TIMEOUT) {
                 break;
             }
@@ -351,7 +380,10 @@ namespace zdon_record {
                     ok = ok && WIFEXITED(st) && WEXITSTATUS(st) == 0;
                 }
             }
-            tick();
+            if (!tick()) {
+                ok = false;
+                break;
+            }
             usleep(250000);
         }
         for (size_t i = 0; i < pids.size(); i++) {
@@ -362,6 +394,49 @@ namespace zdon_record {
             }
         }
         return ok;
+#endif
+    }
+
+    std::string fifo_name(int lane) {
+#ifdef _WIN32
+        return R"(\\.\pipe\zdon-record-)" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(lane);
+#else
+        const fs::path dir = fs::absolute("cache") / "record";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        return (dir / ("lane-" + std::to_string(getpid()) + "-" + std::to_string(lane) + ".fifo")).string();
+#endif
+    }
+
+    FILE* fifo_writer(const std::string& name, const std::function<void()>& created) {
+#ifdef _WIN32
+        HANDLE h = CreateNamedPipeW(utf8_path(name).wstring().c_str(), PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE | PIPE_WAIT,
+                                    1, 1 << 22, 0, 0, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            return nullptr;
+        }
+        created();
+        if (!ConnectNamedPipe(h, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) {
+            CloseHandle(h);
+            return nullptr;
+        }
+        const int fd = _open_osfhandle((intptr_t)h, _O_WRONLY | _O_BINARY);
+        if (fd < 0) {
+            CloseHandle(h);
+            return nullptr;
+        }
+        FILE* f = _fdopen(fd, "wb");
+        if (!f) {
+            _close(fd);
+        }
+        return f;
+#else
+        ::unlink(name.c_str());
+        if (mkfifo(name.c_str(), 0600) != 0) {
+            return nullptr;
+        }
+        created();
+        return std::fopen(name.c_str(), "wb"); // waits for the reader
 #endif
     }
 

@@ -1,6 +1,9 @@
 #include "song_select_record.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <thread>
 
 #include "../libs/audio.h"
@@ -55,6 +58,60 @@ void RecordSongSelectScreen::close_modal() {
     player->reset_selection();
 }
 
+bool RecordSongSelectScreen::start(const Job& job) {
+    current = job;
+    out = zdon_record::export_path(job.title, job.courses, job.autoplay);
+    progress = 0.0;
+    run_started = std::chrono::steady_clock::now();
+    running = zdon_record::export_start(job.song, job.courses, job.autoplay, out);
+    return running;
+}
+
+void RecordSongSelectScreen::poll() {
+    if (!running) {
+        return;
+    }
+    const zdon_record::ExportStatus st = zdon_record::export_poll();
+    progress = st.progress;
+    if (st.state != zdon_record::ExportState::Done && st.state != zdon_record::ExportState::Failed) {
+        return;
+    }
+    const bool saved = st.state == zdon_record::ExportState::Done;
+    (saved ? batch_saved : batch_failed)++;
+    running = false;
+    zdon_record::export_forget();
+    while (!queue.empty()) { // the next queued recording
+        const Job next = queue.front();
+        queue.pop_front();
+        if (start(next)) {
+            return;
+        }
+        batch_failed++;
+    }
+    if (modal == Modal::Running) { // the window waited for it: the last one's file (or the failure)
+        modal = saved ? Modal::Done : Modal::Failed;
+        audio.dev_set_master_volume(normal_volume());
+    } else {
+        show_toast(zhud::text("rec_batch_done", std::to_string(batch_saved), std::to_string(batch_failed)), 6.0);
+    }
+}
+
+std::string RecordSongSelectScreen::eta() const {
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_started).count();
+    if (progress < 0.02 || elapsed < 2.0) {
+        return "";
+    }
+    const int left = (int)std::lround(elapsed * (1.0 - progress) / progress);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d:%02d", left / 60, left % 60);
+    return zhud::text("rec_eta", buf);
+}
+
+void RecordSongSelectScreen::show_toast(const std::string& s, double seconds) {
+    toast = s;
+    toast_until = std::chrono::steady_clock::now() + std::chrono::milliseconds((long long)(seconds * 1000));
+}
+
 void RecordSongSelectScreen::update_modal() {
     const int back = global_data.config->keys.back_key;
     const bool l_kat = is_l_kat_pressed();
@@ -78,10 +135,13 @@ void RecordSongSelectScreen::update_modal() {
             audio.play_sound("don", VolumePreset::SOUND);
         } else if (don) {
             audio.play_sound("don", VolumePreset::SOUND);
-            const bool autoplay = cursor == 0;
-            out = zdon_record::export_path(title, lanes(), autoplay);
-            progress = 0.0;
-            if (zdon_record::export_start(song, lanes(), autoplay, out)) {
+            const Job job{song, lanes(), cursor == 0, title};
+            if (running) { // after the ones before it
+                queue.push_back(job);
+                show_toast(zhud::text("rec_queued", std::to_string(queue.size())), 2.5);
+                close_modal();
+            } else if (start(job)) {
+                batch_saved = batch_failed = 0;
                 modal = Modal::Running;
                 audio.dev_set_master_volume(0.0f); // the preview, while the window waits
             } else {
@@ -89,19 +149,18 @@ void RecordSongSelectScreen::update_modal() {
             }
         }
         break;
-    case Modal::Running: {
-        const zdon_record::ExportStatus st = zdon_record::export_poll();
-        progress = st.progress;
-        if (st.state == zdon_record::ExportState::Done || st.state == zdon_record::ExportState::Failed) {
-            modal = st.state == zdon_record::ExportState::Done ? Modal::Done : Modal::Failed;
-            audio.dev_set_master_volume(normal_volume());
-        } else if (cancel) {
+    case Modal::Running:
+        if (cancel) { // this one and the queued ones
+            queue.clear();
             zdon_record::export_cancel();
+            running = false;
+            audio.dev_set_master_volume(normal_volume());
+            close_modal();
+        } else if (kat) { // the song select comes back; the recording goes on (and more can be queued)
             audio.dev_set_master_volume(normal_volume());
             close_modal();
         }
         break;
-    }
     case Modal::Done:
         if (don) {
             zdon_record::show_in_folder(out);
@@ -121,18 +180,25 @@ void RecordSongSelectScreen::update_modal() {
 }
 
 Screens RecordSongSelectScreen::on_screen_end(Screens next_screen) {
-    if (modal == Modal::Running) {
+    if (running) {
+        queue.clear();
         zdon_record::export_cancel();
-        audio.dev_set_master_volume(normal_volume());
+        running = false;
     }
+    audio.dev_set_master_volume(normal_volume());
     modal = Modal::None;
     return SongSelectScreen::on_screen_end(next_screen);
 }
 
 std::optional<Screens> RecordSongSelectScreen::update() {
+    poll();
     if (modal != Modal::None) {
         update_modal();
         clear_input_buffers(); // the song select behind the window gets none of it
+    } else if (running && state == SongSelectState::BROWSING && check_key_pressed(global_data.config->keys.back_key)) {
+        modal = Modal::Running; // Back shows the recording's window again instead of leaving (which stops it)
+        audio.dev_set_master_volume(0.0f);
+        clear_input_buffers();
     }
     auto next = SongSelectScreen::update();
     if (modal == Modal::Running) {
@@ -150,9 +216,45 @@ void RecordSongSelectScreen::draw() {
     const float th = tag.height + 10 * u;
     zhud::panel(tex.screen_width / 2.0f - tw / 2, 10 * u, tw, th, 0.8f, Color{255, 140, 140, 200});
     tag.draw({.x = tex.screen_width / 2.0f - tag.width / 2, .y = 10 * u + 5 * u});
+    if (running && modal != Modal::Running) {
+        draw_background_panel();
+    }
     if (modal != Modal::None) {
         draw_modal();
     }
+    if (!toast.empty() && std::chrono::steady_clock::now() < toast_until) {
+        OutlinedText& t = zhud::label(toast, 26, Color{255, 226, 120, 255});
+        const float pw = t.width + 48 * u, ph = t.height + 24 * u;
+        const float px = tex.screen_width / 2.0f - pw / 2, py = tex.screen_height * 0.8f;
+        zhud::panel(px, py, pw, ph, 0.9f, Color{255, 226, 120, 200});
+        t.draw({.x = px + 24 * u, .y = py + 12 * u});
+    }
+}
+
+// the recording running behind the song select: a panel in the top left corner (skins keep the timer and the
+// online state on the right)
+void RecordSongSelectScreen::draw_background_panel() {
+    const float u = tex.screen_width / 1920.0f;
+    const Color gold{255, 226, 120, 255};
+    std::string head = zhud::text("rec_bg", std::to_string((int)(progress * 100.0 + 0.5)), eta());
+    while (!head.empty() && head.back() == ' ') { // no time left shown yet: a trailing space drew no text at all
+        head.pop_back();
+    }
+    const std::string sub =
+        queue.empty() ? zhud::text("rec_bg_keys")
+                      : zhud::text("rec_queue_n", std::to_string(queue.size())) + "   " + zhud::text("rec_bg_keys");
+    OutlinedText& a = zhud::label(head, 24, gold);
+    OutlinedText& b = zhud::label(sub, 18, Color{200, 200, 200, 255});
+    const float pad = 14 * u, bar = 8 * u;
+    const float pw = std::max({a.width, b.width, 360 * u}) + 2 * pad;
+    const float ph = a.height + b.height + bar + 4 * pad;
+    const float px = 16 * u, py = 16 * u;
+    zhud::panel(px, py, pw, ph, 0.85f, Color{255, 226, 120, 160});
+    a.draw({.x = px + pad, .y = py + pad});
+    const float by = py + 2 * pad + a.height;
+    draw_rectangle((int)(px + pad), (int)by, (int)(pw - 2 * pad), (int)bar, Color{60, 60, 60, 255});
+    draw_rectangle((int)(px + pad), (int)by, (int)((pw - 2 * pad) * progress), (int)bar, gold);
+    b.draw({.x = px + pad, .y = by + bar + pad});
 }
 
 void RecordSongSelectScreen::draw_modal() {
@@ -168,11 +270,13 @@ void RecordSongSelectScreen::draw_modal() {
         t.draw({.x = cx - t.width / 2, .y = ty});
         return t.height;
     };
+    // the window's song: the one being chosen, or the one recording (or last recorded)
+    const bool choosing = modal == Modal::Choose;
     std::string courses;
-    for (const int c : lanes()) {
+    for (const int c : choosing ? lanes() : current.courses) {
         courses += (courses.empty() ? "" : " + ") + zhud::course_name(c);
     }
-    centered(title + "  " + courses, 30, y + 24 * u);
+    centered((choosing ? title : current.title) + "  " + courses, 30, y + 24 * u);
 
     const Color gold{255, 226, 120, 255};
     switch (modal) {
@@ -208,22 +312,33 @@ void RecordSongSelectScreen::draw_modal() {
             OutlinedText& t = zhud::label(zhud::course_name(c), 24, on ? Color::WHITE : Color{150, 150, 150, 255});
             t.draw({.x = bx + cw / 2 - t.width / 2, .y = by + ch / 2 - t.height / 2});
         }
-        centered(zhud::text("rec_keys_choose"), 22, y + h - 50 * u, Color{200, 200, 200, 255});
+        centered(zhud::text(running ? "rec_keys_queue" : "rec_keys_choose"), 22, y + h - 50 * u,
+                 Color{200, 200, 200, 255});
         break;
     }
     case Modal::Running: {
         const int pct = (int)(progress * 100.0 + 0.5);
-        centered(zhud::text("rec_running", std::to_string(pct)), 32, y + 100 * u, gold);
+        centered(zhud::text("rec_running", std::to_string(pct)), 32, y + 90 * u, gold);
         const float bw = 700 * u, bh = 24 * u;
-        const float bx = cx - bw / 2, by = y + 170 * u;
+        const float bx = cx - bw / 2, by = y + 150 * u;
         draw_rectangle((int)bx, (int)by, (int)bw, (int)bh, Color{60, 60, 60, 255});
         draw_rectangle((int)bx, (int)by, (int)(bw * progress), (int)bh, gold);
         draw_rectangle_lines((int)bx, (int)by, (int)bw, (int)bh, Color{255, 255, 255, 160});
-        centered(zhud::text("rec_running_keys"), 22, y + h - 50 * u, Color{200, 200, 200, 255});
+        std::string info = eta();
+        if (!queue.empty()) {
+            info += (info.empty() ? "" : "   ") + zhud::text("rec_queue_n", std::to_string(queue.size()));
+        }
+        if (!info.empty()) {
+            centered(info, 22, y + 192 * u, Color{200, 200, 200, 255});
+        }
+        centered(zhud::text("rec_running_keys"), 20, y + h - 50 * u, Color{200, 200, 200, 255});
         break;
     }
     case Modal::Done: {
-        centered(zhud::text("rec_done"), 32, y + 90 * u, gold);
+        const int batch = batch_saved + batch_failed;
+        centered(batch > 1 ? zhud::text("rec_batch_done", std::to_string(batch_saved), std::to_string(batch_failed))
+                           : zhud::text("rec_done"),
+                 32, y + 90 * u, gold);
         const std::u8string name = out.filename().u8string();
         centered(std::string(name.begin(), name.end()), 24, y + 150 * u);
         const std::u8string dir = out.parent_path().u8string();
