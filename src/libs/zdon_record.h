@@ -56,7 +56,7 @@ namespace zdon_record {
         double progress = 0.0; // 0..1
         std::filesystem::path out;
     };
-    // where a recording of this song goes: <Videos>/YataiDON/<title>_<course>_<auto|nohit>[ (n)].mp4
+    // where a recording of this song goes: Records/<title>_<course>_<auto|nohit>[ (n)].mp4 next to the exe
     std::filesystem::path export_path(const std::string& title, int difficulty, bool autoplay);
     // starts recording song / difficulty into out (false: the child could not start)
     bool export_start(const std::filesystem::path& song, int difficulty, bool autoplay,

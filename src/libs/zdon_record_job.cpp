@@ -66,13 +66,28 @@ namespace zdon_record {
             return out.empty() ? "song" : out;
         }
 
-        fs::path videos_dir() {
+        // this game's exe
+        fs::path exe_path() {
 #ifdef _WIN32
-            const char* home = std::getenv("USERPROFILE");
+            std::wstring exe(MAX_PATH, L'\0');
+            for (;;) {
+                const DWORD n = GetModuleFileNameW(nullptr, exe.data(), (DWORD)exe.size());
+                if (n < exe.size()) {
+                    exe.resize(n);
+                    return exe;
+                }
+                exe.resize(exe.size() * 2);
+            }
 #else
-            const char* home = std::getenv("HOME");
+            std::error_code ec;
+            return fs::read_symlink("/proc/self/exe", ec);
 #endif
-            return (home && *home ? utf8_path(home) / "Videos" : fs::current_path()) / "YataiDON";
+        }
+
+        // Records next to the exe
+        fs::path records_dir() {
+            const fs::path exe = exe_path();
+            return (exe.empty() ? fs::current_path() : exe.parent_path()) / "Records";
         }
 
         void remove_outputs() {
@@ -105,7 +120,7 @@ namespace zdon_record {
         static const char* courses[] = {"Easy", "Normal", "Hard", "Oni", "Ura"};
         const std::string course =
             difficulty >= 0 && difficulty <= 4 ? courses[difficulty] : std::to_string(difficulty);
-        const fs::path dir = videos_dir();
+        const fs::path dir = records_dir();
         const std::string base = file_safe(title) + "_" + course + "_" + (autoplay ? "auto" : "nohit");
         fs::path p = dir / utf8_path(base + ".mp4");
         std::error_code ec;
@@ -127,15 +142,7 @@ namespace zdon_record {
         fs::remove(j.status, ec);
         fs::create_directories(out.parent_path(), ec);
 #ifdef _WIN32
-        std::wstring exe(MAX_PATH, L'\0');
-        for (;;) {
-            const DWORD n = GetModuleFileNameW(nullptr, exe.data(), (DWORD)exe.size());
-            if (n < exe.size()) {
-                exe.resize(n);
-                break;
-            }
-            exe.resize(exe.size() * 2);
-        }
+        const std::wstring exe = exe_path().wstring();
         const auto q = [](const std::wstring& s) { return L"\"" + s + L"\""; };
         std::wstring cmd = q(exe) + L" " + q(song.wstring()) + L" " + std::to_wstring(difficulty) +
                            (autoplay ? L" --auto" : L"") + L" --record " + q(out.wstring()) + L" --record-status " +
@@ -159,7 +166,7 @@ namespace zdon_record {
         CloseHandle(pi.hThread);
         j.process = pi.hProcess;
 #else
-        const std::string exe = fs::read_symlink("/proc/self/exe", ec).string();
+        const std::string exe = exe_path().string();
         std::vector<std::string> args = {exe, song.string(), std::to_string(difficulty)};
         if (autoplay) {
             args.emplace_back("--auto");
