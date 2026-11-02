@@ -672,6 +672,12 @@ namespace {
     }
 
     Image load_image(const fs::path& path, const std::string& key, texture_pack::Session* pack) {
+        // Z-DON: the BC7 blocks of a file compressed before, without reading and decoding it
+        const texture_bc7::FileStamp st =
+            texture_bc7::enabled() && !verify_enabled() ? texture_bc7::stamp(path) : texture_bc7::FileStamp{};
+        if (Image cached{}; texture_bc7::cached_image(path, st, cached)) {
+            return cached;
+        }
         Image image = load_image_unchecked(path, key, pack);
         if (verify_enabled()) {
             Image ref = ::load_image(path.string().c_str());
@@ -690,7 +696,7 @@ namespace {
                 unload_image(ref);
             }
         }
-        texture_bc7::compress(image); // Z-DON: BC7 when the cache has its blocks
+        texture_bc7::compress(image, path, st); // Z-DON: BC7 when the cache has its blocks
         return image;
     }
 

@@ -41,6 +41,7 @@ namespace texture_bc7 {
         constexpr uint64_t kFileCap = uint64_t{256} << 20; // cache file
         constexpr size_t kBorderCap = 16384;               // remembered borders
         constexpr char kMagic[8] = {'Z', 'D', 'B', 'C', '7', 0, 0, 1};
+        constexpr char kFilesMagic[8] = {'Z', 'D', 'B', 'C', '7', 'F', 0, 1};
         constexpr uint32_t kVersion = 2; // encoder settings / kMaxError / kMaxMse: a change starts over
         constexpr size_t kRecordHeader = 8 + 4 + 4 + 1 + 4;
         constexpr int kFormat = ray::PIXELFORMAT_COMPRESSED_BPTC_RGBA;
@@ -58,6 +59,14 @@ namespace texture_bc7 {
             std::shared_ptr<const std::vector<uint8_t>> mem; // encoded this run, not in the file yet
             bool used = false;                               // this run: kept when the file is over kFileCap
         };
+        // a skin file whose decoded pixels are the entry `key` (files.bin)
+        struct FileRec {
+            FileStamp stamp;
+            uint64_t key = 0;
+            uint32_t width = 0, height = 0;
+            uint8_t bpp = 4;
+            Rect border{};
+        };
 
         struct State {
             std::atomic<bool> on{false};
@@ -65,6 +74,8 @@ namespace texture_bc7 {
             std::shared_mutex mutex; // entries, queue, flags
             std::unordered_map<uint64_t, Entry> entries;
             std::unordered_set<uint64_t> queued;
+            std::unordered_map<std::string, FileRec> files; // by path
+            size_t files_dirty = 0;
             size_t queued_bytes = 0;
             size_t dirty = 0;
             bool saving = false;
@@ -74,7 +85,7 @@ namespace texture_bc7 {
             std::mutex write_mutex; // one write_file at a time (a save job, shutdown)
             FILE* reader = nullptr;
             // stats
-            std::atomic<size_t> hits{0}, kept{0}, encoded{0}, rejected{0};
+            std::atomic<size_t> hits{0}, kept{0}, encoded{0}, rejected{0}, file_hits{0};
             std::atomic<uint64_t> raw_bytes{0}, bc7_bytes{0};
 
             std::mutex border_mutex;
@@ -87,6 +98,18 @@ namespace texture_bc7 {
 
         fs::path cache_path() {
             return fs::path("cache") / "bc7" / "textures.bin";
+        }
+        fs::path files_path() {
+            return fs::path("cache") / "bc7" / "files.bin";
+        }
+
+        // ZDON_BC7_FILES=0: decode every file again (the cache found by the decoded pixels only)
+        bool files_on() {
+            static const bool on = [] {
+                const char* v = std::getenv("ZDON_BC7_FILES");
+                return !(v && v[0] == '0');
+            }();
+            return on;
         }
 
         FILE* open_file(const fs::path& p, const char* mode) {
@@ -228,6 +251,96 @@ namespace texture_bc7 {
                    std::fread(out.data(), 1, e.size, s.reader) == e.size;
         }
 
+        // files.bin (record: u32 path length, path, u64 size, i64 mtime, u64 key, u32 width, u32 height, u8 bpp,
+        // 4 x f32 border); a record whose entry is gone is dropped
+        void load_files() {
+            State& s = state();
+            if (!files_on()) {
+                return;
+            }
+            FILE* f = open_file(files_path(), "r");
+            if (!f) {
+                return;
+            }
+            char magic[sizeof(kFilesMagic)] = {};
+            uint32_t version = 0;
+            if (std::fread(magic, 1, sizeof(magic), f) != sizeof(magic) ||
+                std::memcmp(magic, kFilesMagic, sizeof(kFilesMagic)) != 0 || !get(f, version) || version != kVersion) {
+                std::fclose(f);
+                return;
+            }
+            std::unique_lock lock(s.mutex);
+            std::string path;
+            while (true) {
+                uint32_t n = 0;
+                FileRec r;
+                if (!get(f, n) || n == 0 || n > 4096) {
+                    break;
+                }
+                path.resize(n);
+                if (std::fread(path.data(), 1, n, f) != n || !get(f, r.stamp.size) || !get(f, r.stamp.mtime) ||
+                    !get(f, r.key) || !get(f, r.width) || !get(f, r.height) || !get(f, r.bpp) || !get(f, r.border.x) ||
+                    !get(f, r.border.y) || !get(f, r.border.width) || !get(f, r.border.height)) {
+                    break;
+                }
+                auto it = s.entries.find(r.key);
+                if (it != s.entries.end() && it->second.kind == Kind::Blocks) {
+                    s.files[path] = r;
+                }
+            }
+            std::fclose(f);
+        }
+
+        // files.bin from the records (write_mutex held)
+        void write_files() {
+            State& s = state();
+            if (!files_on()) {
+                return;
+            }
+            std::vector<std::pair<std::string, FileRec>> list;
+            {
+                std::unique_lock lock(s.mutex);
+                if (s.files_dirty == 0) {
+                    return;
+                }
+                s.files_dirty = 0;
+                std::erase_if(s.files, [&](const auto& kv) { return !s.entries.contains(kv.second.key); });
+                list.assign(s.files.begin(), s.files.end());
+            }
+            std::error_code ec;
+            fs::create_directories(files_path().parent_path(), ec);
+            fs::path tmp = files_path();
+            tmp += ".tmp";
+            FILE* f = open_file(tmp, "w");
+            if (!f) {
+                return;
+            }
+            std::fwrite(kFilesMagic, 1, sizeof(kFilesMagic), f);
+            put(f, kVersion);
+            for (const auto& [path, r] : list) {
+                put(f, static_cast<uint32_t>(path.size()));
+                std::fwrite(path.data(), 1, path.size(), f);
+                put(f, r.stamp.size);
+                put(f, r.stamp.mtime);
+                put(f, r.key);
+                put(f, r.width);
+                put(f, r.height);
+                put(f, r.bpp);
+                put(f, r.border.x);
+                put(f, r.border.y);
+                put(f, r.border.width);
+                put(f, r.border.height);
+            }
+            const bool ok = std::ferror(f) == 0;
+            std::fclose(f);
+            if (ok) {
+                fs::rename(tmp, files_path(), ec);
+            }
+            if (!ok || ec) {
+                spdlog::warn("BC7 texture cache: could not write {}", files_path().string());
+            }
+        }
+
         // the index of the cache file (record: u64 key, u32 width, u32 height, u8 kind, u32 size, size bytes); the
         // file stays open for the payloads
         void load_file() {
@@ -271,6 +384,8 @@ namespace texture_bc7 {
             }
             s.reader = f;
             spdlog::info("BC7 texture cache: {} entries ({:.1f} MB)", s.entries.size(), file_size / kMB);
+            lock.unlock();
+            load_files();
         }
 
         // the cache file from the entries (a Background job, or shutdown); afterwards the entries point into it.
@@ -368,6 +483,7 @@ namespace texture_bc7 {
                 std::erase_if(s.entries, [&](const auto& kv) { return !kv.second.mem && !in_file.contains(kv.first); });
             }
             spdlog::info("BC7 texture cache: saved {} entries ({:.1f} MB)", written, pos / kMB);
+            write_files(); // after the entries: a record of an entry the file left out is dropped
         }
 
         // write_file, again while encodes finished meanwhile
@@ -486,6 +602,32 @@ namespace texture_bc7 {
             }
             s.borders[h] = border;
         }
+
+        // the inflated blocks of entry e (key), malloc'd for an Image (RL_MALLOC: UnloadImage frees them); null
+        // when they could not be read
+        uint8_t* read_blocks(const Entry& e, uint64_t key, uint32_t w, uint32_t h) {
+            State& s = state();
+            std::vector<uint8_t> z;
+            bool read = false;
+            if (e.mem) {
+                read = read_payload_locked(e, z);
+            } else {
+                std::scoped_lock file_lock(s.file_mutex);
+                // the file may have been rewritten since e was copied: take the entry's offset again
+                std::shared_lock lock(s.mutex);
+                if (auto it = s.entries.find(key); it != s.entries.end()) {
+                    read = read_payload_locked(it->second, z);
+                }
+            }
+            const size_t n = block_bytes(w, h);
+            auto* blocks = read ? static_cast<uint8_t*>(std::malloc(n)) : nullptr;
+            if (!blocks || !inflate_to(z.data(), z.size(), blocks, n)) {
+                std::free(blocks);
+                spdlog::warn("BC7 texture cache: an entry ({}x{}) could not be read", w, h);
+                return nullptr;
+            }
+            return blocks;
+        }
     } // namespace
 
     void init(bool configured) {
@@ -511,7 +653,67 @@ namespace texture_bc7 {
         return state().on.load(std::memory_order_acquire);
     }
 
-    void compress(Image& image) {
+    FileStamp stamp(const fs::path& path) {
+        std::error_code ec;
+        const uint64_t size = fs::file_size(path, ec);
+        if (ec) {
+            return {};
+        }
+        const auto t = fs::last_write_time(path, ec);
+        if (ec) {
+            return {};
+        }
+        return {size, static_cast<int64_t>(t.time_since_epoch().count())};
+    }
+
+    bool cached_image(const fs::path& path, const FileStamp& st, Image& out) {
+        State& s = state();
+        if (!enabled() || !files_on() || st.size == 0) {
+            return false;
+        }
+        s.loaded.wait();
+        FileRec r;
+        Entry e;
+        {
+            std::shared_lock lock(s.mutex);
+            auto fit = s.files.find(path.string());
+            if (fit == s.files.end() || fit->second.stamp.size != st.size || fit->second.stamp.mtime != st.mtime) {
+                return false;
+            }
+            r = fit->second;
+            auto it = s.entries.find(r.key);
+            if (it == s.entries.end() || it->second.kind != Kind::Blocks || it->second.width != r.width ||
+                it->second.height != r.height) {
+                return false;
+            }
+            e = it->second;
+        }
+        if (!e.used) {
+            std::unique_lock lock(s.mutex);
+            if (auto it = s.entries.find(r.key); it != s.entries.end()) {
+                it->second.used = true;
+            }
+        }
+        uint8_t* blocks = read_blocks(e, r.key, r.width, r.height);
+        if (!blocks) {
+            return false;
+        }
+        const size_t n = block_bytes(r.width, r.height);
+        remember_border(blocks, n, r.border);
+        s.raw_bytes += size_t(r.width) * r.height * r.bpp;
+        s.bc7_bytes += n;
+        ++s.hits;
+        ++s.file_hits;
+        out = Image{};
+        out.data = blocks;
+        out.width = static_cast<int>(r.width);
+        out.height = static_cast<int>(r.height);
+        out.mipmaps = 1;
+        out.format = kFormat;
+        return true;
+    }
+
+    void compress(Image& image, const fs::path& path, const FileStamp& st) {
         State& s = state();
         if (!enabled() || !encodable(image)) {
             return;
@@ -540,25 +742,11 @@ namespace texture_bc7 {
                 ++s.kept;
                 return;
             }
-            std::vector<uint8_t> z;
-            bool read = false;
-            if (e.mem) {
-                read = read_payload_locked(e, z);
-            } else {
-                std::scoped_lock file_lock(s.file_mutex);
-                // the file may have been rewritten since e was copied: take the entry's offset again
-                std::shared_lock lock(s.mutex);
-                if (auto it = s.entries.find(key); it != s.entries.end()) {
-                    read = read_payload_locked(it->second, z);
-                }
-            }
-            const size_t n = block_bytes(w, h);
-            auto* blocks = read ? static_cast<uint8_t*>(std::malloc(n)) : nullptr; // RL_MALLOC: UnloadImage frees it
-            if (!blocks || !inflate_to(z.data(), z.size(), blocks, n)) {
-                std::free(blocks);
-                spdlog::warn("BC7 texture cache: an entry ({}x{}) could not be read", w, h);
+            uint8_t* blocks = read_blocks(e, key, w, h);
+            if (!blocks) {
                 return;
             }
+            const size_t n = block_bytes(w, h);
             const bool rgba = image.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
             const Rect border = rgba ? border_of(static_cast<const uint8_t*>(image.data), image.width, image.height)
                                      : Rect{0, 0, float(w), float(h)};
@@ -566,6 +754,17 @@ namespace texture_bc7 {
             s.raw_bytes += size_t(w) * h * (rgba ? 4 : 3);
             s.bc7_bytes += n;
             ++s.hits;
+            if (files_on() && !path.empty() && st.size != 0) { // cached_image finds the file next time
+                const FileRec r{st, key, w, h, uint8_t(rgba ? 4 : 3), border};
+                std::unique_lock lock(s.mutex);
+                auto [it, added] = s.files.try_emplace(path.string(), r);
+                if (!added &&
+                    (it->second.stamp.size != st.size || it->second.stamp.mtime != st.mtime || it->second.key != key)) {
+                    it->second = r;
+                    added = true;
+                }
+                s.files_dirty += added ? 1 : 0;
+            }
             ray::UnloadImage(image);
             image.data = blocks;
             image.format = kFormat;
@@ -620,10 +819,10 @@ namespace texture_bc7 {
         if (!enabled()) {
             return;
         }
-        spdlog::info("BC7 textures: {} images from the cache ({:.0f} MB as RGBA, {:.0f} MB as BC7), {} kept as RGBA, "
-                     "{} encoded this run, {} over the error limit",
-                     s.hits.load(), s.raw_bytes.load() / kMB, s.bc7_bytes.load() / kMB, s.kept.load(), s.encoded.load(),
-                     s.rejected.load());
+        spdlog::info("BC7 textures: {} images from the cache ({} of them without decoding the file; {:.0f} MB as "
+                     "RGBA, {:.0f} MB as BC7), {} kept as RGBA, {} encoded this run, {} over the error limit",
+                     s.hits.load(), s.file_hits.load(), s.raw_bytes.load() / kMB, s.bc7_bytes.load() / kMB,
+                     s.kept.load(), s.encoded.load(), s.rejected.load());
         bool save = false;
         {
             std::unique_lock lock(s.mutex);
@@ -632,6 +831,9 @@ namespace texture_bc7 {
         }
         if (save) {
             write_file(); // waits for a save that is running
+        } else {
+            std::scoped_lock write_lock(s.write_mutex);
+            write_files();
         }
     }
 } // namespace texture_bc7

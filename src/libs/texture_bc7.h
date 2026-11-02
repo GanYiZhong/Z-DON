@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
+
 #include "gfx.h" // IWYU pragma: keep
 #include "raylib_ns.h"
 
@@ -19,9 +22,20 @@ namespace texture_bc7 {
     void init(bool configured);
     bool enabled();
 
+    // A skin file's size and last write, taken before it is read (zero when it could not be)
+    struct FileStamp {
+        uint64_t size = 0;
+        int64_t mtime = 0;
+    };
+    FileStamp stamp(const std::filesystem::path& path);
+
+    // The file's BC7 image without decoding it: a load compressed this file (same path, size and last write)
+    // from the cache before. False: decode it and hand it to compress. cache/bc7/files.bin keeps the files.
+    bool cached_image(const std::filesystem::path& path, const FileStamp& st, Image& out);
+
     // An image just decoded from a skin file (any thread): RGBA8 / RGB8 becomes BC7 when the cache has its blocks;
-    // anything else stays as it is.
-    void compress(Image& image);
+    // anything else stays as it is. With the file's path and stamp, the next load of it finds it by cached_image.
+    void compress(Image& image, const std::filesystem::path& path = {}, const FileStamp& st = {});
 
     // GetImageAlphaBorder(image, 0) of a BC7 image: the border of its pixels before compression
     Rect alpha_border(const Image& image);

@@ -323,3 +323,10 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - BC7 快取存檔不再擋讀取：`write_file` 以前整段（重寫約 60 MB）拿著 file_mutex，那時任何快取命中都要等，主執行緒看過 310–335 ms 的停頓（Nijiiro 背景 footer 3 張圖）。改成每讀一筆 payload 才拿鎖、換檔＋更新位移一起鎖，另加 write_mutex 讓存檔一次一個。
 - Nijiiro 背景（skin 端，nj_pr_wt3 分支 perf/lazy-collab-backgrounds）：background.lua 一載入就 require 全部 37 個 collab（第一場約 250–300 ms），改成用到才 require。Background 建立 390–465→182–245 ms（8 次）。剩下的是 Lua 依亂數選的背景組合（dancer/bg_fever/footer 等）當場 load_folder，選擇在 Background.new 裡才決定，引擎沒辦法事先知道。
 - 開發鉤子 `ZDON_LUA_REQUIRE_LOG=1`：每個 ≥1 ms 的 require 記一行、給 skin `zdon_clock_ms()`；Background.new 耗時每次記一行。包 require 會多一層 Lua frame，skin_require 找呼叫者時跳過它（不然父 skin 的模組會解析錯）。
+
+## 2026-11-03 BC7 快取命中時不解 PNG（cache/bc7/files.bin）
+
+- 原因：BC7 快取以解碼後像素的雜湊為鍵，所以每張圖每次都先完整解一次 PNG，快取只省上傳和顯存。Nijiiro 的大圖（1920×540 背景一張 20–30 ms）讓背景資料夾的 load_folder 幾乎等於「最大那張的解碼時間」。
+- 做法：`texture_bc7::cached_image(path, stamp)`。`load_image` 先取檔案大小＋最後寫入時間，`files.bin` 有同路徑同 stamp 的紀錄、且對應的 Blocks 項目還在，就直接讀 BC7 blocks 組成 Image（不讀檔、不碰 texture pack），邊界從紀錄放回 `remember_border`。紀錄在 `compress` 命中時寫入（所以第二次載入才生效），隨 textures.bin 一起存、關遊戲時也存；項目被裁掉的紀錄在存檔時丟掉。Keep（保留 RGBA）的圖照舊解碼。`ZDON_BC7_FILES=0` 關（A/B 用），`YATAIDON_TEXPACK_VERIFY=1` 時也不走。
+- 量測（Nijiiro，同一 exe 開/關交替）：一般流程選曲畫面 243→129 ms；教學背景 20→11 ms；命令列開歌 Background.new 198→143–149 ms（bga_bg_1 19.6→6.0、bg_fever 21.6→11.1、dancer 68→55）；遊戲畫面本身 242→221–245 ms（解碼本來就被平行 prefetch 蓋掉，瓶頸不在這）。SimpleStyle（小圖）遊戲 271–298→248–258 ms、選曲不變。第一次建立紀錄那輪比關閉時多約 25 ms（stat＋記錄）。
+- 驗證：兩個 skin 的遊戲（dense 魔王 auto 6 格）與選曲（7 格）固定步進截圖開/關逐位元相同，log 無錯誤。冷硬碟沒量（textures.bin 的隨機讀取在 HDD 上可能不如 pack 的循序讀）。
