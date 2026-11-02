@@ -47,6 +47,10 @@ void TutorialScreen::on_screen_start() {
     hits.clear();
     rim_count = 0;
     GameScreen::on_screen_start();
+    // Z-DON: the game screen holds the clock back until the first note can scroll in (about 2.7 s with
+    // this chart's slow scroll); the tutorial's first note comes seconds after the narration starts,
+    // so the hold was only a still screen. The 1 s start delay is skipped too: the intro starts at once.
+    reset_song_clock(-start_delay);
     transition->set_rainbow_only();
     overlay.emplace();
 }
