@@ -1,5 +1,7 @@
 #include "background.h"
 
+#include <chrono>
+
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/script.h"
 
@@ -32,7 +34,10 @@ Background::Background(PlayerNum player_num, float bpm, const std::string& scene
     sol::table background_class = bg_obj;
     sol::protected_function new_func = background_class["new"];
 
+    const auto t_new = std::chrono::steady_clock::now();
     auto call_result = new_func(static_cast<int>(player_num), bpm, scene_preset);
+    spdlog::info("Background.new took {:.1f} ms",
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_new).count());
     if (!call_result.valid()) {
         sol::error err = call_result;
         spdlog::error("Error calling Background.new: {}", err.what());

@@ -555,6 +555,18 @@ static AssetCache<rapidjson::Document>& skin_json_cache() {
     return cache;
 }
 
+std::shared_ptr<const rapidjson::Document> read_json_shared(const fs::path& file_path) {
+    if (skin_json_cache().enabled()) {
+        const std::string cache_key = file_path.lexically_normal().generic_string();
+        if (cache_key.starts_with("Skins/") || cache_key.contains("/Skins/")) {
+            if (auto cached = skin_json_cache().get(cache_key)) {
+                return cached;
+            }
+        }
+    }
+    return std::make_shared<const rapidjson::Document>(read_json_file(file_path)); // parses (and caches) it
+}
+
 rapidjson::Document read_json_file(const fs::path& file_path) {
     if (file_path.extension() != ".json") {
         throw std::runtime_error("File is not a json file: " + file_path.string());

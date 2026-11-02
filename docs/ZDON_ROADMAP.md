@@ -245,7 +245,7 @@
 - 自動演奏卡頓補打：拖曳視窗等造成主迴圈卡住時，時鐘一次跳過好幾顆音符與連打。Player::update 在 auto 時把跳過的區間以 4 ms 一步重跑 note_manager/timeline/autoplay（補打不出聲）。測試鉤子 ZDON_TEST_STALL="<歌曲 ms>:<ms>,..."、ZDON_NO_AUTO_CATCHUP=1（舊行為）。即時跑 4 次卡頓（0.25–1.5 s）：dense 舊 977/1/21 → 新 999/0/0；longroll 舊 156/0/12、連打 73 → 新 168/0/0、連打 82（同無卡頓）。
 
 ## 還可以做的
-- 載入時 texture.json 讀兩次（規劃一次、load_folder 一次，遊戲畫面約 27 ms）、目錄列表約 65 ms：可以在 predecode 時先做或在一次載入內共用，沒做。
+- 載入時的 texture.json／目錄列表：2026-11-02 已做（見下方「2026-11-02 效能檢查」）。剩下規劃約 20–40 ms 多半是第一次解析 JSON，同一場遊戲第二次起走快取。
 - PBO／共用 context 上傳執行緒：第一次畫到的同步上傳已用 warm-up 搬到前幾幀的空檔（見上表），剩載入那幀就畫到的那幾張（Nijiiro 選曲 10 張 7–10 ms，在 480–560 ms 的載入幀裡）。要再省只能把它們跟解碼重疊（載入時上傳）或另開 GL context，收益是載入幀的 1–2%，沒做。
 - `PlaybackClock` 與 vblank 限幀：已讓 synchronize 用實測的刷新週期（02f375d）；更深的整合會改變演奏時鐘，等於判定行為改動，不做。
 - 譜面音符改成不用 deque：約 90 處參考/迭代器語意要改，每幀的迭代早已走 vector，收益小，不做。
@@ -265,7 +265,7 @@
 - AI 對戰的 2P 也走自動演奏的卡頓補打（Player::update 的補打迴圈多跑 zdon_ai_manager，補打中不出打擊音）。dense 譜 AI Lv5、`ZDON_AI_SEED=7`、`ZDON_TEST_STALL=4000:300,9000:700,15000:1500,22000:250`：沒卡頓 良 749/可 224/不可 26；卡頓、修正前 732/225/42；修正後 749/224/26（與沒卡頓相同）。
 - 量測鉤子 `ZDON_TEX_USE_STATS=1`：每次換畫面（unload_textures）記下已上傳卻從沒交給 GL 的貼圖，依資料夾排（`[tex_use]`）。crazylover 魔王 auto 一首：SimpleStyle 演奏畫面已上傳 133 MB 中 109 MB 沒畫到、Nijiiro 132 MB 中 84 MB。大宗：
   - SimpleStyle 吉祥物 `global/ss_mascot_k3/k6/k9`（22 套服裝 × 3 尺寸，共用貼圖的 50 MB/72 MB，每個畫面都在）：產生器改成一個精靈一個資料夾 `Graphics/ss_mascot/k<k>_<name>`，沒有畫面會載入它，Lua（ss_ui.lua `UI.TM`）要畫時才由 resolve_lua_texture 載入，texture_ondemand 下次跟著畫面預解碼（第二次起不再臨時載入）。共用貼圖 72→18 MB；選曲 ws 300→256、private 525→428、顯存 266→177；演奏 private 690→599、顯存 384→301。BC7 關閉時固定步進截圖與改前逐位元相同。
-  - 還沒做：只在特定模式用的資料夾（practice、ai_battle、gauge_ai、dan_info、gauge_dan、SimpleStyle 的 ss_dan）在一般演奏也載入：SimpleStyle 約 33 MB、Nijiiro 約 18 MB（BC7 後）。要按模式略過得逐一確認各模式的 Lua 不會在 init 就查這些圖。其餘（balloon、kusudama、branch、各結尾動畫）看歌，不能略過。
+  - 2026-11-02 已做（practice 除外，見下方「2026-11-02 效能檢查」）。原註：只在特定模式用的資料夾（practice、ai_battle、gauge_ai、dan_info、gauge_dan、SimpleStyle 的 ss_dan）在一般演奏也載入：SimpleStyle 約 33 MB、Nijiiro 約 18 MB（BC7 後）。要按模式略過得逐一確認各模式的 Lua 不會在 init 就查這些圖。其餘（balloon、kusudama、branch、各結尾動畫）看歌，不能略過。
 - density 2 畫到 3840×2160 再縮到螢幕：畫布本身 33 MB，改成螢幕大小的收益小（1440p 省約 18 MB），沒做。
 
 ## 2026-11-01 錄影：指定歌曲/難度直接輸出影片（zdon_record）
@@ -312,3 +312,14 @@
 - 實測（測試資料夾、假按鍵）：万戈イムーーノ十 魔王 auto 147.8 s 影片 62 s 完成；不敲擊中途取消，子程序/ffmpeg 都結束、檔案清掉。
 - 發現：build/bin 的 Nijiiro 在 11-01 00:33 被換成沒有 Z-DON 等速列修正的版本（modifier.lua 的 7 列以上重畫、selector.lua 的 mod_lift / nil 修正；有修正的版本在 D:\GitHubRepos
 j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次把那兩個檔換回已安裝的版本；產生器的該補丁改成 optional。Nijiiro 本身待使用者決定。
+
+## 2026-11-02 效能檢查
+
+- 演奏中（dense 魔王 auto、180 Hz、隱藏即時跑）：每幀工作 avg 0.7–0.9、p99 1.3–1.7 ms，歌曲開始後沒有 >8.33 ms 的間隔，沒有可再省的。`ZDON_FRAME_SPIKE_MS` 記到的 5–7 ms 幀都在 overlay（EndMode2D 的 flush）、F1 重來後照樣出現：是等前一幀翻頁，不是工作。
+- 一般選曲進遊戲 players made 13–58 ms；命令列直接開歌的 180–270 ms 是 3D 角色第一次載入。
+- 延後特定模式的 game 資料夾（`deferred_game_subsets`）：ai_battle/gauge_ai 只在 GAME_2P/AI_GAME、dan_info/gauge_dan/ss_dan 只在 GAME_DAN、tutorial 只在 TUTORIAL/INPUT_CALI 載入；其他模式先不載，C++ 或 Lua 查到其中的貼圖時才 load_folder（記一行 `left out of ... loaded when first asked for`）。predecode 依目前畫面推下一個模式（`next_game_mode`）也不解它們。practice 不延後：每個模式的暫停選單都畫它的面板（延後時開暫停 SimpleStyle 卡 386 ms）。`ZDON_DEFER_MODE_FOLDERS=0` 關。同一 exe 開/關交替各 3 次：SimpleStyle 遊戲貼圖上傳 93→76 MB、private 610–619→575–587 MB、載入少 80–160 ms；Nijiiro 138→118 MB、634–673→578–600 MB、少 45–100 ms。固定步進截圖（暫停、練習、段位、教學，兩個 skin）開/關逐位元相同（AI 對戰本身每次不同，不比）。
+- 目錄平行列出（`DirIndex::prefetch`）：規劃前先把各 skin 的 subset 資料夾、再把它們的 frame 資料夾丟到 job pool 一起列。列目錄 SimpleStyle 遊戲 38–42→15–16 ms、選曲 27–29→11–12 ms；Nijiiro 遊戲 16–18→8 ms、選曲 19–20→7 ms。載入 log 多了 `(總 ms: animations, listing and plan, N folders listed in ms)`。
+- texture.json：`read_json_shared` 直接共用解析快取那份（以前規劃、load_folder 各深拷貝一次）。單次新程序量不出差別（第一次是解析），留著省拷貝。
+- BC7 快取存檔不再擋讀取：`write_file` 以前整段（重寫約 60 MB）拿著 file_mutex，那時任何快取命中都要等，主執行緒看過 310–335 ms 的停頓（Nijiiro 背景 footer 3 張圖）。改成每讀一筆 payload 才拿鎖、換檔＋更新位移一起鎖，另加 write_mutex 讓存檔一次一個。
+- Nijiiro 背景（skin 端，nj_pr_wt3 分支 perf/lazy-collab-backgrounds）：background.lua 一載入就 require 全部 37 個 collab（第一場約 250–300 ms），改成用到才 require。Background 建立 390–465→182–245 ms（8 次）。剩下的是 Lua 依亂數選的背景組合（dancer/bg_fever/footer 等）當場 load_folder，選擇在 Background.new 裡才決定，引擎沒辦法事先知道。
+- 開發鉤子 `ZDON_LUA_REQUIRE_LOG=1`：每個 ≥1 ms 的 require 記一行、給 skin `zdon_clock_ms()`；Background.new 耗時每次記一行。包 require 會多一層 Lua frame，skin_require 找呼叫者時跳過它（不然父 skin 的模組會解析錯）。

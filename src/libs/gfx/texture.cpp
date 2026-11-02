@@ -35,6 +35,64 @@
 
 namespace {
 
+    // Z-DON: the game folders a play mode never draws, by the screen showing (global_data.current_screen):
+    // AI battle (GAME_2P, AI_GAME), dan (GAME_DAN) and the tutorial's (TUTORIAL, INPUT_CALI). Another mode, or
+    // ZDON_DEFER_MODE_FOLDERS=0: all of them load as before. practice always loads: every mode's pause menu
+    // draws its panel (left out, opening the menu loaded it: 46-386 ms).
+    std::unordered_set<std::string> deferred_game_subsets(const std::string& screen, const std::string& mode) {
+        static const bool on = [] {
+            const char* v = std::getenv("ZDON_DEFER_MODE_FOLDERS");
+            return !(v && *v == '0');
+        }();
+        static const std::unordered_set<std::string> modes = {"GAME",    "GAME_2P",  "GAME_DAN",  "GAME_PRACTICE",
+                                                              "AI_GAME", "TUTORIAL", "INPUT_CALI"};
+        if (!on || screen != "game" || !modes.contains(mode)) {
+            return {};
+        }
+        std::unordered_set<std::string> out;
+        if (mode != "GAME_2P" && mode != "AI_GAME") {
+            out.insert({"ai_battle", "gauge_ai"});
+        }
+        if (mode != "GAME_DAN") {
+            out.insert({"dan_info", "gauge_dan", "ss_dan"});
+        }
+        if (mode != "TUTORIAL" && mode != "INPUT_CALI") {
+            out.insert("tutorial");
+        }
+        return out;
+    }
+
+    // the play mode a screen's start_predecode("game") leads to
+    std::string next_game_mode(const std::string& showing) {
+        if (showing == "SONG_SELECT_2P") {
+            return "GAME_2P";
+        }
+        if (showing == "DAN_SELECT") {
+            return "GAME_DAN";
+        }
+        if (showing == "PRACTICE_SELECT") {
+            return "GAME_PRACTICE";
+        }
+        if (showing == "AI_SELECT") {
+            return "AI_GAME";
+        }
+        return "GAME";
+    }
+
+    // the <subset> of a file under <skin>/Graphics/<screen>/<subset>/..., "" when it isn't one
+    std::string graphics_subset(const fs::path& file, const std::string& screen) {
+        auto it = file.begin();
+        for (; it != file.end(); ++it) {
+            if (*it == "Graphics") {
+                break;
+            }
+        }
+        if (it == file.end() || ++it == file.end() || *it != screen || ++it == file.end()) {
+            return {};
+        }
+        return it->string();
+    }
+
     inline double json_number(const Value& v, double fallback = 0.0) {
         if (v.IsInt()) {
             return static_cast<double>(v.GetInt());
@@ -339,6 +397,7 @@ void TextureWrapper::unload_textures() {
     debug_draw_log_prev.clear();
     screen_loaded.clear();
     ondemand_stash.clear();
+    deferred_folders.clear();
     texture_ondemand::flush(); // what the screen that ends loaded on demand
     // the images of textures never drawn: the next load of a screen that holds them decodes them again
     texture_lazy::set_decoder(decode_evicted);
@@ -678,6 +737,32 @@ public:
         uint64_t mtime = 0; // last write, in the file system's own units
     };
 
+    size_t listed() const { return listings.size(); } // folders listed so far (the load log)
+    double list_ms = 0;                               // time spent listing them
+
+    // Z-DON: lists the folders not listed yet on the job pool, all at once (one by one on the main thread, a
+    // skin's 100-200 texture folders took 20-40 ms of a screen load)
+    void prefetch(const std::vector<fs::path>& dirs) {
+        std::vector<fs::path> todo;
+        std::unordered_set<fs::path::string_type> seen;
+        for (const fs::path& d : dirs) {
+            fs::path::string_type k = key(d);
+            if (!listings.contains(k) && seen.insert(std::move(k)).second) {
+                todo.push_back(d);
+            }
+        }
+        if (todo.empty()) {
+            return;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<Listing> got(todo.size());
+        jobs::parallel_for(todo.size(), jobs::Priority::Critical, [&](size_t i) { fill(got[i], todo[i]); });
+        for (size_t i = 0; i < todo.size(); ++i) {
+            listings.try_emplace(key(todo[i]), std::move(got[i]));
+        }
+        list_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+
     // the folder's entries, or nullptr when it cannot be listed
     const std::vector<Entry>* list(const fs::path& dir) {
         const Listing& l = get(dir);
@@ -730,12 +815,8 @@ private:
         return k;
     }
 
-    const Listing& get(const fs::path& dir) {
-        auto [it, inserted] = listings.try_emplace(key(dir));
-        Listing& l = it->second;
-        if (!inserted) {
-            return l;
-        }
+    // lists dir into l (any thread: touches nothing but l)
+    static void fill(Listing& l, const fs::path& dir) {
 #ifdef _WIN32
         std::vector<Win32DirEntry> raw;
         l.ok = win32_list_dir(dir, raw);
@@ -767,6 +848,17 @@ private:
         for (size_t i = 0; i < l.entries.size(); ++i) {
             l.by_name.emplace(key(l.entries[i].path.filename()), i);
         }
+    }
+
+    const Listing& get(const fs::path& dir) {
+        auto [it, inserted] = listings.try_emplace(key(dir));
+        Listing& l = it->second;
+        if (!inserted) {
+            return l;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        fill(l, dir);
+        list_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         return l;
     }
 
@@ -1150,7 +1242,8 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
         }
 
         try {
-            auto tex_config = read_json_file(tex_json);
+            const auto tex_config_doc = read_json_shared(tex_json);
+            const rapidjson::Document& tex_config = *tex_config_doc;
             auto& cache = tex_object_cache();
 
             std::vector<PendingTex> pending;
@@ -1537,6 +1630,8 @@ namespace {
         size_t cap = 0;
         std::atomic<size_t> held{0};
         std::vector<std::string> via;
+        std::string mode;                         // whole: the play mode it is for (next_game_mode)
+        std::unordered_set<std::string> deferred; // whole: owner's folders that mode leaves out
         // whole, for a screen whose textures upload at load (the game screen): the decoded images are also
         // uploaded ahead, on the main thread after the frame's present (predecode_tick); main thread only
         bool upload = false;
@@ -1856,6 +1951,8 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
     pf->cap = predecode_cap();
     pf->via = std::move(via);
     pf->upload = target == "game"; // the screens whose textures upload at load (texture_lazy: gameplay)
+    pf->mode = next_game_mode(global_data.current_screen);
+    pf->deferred = deferred_game_subsets(target, pf->mode);
     pf->start = std::chrono::steady_clock::now();
     slot = pf;
     // the first job reads the pack's index (file I/O), opens the pack, then starts the others
@@ -1877,8 +1974,18 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
         }
         std::vector<texture_lazy::EvictedFile> files;
         files.reserve(planned.size());
+        size_t skipped = 0;
         for (const texture_pack::Session::Planned& p : planned) {
-            files.push_back({fs::path(p.key), p.stat.size, p.stat.mtime, 0});
+            fs::path file(p.key);
+            if (!pf->deferred.empty() && pf->deferred.contains(graphics_subset(file, pf->owner))) {
+                ++skipped; // a folder the coming play mode leaves out (deferred_game_subsets)
+                continue;
+            }
+            files.push_back({std::move(file), p.stat.size, p.stat.mtime, 0});
+        }
+        if (skipped > 0) {
+            spdlog::info("Texture predecode for {}: {} files of folders {} leaves out not decoded", pf->owner, skipped,
+                         pf->mode);
         }
         try {
             // never finished: a predecode only reads the pack, the screen's own loads rewrite it
@@ -1993,6 +2100,8 @@ constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
 void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     PROFILE_SCOPE();
     PROFILE_ZONE_TEXT(screen_name);
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
     screen_loaded = screen_name;
     take_prefill(screen_name); // Z-DON: before the evicted files are planned
     const std::vector<fs::path> roots = all_graphics_roots();
@@ -2015,8 +2124,11 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     }
 
     load_animations(screen_name);
+    const auto t_anim = clock::now();
 
     // Subsets of the child and every ancestor, each once
+    deferred_folders.clear();
+    const std::unordered_set<std::string> deferred = deferred_game_subsets(screen_name, global_data.current_screen);
     std::vector<std::string> subsets;
     std::unordered_set<std::string> seen;
     for (const fs::path& dir : screen_dirs) {
@@ -2029,9 +2141,14 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
                 continue;
             }
             std::string name = entry.path.filename().string();
-            if (seen.insert(name).second && !loaded_subsets.contains(std::format("{}/{}", screen_name, name))) {
-                subsets.push_back(std::move(name));
+            if (!seen.insert(name).second || loaded_subsets.contains(std::format("{}/{}", screen_name, name))) {
+                continue;
             }
+            if (deferred.contains(name)) {
+                deferred_folders.emplace_back(screen_name, std::move(name));
+                continue;
+            }
+            subsets.push_back(std::move(name));
         }
     }
 
@@ -2047,8 +2164,8 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
             return;
         }
         try {
-            auto cfg = read_json_file(dir / "texture.json");
-            for (auto& m : cfg.GetObject()) {
+            const auto cfg = read_json_shared(dir / "texture.json");
+            for (const auto& m : cfg->GetObject()) {
                 const std::string name = m.name.GetString();
                 if (skip && skip->contains(name)) {
                     continue;
@@ -2100,6 +2217,29 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         }
         return any;
     };
+    // the subset folders of every skin in the chain, then their frame folders, listed in parallel first
+    {
+        std::vector<fs::path> level;
+        for (const fs::path& root : roots) {
+            for (const std::string& subset : subsets) {
+                if (dirs.is_dir(root / screen_name, subset)) {
+                    level.push_back(root / screen_name / subset);
+                }
+            }
+        }
+        dirs.prefetch(level);
+        std::vector<fs::path> frames;
+        for (const fs::path& dir : level) {
+            if (const auto* entries = dirs.list(dir)) {
+                for (const DirIndex::Entry& e : *entries) {
+                    if (e.is_dir) {
+                        frames.push_back(e.path);
+                    }
+                }
+            }
+        }
+        dirs.prefetch(frames);
+    }
     for (size_t g = 0; g < subsets.size(); ++g) {
         plan_subset(screen_name, subsets[g], groups[g]);
     }
@@ -2157,6 +2297,7 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         }
     }
 
+    const auto t_plan = clock::now();
     // the screen's texture pack: the planned files' bytes in one file, checked against the listings
     std::unique_ptr<texture_pack::Session> pack;
     if (texture_pack::enabled()) {
@@ -2225,7 +2366,13 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         }
         spdlog::info("On-demand prefetch for {}: {} folder(s): {}", screen_name, extra.size(), list);
     }
-    spdlog::info("Screen textures loaded for: {}", screen_name);
+    const auto ms = [](clock::time_point a, clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    spdlog::info("Screen textures loaded for: {} ({:.1f} ms: animations {:.1f}, listing and plan {:.1f}, "
+                 "{} folders listed in {:.1f} ms)",
+                 screen_name, ms(t_start, clock::now()), ms(t_start, t_anim), ms(t_anim, t_plan), dirs.listed(),
+                 dirs.list_ms);
     texture_retain::log_screen(screen_name);
     texture_lazy::log_screen(screen_name);
     start_prefill(screen_name, skin_root().filename().string());
@@ -2316,6 +2463,9 @@ std::shared_ptr<TextureObject> TextureWrapper::get_texture_shared(std::string_vi
     if (fb.found) {
         return fb.found;
     }
+    if (load_deferred(name)) {
+        return get_texture_shared(name);
+    }
     if (!fb.warned) { // once per name until the textures change (it used to log on every call)
         fb.warned = true;
         spdlog::warn("Texture not found: {}", name);
@@ -2328,7 +2478,30 @@ bool TextureWrapper::has_texture(std::string_view name) {
     if (textures.contains(name)) {
         return true;
     }
-    return texture_fallback(name).found != nullptr;
+    if (texture_fallback(name).found != nullptr) {
+        return true;
+    }
+    return load_deferred(name) && has_texture(name);
+}
+
+bool TextureWrapper::load_deferred(std::string_view name) {
+    const size_t slash = name.find('/');
+    if (slash == std::string_view::npos || deferred_folders.empty()) {
+        return false;
+    }
+    const std::string_view subset = name.substr(0, slash);
+    auto it = std::ranges::find_if(deferred_folders, [&](const auto& f) { return f.second == subset; });
+    if (it == deferred_folders.end()) {
+        return false;
+    }
+    const auto [screen, sub] = *it;
+    deferred_folders.erase(it);
+    const auto t0 = std::chrono::steady_clock::now();
+    load_folder(screen, sub);
+    spdlog::info("Texture folder {}/{} left out of {} loaded when first asked for ({:.1f} ms)", screen, sub,
+                 global_data.current_screen,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    return true;
 }
 
 void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParams& params) {

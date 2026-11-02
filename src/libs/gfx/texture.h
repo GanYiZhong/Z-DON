@@ -212,6 +212,10 @@ private:
     // where load_folder puts them while it makes them; dropped with unload_textures
     std::vector<std::shared_ptr<TextureObject>> ondemand_stash;
     std::vector<std::shared_ptr<TextureObject>>* stash = nullptr;
+    // Z-DON: game folders only another play mode draws (practice, AI battle, dan, tutorial), left out of this
+    // screen's load (deferred_game_subsets); a lookup of one of their textures loads the folder then
+    std::vector<std::pair<std::string, std::string>> deferred_folders; // (screen, subset)
+    bool load_deferred(std::string_view name);
     // Z-DON: the images texture_lazy::evict_all freed for the textures this screen now holds
     void refill_evicted(class ImagePrefetch& prefetch, const std::vector<fs::path>& planned);
 

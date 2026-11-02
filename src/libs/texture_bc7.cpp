@@ -71,6 +71,7 @@ namespace texture_bc7 {
             bool stopping = false;
             // the cache file, read on demand (the blocks are not kept in memory); taken before mutex
             std::mutex file_mutex;
+            std::mutex write_mutex; // one write_file at a time (a save job, shutdown)
             FILE* reader = nullptr;
             // stats
             std::atomic<size_t> hits{0}, kept{0}, encoded{0}, rejected{0};
@@ -272,10 +273,13 @@ namespace texture_bc7 {
             spdlog::info("BC7 texture cache: {} entries ({:.1f} MB)", s.entries.size(), file_size / kMB);
         }
 
-        // the cache file from the entries (a Background job, or shutdown); afterwards the entries point into it
+        // the cache file from the entries (a Background job, or shutdown); afterwards the entries point into it.
+        // Loads keep reading the old file meanwhile: file_mutex is taken per payload read and for the swap only
+        // (held for the whole write, a load's cache hit waited out the 60 MB rewrite: about 300 ms on the
+        // main thread)
         void write_file() {
             State& s = state();
-            std::scoped_lock file_lock(s.file_mutex);
+            std::scoped_lock write_lock(s.write_mutex);
             std::vector<std::pair<uint64_t, Entry>> list;
             {
                 std::unique_lock lock(s.mutex);
@@ -308,7 +312,12 @@ namespace texture_bc7 {
             std::vector<uint8_t> payload;
             for (size_t i = 0; i < list.size(); ++i) {
                 const auto& [key, e] = list[i];
-                if (!read_payload_locked(e, payload)) {
+                bool read = false;
+                {
+                    std::scoped_lock file_lock(s.file_mutex);
+                    read = read_payload_locked(e, payload);
+                }
+                if (!read) {
                     continue;
                 }
                 put(f, key);
@@ -326,6 +335,8 @@ namespace texture_bc7 {
                 spdlog::warn("BC7 texture cache: could not write {}", tmp.string());
                 return;
             }
+            // the swap and the new offsets in one step: a load reading meanwhile sees the old file or the new one
+            std::scoped_lock file_lock(s.file_mutex);
             // Windows cannot replace a file that is open: close the reader for the rename
             if (s.reader) {
                 std::fclose(s.reader);

@@ -352,13 +352,39 @@ void ScriptManager::init(const fs::path& script_path) {
                                            "=skin_require");
     auto caller_source = [](sol::this_state s) -> std::string {
         lua_Debug ar; // level 0 = this function, 1 = the require wrapper, 2 = its caller
-        if (!lua_getstack(s, 2, &ar) || !lua_getinfo(s, "S", &ar) || !ar.source) {
-            return "";
+        for (int level = 2; lua_getstack(s, level, &ar) && lua_getinfo(s, "S", &ar) && ar.source; ++level) {
+            if (std::strcmp(ar.source, "=zdon_require_log") != 0) { // ZDON_LUA_REQUIRE_LOG's timing wrapper
+                return ar.source;
+            }
         }
-        return ar.source;
+        return "";
     };
     (*lua)["require"] = make_require.call<sol::function>((*lua)["require"], sol::make_object(*lua, caller_source),
                                                          sol::as_table(script_dirs));
+    // Z-DON dev hook: ZDON_LUA_REQUIRE_LOG=1 logs every require that took 1 ms or more (inclusive of the
+    // modules it requires itself), the first time only: later ones come from package.loaded; it also gives
+    // skins zdon_clock_ms() (a steady clock in ms) to time their own code
+    if (const char* v = std::getenv("ZDON_LUA_REQUIRE_LOG"); v && *v && *v != '0') {
+        auto clock_ms = [] -> double {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+        auto log_require = [](const std::string& name, double ms) { spdlog::info("[require] {} {:.1f} ms", name, ms); };
+        sol::function wrap = lua->load(R"(
+            local req, clock, log = ...
+            return function(name, ...)
+                local t = clock()
+                local a, b = req(name, ...)
+                local ms = clock() - t
+                if ms >= 1 then log(name, ms) end
+                return a, b
+            end
+        )",
+                                       "=zdon_require_log");
+        (*lua)["require"] = wrap.call<sol::function>((*lua)["require"], sol::make_object(*lua, clock_ms),
+                                                     sol::make_object(*lua, log_require));
+        (*lua)["zdon_clock_ms"] = clock_ms; // for timing a skin's own code while profiling
+    }
 
     index_scripts(script_path);
     for (const fs::path& dir : ancestor_scripts) {

@@ -39,6 +39,9 @@ std::vector<fs::path> get_song_files(const std::vector<fs::path>& root_path,
                                      std::shared_ptr<const LibraryIndex>* index = nullptr);
 
 rapidjson::Document read_json_file(const fs::path& file_path);
+// Z-DON: the same document without the copy: a skin JSON comes straight from the parse cache (shared,
+// read-only); others are parsed into a new one
+std::shared_ptr<const rapidjson::Document> read_json_shared(const fs::path& file_path);
 
 struct SongListEntry {
     std::string hash;
