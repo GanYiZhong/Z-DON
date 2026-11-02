@@ -330,3 +330,12 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - 做法：`texture_bc7::cached_image(path, stamp)`。`load_image` 先取檔案大小＋最後寫入時間，`files.bin` 有同路徑同 stamp 的紀錄、且對應的 Blocks 項目還在，就直接讀 BC7 blocks 組成 Image（不讀檔、不碰 texture pack），邊界從紀錄放回 `remember_border`。紀錄在 `compress` 命中時寫入（所以第二次載入才生效），隨 textures.bin 一起存、關遊戲時也存；項目被裁掉的紀錄在存檔時丟掉。Keep（保留 RGBA）的圖照舊解碼。`ZDON_BC7_FILES=0` 關（A/B 用），`YATAIDON_TEXPACK_VERIFY=1` 時也不走。
 - 量測（Nijiiro，同一 exe 開/關交替）：一般流程選曲畫面 243→129 ms；教學背景 20→11 ms；命令列開歌 Background.new 198→143–149 ms（bga_bg_1 19.6→6.0、bg_fever 21.6→11.1、dancer 68→55）；遊戲畫面本身 242→221–245 ms（解碼本來就被平行 prefetch 蓋掉，瓶頸不在這）。SimpleStyle（小圖）遊戲 271–298→248–258 ms、選曲不變。第一次建立紀錄那輪比關閉時多約 25 ms（stat＋記錄）。
 - 驗證：兩個 skin 的遊戲（dense 魔王 auto 6 格）與選曲（7 格）固定步進截圖開/關逐位元相同，log 無錯誤。冷硬碟沒量（textures.bin 的隨機讀取在 HDD 上可能不如 pack 的循序讀）。
+
+## 2026-11-03 BC7 快取改 zstd、3D 咚動畫預先解析
+
+- 一般流程（選歌→選難度→開始，非固定步進）：選曲結束到遊戲初始化約 317 ms＝遊戲畫面貼圖 118（選難度時已預解，只來得及先上傳 61 張）＋Background.new 119＋其他。「選曲 player 建立 190 ms」只出現在直接跳進選曲的測試：一般流程登入畫面已建過咚，選曲建 player 約 20 ms、選曲啟動共約 165 ms。
+- BC7 快取的區塊壓縮率 10.7 倍（skin 圖大量透明），不能存原始資料；Python 實測同一批資料 zlib 0.48 GB/s、zstd 9 1.40 GB/s 且小 13%。改用 zstd（cpptrace 帶進來的 `libzstd_static`，CMake 有這個 target 才開 `ZDON_HAVE_ZSTD`），level 9。舊檔的 deflate 項目照讀，第一次讀到時由 Background job 轉成 zstd（不重新編碼），隨下次存檔寫回；log 尾巴記轉了幾筆。交替 A/B 各 3 次（Nijiiro dense 命令列）：Background.new 175–187→127–135 ms（背景資料夾讀＋解 73–81→41–46 ms）、遊戲畫面 276–290→237–253 ms；快取檔 63.9→59.5 MB。
+- 順手修掉的競態：write_file 先複製項目清單再寫，寫完更新位移時沒檢查項目是否在中間被換掉（背景編碼完成、轉 zstd），會讓記憶體裡的項目指向檔案裡舊的資料、下一次存檔把不相符的資料寫進去（實際出現 752 筆讀不出來）。現在只更新跟清單一致的項目，其他的留到下次存。
+- 3D 咚：每次執行第一次建咚要解析 Models/animations.glb（load_model 52 ms 只為了骨骼名稱＋動畫 110 ms），落在登入畫面初始化。骨骼名稱改用 cgltf 直接讀（第一個 skin 的 joints、截 31 字元，同 raylib LoadBoneInfoGLTF；兩個 skin 的 animations/head/body/cos 共 8 次比對全相同），整段不碰 GL，`load_skin` 成功後由 `chara3d_prewarm()` 丟 Background job 先解析；快取改成不解構的 heap 物件（結束時 job 可能還在跑）。啟動→登入畫面就緒 765–829→386–393 ms。
+- 驗證：Nijiiro／SimpleStyle 遊戲 6 格＋選曲 7 格固定步進截圖對上一版（4eae1042）逐位元相同，0 筆讀取失敗、log 無錯誤。
+- 沒做：背景隨機組合提前準備。只改引擎的話不知道 Lua 會選哪組，Nijiiro 候選總量約 686 MB（BC7），學「上次用過的」命中率低；要做得讓 skin 在選歌時就決定（改 Nijiiro）。父 skin 用不到的舞者圖（每首約 30 ms）也是 skin 端的事。

@@ -197,6 +197,8 @@ public:
 
 // Unloads the model parts kept for the next Don (skin change, shutdown: needs the GL context).
 void chara3d_clear_part_pool();
+// Z-DON: parses the skin's Models/animations.glb on a Background job (the first Don of a run waited for it)
+void chara3d_prewarm();
 
 struct PlayerData;
 std::unique_ptr<Chara3D> make_chara_from_player_data(const PlayerData* pd, bool mirror = false,

@@ -13,10 +13,10 @@
 //
 // Encoding is slow (a 4K skin is tens of CPU seconds), so it never runs on a load: a decoded image the cache does not
 // know is uploaded as it is and encoded by a Background job, and the next load takes the cached blocks.
-// cache/bc7/textures.bin: the blocks (deflated) by the 64-bit hash of the decoded pixels, so any skin, child skin or
-// edited file finds its own entry; read at start, rewritten (.tmp + rename) when a batch of encodes is done.
-// [video] zdon_texture_compression (default true) or ZDON_BC7=0/1 turns it off / on; it is off without GL 4.2 or
-// GL_ARB_texture_compression_bptc.
+// cache/bc7/textures.bin: the blocks (zstd; deflated by earlier builds) by the 64-bit hash of the decoded pixels, so
+// any skin, child skin or edited file finds its own entry; read at start, rewritten (.tmp + rename) when a batch of
+// encodes is done. [video] zdon_texture_compression (default true) or ZDON_BC7=0/1 turns it off / on; it is off without
+// GL 4.2 or GL_ARB_texture_compression_bptc.
 namespace texture_bc7 {
     // main thread, once the GL context exists
     void init(bool configured);

@@ -18,6 +18,9 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef ZDON_HAVE_ZSTD
+#include <zstd.h>
+#endif
 #ifdef ZDON_HAVE_ZLIB
 #include <zlib.h>
 #else
@@ -48,9 +51,19 @@ namespace texture_bc7 {
         constexpr double kMB = 1024.0 * 1024.0;
 
         enum class Kind : uint8_t {
-            Blocks, // deflated BC7 blocks
+            Blocks, // deflated BC7 blocks (what earlier builds wrote; moved to Zstd once read)
             Keep,   // over kMaxError and kMaxMse: stays RGBA8
+            Zstd,   // BC7 blocks compressed with zstd: about 3x faster to unpack than deflate
         };
+        bool has_blocks(Kind k) {
+            return k == Kind::Blocks || k == Kind::Zstd;
+        }
+#ifdef ZDON_HAVE_ZSTD
+        constexpr Kind kNewBlocks = Kind::Zstd;
+        constexpr int kZstdLevel = 9; // smaller than deflate 6, and unpacks as fast as level 1
+#else
+        constexpr Kind kNewBlocks = Kind::Blocks;
+#endif
         struct Entry {
             Kind kind = Kind::Keep;
             uint32_t width = 0, height = 0;
@@ -86,6 +99,7 @@ namespace texture_bc7 {
             FILE* reader = nullptr;
             // stats
             std::atomic<size_t> hits{0}, kept{0}, encoded{0}, rejected{0}, file_hits{0};
+            std::atomic<size_t> converted{0}; // deflated entries stored again as zstd this run
             std::atomic<uint64_t> raw_bytes{0}, bc7_bytes{0};
 
             std::mutex border_mutex;
@@ -212,7 +226,21 @@ namespace texture_bc7 {
 #endif
         }
 
-        std::vector<uint8_t> deflate_blocks(const std::vector<uint8_t>& in) {
+        // a payload of kind k into the n bytes at out
+        bool unpack_to(Kind k, const uint8_t* z, size_t zn, uint8_t* out, size_t n) {
+#ifdef ZDON_HAVE_ZSTD
+            if (k == Kind::Zstd) {
+                const size_t got = ZSTD_decompress(out, n, z, zn);
+                return !ZSTD_isError(got) && got == n;
+            }
+#endif
+            return k == Kind::Blocks && inflate_to(z, zn, out, n);
+        }
+
+        // the blocks as a payload of kind kNewBlocks (empty when that failed)
+        std::vector<uint8_t> pack_blocks(const uint8_t* in, size_t n);
+
+        [[maybe_unused]] std::vector<uint8_t> deflate_blocks(const std::vector<uint8_t>& in) {
 #ifdef ZDON_HAVE_ZLIB
             uLongf n = compressBound(static_cast<uLong>(in.size()));
             std::vector<uint8_t> out(n);
@@ -228,6 +256,20 @@ namespace texture_bc7 {
 #endif
             out.resize(n);
             return out;
+        }
+
+        std::vector<uint8_t> pack_blocks(const uint8_t* in, size_t n) {
+#ifdef ZDON_HAVE_ZSTD
+            std::vector<uint8_t> out(ZSTD_compressBound(n));
+            const size_t got = ZSTD_compress(out.data(), out.size(), in, n, kZstdLevel);
+            if (ZSTD_isError(got)) {
+                return {};
+            }
+            out.resize(got);
+            return out;
+#else
+            return deflate_blocks(std::vector<uint8_t>(in, in + n));
+#endif
         }
 
         template<class T>
@@ -284,7 +326,7 @@ namespace texture_bc7 {
                     break;
                 }
                 auto it = s.entries.find(r.key);
-                if (it != s.entries.end() && it->second.kind == Kind::Blocks) {
+                if (it != s.entries.end() && has_blocks(it->second.kind)) {
                     s.files[path] = r;
                 }
             }
@@ -368,7 +410,7 @@ namespace texture_bc7 {
                 uint8_t kind = 0;
                 if (std::fseek(f, pos, SEEK_SET) != 0 || !get(f, key) || !get(f, w) || !get(f, h) || !get(f, kind) ||
                     !get(f, size) || pos + static_cast<long>(kRecordHeader + size) > file_size ||
-                    kind > uint8_t(Kind::Keep)) {
+                    kind > uint8_t(Kind::Zstd)) {
                     spdlog::warn("BC7 texture cache: {} is cut short, using {} entries", cache_path().string(),
                                  s.entries.size());
                     break;
@@ -474,7 +516,11 @@ namespace texture_bc7 {
                     ++written;
                     in_file.insert(list[i].first);
                     auto it = s.entries.find(list[i].first);
-                    if (it != s.entries.end()) {
+                    // only an entry as the list had it: one replaced since (an encode, a move to zstd) keeps its
+                    // payload in memory until the next write, or it would point at the bytes it had before
+                    const Entry& was = list[i].second;
+                    if (it != s.entries.end() && it->second.kind == was.kind && it->second.size == was.size &&
+                        it->second.mem == was.mem) {
                         it->second.offset = offsets[i];
                         it->second.mem.reset();
                     }
@@ -567,7 +613,7 @@ namespace texture_bc7 {
             // whole image is accepted too
             const double mse = double(sse) / (double(bw) * bh * 64);
             const bool ok = worst <= kMaxError || mse <= kMaxMse;
-            std::vector<uint8_t> z = ok ? deflate_blocks(blocks) : std::vector<uint8_t>{};
+            std::vector<uint8_t> z = ok ? pack_blocks(blocks.data(), blocks.size()) : std::vector<uint8_t>{};
             const bool keep = z.empty();
 
             std::unique_lock lock(s.mutex);
@@ -577,7 +623,7 @@ namespace texture_bc7 {
                 return;
             }
             Entry e;
-            e.kind = keep ? Kind::Keep : Kind::Blocks;
+            e.kind = keep ? Kind::Keep : kNewBlocks;
             e.width = w;
             e.height = h;
             e.used = true;
@@ -603,12 +649,51 @@ namespace texture_bc7 {
             s.borders[h] = border;
         }
 
+        // an entry written by an earlier build (deflated) stored again as kNewBlocks by a Background job, saved
+        // with the next write of the file: the blocks are not encoded again
+        void convert_later(uint64_t key, uint32_t w, uint32_t h, std::vector<uint8_t> blocks) {
+            State& s = state();
+            {
+                std::unique_lock lock(s.mutex);
+                if (s.stopping || s.queued.contains(key) || s.queued_bytes + blocks.size() > kQueueCap) {
+                    return;
+                }
+                s.queued.insert(key);
+                s.queued_bytes += blocks.size();
+            }
+            jobs::submit(jobs::Priority::Background, [key, w, h, blocks = std::move(blocks)] {
+                State& s = state();
+                std::vector<uint8_t> z = pack_blocks(blocks.data(), blocks.size());
+                std::unique_lock lock(s.mutex);
+                s.queued.erase(key);
+                s.queued_bytes -= std::min(s.queued_bytes, blocks.size());
+                if (s.stopping) {
+                    return;
+                }
+                auto it = s.entries.find(key);
+                if (!z.empty() && it != s.entries.end() && it->second.kind == Kind::Blocks && it->second.width == w &&
+                    it->second.height == h) {
+                    it->second.kind = kNewBlocks;
+                    it->second.size = static_cast<uint32_t>(z.size());
+                    it->second.mem = std::make_shared<const std::vector<uint8_t>>(std::move(z));
+                    ++s.dirty;
+                    ++s.converted;
+                }
+                if (s.queued.empty() && s.dirty > 0 && !s.saving) {
+                    s.saving = true;
+                    lock.unlock();
+                    jobs::submit(jobs::Priority::Background, save_job);
+                }
+            });
+        }
+
         // the inflated blocks of entry e (key), malloc'd for an Image (RL_MALLOC: UnloadImage frees them); null
         // when they could not be read
         uint8_t* read_blocks(const Entry& e, uint64_t key, uint32_t w, uint32_t h) {
             State& s = state();
             std::vector<uint8_t> z;
             bool read = false;
+            Kind kind = e.kind;
             if (e.mem) {
                 read = read_payload_locked(e, z);
             } else {
@@ -616,15 +701,19 @@ namespace texture_bc7 {
                 // the file may have been rewritten since e was copied: take the entry's offset again
                 std::shared_lock lock(s.mutex);
                 if (auto it = s.entries.find(key); it != s.entries.end()) {
+                    kind = it->second.kind;
                     read = read_payload_locked(it->second, z);
                 }
             }
             const size_t n = block_bytes(w, h);
             auto* blocks = read ? static_cast<uint8_t*>(std::malloc(n)) : nullptr;
-            if (!blocks || !inflate_to(z.data(), z.size(), blocks, n)) {
+            if (!blocks || !unpack_to(kind, z.data(), z.size(), blocks, n)) {
                 std::free(blocks);
                 spdlog::warn("BC7 texture cache: an entry ({}x{}) could not be read", w, h);
                 return nullptr;
+            }
+            if (kind != kNewBlocks) {
+                convert_later(key, w, h, std::vector<uint8_t>(blocks, blocks + n));
             }
             return blocks;
         }
@@ -682,7 +771,7 @@ namespace texture_bc7 {
             }
             r = fit->second;
             auto it = s.entries.find(r.key);
-            if (it == s.entries.end() || it->second.kind != Kind::Blocks || it->second.width != r.width ||
+            if (it == s.entries.end() || !has_blocks(it->second.kind) || it->second.width != r.width ||
                 it->second.height != r.height) {
                 return false;
             }
@@ -819,10 +908,12 @@ namespace texture_bc7 {
         if (!enabled()) {
             return;
         }
-        spdlog::info("BC7 textures: {} images from the cache ({} of them without decoding the file; {:.0f} MB as "
-                     "RGBA, {:.0f} MB as BC7), {} kept as RGBA, {} encoded this run, {} over the error limit",
-                     s.hits.load(), s.file_hits.load(), s.raw_bytes.load() / kMB, s.bc7_bytes.load() / kMB,
-                     s.kept.load(), s.encoded.load(), s.rejected.load());
+        spdlog::info(
+            "BC7 textures: {} images from the cache ({} of them without decoding the file; {:.0f} MB as "
+            "RGBA, {:.0f} MB as BC7), {} kept as RGBA, {} encoded this run, {} over the error limit, {} deflated "
+            "entries stored again with zstd",
+            s.hits.load(), s.file_hits.load(), s.raw_bytes.load() / kMB, s.bc7_bytes.load() / kMB, s.kept.load(),
+            s.encoded.load(), s.rejected.load(), s.converted.load());
         bool save = false;
         {
             std::unique_lock lock(s.mutex);

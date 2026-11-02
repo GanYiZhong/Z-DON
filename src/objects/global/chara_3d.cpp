@@ -1,6 +1,7 @@
 #include "chara_3d.h"
 
 #include <algorithm>
+#include <cgltf.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +16,7 @@
 #include "../../libs/file/scores.h"
 #include "../../libs/gfx.h"
 #include "../../libs/gfx/camera_utils.h"
+#include "../../libs/jobs.h"
 #include "../../libs/math/animation.h"
 #include "../../libs/raylib_ns.h"
 #include "../../platform/platform.h"
@@ -94,6 +96,8 @@ static Mat4 rotation_xyz(float ax, float ay, float az) {
 // its bone names, LoadModelAnimations for the poses): about 185 ms per part on every screen with
 // a Don. It is parsed once per file (again if the file changes, e.g. after a skin update) and each
 // part gets its own copy with the poses reordered to its skeleton.
+// Z-DON: the bone names come from the glTF itself (no LoadModel: no GL), so a Background job parses
+// the skin's file once it is loaded (chara3d_prewarm) instead of the first screen with a Don (160 ms).
 struct AnimSource {
     fs::file_time_type mtime;
     std::uintmax_t size = 0;
@@ -102,15 +106,35 @@ struct AnimSource {
     int count = 0;
 };
 
+// the bones LoadModel gives the glb: its first skin's joints, names cut to BoneInfo's 32 bytes
+static std::vector<std::string> glb_bone_names(const fs::path& path) {
+    std::vector<std::string> names;
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, path.string().c_str(), &data) != cgltf_result_success) {
+        return names;
+    }
+    if (data->skins_count > 0) {
+        const cgltf_skin& skin = data->skins[0];
+        for (cgltf_size i = 0; i < skin.joints_count; i++) {
+            const char* name = skin.joints[i]->name;
+            names.emplace_back(name ? std::string(name).substr(0, 31) : std::string());
+        }
+    }
+    cgltf_free(data);
+    return names;
+}
+
 static const AnimSource& anim_source(const fs::path& path) {
-    static std::mutex mutex;
-    static std::map<fs::path, AnimSource> cache;
-    std::scoped_lock lock(mutex);
+    // never destroyed: a prewarm job may still be parsing at exit
+    static auto* mutex = new std::mutex();
+    static auto* cache = new std::map<fs::path, AnimSource>();
+    std::scoped_lock lock(*mutex);
 
     std::error_code ec;
     const auto mtime = fs::last_write_time(path, ec);
     const auto size = fs::file_size(path, ec);
-    AnimSource& src = cache[path];
+    AnimSource& src = (*cache)[path];
     if (src.anims && src.mtime == mtime && src.size == size) {
         return src;
     }
@@ -121,15 +145,18 @@ static const AnimSource& anim_source(const fs::path& path) {
     src = AnimSource{};
     src.mtime = mtime;
     src.size = size;
-    Model glb_model = load_model(path.string().c_str());
-    if (glb_model.skeleton.bones) {
-        for (int i = 0; i < glb_model.skeleton.boneCount; i++) {
-            src.bone_names.emplace_back(glb_model.skeleton.bones[i].name);
-        }
-    }
-    unload_model(glb_model);
+    src.bone_names = glb_bone_names(path);
     src.anims = load_model_animations(path.string().c_str(), &src.count);
     return src;
+}
+
+void chara3d_prewarm() {
+    const fs::path path = resolve_skin_path("Models/animations.glb");
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) {
+        return;
+    }
+    jobs::submit(jobs::Priority::Background, [path] { anim_source(path); });
 }
 
 // A copy of `src`'s animations for `model`: the poses reordered to the model's bones, bones the glb

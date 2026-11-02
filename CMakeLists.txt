@@ -314,6 +314,13 @@ elseif(TARGET ZLIB::ZLIB)
   target_compile_definitions(${PROJECT_NAME} PRIVATE ZDON_HAVE_ZLIB)
 endif()
 
+# Z-DON: the BC7 texture cache (src/libs/texture_bc7.cpp) stores its blocks with zstd when a dependency
+# built it (cpptrace's libdwarf does, as the static target "libzstd_static"), else deflated
+if(TARGET libzstd_static AND NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
+  target_link_libraries(${PROJECT_NAME} PRIVATE libzstd_static)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ZDON_HAVE_ZSTD)
+endif()
+
 if(YATAIDON_PROFILER)
   target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
 endif()

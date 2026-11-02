@@ -113,6 +113,7 @@ void load_skin() {
         font_manager.load_text_config(root_skin_path);
         audio.init_audio_device(root_skin_path / "Sounds", global_data.config->audio, global_data.config->volume);
         debug_menu.load_fonts();
+        chara3d_prewarm(); // Z-DON
     } catch (...) {
         spdlog::error("load_skin() failed; rolling back to unloaded state");
         unload_skin();
