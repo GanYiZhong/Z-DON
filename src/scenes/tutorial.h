@@ -23,6 +23,9 @@ public:
 protected:
     void create_players() override;
     std::string background_scene_preset() const override { return "TUTORIAL"; }
+    // Z-DON: no pause menu (its update never runs here, so an opened menu froze the tutorial);
+    // Escape leaves to song select
+    bool pause_menu_allowed() const override { return false; }
 
 private:
     static constexpr int SKIP_HITS = 5;
