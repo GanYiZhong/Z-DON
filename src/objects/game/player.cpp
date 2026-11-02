@@ -2252,7 +2252,7 @@ void Player::draw_overlays(float y) {
         }
     }
 
-    if (drumroll_counter.has_value()) {
+    if (drumroll_counter.has_value() && show_drumroll_count) {
         drumroll_counter->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
     }
     if (balloon_counter.has_value()) {

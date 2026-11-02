@@ -162,6 +162,7 @@ protected:
     std::vector<std::unique_ptr<DrumHitEffect>> draw_drum_hit_list;
     TextureObject* lane_mark = nullptr; // drawn instead of the difficulty mark (tutorial wakaba)
     bool show_lane_name = true;         // auto icon / nameplate
+    bool show_drumroll_count = true;    // the "N hits" counter during a drumroll
 
 private:
     bool is_2p;
