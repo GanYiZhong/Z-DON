@@ -45,18 +45,32 @@ void Transition::set_dan(int color, const std::string& rank_name) {
     global_tex.load_folder("dan_loading", "loading_dan");
     t_loading_dan_night = global_tex.get_texture("loading_dan/night");
     t_loading_dan_plaque = global_tex.get_texture("loading_dan/plaque");
+    load_rainbow_bg();
     if (!rank_name.empty()) {
         dan_rank_text = std::make_unique<OutlinedText>(
             rank_name, global_tex.get_skin_config(SC::DAN_SELECT_TITLE)->font_size, Color::WHITE, Color::BLACK, true);
     }
 }
 
+void Transition::load_rainbow_bg() {
+    if (global_tex.has_texture("rainbow_transition/rainbow_bg")) {
+        t_rainbow_bg_bottom = global_tex.get_texture("rainbow_transition/rainbow_bg_bottom");
+        t_rainbow_bg_top = global_tex.get_texture("rainbow_transition/rainbow_bg_top");
+        t_rainbow_bg = global_tex.get_texture("rainbow_transition/rainbow_bg");
+    }
+}
+
+void Transition::set_rainbow_only() {
+    rainbow_only = true;
+    load_rainbow_bg();
+}
+
 void Transition::draw_dan(float total_offset) {
     const double f = 36.0 + (get_current_ms() - dan_start_ms) * 0.06;
-    const float y = -106.0f - 0.625f * (float)std::clamp(f - 36.0, 0.0, 179.0);
-    const float a = (float)std::clamp((f - 44.0) / 20.0, 0.0, 1.0);
-    const float black = (float)std::clamp(1.0 - (f - 36.0) / 29.0, 0.0, 1.0);
-    const float dy = -(float)cur_rainbow - total_offset;
+    const float y = -106.0f - 0.625f * static_cast<float>(std::clamp(f - 36.0, 0.0, 179.0));
+    const float a = std::clamp((f - 44.0) / 20.0, 0.0, 1.0);
+    const float black = std::clamp(1.0 - (f - 36.0) / 29.0, 0.0, 1.0);
+    const float dy = -static_cast<float>(cur_rainbow) - total_offset;
 
     global_tex.draw_texture(t_loading_dan_night, {.y = y + dy});
     if (a > 0.0f) {
@@ -74,14 +88,23 @@ void Transition::draw_dan(float total_offset) {
     }
 }
 
+// dan course without loading art: the rainbow backdrop alone, no song info or characters
+void Transition::draw_dan_rainbow(float total_offset) {
+    const float y = -static_cast<float>(cur_rainbow) - total_offset;
+    global_tex.draw_texture(t_rainbow_bg_bottom, {.y = y});
+    global_tex.draw_texture(t_rainbow_bg_top, {.y = y});
+    global_tex.draw_texture(t_rainbow_bg, {.y = y});
+}
+
 void Transition::start() {
     call(fn_start, "SongTransition:start");
     dan_start_ms = get_current_ms();
 }
 
 void Transition::update(double current_ms) {
-    // dan course without loading art (e.g. PyTaikoGreen): no transition at all
-    if (dan_color >= 0 && !global_tex.has_texture("loading_dan/night")) {
+    // dan course with neither loading art nor a rainbow backdrop: no transition at all
+    if ((dan_color >= 0 && !global_tex.has_texture("loading_dan/night") && !t_rainbow_bg) ||
+        (rainbow_only && !t_rainbow_bg)) {
         finished = true;
         return;
     }
@@ -107,13 +130,13 @@ void Transition::draw_song_info() {
         fade_2 = std::min(0.70, cur_fade_out);
         offset = global_tex.get_skin_config(SC::TRANSITION_OFFSET)->y - cur_rainbow;
     }
-    global_tex.draw_texture(t_rainbow_text_bg, {.y = (float)-cur_rainbow - offset, .fade = fade_2});
+    global_tex.draw_texture(t_rainbow_text_bg, {.y = static_cast<float>(-cur_rainbow) - offset, .fade = fade_2});
 
-    float x = (float)global_tex.screen_width / 2 - title->width / 2;
+    float x = static_cast<float>(global_tex.screen_width) / 2 - title->width / 2;
     float y = global_tex.get_skin_config(SC::TRANSITION_TITLE)->y - title->height / 2 - cur_rainbow - offset;
     title->draw({.x = x, .y = y, .fade = fade_1});
 
-    x = (float)global_tex.screen_width / 2 - subtitle->width / 2;
+    x = static_cast<float>(global_tex.screen_width) / 2 - subtitle->width / 2;
     y = global_tex.get_skin_config(SC::TRANSITION_SUBTITLE)->y - subtitle->height / 2 - cur_rainbow - offset;
     subtitle->draw({.x = x, .y = y, .fade = fade_1});
 }
@@ -123,22 +146,31 @@ void Transition::draw() {
     if (is_second) {
         total_offset = global_tex.get_skin_config(SC::TRANSITION_OFFSET)->y;
     }
-    // the dan loading art (loading_dan/night, plaque) is optional: without it a dan course has no transition
+    // the dan loading art (loading_dan/night, plaque) is optional: without it a dan course shows only the rainbow
+    if (rainbow_only) {
+        if (t_rainbow_bg) {
+            draw_dan_rainbow(total_offset);
+        }
+        return;
+    }
     if (dan_color >= 0) {
         if (global_tex.has_texture("loading_dan/night")) {
             draw_dan(total_offset);
+        } else if (t_rainbow_bg) {
+            draw_dan_rainbow(total_offset);
         }
         return;
     }
 
     call(fn_draw_bg, "SongTransition:draw_bg", total_offset, cur_rainbow);
     if (loading_graphic.has_value()) {
-        Rect src = {0, 0, (float)loading_graphic.value().width, (float)loading_graphic.value().height};
+        Rect src = {0, 0, static_cast<float>(loading_graphic.value().width),
+                    static_cast<float>(loading_graphic.value().height)};
         Rect dst = {0,
                     global_tex.screen_height +
                         (global_tex.get_skin_config(SC::TRANSITION_OFFSET)->y - global_tex.screen_height) -
-                        (float)cur_rainbow - total_offset,
-                    (float)global_tex.screen_width, (float)global_tex.screen_height};
+                        static_cast<float>(cur_rainbow) - total_offset,
+                    static_cast<float>(global_tex.screen_width), static_cast<float>(global_tex.screen_height)};
         draw_texture_pro(loading_graphic.value(), src, dst, {0, 0}, 0, Color::WHITE);
     }
 

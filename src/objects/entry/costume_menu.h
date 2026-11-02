@@ -6,8 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../libs/file/script.h"
 #include "../../libs/global_data.h" // IWYU pragma: keep
-#include "../../libs/script.h"
 
 enum class CostumePickStage {
     NONE,

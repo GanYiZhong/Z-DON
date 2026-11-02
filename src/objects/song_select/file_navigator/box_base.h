@@ -3,8 +3,8 @@
 #include <cmath>
 #include <numbers>
 
-#include "../../../libs/color_utils.h"
-#include "../../../libs/text.h"
+#include "../../../libs/gfx/color_utils.h"
+#include "../../../libs/gfx/text.h"
 #include "../../enums.h"
 
 struct BoxDef {
@@ -28,9 +28,6 @@ inline size_t utf8_char_count(const std::string& s) {
     }
     return count;
 }
-
-// Points the colortransform shader at the genre colour (the stock green folder is the source).
-void set_recolor_uniforms(ray::Shader& shader, const ray::Color& target);
 
 class BaseBox {
 public:
@@ -75,7 +72,7 @@ public:
     bool is_new = false;
     bool preserve_order = false;
 
-    BaseBox(const fs::path& path, const BoxDef& box_def);
+    BaseBox(fs::path path, const BoxDef& box_def);
     virtual ~BaseBox();
 
     virtual void load_text();
@@ -98,7 +95,7 @@ public:
 
     void move_box(float target_position, float duration, float delay = 0.0f,
                   std::optional<EaseType> ease = EaseType::Cubic);
-    virtual void update(double current_ms);
+    virtual void update(double current_time);
 
     const char* draw_state() const {
         if (yellow_box_active && is_diff_select) {
@@ -149,7 +146,8 @@ protected:
 
     std::unique_ptr<MoveAnimation> move;
 
-    ray::Shader shader;
+    Shader shader;
+    std::shared_ptr<Shader> shader_owner;
     bool shader_loaded = false;
 
     std::unique_ptr<OutlinedText> name;

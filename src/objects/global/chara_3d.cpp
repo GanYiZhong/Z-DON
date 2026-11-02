@@ -5,46 +5,27 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <ranges>
 #include <rapidjson/document.h>
 
-#include "../../libs/animation.h"
-#include "../../libs/camera_utils.h"
-#include "../../libs/filesystem.h"
-#include "../../libs/scores.h"
-namespace ray {
-#include <raymath.h>
-}
+#include "../../libs/file/filesystem.h"
+#include "../../libs/file/scores.h"
+#include "../../libs/gfx.h"
+#include "../../libs/gfx/camera_utils.h"
+#include "../../libs/math/animation.h"
+#include "../../libs/raylib_ns.h"
+#include "../../platform/platform.h"
 
-// raymath lives outside raylib.h, so these stay local to the only file that includes it.
-inline Mat4 matrix_multiply(Mat4 left, Mat4 right) {
-    return ray::MatrixMultiply(left, right);
-}
-
-inline Mat4 matrix_translate(float x, float y, float z) {
-    return ray::MatrixTranslate(x, y, z);
-}
-
-inline Mat4 matrix_scale(float x, float y, float z) {
-    return ray::MatrixScale(x, y, z);
-}
-
-inline Vec3 vector3_transform(Vec3 v, Mat4 mat) {
-    return ray::Vector3Transform(v, mat);
-}
+// Z-DON: the part pool resets materials to raylib's default shader (the raylib backend only)
 extern "C" {
-void rlSetCullFace(int mode);
-void rlEnableBackfaceCulling(void);
-void rlDisableBackfaceCulling(void);
-unsigned int rlGetShaderIdDefault(void);
-int* rlGetShaderLocsDefault(void);
+unsigned int ray::rlGetShaderIdDefault(void);
+int* ray::rlGetShaderLocsDefault(void);
 }
-static constexpr int RL_CULL_FACE_FRONT = 0;
-static constexpr int RL_CULL_FACE_BACK = 1;
 
-static void draw_model_face_last(ray::Model& model, int face_material_index, const std::vector<int>& blend_materials,
+static void draw_model_face_last(Model& model, int face_material_index, const std::vector<int>& blend_materials,
                                  const std::vector<int>& twosided_materials, Vec3 position, float scale) {
     Mat4 matTransform =
         matrix_multiply(matrix_scale(scale, scale, scale), matrix_translate(position.x, position.y, position.z));
@@ -55,11 +36,11 @@ static void draw_model_face_last(ray::Model& model, int face_material_index, con
         const int mat = model.meshMaterial[i];
         const bool two_sided = std::ranges::contains(twosided_materials, mat);
         if (two_sided) {
-            rlDisableBackfaceCulling();
+            set_backface_culling(false);
         }
         draw_mesh(model.meshes[i], model.materials[mat], transform);
         if (two_sided) {
-            rlEnableBackfaceCulling();
+            set_backface_culling(true);
         }
     };
 
@@ -117,7 +98,7 @@ struct AnimSource {
     fs::file_time_type mtime;
     std::uintmax_t size = 0;
     std::vector<std::string> bone_names; // the glb's skeleton; empty if it has none
-    ray::ModelAnimation* anims = nullptr;
+    ModelAnimation* anims = nullptr;
     int count = 0;
 };
 
@@ -140,7 +121,7 @@ static const AnimSource& anim_source(const fs::path& path) {
     src = AnimSource{};
     src.mtime = mtime;
     src.size = size;
-    ray::Model glb_model = load_model(path.string().c_str());
+    Model glb_model = load_model(path.string().c_str());
     if (glb_model.skeleton.bones) {
         for (int i = 0; i < glb_model.skeleton.boneCount; i++) {
             src.bone_names.emplace_back(glb_model.skeleton.bones[i].name);
@@ -154,31 +135,31 @@ static const AnimSource& anim_source(const fs::path& path) {
 // A copy of `src`'s animations for `model`: the poses reordered to the model's bones, bones the glb
 // does not animate held at the model's bind pose (copied as they are when either side has no
 // skeleton). Freed with UnloadModelAnimations.
-static ray::ModelAnimation* reindexed_animations(const ray::Model& model, const AnimSource& src) {
+static ModelAnimation* reindexed_animations(const Model& model, const AnimSource& src) {
     if (!src.anims || src.count <= 0) {
         return nullptr;
     }
     const bool reindex = model.skeleton.bones && !src.bone_names.empty();
     std::unordered_map<std::string, int> glb_bone_idx;
-    for (int i = 0; i < (int)src.bone_names.size(); i++) {
+    for (int i = 0; i < std::ssize(src.bone_names); i++) {
         glb_bone_idx[src.bone_names[i]] = i;
     }
 
-    auto* out = (ray::ModelAnimation*)std::calloc(src.count, sizeof(ray::ModelAnimation));
+    auto* out = static_cast<ModelAnimation*>(std::calloc(src.count, sizeof(ModelAnimation)));
     if (!out) {
         return nullptr;
     }
     for (int a = 0; a < src.count; a++) {
-        const ray::ModelAnimation& in = src.anims[a];
-        ray::ModelAnimation& anim = out[a];
+        const ModelAnimation& in = src.anims[a];
+        ModelAnimation& anim = out[a];
         std::memcpy(anim.name, in.name, sizeof(anim.name));
         anim.boneCount = in.boneCount;
         if (in.keyframeCount <= 0 || !in.keyframePoses) {
             continue;
         }
 
-        const int n = reindex ? model.skeleton.boneCount : (int)in.boneCount;
-        anim.keyframePoses = (ray::ModelAnimPose*)std::calloc(in.keyframeCount, sizeof(ray::ModelAnimPose));
+        const int n = reindex ? model.skeleton.boneCount : static_cast<int>(in.boneCount);
+        anim.keyframePoses = static_cast<Transform**>(std::calloc(in.keyframeCount, sizeof(Transform*)));
         if (!anim.keyframePoses) {
             continue;
         }
@@ -186,17 +167,17 @@ static ray::ModelAnimation* reindexed_animations(const ray::Model& model, const 
         anim.boneCount = n;
         for (int f = 0; f < in.keyframeCount; f++) {
             // calloc'd: a failed allocation leaves the rest null, which UnloadModelAnimations frees safely
-            anim.keyframePoses[f] = (ray::Transform*)std::malloc(n * sizeof(ray::Transform));
+            anim.keyframePoses[f] = static_cast<Transform*>(std::malloc(n * sizeof(Transform)));
             if (!anim.keyframePoses[f]) {
                 break;
             }
             if (!reindex) {
-                std::memcpy(anim.keyframePoses[f], in.keyframePoses[f], n * sizeof(ray::Transform));
+                std::memcpy(anim.keyframePoses[f], in.keyframePoses[f], n * sizeof(Transform));
                 continue;
             }
             for (int b = 0; b < n; b++) {
                 auto it = glb_bone_idx.find(model.skeleton.bones[b].name);
-                if (it != glb_bone_idx.end() && it->second < (int)in.boneCount) {
+                if (it != glb_bone_idx.end() && it->second < static_cast<int>(in.boneCount)) {
                     anim.keyframePoses[f][b] = in.keyframePoses[f][it->second];
                 } else {
                     anim.keyframePoses[f][b] = model.skeleton.bindPose[b];
@@ -210,7 +191,7 @@ static ray::ModelAnimation* reindexed_animations(const ray::Model& model, const 
 static std::string name_lower(const char* s) {
     std::string r(s);
     for (char& c : r) {
-        c = (char)tolower((unsigned char)c);
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     }
     return r;
 }
@@ -306,7 +287,7 @@ static std::unordered_map<std::string, int> parse_glb_material_indices(const std
     return result;
 }
 
-static void normalize_face_mesh_size(ray::Mesh& mesh, float target_size) {
+static void normalize_face_mesh_size(Mesh& mesh, float target_size) {
     if (mesh.vertexCount == 0 || !mesh.vertices) {
         return;
     }
@@ -342,11 +323,11 @@ static void normalize_face_mesh_size(ray::Mesh& mesh, float target_size) {
 namespace {
     struct PooledPart {
         std::string key;
-        ray::Model model{};
+        Model model{};
         std::unordered_map<std::string, int> material_indices;
         std::vector<int> recolor_indices, blend_indices, twosided_indices;
         int face_material_index = -1;
-        ray::ModelAnimation* anims = nullptr;
+        ModelAnimation* anims = nullptr;
         int anim_count = 0;
     };
     constexpr size_t kMaxPooledParts = 8; // a few Dons' worth (a Don is one costume or a head and a body)
@@ -372,36 +353,41 @@ namespace {
         return key;
     }
 
-    ray::Shader default_shader() {
-        return ray::Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
+    Shader default_shader() {
+        Shader shader;
+        shader.id = ray::rlGetShaderIdDefault();
+        shader.locs = ray::rlGetShaderLocsDefault();
+        return shader;
     }
 
     // The mesh buffers as LoadModel left them: no skinned copies, the bind-pose vertices on the GPU.
-    void reset_pose(ray::Model& model) {
+    void reset_pose(Model& model) {
         for (int m = 0; m < model.meshCount; m++) {
-            ray::Mesh& mesh = model.meshes[m];
+            Mesh& mesh = model.meshes[m];
             if (mesh.animVertices) {
-                ray::MemFree(mesh.animVertices);
+                std::free(mesh.animVertices);
                 mesh.animVertices = nullptr;
                 update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * (int)sizeof(float), 0);
             }
             if (mesh.animNormals) {
-                ray::MemFree(mesh.animNormals);
+                std::free(mesh.animNormals);
                 mesh.animNormals = nullptr;
                 update_mesh_buffer(mesh, 2, mesh.normals, mesh.vertexCount * 3 * (int)sizeof(float), 0);
             }
         }
         if (model.currentPose) {
-            std::memset(model.currentPose, 0, model.skeleton.boneCount * sizeof(ray::Transform));
+            std::memset(model.currentPose, 0, model.skeleton.boneCount * sizeof(Transform));
         }
         if (model.boneMatrices) {
             for (int b = 0; b < model.skeleton.boneCount; b++) {
-                model.boneMatrices[b] = ray::MatrixIdentity();
+                model.boneMatrices[b] = Mat4{};
+                model.boneMatrices[b].m0 = model.boneMatrices[b].m5 = model.boneMatrices[b].m10 =
+                    model.boneMatrices[b].m15 = 1.0f;
             }
         }
     }
 
-    void unload_part(ray::Model& model, ray::ModelAnimation* anims, int anim_count) {
+    void unload_part(Model& model, ModelAnimation* anims, int anim_count) {
         unload_model_animations(anims, anim_count);
         unload_model(model);
     }
@@ -416,8 +402,8 @@ void chara3d_clear_part_pool() {
 }
 
 // The shaders this Don's materials use (a pooled part comes back with the default shader).
-static void assign_part_shaders(ray::Model& model, int face_material_index, const ray::Shader& face_shader,
-                                const ray::Shader& cutout_shader) {
+static void assign_part_shaders(Model& model, int face_material_index, const Shader& face_shader,
+                                const Shader& cutout_shader) {
 #ifdef PLATFORM_ANDROID
     if (face_material_index != -1 && face_shader.id != 0) {
         model.materials[face_material_index].shader = face_shader;
@@ -461,13 +447,13 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
             part_face_original.push_back(
                 p.face_material_index != -1
                     ? p.model.materials[p.face_material_index].maps[material_map::DIFFUSE].texture
-                    : ray::Texture2D{});
+                    : Texture{});
             part_replaced_textures.emplace_back();
             return;
         }
     }
 
-    ray::Model model = load_model(model_path.string().c_str());
+    Model model = load_model(model_path.string().c_str());
     // The vertex colours stay as shipped: the main shader does not tint by them, and the black
     // line pass reads its per-vertex thickness from the green channel.
 
@@ -507,7 +493,7 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
             const float size = std::max(maxx - minx, maxy - miny);
             if (normalize_face_scale || size > COS_FACE_PLANE_SIZE * 1.02f) {
                 normalize_face_mesh_size(mesh, COS_FACE_PLANE_SIZE);
-                update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * (int)sizeof(float), 0);
+                update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * static_cast<int>(sizeof(float)), 0);
             }
         }
     }
@@ -519,7 +505,7 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     assign_part_shaders(model, face_material_index, face_shader, cutout_shader);
 
     const AnimSource& anim_src = anim_source(anim_path);
-    ray::ModelAnimation* anims = reindexed_animations(model, anim_src);
+    ModelAnimation* anims = reindexed_animations(model, anim_src);
     int anim_count = anims ? anim_src.count : 0;
 
     parts.push_back(model);
@@ -534,18 +520,28 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     part_pool_generation.push_back(g_pool_generation);
     part_face_original.push_back(face_material_index != -1
                                      ? model.materials[face_material_index].maps[material_map::DIFFUSE].texture
-                                     : ray::Texture2D{});
+                                     : Texture{});
     part_replaced_textures.emplace_back();
 }
 
-static void init_shaders(ray::Shader& outline_fxaa_shader, int& outline_fxaa_size_loc, int& outline_fxaa_thickness_loc,
-                         ray::Shader& null_shader, ray::Shader& face_shader, ray::Shader& cutout_shader,
-                         ray::Shader& outline_shader, bool& use_render_textures) {
+static void init_shaders(Shader& outline_fxaa_shader, int& outline_fxaa_size_loc, int& outline_fxaa_thickness_loc,
+                         Shader& null_shader, Shader& face_shader, Shader& cutout_shader, Shader& outline_shader,
+                         bool& use_render_textures) {
     outline_fxaa_shader = load_shader("shader/pass.vs", "shader/outline_fxaa.fs");
     outline_fxaa_size_loc = get_shader_location(outline_fxaa_shader, "texSize");
     outline_fxaa_thickness_loc = get_shader_location(outline_fxaa_shader, "outlineThickness");
     float outline_thickness = 3.0f;
     set_shader_value(outline_fxaa_shader, outline_fxaa_thickness_loc, &outline_thickness, shader_uniform::FLOAT);
+
+    // bgfx uniforms are shared by name, while their values are cached per
+    // shader program. Untinted characters must submit neutral values too,
+    // otherwise a previous character/scene's Go-Go or miss tint remains active.
+    const float tint_color[3] = {0.0f, 0.0f, 0.0f};
+    const float tint_amount = 0.0f;
+    set_shader_value(outline_fxaa_shader, get_shader_location(outline_fxaa_shader, "tintColor"), tint_color,
+                     shader_uniform::VEC3);
+    set_shader_value(outline_fxaa_shader, get_shader_location(outline_fxaa_shader, "tintAmount"), &tint_amount,
+                     shader_uniform::FLOAT);
 
     null_shader = load_shader(nullptr, "shader/null.fs");
     face_shader = load_shader(nullptr, "shader/face.fs");
@@ -614,7 +610,7 @@ Chara3D::~Chara3D() {
         }
         // back into the pool as loaded: the glb's own textures, default shaders, bind pose
         for (auto it = part_replaced_textures[p].rbegin(); it != part_replaced_textures[p].rend(); ++it) {
-            ray::Texture2D& current = parts[p].materials[it->first].maps[material_map::DIFFUSE].texture;
+            Texture& current = parts[p].materials[it->first].maps[material_map::DIFFUSE].texture;
             unload_texture(current);
             current = it->second;
         }
@@ -652,6 +648,40 @@ Chara3D::~Chara3D() {
     for (auto& tex : face_textures) {
         unload_texture(tex);
     }
+    if (puchi_tex.id != 0) {
+        unload_texture(puchi_tex);
+        unload_texture(puchi_silhouette);
+    }
+}
+
+void Chara3D::set_puchi(int index) {
+    if (index == puchi_index) {
+        return;
+    }
+    puchi_index = index;
+    if (puchi_tex.id != 0) {
+        unload_texture(puchi_tex);
+        unload_texture(puchi_silhouette);
+        puchi_tex = {};
+        puchi_silhouette = {};
+    }
+    if (index <= 0) {
+        return;
+    }
+    fs::path path = resolve_skin_path(fs::path("Models/acce") / (std::to_string(index) + ".png"));
+    if (fs::exists(path)) {
+        Image img = load_image(path.string().c_str());
+        image_format(&img, pixel_format::RGBA8);
+        puchi_tex = load_texture_from_image(img);
+        auto* px = static_cast<unsigned char*>(img.data);
+        for (int i = 0; i < img.width * img.height; i++) {
+            px[4 * i] = px[4 * i + 1] = px[4 * i + 2] = 255;
+        }
+        puchi_silhouette = load_texture_from_image(img);
+        unload_image(img);
+        set_texture_filter(puchi_tex, texture_filter::BILINEAR);
+        set_texture_filter(puchi_silhouette, texture_filter::BILINEAR);
+    }
 }
 
 void Chara3D::set_texture(fs::path& texture_path, int part_index, int material_index) {
@@ -670,6 +700,26 @@ void Chara3D::set_texture(fs::path& texture_path, int part_index, int material_i
     render_dirty = true;
 }
 
+void Chara3D::set_body_texture(fs::path& texture_path) {
+    for (size_t p = 0; p < parts.size(); p++) {
+        auto it = part_material_indices[p].find("RGB_don_color_S_CUS_0x10000001_");
+        if (it != part_material_indices[p].end()) {
+            set_texture(texture_path, static_cast<int>(p), it->second);
+            return;
+        }
+    }
+}
+
+void Chara3D::set_face_rim_texture(fs::path& texture_path) {
+    for (size_t p = 0; p < parts.size(); p++) {
+        auto it = part_material_indices[p].find("don_FACEHIP_color_S_CUS_0x10000001_");
+        if (it != part_material_indices[p].end()) {
+            set_texture(texture_path, static_cast<int>(p), it->second);
+            return;
+        }
+    }
+}
+
 void Chara3D::load_face_textures(fs::path& face_dir) {
     if (!fs::exists(face_dir)) {
         return;
@@ -684,15 +734,16 @@ void Chara3D::load_face_textures(fs::path& face_dir) {
         return;
     }
     std::ranges::sort(paths);
-    ray::Image sheet = load_image(paths[0].string().c_str());
+    Image sheet = load_image(paths[0].string().c_str());
     // Frames are square and stacked vertically; derive the size from the
     // sheet width instead of assuming 128px, so higher-resolution skins
     // slice on the right boundaries (the UVs are normalized anyway).
     int frame_size = sheet.width;
     int frame_count = frame_size > 0 ? sheet.height / frame_size : 0;
     for (int f = 0; f < frame_count; f++) {
-        Rect rect = {0, (float)(f * frame_size), (float)frame_size, (float)frame_size};
-        ray::Image frame_img = image_from_image(sheet, rect);
+        Rect rect = {0, static_cast<float>(f * frame_size), static_cast<float>(frame_size),
+                     static_cast<float>(frame_size)};
+        Image frame_img = image_from_image(sheet, rect);
         face_textures.push_back(load_texture_from_image(frame_img));
         unload_image(frame_img);
     }
@@ -714,7 +765,7 @@ void Chara3D::load_face_anims(fs::path& anim_path) {
 }
 
 void Chara3D::apply_face(int face_index) {
-    if (face_index < 0 || face_index >= (int)face_textures.size()) {
+    if (face_index < 0 || face_index >= std::ssize(face_textures)) {
         return;
     }
     for (size_t p = 0; p < parts.size(); p++) {
@@ -727,11 +778,11 @@ void Chara3D::apply_face(int face_index) {
     render_dirty = true;
 }
 
-static Texture recolor_texture(ray::Image& source, Color body, Color face, Color rim) {
-    ray::Image img = image_copy(source);
+static Texture recolor_texture(Image& source, Color body, Color face, Color rim) {
+    Image img = image_copy(source);
     image_format(&img, pixel_format::RGBA8);
 
-    unsigned char* pixels = (unsigned char*)img.data;
+    auto* pixels = static_cast<unsigned char*>(img.data);
     int total = img.width * img.height;
 
     for (int i = 0; i < total; i++) {
@@ -766,10 +817,10 @@ static Texture recolor_texture(ray::Image& source, Color body, Color face, Color
 
 // `replaced` keeps the part's original texture for each material (the pool restores it); a texture
 // this Don made itself is unloaded when replaced again
-static void apply_don_colors(ray::Model& model, int mat_idx, Color body, Color face, Color rim,
-                             std::vector<std::pair<int, ray::Texture2D>>& replaced) {
+static void apply_don_colors(Model& model, int mat_idx, Color body, Color face, Color rim,
+                             std::vector<std::pair<int, Texture>>& replaced) {
     auto& map = model.materials[mat_idx].maps[material_map::DIFFUSE];
-    ray::Image img = load_image_from_texture(map.texture);
+    Image img = load_image_from_texture(map.texture);
     if (!img.data) {
         return;
     }
@@ -802,27 +853,27 @@ static constexpr int FACE_ANIM_IDS[] = {
 
 static constexpr int FUKKATU_FACE = 8;
 
-static constexpr int MIRROR_OFFSET = (int)AnimIndex::DON_BALLOON_FAILURE_MIRROR;
+static constexpr int MIRROR_OFFSET = static_cast<int>(AnimIndex::DON_BALLOON_FAILURE_MIRROR);
 static int base_anim(AnimIndex idx) {
     return static_cast<int>(idx) % MIRROR_OFFSET;
 }
 
 void Chara3D::set_anim(AnimIndex idx) {
     const int base = base_anim(idx);
-    if (base == (int)AnimIndex::DON_ENTRY_IN) {
+    if (base == static_cast<int>(AnimIndex::DON_ENTRY_IN)) {
         set_anim(AnimIndex::DON_ENTRY_LOOP);
-    } else if (base == (int)AnimIndex::DON_FUKKATU_START) {
+    } else if (base == static_cast<int>(AnimIndex::DON_FUKKATU_START)) {
         set_anim(AnimIndex::DON_FUKKATU_LOOP);
     }
     int i = base + (mirror ? MIRROR_OFFSET : 0);
-    if (mirror && (base == (int)AnimIndex::DON_MISS || base == (int)AnimIndex::DON_MISS6)) {
-        i = (int)AnimIndex::DON_MISS6_MIRROR + (int)AnimIndex::DON_MISS_MIRROR - i;
+    if (mirror && (base == static_cast<int>(AnimIndex::DON_MISS) || base == static_cast<int>(AnimIndex::DON_MISS6))) {
+        i = static_cast<int>(AnimIndex::DON_MISS6_MIRROR) + static_cast<int>(AnimIndex::DON_MISS_MIRROR) - i;
     }
     idx = static_cast<AnimIndex>(i);
     int anim_count = part_anim_count.empty() ? 0 : part_anim_count[0];
     if (i >= 0 && i < anim_count) {
-        if (base == (int)AnimIndex::DON_NORMAL || base == (int)AnimIndex::DON_SABI ||
-            base == (int)AnimIndex::DON_BALLOON_NOBEAT || base == (int)AnimIndex::DON_MISS6 ||
+        if (base == static_cast<int>(AnimIndex::DON_NORMAL) || base == static_cast<int>(AnimIndex::DON_SABI) ||
+            base == static_cast<int>(AnimIndex::DON_BALLOON_NOBEAT) || base == static_cast<int>(AnimIndex::DON_MISS6) ||
             get_anim_name(i).contains("loop")) {
             is_looping = true;
         } else {
@@ -840,17 +891,18 @@ void Chara3D::set_anim(AnimIndex idx) {
         }
     }
 
-    if (base == (int)AnimIndex::DON_FUKKATU_LOOP || base == (int)AnimIndex::DON_FUKKATU_START) {
+    if (base == static_cast<int>(AnimIndex::DON_FUKKATU_LOOP) ||
+        base == static_cast<int>(AnimIndex::DON_FUKKATU_START)) {
         // the revive sequence holds one face instead of running a face animation
         current_face_anim = nullptr;
         apply_face(FUKKATU_FACE);
-    } else if (i >= 0 && i < (int)(sizeof(FACE_ANIM_IDS) / sizeof(FACE_ANIM_IDS[0]))) {
+    } else if (i >= 0 && i < static_cast<int>(sizeof(FACE_ANIM_IDS) / sizeof(FACE_ANIM_IDS[0]))) {
         auto it = face_anims.find(FACE_ANIM_IDS[i]);
         if (it != face_anims.end()) {
             current_face_anim = it->second.get();
             current_face_anim->reset();
             current_face_anim->start();
-            apply_face((int)current_face_anim->attribute);
+            apply_face(static_cast<int>(current_face_anim->attribute));
         }
     }
 }
@@ -863,6 +915,8 @@ std::string Chara3D::get_anim_name(int idx) {
 }
 
 void Chara3D::set_tint(Color color, float amount) {
+    tint_color = color;
+    tint_amount = amount;
     if (outline_fxaa_shader.id == 0) {
         return;
     }
@@ -875,9 +929,9 @@ void Chara3D::set_tint(Color color, float amount) {
     set_shader_value(outline_fxaa_shader, outline_fxaa_tint_amount_loc, &amount, shader_uniform::FLOAT);
 }
 
-ray::Matrix Chara3D::rotation_matrix() const {
+Mat4 Chara3D::rotation_matrix() const {
     const float y_angle = mirror ? -rot_y : rot_y;
-    return rotation_xyz(rot_x * DEG2RAD, y_angle * DEG2RAD, rot_z * DEG2RAD);
+    return rotation_xyz(rot_x * deg2rad, y_angle * deg2rad, rot_z * deg2rad);
 }
 
 void Chara3D::apply_pose() {
@@ -930,6 +984,7 @@ int Chara3D::get_anim_count() const {
 }
 
 void Chara3D::update(double current_ms) {
+    puchi_ms = current_ms;
     if (frozen) {
         return;
     }
@@ -940,12 +995,12 @@ void Chara3D::update(double current_ms) {
         if (bpm > 0.0f && kf > 0) {
             double ms_per_beat = 60000.0 / bpm;
             const int base = base_anim(anim_index);
-            if (base == (int)AnimIndex::DON_NORMAL) {
+            if (base == static_cast<int>(AnimIndex::DON_NORMAL)) {
                 ms_per_beat *= 3;
-            } else if (base == (int)AnimIndex::DON_SABI) {
+            } else if (base == static_cast<int>(AnimIndex::DON_SABI)) {
                 ms_per_beat *= 6;
             }
-            if (base == (int)AnimIndex::DON_BALLOON_LOOP) {
+            if (base == static_cast<int>(AnimIndex::DON_BALLOON_LOOP)) {
                 ms_per_beat /= 2;
             }
             double ms_per_frame = ms_per_beat / kf;
@@ -975,7 +1030,7 @@ void Chara3D::update(double current_ms) {
 
     if (current_face_anim) {
         current_face_anim->update(current_ms);
-        int new_face = (int)current_face_anim->attribute;
+        int new_face = static_cast<int>(current_face_anim->attribute);
         if (new_face != current_face_index) {
             apply_face(new_face);
         }
@@ -983,7 +1038,7 @@ void Chara3D::update(double current_ms) {
 }
 
 void Chara3D::draw_outline(float x, float y, int rt_w, int rt_h, float full_h) {
-    std::vector<std::vector<ray::Shader>> saved(parts.size());
+    std::vector<std::vector<Shader>> saved(parts.size());
     for (size_t p = 0; p < parts.size(); p++) {
         saved[p].resize(parts[p].materialCount);
         for (int i = 0; i < parts[p].materialCount; i++) {
@@ -1006,7 +1061,7 @@ void Chara3D::draw_outline(float x, float y, int rt_w, int rt_h, float full_h) {
     {
         const float thickness_px = 2.5f * full_h / 720.0f;
         float param[2] = {thickness_px, 0.3f};
-        float size[2] = {(float)rt_w, (float)rt_h};
+        float size[2] = {static_cast<float>(rt_w), static_cast<float>(rt_h)};
         if (outline_param_loc < 0) {
             outline_param_loc = get_shader_location(outline_shader, "outlineParam");
         }
@@ -1017,11 +1072,11 @@ void Chara3D::draw_outline(float x, float y, int rt_w, int rt_h, float full_h) {
         set_shader_value(outline_shader, outline_size_loc, size, shader_uniform::VEC2);
         const float draw_size = scale * draw_scale * tex.screen_scale;
 
-        rlSetCullFace(RL_CULL_FACE_FRONT);
+        set_cull_face(cull_face::FRONT);
         for (auto& part : parts) {
             draw_model(part, {x, y, 400.0f}, draw_size, Color::WHITE);
         }
-        rlSetCullFace(RL_CULL_FACE_BACK);
+        set_cull_face(cull_face::BACK);
     }
 
     for (size_t p = 0; p < parts.size(); p++) {
@@ -1048,15 +1103,14 @@ void Chara3D::draw_3d(float x, float y) {
     }
 }
 
-// Render at 2x and downscale on blit: bilinear-filtered supersampling ahead of the
-// FXAA pass, since raylib render textures have no MSAA path that stays GLES/Android-safe.
-static constexpr float SUPERSAMPLE = 2.0f;
+// Supersampling before the FXAA pass; rw/rh come from GetRenderWidth/Height.
+static const float SUPERSAMPLE = platform_supersample();
 
 // Screen rectangle (render pixels) of the posed model: the CPU-skinned vertices (animVertices,
 // see UpdateModelAnimation) through the same transform draw_3d uses, then the orthographic
 // camera of camera2d_to_3d (camera rotation 0).
-bool Chara3D::screen_bounds(float x, float y, const ray::Camera3D& cam3d, float zoom, int rw, int rh, float& x0,
-                            float& y0, float& x1, float& y1) {
+bool Chara3D::screen_bounds(float x, float y, const Camera3D& cam3d, float zoom, int rw, int rh, float& x0, float& y0,
+                            float& x1, float& y1) {
     Mat4 rot = rotation_matrix();
     const float s = scale * draw_scale * tex.screen_scale;
     Mat4 transform = matrix_multiply(rot, matrix_multiply(matrix_scale(s, s, s), matrix_translate(x, y, 400.0f)));
@@ -1065,7 +1119,7 @@ bool Chara3D::screen_bounds(float x, float y, const ray::Camera3D& cam3d, float 
     bool any = false;
     for (const auto& part : parts) {
         for (int m = 0; m < part.meshCount; m++) {
-            const ray::Mesh& mesh = part.meshes[m];
+            const Mesh& mesh = part.meshes[m];
             const float* v = mesh.animVertices ? mesh.animVertices : mesh.vertices;
             if (!v) {
                 continue;
@@ -1089,10 +1143,43 @@ void Chara3D::draw(float x, float y, float scale_mul) {
     if (tex.options[SCO::DISABLE_CHARA_3D]) {
         return;
     }
+    draw_body(x, y);
+    draw_puchi(x, y);
+}
+
+void Chara3D::draw_puchi(float x, float y) {
+    if (puchi_tex.id == 0) {
+        return;
+    }
+
+    constexpr double FRAME_MS = 850.0;
+    constexpr float PUCHI_X = 90.0f;
+    constexpr float PUCHI_Y = -120.0f;
+    constexpr float PUCHI_SIZE = 150.0f;
+    constexpr float PUCHI_BOB = 6.0f;
+    const float s = tex.screen_scale;
+    const float fw = static_cast<float>(puchi_tex.width);
+    const float fh = static_cast<float>(puchi_tex.height) / 2.0f;
+    const int frame = static_cast<int>(puchi_ms / FRAME_MS) % 2;
+    const float bob =
+        std::sin(static_cast<float>(puchi_ms / (FRAME_MS * 2.0) * 2.0 * std::numbers::pi)) * PUCHI_BOB * s;
+    const float size = PUCHI_SIZE * s;
+    const float px = x + (mirror ? PUCHI_X : -PUCHI_X) * s - size / 2.0f;
+    const float py = y + PUCHI_Y * s - size / 2.0f + bob;
+    const Rect src{0, frame * fh, mirror ? -fw : fw, fh};
+    draw_texture_pro(puchi_tex, src, {px, py, size, size}, {0, 0}, 0.0f, Color::WHITE);
+    if (tint_amount > 0.0f) {
+        Color overlay = tint_color;
+        overlay.a = static_cast<unsigned char>(std::clamp(tint_amount, 0.0f, 1.0f) * 255.0f);
+        draw_texture_pro(puchi_silhouette, src, {px, py, size, size}, {0, 0}, 0.0f, overlay);
+    }
+}
+
+void Chara3D::draw_body(float x, float y) {
 
     int rw = get_render_width();
     int rh = get_render_height();
-    ray::Camera2D cam2d = compute_camera2d(tex.screen_width, tex.screen_height);
+    Camera2D cam2d = compute_camera2d(tex.screen_width, tex.screen_height);
 
     // A rotated camera (and no render textures) keep the full-screen path
     if (!use_render_textures || cam2d.rotation != 0.0f) {
@@ -1100,7 +1187,7 @@ void Chara3D::draw(float x, float y, float scale_mul) {
         return;
     }
 
-    ray::Camera3D cam3d = camera2d_to_3d(cam2d);
+    Camera3D cam3d = camera2d_to_3d(cam2d);
     const float zoom = std::max(cam2d.zoom, 0.0001f);
     if (full_target || x != last_draw_x || y != last_draw_y || zoom != last_zoom || cam3d.position.x != last_cam_x ||
         cam3d.position.y != last_cam_y || rw != last_rw || rh != last_rh) {
@@ -1122,13 +1209,13 @@ void Chara3D::draw(float x, float y, float scale_mul) {
         }
         // room for the outline hull (2.5 px at 720 lines, scaled by the vertex colour) and the
         // FXAA pass's 3-texel dilation, plus a safety pixel
-        const float margin = 2.0f * (2.5f * (float)rh / 720.0f) + 4.0f;
-        const int need_w = (int)std::ceil((bx1 - bx0) + 2.0f * margin);
-        const int need_h = (int)std::ceil((by1 - by0) + 2.0f * margin);
+        const float margin = 2.0f * (2.5f * rh / 720.0f) + 4.0f;
+        const int need_w = static_cast<int>(std::ceil((bx1 - bx0) + 2.0f * margin));
+        const int need_h = static_cast<int>(std::ceil((by1 - by0) + 2.0f * margin));
         // grow-only target, in 128-texel steps, so a changing pose rarely reallocates it
         auto round_up = [](int v) { return std::max(128, (v + 127) / 128 * 128); };
-        const int aw = round_up((int)(need_w * SUPERSAMPLE));
-        const int ah = round_up((int)(need_h * SUPERSAMPLE));
+        const int aw = round_up(static_cast<int>(need_w * SUPERSAMPLE));
+        const int ah = round_up(static_cast<int>(need_h * SUPERSAMPLE));
         if (scene_target.id == 0 || full_target || aw > scene_target_w || ah > scene_target_h) {
             const int nw = full_target ? aw : std::max(aw, scene_target_w);
             const int nh = full_target ? ah : std::max(ah, scene_target_h);
@@ -1146,18 +1233,18 @@ void Chara3D::draw(float x, float y, float scale_mul) {
             set_texture_filter(scene_target.texture, texture_filter::BILINEAR);
             scene_target_w = nw;
             scene_target_h = nh;
-            float ts[2] = {(float)nw, (float)nh};
+            float ts[2] = {static_cast<float>(nw), static_cast<float>(nh)};
             set_shader_value(outline_fxaa_shader, outline_fxaa_size_loc, ts, shader_uniform::VEC2);
         }
         // the target's area, centred on the model, on whole render pixels (the supersampled
         // grid then lines up with the full-screen one)
-        const int region_w = (int)(scene_target_w / SUPERSAMPLE);
-        const int region_h = (int)(scene_target_h / SUPERSAMPLE);
-        region_x = (int)std::floor((bx0 + bx1) * 0.5f - region_w * 0.5f);
-        region_y = (int)std::floor((by0 + by1) * 0.5f - region_h * 0.5f);
+        const int region_w = static_cast<int>(scene_target_w / SUPERSAMPLE);
+        const int region_h = static_cast<int>(scene_target_h / SUPERSAMPLE);
+        region_x = static_cast<int>(std::floor((bx0 + bx1) * 0.5f - region_w * 0.5f));
+        region_y = static_cast<int>(std::floor((by0 + by1) * 0.5f - region_h * 0.5f));
 
         // the full-screen camera narrowed to that rectangle: same centre offset and pixel scale
-        ray::Camera3D rc = cam3d;
+        Camera3D rc = cam3d;
         const float wcx = cam3d.position.x + (region_x + region_w * 0.5f - rw * 0.5f) / zoom;
         const float wcy = cam3d.position.y + (region_y + region_h * 0.5f - rh * 0.5f) / zoom;
         rc.position.x = rc.target.x = wcx;
@@ -1186,8 +1273,10 @@ void Chara3D::draw(float x, float y, float scale_mul) {
         const float region_w = scene_target_w / SUPERSAMPLE;
         const float region_h = scene_target_h / SUPERSAMPLE;
         begin_shader_mode(outline_fxaa_shader);
-        draw_texture_pro(scene_target.texture, {0, 0, (float)scene_target_w, -(float)scene_target_h},
-                         {(float)region_x, (float)region_y, region_w, region_h}, {0, 0}, 0.0f, Color::WHITE);
+        draw_texture_pro(scene_target.texture,
+                         {0, 0, static_cast<float>(scene_target_w), -static_cast<float>(scene_target_h)},
+                         {static_cast<float>(region_x), static_cast<float>(region_y), region_w, region_h}, {0, 0}, 0.0f,
+                         Color::WHITE);
         end_shader_mode();
     }
 
@@ -1196,9 +1285,9 @@ void Chara3D::draw(float x, float y, float scale_mul) {
 }
 
 // The whole screen at 2x: kept for a rotated camera and as the fallback.
-void Chara3D::draw_full_target(float x, float y, int rw, int rh, const ray::Camera2D& cam2d) {
-    int ssw = (int)((float)rw * SUPERSAMPLE);
-    int ssh = (int)((float)rh * SUPERSAMPLE);
+void Chara3D::draw_full_target(float x, float y, int rw, int rh, const Camera2D& cam2d) {
+    int ssw = static_cast<int>(rw * SUPERSAMPLE);
+    int ssh = static_cast<int>(rh * SUPERSAMPLE);
 
     if (scene_target.id == 0 || !full_target || scene_target_w != ssw || scene_target_h != ssh) {
         if (scene_target.id != 0) {
@@ -1214,13 +1303,13 @@ void Chara3D::draw_full_target(float x, float y, int rw, int rh, const ray::Came
         scene_target_w = ssw;
         scene_target_h = ssh;
         full_target = true;
-        float ts[2] = {(float)ssw, (float)ssh};
+        float ts[2] = {static_cast<float>(ssw), static_cast<float>(ssh)};
         set_shader_value(outline_fxaa_shader, outline_fxaa_size_loc, ts, shader_uniform::VEC2);
         render_dirty = true;
     }
 
     if (!use_render_textures) {
-        ray::Camera3D cam3d = camera2d_to_3d(cam2d);
+        Camera3D cam3d = camera2d_to_3d(cam2d);
         end_mode_2d();
         end_blend_mode();
         begin_mode_3d(cam3d);
@@ -1242,14 +1331,14 @@ void Chara3D::draw_full_target(float x, float y, int rw, int rh, const ray::Came
 
     if (render_dirty) {
         render_dirty = false;
-        ray::Camera3D cam3d = camera2d_to_3d(cam2d);
+        Camera3D cam3d = camera2d_to_3d(cam2d);
 
         begin_texture_mode(scene_target);
         clear_background(Color::BLANK);
         begin_blend_mode(blend_mode::CUSTOM_SEPARATE);
         begin_mode_3d(cam3d);
         draw_3d(x, y);
-        draw_outline(x, y, ssw, ssh, (float)ssh);
+        draw_outline(x, y, ssw, ssh, ssh);
         end_mode_3d();
         end_blend_mode();
         end_texture_mode();
@@ -1257,8 +1346,8 @@ void Chara3D::draw_full_target(float x, float y, int rw, int rh, const ray::Came
 
     {
         begin_shader_mode(outline_fxaa_shader);
-        draw_texture_pro(scene_target.texture, {0, 0, (float)ssw, -(float)ssh}, {0, 0, (float)rw, (float)rh}, {0, 0},
-                         0.0f, Color::WHITE);
+        draw_texture_pro(scene_target.texture, {0, 0, static_cast<float>(ssw), -static_cast<float>(ssh)},
+                         {0, 0, static_cast<float>(rw), static_cast<float>(rh)}, {0, 0}, 0.0f, Color::WHITE);
         end_shader_mode();
     }
 
@@ -1270,8 +1359,14 @@ std::unique_ptr<Chara3D> make_chara_from_player_data(const PlayerData* pd, bool 
     if (pd && !pd->chara_is_costume) {
         std::string head_name = std::to_string(pd->chara_head_index);
         std::string body_name = std::to_string(pd->chara_body_index);
-        return std::make_unique<Chara3D>(head_name, body_name, mirror, use_skin_config);
+        auto chara = std::make_unique<Chara3D>(head_name, body_name, mirror, use_skin_config);
+        chara->set_puchi(pd->chara_acce_index);
+        return chara;
     }
     std::string costume_name = pd ? std::to_string(pd->chara_cos_index) : "0";
-    return std::make_unique<Chara3D>(costume_name, mirror, use_skin_config);
+    auto chara = std::make_unique<Chara3D>(costume_name, mirror, use_skin_config);
+    if (pd) {
+        chara->set_puchi(pd->chara_acce_index);
+    }
+    return chara;
 }

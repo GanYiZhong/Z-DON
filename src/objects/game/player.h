@@ -3,10 +3,10 @@
 #include <memory>
 #include <unordered_map>
 
-#include "../../libs/network.h"
+#include "../../libs/gfx/text.h"
+#include "../../libs/network/network.h"
+#include "../../libs/parsers/song_parser.h"
 #include "../../libs/screen.h"
-#include "../../libs/song_parser.h"
-#include "../../libs/text.h"
 #include "../global/chara_3d.h"
 #include "../global/nameplate.h"
 #include "background.h"
@@ -53,7 +53,10 @@ public:
     std::vector<BranchDifficulty> branch_history;
 
     Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
-           bool is_2p_param, const Modifiers& modifiers_param);
+           bool is_2p_param, const Modifiers& modifiers_param,
+           const std::string& score_method_param = global_data.config->general.score_method);
+
+    virtual ~Player() = default;
 
     std::optional<JudgeCounter> judge_counter;
     std::optional<Gauge> gauge;
@@ -157,6 +160,8 @@ public:
 protected:
     std::optional<LaneHitEffect> lane_hit_effect;
     std::vector<std::unique_ptr<DrumHitEffect>> draw_drum_hit_list;
+    TextureObject* lane_mark = nullptr; // drawn instead of the difficulty mark (tutorial wakaba)
+    bool show_lane_name = true;         // auto icon / nameplate
 
 private:
     bool is_2p;
@@ -374,9 +379,8 @@ private:
 
     void kusudama_counter_manager(double current_ms);
 
-    virtual void spawn_hit_effects(DrumType drum_type, Side side);
-
 protected:
+    virtual void spawn_hit_effects(DrumType drum_type, Side side);
     virtual void handle_input(double ms_from_start, double current_ms, std::optional<Background>& background);
 
 private:

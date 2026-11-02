@@ -4,6 +4,8 @@
 #include <cmath>
 #include <fstream>
 
+#include "../math/md5.h"
+
 #pragma pack(push, 1)
 
 struct FumenJudgeTiming {

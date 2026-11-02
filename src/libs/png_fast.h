@@ -3,7 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
+#include "raylib_ns.h"
 
 // Z-DON: a PNG decoder for the common case of skin art (8-bit gray / gray+alpha / RGB / RGBA /
 // palette, not interlaced), inflating with zlib instead of stb_image's own inflate. The output is
@@ -17,6 +18,6 @@ namespace png_fast {
     bool enabled();
 
     // true and image set when decoded; false (image untouched) to fall back to raylib
-    bool decode(const uint8_t* data, size_t size, ray::Image& image);
+    bool decode(const uint8_t* data, size_t size, Image& image);
 
 } // namespace png_fast

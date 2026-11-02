@@ -11,6 +11,8 @@ protected:
     bool zdon_two_boards() const override { return true; }
 
 public:
+    bool two_player_audio() const override { return true; }
+
     Result2PScreen() = default;
 
     void on_screen_start() override;

@@ -1,8 +1,9 @@
 #include "box_lua_bindings.h"
 
 #include <algorithm>
+#include <iterator>
 
-#include "../../../libs/script.h"
+#include "../../../libs/file/script.h"
 #include "../../game/exam_caption.h"
 #include "../diff_sort.h"
 #include "../player.h"
@@ -59,9 +60,9 @@ void register_box_lua_bindings(sol::state& lua) {
             return t;
         },
         "name", &BaseBox::horizontal_name, "collection", &BaseBox::collection, "genre_index",
-        [](BaseBox& self) { return (int)self.genre_index; }, "texture_index",
-        [](BaseBox& self) { return (int)self.texture_index; }, "has_recolor", &BaseBox::has_recolor, "begin_recolor",
-        &BaseBox::begin_recolor, "end_recolor", &BaseBox::end_recolor);
+        [](BaseBox& self) { return static_cast<int>(self.genre_index); }, "texture_index",
+        [](BaseBox& self) { return static_cast<int>(self.texture_index); }, "has_recolor", &BaseBox::has_recolor,
+        "begin_recolor", &BaseBox::begin_recolor, "end_recolor", &BaseBox::end_recolor);
 
     lua.new_usertype<SongBox>(
         "SongBox", sol::base_classes, sol::bases<BaseBox>(), "text_subtitle", &SongBox::text_subtitle, "subtitle",
@@ -78,9 +79,9 @@ void register_box_lua_bindings(sol::state& lua) {
             auto info = self.course_info(static_cast<int>(diff));
             info.crown = 0; // Crown::NONE
             info.rank = 0;  // Rank::_NONE
-            if (diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value()) {
-                info.crown = (int)self.scores_p2[diff]->crown;
-                info.rank = (int)self.scores_p2[diff]->rank;
+            if (diff >= 0 && diff < std::ssize(self.scores_p2) && self.scores_p2[diff].has_value()) {
+                info.crown = static_cast<int>(self.scores_p2[diff]->crown);
+                info.rank = static_cast<int>(self.scores_p2[diff]->rank);
             }
             return course_table(info,
                                 diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
@@ -113,7 +114,7 @@ void register_box_lua_bindings(sol::state& lua) {
             if (!self.preimage.has_value()) {
                 return;
             }
-            Rect src{0, 0, (float)self.preimage->width, (float)self.preimage->height};
+            Rect src{0, 0, static_cast<float>(self.preimage->width), static_cast<float>(self.preimage->height)};
             Rect dest{x, y, width, height};
             draw_texture_pro(self.preimage.value(), src, dest, Vec2{0, 0}, 0, ::fade(Color::WHITE, fade));
         });
@@ -128,8 +129,8 @@ void register_box_lua_bindings(sol::state& lua) {
             }
             auto it = self.crown.rbegin(); // std::map is sorted -> highest diff
             sol::table t = script_manager.lua->create_table(0, 2);
-            t["crown"] = (int)it->second;
-            t["frame"] = std::min((int)Difficulty::URA, it->first);
+            t["crown"] = static_cast<int>(it->second);
+            t["frame"] = std::min(static_cast<int>(Difficulty::URA), it->first);
             return t;
         },
         "highest_crown_p2",
@@ -139,8 +140,8 @@ void register_box_lua_bindings(sol::state& lua) {
             }
             auto it = self.crown_p2.rbegin();
             sol::table t = script_manager.lua->create_table(0, 2);
-            t["crown"] = (int)it->second;
-            t["frame"] = std::min((int)Difficulty::URA, it->first);
+            t["crown"] = static_cast<int>(it->second);
+            t["frame"] = std::min(static_cast<int>(Difficulty::URA), it->first);
             return t;
         },
         "explanation",
@@ -171,8 +172,8 @@ void register_box_lua_bindings(sol::state& lua) {
             float x = params.get_or("x", 0.0f);
             float y = params.get_or("y", 0.0f);
             float fade = params.get_or("fade", 1.0f);
-            float w = (float)self.box_texture->width;
-            float h = (float)self.box_texture->height;
+            float w = self.box_texture->width;
+            float h = self.box_texture->height;
             float dw = w * s * scale;
             float dh = h * s * scale;
 

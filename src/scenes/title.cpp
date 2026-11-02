@@ -2,12 +2,12 @@
 
 #include <random>
 
-#include "../libs/config.h"
-#include "../libs/filesystem.h"
+#include "../libs/file/config.h"
+#include "../libs/file/filesystem.h"
 #include "../libs/fixed_step.h"
 #include "../libs/global_data.h"
-#include "../libs/input.h"
-#include "../libs/network.h"
+#include "../libs/input/input.h"
+#include "../libs/network/network.h"
 
 #ifdef CARD_READER_ENABLED
 #include "../libs/optional/card_reader.h"
@@ -25,9 +25,11 @@ void TitleScreen::on_screen_start() {
                                                     Color::WHITE, Color::BLACK, false, 4);
     fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(13));
     text_overlay_fade = dynamic_cast<FadeAnimation*>(tex.get_animation(14));
-    if (text_overlay_fade) {
-        text_overlay_fade->start();
+    if (!fade_out || !text_overlay_fade) {
+        throw std::runtime_error("Title skin animations 13 and 14 must be FadeAnimation objects");
     }
+    text_overlay_fade->start();
+    t_caution = tex.has_texture("tournament/caution") ? tex.get_texture("tournament/caution") : nullptr;
 
     // Session over: undo card-login access code overrides
     for (int i = 0; i < 2; i++) {
@@ -91,6 +93,12 @@ void TitleScreen::reset_attract_objects() {
     attract_video.reset();
     warning_board.reset();
     attract_scene.reset();
+    tournament.reset();
+    network_msg.hide();
+    gacha_busy = false;
+    gacha_waiting = false;
+    gacha_puchichara.reset();
+    msg_until_ms = 0.0;
 }
 
 Screens TitleScreen::on_screen_end(Screens next_screen) {
@@ -154,13 +162,24 @@ void TitleScreen::scene_manager(double current_ms) {
         attract_scene->update(current_ms);
         if (attract_scene->is_finished()) {
             attract_scene.reset();
+            state = network.is_tournament() ? TitleState::TOURNAMENT : TitleState::OP_VIDEO;
+        }
+    } else if (state == TitleState::TOURNAMENT) {
+        if (!tournament.has_value()) {
+            tournament.emplace(current_ms);
+        }
+        tournament->update(current_ms);
+        if (tournament->is_finished() && !gacha_busy) {
+            tournament.reset();
             state = TitleState::OP_VIDEO;
         }
     }
 }
 
 std::optional<Screens> TitleScreen::update() {
-    Screen::update();
+    if (auto next = Screen::update()) {
+        return next;
+    }
     double current_ms = get_current_ms();
 
     text_overlay_fade->update(current_ms);
@@ -220,14 +239,69 @@ std::optional<Screens> TitleScreen::update() {
 #endif
 
     scene_manager(current_ms);
-    if (menu_confirm_pressed()) {
-        if (!fade_out->is_started) {
-            fade_out->start();
-        }
-        fade_out->unlock_input();
-        audio.play_sound("don", VolumePreset::SOUND);
+    if (!update_gacha(current_ms) && menu_confirm_pressed()) {
+        start_entry();
     }
     return std::nullopt;
+}
+
+void TitleScreen::start_entry() {
+    if (!fade_out->is_started) {
+        fade_out->start();
+    }
+    fade_out->unlock_input();
+    audio.play_sound("don", VolumePreset::SOUND);
+}
+
+bool TitleScreen::update_gacha(double current_ms) {
+    network_msg.update(current_ms);
+    float msg_wait_ms = 2000;
+    if (state != TitleState::TOURNAMENT || !tournament.has_value()) {
+        return false;
+    }
+
+    if (auto result = network.take_gacha_result()) {
+        gacha_waiting = false;
+        if (result->puchichara >= 0) {
+            gacha_puchichara = result->puchichara;
+            network_msg.show("clear_reading_ok");
+        } else {
+            network_msg.show("error_" + result->error);
+            audio.play_sound("error", VolumePreset::ATTRACT_MODE);
+        }
+        msg_until_ms = current_ms + msg_wait_ms;
+    }
+    if (msg_until_ms > 0.0 && current_ms >= msg_until_ms) {
+        msg_until_ms = 0.0;
+        network_msg.hide();
+        if (gacha_puchichara.has_value()) {
+            tournament->spin(*gacha_puchichara);
+            gacha_puchichara.reset();
+        }
+    }
+    if (gacha_busy && !gacha_waiting && msg_until_ms == 0.0 && tournament->can_spin()) {
+        gacha_busy = false;
+    }
+    if (gacha_busy) {
+        return true;
+    }
+
+    if (!network.is_tournament() || !tournament->can_spin() || !key_pressed(SDL_SCANCODE_RETURN)) {
+        return false;
+    }
+    gacha_busy = true;
+    audio.play_sound("don", VolumePreset::SOUND);
+    const std::string& code = global_data.config->network.access_code_1;
+    if (code.empty() || code == "0" || code == "1") {
+        network_msg.show("error_not_play");
+        audio.play_sound("error", VolumePreset::ATTRACT_MODE);
+        msg_until_ms = current_ms + msg_wait_ms;
+    } else {
+        gacha_waiting = true;
+        network.spin_gacha(code);
+        network_msg.show("clear_reading");
+    }
+    return true;
 }
 
 void TitleScreen::draw() {
@@ -239,6 +313,12 @@ void TitleScreen::draw() {
         attract_video->draw();
     } else if (state == TitleState::ATTRACT_CAMERA && attract_scene) {
         attract_scene->draw();
+    } else if (state == TitleState::TOURNAMENT && tournament) {
+        tournament->draw();
+        network_msg.draw();
+    }
+    if (t_caution && state != TitleState::TOURNAMENT && (network.is_tournament() || network.tournament_offline())) {
+        tex.draw_texture(t_caution, {.frame = network.is_tournament() ? 0 : 1});
     }
 
     draw_rectangle(0, 0, tex.screen_width, tex.screen_height, fade(Color::WHITE, fade_out->attribute));
@@ -246,11 +326,10 @@ void TitleScreen::draw() {
     allnet_indicator.draw();
     entry_overlay.draw(true);
 
-    const float hit_taiko_y = font_manager.get_text_info("hit_taiko_to_start")->y;
-    hit_taiko_text->draw({.x = (float)(tex.screen_width * 0.25 - hit_taiko_text->width / 2),
-                          .y = hit_taiko_y,
+    hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.25 - hit_taiko_text->width / 2),
+                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
                           .fade = text_overlay_fade->attribute});
-    hit_taiko_text->draw({.x = (float)(tex.screen_width * 0.75 - hit_taiko_text->width / 2),
-                          .y = hit_taiko_y,
+    hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.75 - hit_taiko_text->width / 2),
+                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
                           .fade = text_overlay_fade->attribute});
 }

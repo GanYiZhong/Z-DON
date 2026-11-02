@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "filesystem.h"
+#include "file/filesystem.h"
 #include "global_data.h"
 #include "texture_pack.h"
 #include "texture_retain.h"

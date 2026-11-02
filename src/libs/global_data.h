@@ -5,15 +5,17 @@
 #include <cassert>
 #include <cmath>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "color_utils.h"
-#include "config.h"
-#include "ray.h" // IWYU pragma: keep
+#include "file/config.h"
+#include "gfx.h" // IWYU pragma: keep
+#include "gfx/color_utils.h"
 
 namespace fs = std::filesystem;
 
@@ -75,11 +77,11 @@ struct Exam {
     bool per_song() const { return !song_red.empty(); }
     // The exam as it applies to song i: red/gold swapped for that song's pair.
     Exam for_song(int i) const {
-        assert(!per_song() || (i >= 0 && i < (int)song_red.size()));
+        assert(!per_song() || (i >= 0 && i < std::ssize(song_red)));
         Exam ex = *this;
-        if (per_song() && i >= 0 && i < (int)song_red.size()) {
+        if (per_song() && i >= 0 && i < std::ssize(song_red)) {
             ex.red = song_red[i];
-            ex.gold = i < (int)song_gold.size() ? song_gold[i] : song_red[i];
+            ex.gold = i < std::ssize(song_gold) ? song_gold[i] : song_red[i];
         }
         // the view of one song is a plain pair again (captions print a single number)
         ex.song_red.clear();
@@ -88,8 +90,8 @@ struct Exam {
     }
 };
 
-inline std::string dan_bar_state(const Exam& exam, int value, bool live = false, bool near_end = false,
-                                 bool just_before_end = false) {
+inline std::string_view dan_bar_state(const Exam& exam, int value, bool live = false, bool near_end = false,
+                                      bool just_before_end = false) {
     const bool down = (exam.range == "less");
     // CheckMax
     if (exam.gold > 0 && ((down && value < exam.gold) || (!down && value >= exam.gold))) {
@@ -104,7 +106,7 @@ inline std::string dan_bar_state(const Exam& exam, int value, bool live = false,
         }
         // fall through to the flat palette -- no `max` during play
     }
-    int gauge = (exam.red > 0) ? (int)std::floor(100.0 * (double)value / (double)exam.red) : 100;
+    int gauge = (exam.red > 0) ? static_cast<int>(std::floor(100.0 * value / exam.red)) : 100;
     gauge = std::clamp(gauge, 0, 100);
     if (down) {
         gauge = 100 - gauge;
@@ -122,7 +124,7 @@ inline std::string dan_bar_state(const Exam& exam, int value, bool live = false,
         return "up_100";
     }
     const int good =
-        (exam.red > 0 && exam.gold > 0) ? 100 - (int)std::floor(100.0 * (double)exam.gold / (double)exam.red) : 100;
+        (exam.red > 0 && exam.gold > 0) ? 100 - static_cast<int>(std::floor(100.0 * exam.gold / exam.red)) : 100;
     if (gauge < 30) {
         return "down_80";
     }
@@ -214,6 +216,7 @@ struct SessionData {
     fs::path selected_song;
     std::string song_hash;
     fs::path selected_dan_folder;
+    fs::path selected_tutorial;
     std::vector<DanSongEntry> selected_dan;
     std::vector<Exam> selected_dan_exam;
     int dan_color = 0;
@@ -221,6 +224,7 @@ struct SessionData {
     int dan_index = -1;
     int dan_index_max = -1;
     bool dan_gaiden = false;
+    bool dan_gen3 = false;
     int selected_difficulty = 0;
     std::string song_title = "default_title";
     std::string song_subtitle = "default_subtitle";
@@ -290,7 +294,8 @@ struct GlobalData {
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;
-    std::string title_state = "";
+    std::string title_state;
+    double title_state_start_ms = 0.0;
     int live_skip_count = -1;
     bool live_skip_used = false;
     bool force_auto_play = false;

@@ -3,9 +3,9 @@
 #include <string>
 #include <utility>
 
-#include "../../libs/color_utils.h"
+#include "../../libs/gfx/color_utils.h"
+#include "../../libs/gfx/text.h"
 #include "../../libs/global_data.h"
-#include "../../libs/text.h"
 
 inline std::string exam_threshold_text(const TextureWrapper& tex, const std::string& type, const std::string& range,
                                        const std::string& num, const std::string& lang) {

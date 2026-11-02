@@ -5,12 +5,11 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// Win32-specific platform services.
+// Win32-only platform services; see platform.h for the shared ones.
 
 // Converts a UTF-8 string to a filesystem::path using Windows APIs.
 // Handles both UTF-8 and ANSI codepages (CP932 for Japanese).
@@ -26,16 +25,10 @@ std::filesystem::path win32_path_from_encoded(const std::string& path_str, const
 // Chinese-locale system).
 std::vector<std::string> win32_utf8_args();
 
-// Gets the directory containing the current executable.
-std::filesystem::path win32_get_executable_dir();
-
 // Runs the calling thread below the game's threads for CPU time.
 void win32_lower_thread_priority();
 // background processing mode for the calling thread: lowest CPU, I/O and memory priority
 void win32_background_mode_thread();
-
-// Initializes Windows-specific crash handlers (SEH exception filter, dbghelp stack traces).
-void win32_install_crash_handlers();
 
 // Sleeps for about `us` microseconds on a high-resolution waitable timer (Windows 10 1803+).
 // Returns false when that timer is unavailable; the caller then falls back to a normal sleep.

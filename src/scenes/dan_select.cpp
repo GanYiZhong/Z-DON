@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iterator>
 
-#include "../libs/input.h"
-#include "../libs/script.h"
+#include "../libs/file/script.h"
+#include "../libs/input/input.h"
 #include "../objects/song_select/song_select_script.h"
 
 static constexpr double DAN_INTRO_MS = 80.0 * 1000.0 / 60.0;
@@ -57,9 +58,10 @@ void DanSelectScreen::on_screen_start() {
         dan_player_data = *pd;
     }
 
-    SessionData& sd_boot = global_data.session_data[(int)global_data.player_num];
-    if (sd_boot.selected_dan_folder.empty() && (int)global_data.player_num < (int)global_data.dan_folder.size()) {
-        sd_boot.selected_dan_folder = global_data.dan_folder[(int)global_data.player_num];
+    const auto player_index = static_cast<int>(global_data.player_num);
+    SessionData& sd_boot = global_data.session_data[player_index];
+    if (sd_boot.selected_dan_folder.empty() && player_index < std::ssize(global_data.dan_folder)) {
+        sd_boot.selected_dan_folder = global_data.dan_folder[player_index];
     }
     if (!global_data.cli_dan.empty()) { // `--dan`: scan only that course
         sd_boot.selected_dan_folder =
@@ -181,7 +183,7 @@ Screens DanSelectScreen::on_screen_end(Screens next_screen) {
     scene.reset();
     DanBox* current = dan_navigator.get_current();
     if (current && next_screen == Screens::GAME_DAN) {
-        SessionData& sd = global_data.session_data[(int)global_data.player_num];
+        SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
         sd.selected_dan = current->songs;
         sd.selected_dan_exam = current->exams;
         sd.song_title = current->dan_title;
@@ -193,6 +195,7 @@ Screens DanSelectScreen::on_screen_end(Screens next_screen) {
             sd.dan_index_max = std::max(sd.dan_index_max, b->dan_index);
         }
         sd.dan_gaiden = current->gaiden;
+        sd.dan_gen3 = current->gen3;
         if (!current->songs.empty()) {
             sd.selected_song = current->songs[0].song_path;
         }
@@ -206,7 +209,7 @@ void DanSelectScreen::handle_input_browsing(double current_ms) {
     }
 
     if (wheel_locked) {
-        long long tick = (long long)((current_ms - wheel_tick_epoch) / 100.0);
+        long long tick = static_cast<long long>((current_ms - wheel_tick_epoch) / 100.0);
         if (tick > wheel_tick_seen) {
             wheel_locked = false;
             wheel_tick_seen = tick;
@@ -279,7 +282,7 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
         return yes && no && !yes->x.empty() && !no->x.empty() && yes->x[0] > no->x[0];
     }();
     const int order[3] = {CONFIRM_OPTION, yes_right ? CONFIRM_NO : CONFIRM_YES, yes_right ? CONFIRM_YES : CONFIRM_NO};
-    int slot = (int)(std::find(order, order + 3, confirm_index) - order);
+    int slot = static_cast<int>(std::find(order, order + 3, confirm_index) - order);
     if (l_kat) {
         audio.play_sound("kat", VolumePreset::SOUND);
         slot = std::max(slot - 1, 0);

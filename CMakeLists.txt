@@ -10,6 +10,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON CACHE INTERNAL "")
 
+# The public PS5 SDK supplies PS5 through its cross-compilation toolchain.
+# Keep console dependencies out of desktop/mobile configuration.
+if(PS5)
+  add_subdirectory(ps5)
+  return()
+endif()
+
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug)
 endif()
@@ -20,8 +28,8 @@ if(EMSCRIPTEN)
 endif()
 
 include(FetchContent)
-if(IOS)
-  # Device and Simulator can both be arm64 but cannot share dependency binaries.
+if(IOS OR ANDROID)
+  # Cross builds cannot share dependency binaries with the host trees in .cmake-deps.
   set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Dependency build directory")
 else()
   set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/.cmake-deps" CACHE PATH "" FORCE)
@@ -87,8 +95,18 @@ if(IOS)
   endif()
 endif()
 
+set(YATAIDON_GFX_BACKEND "raylib" CACHE STRING "Graphics backend: raylib or bgfx")
+set_property(CACHE YATAIDON_GFX_BACKEND PROPERTY STRINGS raylib bgfx)
+if(YATAIDON_GFX_BACKEND STREQUAL "bgfx")
+  if(NOT UNIX OR APPLE OR EMSCRIPTEN OR YATAIDON_USE_SDL2)
+    message(FATAL_ERROR "YATAIDON_GFX_BACKEND=bgfx: only Linux desktop and Android with SDL3 are supported so far")
+  endif()
+elseif(NOT YATAIDON_GFX_BACKEND STREQUAL "raylib")
+  message(FATAL_ERROR "YATAIDON_GFX_BACKEND must be raylib or bgfx")
+endif()
+message(STATUS "Graphics backend: ${YATAIDON_GFX_BACKEND}")
+
 include(cmake/deps.cmake)
-set(YATAIDON_SKINS_DIR "${CMAKE_SOURCE_DIR}/Skins" CACHE PATH "Skins used for iOS bundling")
 
 ### Source files
 
@@ -102,21 +120,25 @@ file(GLOB_RECURSE HeaderFiles CONFIGURE_DEPENDS
 # Exclude platform-specific and optional sources from main glob
 list(FILTER CppFiles EXCLUDE REGEX "/src/libs/optional/")
 list(FILTER CppFiles EXCLUDE REGEX "/src/platform/")
+# One graphics backend (src/libs/gfx_<backend>.cpp) implements src/libs/gfx.h
+list(FILTER CppFiles EXCLUDE REGEX "/src/libs/gfx_[a-z0-9]+\\.cpp$")
+list(APPEND CppFiles ${CMAKE_SOURCE_DIR}/src/libs/gfx_${YATAIDON_GFX_BACKEND}.cpp)
 
-# Platform-specific sources
+# Platform-specific sources; each set implements src/platform/platform.h
 if(WIN32)
-    file(GLOB PLATFORM_SOURCES src/platform/*_windows.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_windows.cpp src/platform/platform_desktop.cpp)
 elseif(ANDROID)
-    file(GLOB PLATFORM_SOURCES src/platform/*_android.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_android.cpp src/platform/platform_mobile.cpp)
 elseif(APPLE AND NOT IOS)
-    file(GLOB PLATFORM_SOURCES src/platform/*_macos.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_macos.cpp src/platform/platform_posix.cpp src/platform/platform_desktop.cpp)
 elseif(IOS)
-    file(GLOB PLATFORM_SOURCES src/platform/*_ios.mm)
+    file(GLOB PLATFORM_SOURCES src/platform/*_ios.mm src/platform/*_ios.cpp src/platform/platform_mobile.cpp)
 elseif(EMSCRIPTEN)
-    file(GLOB PLATFORM_SOURCES src/platform/*_emscripten.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_emscripten.cpp src/platform/platform_desktop.cpp)
 elseif(UNIX)
-    file(GLOB PLATFORM_SOURCES src/platform/*_linux.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_linux.cpp src/platform/platform_posix.cpp src/platform/platform_desktop.cpp)
 endif()
+list(APPEND PLATFORM_SOURCES src/platform/platform_defaults.cpp)
 
 if(SUPPORT_FUMEN)
   file(GLOB Gen4CppFiles src/libs/optional/*.cpp)
@@ -227,8 +249,45 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     ${tomlplusplus_SOURCE_DIR}/include
 )
 
+# Built-in default font
+set(_default_font ${CMAKE_SOURCE_DIR}/src/libs/gfx/default.ttf)
+set(_default_font_cpp ${CMAKE_BINARY_DIR}/generated/default_font_ttf.cpp)
+add_custom_command(
+  OUTPUT ${_default_font_cpp}
+  COMMAND ${CMAKE_COMMAND} -DIN=${_default_font} -DOUT=${_default_font_cpp} -DNAME=default_font_ttf_data
+          -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+  DEPENDS ${_default_font} ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+  VERBATIM
+)
+target_sources(${PROJECT_NAME} PRIVATE ${_default_font_cpp})
+
+if(YATAIDON_GFX_BACKEND STREQUAL "raylib")
+  target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
+else()
+  target_link_libraries(${PROJECT_NAME} PRIVATE bgfx bx SDL3::SDL3)
+  # Shaders compile to SPIR-V headers embedded by src/libs/gfx_bgfx.cpp
+  include(${bgfx_SOURCE_DIR}/cmake/bgfxToolUtils.cmake)
+  FetchContent_GetProperties(bgfx_source SOURCE_DIR _bgfx_src)
+  set(_shader_dir ${CMAKE_SOURCE_DIR}/shader/bgfx)
+  foreach(_type VERTEX FRAGMENT)
+    string(SUBSTRING ${_type} 0 1 _prefix)
+    string(TOLOWER ${_prefix} _prefix)
+    file(GLOB _shaders CONFIGURE_DEPENDS ${_shader_dir}/${_prefix}s_*.sc)
+    bgfx_compile_shaders(
+      TYPE ${_type}
+      SHADERS ${_shaders}
+      VARYING_DEF ${_shader_dir}/varying.def.sc
+      OUTPUT_DIR ${CMAKE_BINARY_DIR}/generated/shaders
+      INCLUDE_DIRS ${_bgfx_src}/src
+      PROFILES spirv
+      AS_HEADERS
+      OUT_FILES_VAR _shader_headers
+    )
+    target_sources(${PROJECT_NAME} PRIVATE ${_shader_headers})
+  endforeach()
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    raylib
     tomlplusplus::tomlplusplus
     spdlog::spdlog
     lua::lua
@@ -238,8 +297,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     bc7enc
 )
 
+# Optional libraries: shared code checks these YATAIDON_HAS_* macros, never platform names.
+# (ps5/game.cmake builds without any of them.)
 if(NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_HTTP)
 endif()
 
 # Z-DON: src/libs/png_fast.cpp inflates with zlib-ng when a dependency built it (cpr does, as the
@@ -260,7 +322,7 @@ if(CARD_READER_ENABLED)
   target_compile_definitions(${PROJECT_NAME} PRIVATE CARD_READER_ENABLED)
 endif()
 
-# Shift-JIS charts and box.def files are converted with iconv outside Windows (src/libs/text.cpp)
+# Shift-JIS charts and box.def files are converted with iconv outside Windows (src/libs/gfx/text.cpp)
 if(NOT WIN32 AND NOT EMSCRIPTEN)
   find_package(Iconv)
   if(Iconv_FOUND)
@@ -280,6 +342,7 @@ endif()
 
 if(NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE cpptrace::cpptrace)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_CPPTRACE)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -296,9 +359,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE yataidon_ebur128)
 
 if(NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE rtaudio)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_RTAUDIO)
 endif()
 if(NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE libremidi::libremidi)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_MIDI)
+endif()
+# iOS and web drive their own main loop and poll input once per frame instead.
+if(NOT IOS AND NOT EMSCRIPTEN)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_INPUT_THREAD)
 endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE portaudio)
 

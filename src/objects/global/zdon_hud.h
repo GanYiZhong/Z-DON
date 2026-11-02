@@ -4,7 +4,7 @@
 // Strings are built in (ja / en / zh / ko); a skin's text "zdon_<key>" replaces one.
 #include <string>
 
-#include "../../libs/text.h"
+#include "../../libs/gfx/text.h"
 
 namespace zhud {
 

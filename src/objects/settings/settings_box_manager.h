@@ -23,6 +23,7 @@ public:
     // Z-DON: see SettingsBox::take_capture_done / adjusting_number.
     bool take_capture_done();
     bool adjusting_number() const { return box_selected && boxes[selected_box_index]->adjusting_number(); }
+    bool editing() const { return box_selected && boxes[selected_box_index]->editing(); }
 
     std::optional<Screens> pending_screen_change();
 

@@ -7,8 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "../../libs/gfx/text.h"
 #include "../../libs/screen.h"
-#include "../../libs/text.h"
 #include "config_ref.h"
 
 class BaseOptionBox {
@@ -19,7 +19,7 @@ protected:
     mutable std::string desc_lines_for;
     mutable float desc_lines_size = 0.0f;
     mutable float desc_lines_w = 0.0f;
-    static std::vector<std::string> wrap_description(const ray::Font& font, const std::string& text, float size,
+    static std::vector<std::string> wrap_description(const Font& font, const std::string& text, float size,
                                                      float max_w);
     ConfigRef config_ref;
     std::unique_ptr<OutlinedText> name_text;
@@ -44,7 +44,7 @@ public:
     // Z-DON: set when this option rewrote other options' config values (reset to defaults).
     bool reload_siblings{false};
 
-    BaseOptionBox(const std::string& name, const std::string& description, const std::string& path);
+    BaseOptionBox(const std::string& name, std::string description, const std::string& path);
 
     virtual void confirm() {}
     virtual bool needs_text_input() const { return false; }
@@ -54,6 +54,7 @@ public:
     virtual void reload() {}
     // Z-DON: a requested screen transition; consumed by the call.
     virtual std::optional<Screens> take_screen_change() { return std::nullopt; }
+    virtual std::string text_input_value() const { return {}; }
 
     virtual void update(double /*current_time*/) {}
     virtual void move_left() {}
@@ -113,6 +114,7 @@ public:
 
     void confirm() override;
     bool needs_text_input() const override;
+    std::string text_input_value() const override { return input_string; }
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;

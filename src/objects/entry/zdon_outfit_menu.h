@@ -7,8 +7,8 @@
 // Each player's pick is stored per skin in scores.db (table zdon_outfits) and read back with tex.outfit(pn).
 #include <string>
 
+#include "../../libs/file/script.h"
 #include "../../libs/global_data.h" // IWYU pragma: keep
-#include "../../libs/script.h"
 
 int zdon_outfit_count();              // 0: the skin has no 2D outfits
 std::string zdon_skin_key();          // the current skin's folder name

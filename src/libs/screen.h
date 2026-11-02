@@ -5,11 +5,13 @@
 #include <optional>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <utility>
 
-#include "audio.h"
+#include "audio/audio.h"
+#include "gfx/texture.h"
 #include "global_data.h"
 #include "readahead.h"
-#include "texture.h"
+#include "time.h"
 
 // One axis of the virtual -> window mapping: dim/win_dim are the skin's and the window's size along the axis,
 // stretch is the camera's h_scale or v_scale, cam_offset the camera offset along it
@@ -63,15 +65,16 @@ enum class Screens {
     INPUT_TEST,
     RETRY_GAME,
     ONBOARDING,
+    TUTORIAL,
     RECORD_SELECT // Z-DON: the recording mode's song select (song_select_record.h)
 };
 
 inline std::string screens_to_string(Screens screen) {
-    static const std::array<std::string, 23> names = {
-        "TITLE",         "ENTRY",          "SONG_SELECT", "GAME",       "GAME_2P",      "RESULT",
-        "RESULT_2P",     "SONG_SELECT_2P", "DAN_SELECT",  "GAME_DAN",   "DAN_RESULT",   "PRACTICE_SELECT",
-        "GAME_PRACTICE", "AI_SELECT",      "AI_GAME",     "SETTINGS",   "LOADING",      "INPUT_CALI",
-        "GAME_OVER",     "INPUT_TEST",     "RETRY_GAME",  "ONBOARDING", "RECORD_SELECT"};
+    static const std::array<std::string, 24> names = {
+        "TITLE",         "ENTRY",          "SONG_SELECT", "GAME",       "GAME_2P",    "RESULT",
+        "RESULT_2P",     "SONG_SELECT_2P", "DAN_SELECT",  "GAME_DAN",   "DAN_RESULT", "PRACTICE_SELECT",
+        "GAME_PRACTICE", "AI_SELECT",      "AI_GAME",     "SETTINGS",   "LOADING",    "INPUT_CALI",
+        "GAME_OVER",     "INPUT_TEST",     "RETRY_GAME",  "ONBOARDING", "TUTORIAL",   "RECORD_SELECT"};
     int idx = static_cast<int>(screen);
     if (idx < 0 || static_cast<size_t>(idx) >= names.size()) {
         return "UNKNOWN";
@@ -91,11 +94,15 @@ class Screen {
 public:
     bool screen_init{false};
     std::string screen_name;
-    Screen(const std::string& name) : screen_name(name) {}
+    Screen(std::string name) : screen_name(std::move(name)) {}
 
     virtual ~Screen() = default;
 
+    // Scene identity is independent of its shared skin name and login seat.
+    virtual bool two_player_audio() const { return false; }
+
     virtual void on_screen_start() {
+        audio.set_two_player_mode(two_player_audio());
         tex.load_screen_textures(screen_name);
         audio.load_screen_sounds(screen_name);
     }
@@ -150,6 +157,7 @@ protected:
                 readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
                 on_screen_start();
                 tex.end_predecode(); // Z-DON: the predecoded images the screen did not need
+                g_frame_ms = get_current_ms();
                 spdlog::info("{} initialized", screen_name);
                 predecode_next(screen_name);
                 readahead::after_screen(screen_name);

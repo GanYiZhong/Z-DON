@@ -1,6 +1,6 @@
 #include <algorithm>
 
-#include "../../../libs/script.h"
+#include "../../../libs/file/script.h"
 #include "../../game/exam_caption.h"
 #include "../diff_sort.h"
 #include "../player.h"

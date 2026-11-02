@@ -1,6 +1,6 @@
 #include "song_select_script.h"
 
-#include "../../libs/ime_ui.h"
+#include "../../libs/input/ime_ui.h"
 #include "diff_sort.h"
 #include "file_navigator/box_back.h"
 #include "file_navigator/box_folder.h"
@@ -60,7 +60,7 @@ sol::protected_function cached_skin_module_fn(const char* module, const char* fn
 }
 
 float option_panel_offset(const MoveAnimation* move, bool confirmed) {
-    float v = (float)move->attribute;
+    float v = move->attribute;
     if (!confirmed) {
         return -v;
     }
@@ -193,30 +193,32 @@ bool SongSelectScript::draw_sort_window(DiffSortSelect* window) {
                              "sort_window.draw_sort_window", window);
 }
 
+// The text box player_ui.draw_search_box draws (the skin's search_box_layout, centered on screen)
+static Rect search_box_rect(const sol::table& skin) {
+    const float S = tex.screen_scale;
+    float x = 0;
+    float y = 0;
+    float w = 400 * S;
+    float h = 60 * S;
+    sol::optional<sol::table> layout;
+    if (skin.valid()) {
+        layout = skin.get<sol::optional<sol::table>>("search_box_layout");
+    }
+    if (layout) {
+        x = layout->get_or<float>("x", x);
+        y = layout->get_or<float>("y", y);
+        w = layout->get_or<float>("width", w);
+        h = layout->get_or<float>("height", h);
+    }
+    return {tex.screen_width / 2.0f - w / 2 + x, tex.screen_height / 2.0f - h / 2 + y, w, h};
+}
+
 bool SongSelectScript::draw_search_box(const std::string& search, double bg_resize, double fade_in) {
     sol::table box = script_manager.lua->create_table();
     box["search"] = search;
     box["bg_resize"] = bg_resize;
     box["fade_in"] = fade_in;
-    { // Z-DON: the IME overlay anchors to the box (the rect player_ui.draw_search_box draws)
-        const float S = tex.screen_scale;
-        float lx = 0;
-        float ly = 0;
-        float lw = 400 * S;
-        float lh = 60 * S;
-        if (lua_object.valid()) {
-            sol::optional<sol::table> layout = lua_object["search_box_layout"];
-            if (layout) {
-                lx = layout->get_or<float>("x", lx);
-                ly = layout->get_or<float>("y", ly);
-                lw = layout->get_or<float>("width", lw);
-                lh = layout->get_or<float>("height", lh);
-            }
-        }
-        const float cx = tex.screen_width / 2.0f;
-        const float cy = tex.screen_height / 2.0f;
-        ime_ui_set_field({cx - lw / 2 + lx, cy - lh / 2 + ly, lw, lh});
-    }
+    ime_ui_set_field(search_box_rect(lua_object));
     return draw_with_default(fn_draw_search_box, "SongSelect:draw_search_box", fn_default_search_box,
                              "player_ui.draw_search_box", box);
 }

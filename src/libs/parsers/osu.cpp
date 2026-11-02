@@ -7,6 +7,8 @@
 #include <sstream>
 #include <string_view>
 
+#include "../math/md5.h"
+
 std::vector<std::string> OsuParser::read_file_lines(const fs::path& path) {
     std::vector<std::string> lines;
     std::ifstream f(path, std::ios::binary);
@@ -179,16 +181,18 @@ OsuParser::OsuParser(const fs::path& path) : file_path(path) {
         }
     }
 
-    // Timing points: store {time_ms, beat_length}
+    // Timing points: store {time_ms, beat_length, meter, effects}
     for (const auto& row : tp_data) {
         if (row.size() >= 2) {
-            timing_points.push_back({row[0], row[1]});
+            double meter = row.size() > 2 && row[2] > 0 ? row[2] : 4.0;
+            double effects = row.size() > 7 ? row[7] : 0.0;
+            timing_points.push_back({row[0], row[1], meter, effects});
         }
     }
     // stable_sort + tie-breaker: an inherited (green) and uninherited (red) point
     // often share the same offset, and get_scroll_multiplier()/get_bpm_at() depend
     // on the uninherited (positive beatLength) one being processed first.
-    std::ranges::stable_sort(timing_points, [](const std::array<double, 2>& a, const std::array<double, 2>& b) {
+    std::ranges::stable_sort(timing_points, [](const std::array<double, 4>& a, const std::array<double, 4>& b) {
         if (a[0] != b[0]) {
             return a[0] < b[0];
         }
@@ -250,7 +254,8 @@ OsuParser::OsuParser(const fs::path& path) : file_path(path) {
             if (std::regex_search(el, m, bg_re)) {
                 fs::path candidate = path.parent_path() / m[1].str();
                 std::string ext = candidate.extension().string();
-                std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+                std::ranges::transform(ext, ext.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 if (std::ranges::contains(video_extensions, ext)) {
                     metadata.bgmovie = candidate;
                     break;
@@ -406,6 +411,47 @@ NoteList& OsuParser::get_notes() {
             cached_notes.notes.push_back(tail);
         }
     }
+
+    double last_ms = 0.0;
+    for (const Note& n : cached_notes.notes) {
+        last_ms = std::max(last_ms, n.hit_ms);
+    }
+    std::vector<const std::array<double, 4>*> red_points;
+    for (const auto& tp : timing_points) {
+        if (tp[1] > 0 && tp[1] < 60000) {
+            red_points.push_back(&tp);
+        }
+    }
+    std::deque<Note> barlines;
+    for (size_t i = 0; i < red_points.size(); ++i) {
+        const auto& tp = *red_points[i];
+        double section_end = i + 1 < red_points.size() ? (*red_points[i + 1])[0] : last_ms + 1.0;
+        double measure_ms = tp[1] * tp[2];
+        bool omit_first = (static_cast<int>(tp[3]) & 8) != 0;
+
+        for (double t = tp[0]; t < section_end - 1.0; t += measure_ms) {
+            if (omit_first && t == tp[0]) {
+                continue;
+            }
+            Note bar;
+            bar.type = NoteType::BARLINE;
+            bar.hit_ms = t;
+            bar.bpm = get_bpm_at(t);
+            bar.scroll_x = get_scroll_multiplier(t);
+            bar.scroll_y = 0.0;
+            bar.display = true;
+            bar.index = counter++;
+            barlines.push_back(bar);
+        }
+    }
+    cached_notes.notes.insert(cached_notes.notes.end(), barlines.begin(), barlines.end());
+
+    std::ranges::stable_sort(cached_notes.notes, [](const Note& a, const Note& b) {
+        if (a.hit_ms != b.hit_ms) {
+            return a.hit_ms < b.hit_ms;
+        }
+        return a.type == NoteType::BARLINE && b.type != NoteType::BARLINE;
+    });
 
     // Build timeline from uninherited timing points (BPM changes)
     for (const auto& tp : timing_points) {

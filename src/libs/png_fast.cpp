@@ -4,6 +4,8 @@
 #include <cstring>
 #include <vector>
 
+#include "raylib_ns.h"
+
 #if defined(ZDON_HAVE_ZLIB)
 #include <zlib.h>
 #endif
@@ -18,7 +20,7 @@ namespace png_fast {
     bool enabled() {
         return false;
     }
-    bool decode(const uint8_t*, size_t, ray::Image&) {
+    bool decode(const uint8_t*, size_t, Image&) {
         return false;
     }
 
@@ -188,7 +190,7 @@ namespace png_fast {
         return on;
     }
 
-    bool decode(const uint8_t* data, size_t size, ray::Image& image) {
+    bool decode(const uint8_t* data, size_t size, Image& image) {
         static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
         if (!data || size < 8 + 25 || std::memcmp(data, sig, 8) != 0) {
             return false;

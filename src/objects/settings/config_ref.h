@@ -2,8 +2,8 @@
 
 #include <variant>
 
+#include "../../libs/file/scores.h"
 #include "../../libs/global_data.h"
-#include "../../libs/scores.h"
 
 struct ConfigRef {
     std::variant<bool*, int*, float*, std::string*, std::vector<int>*, fs::path*> ptr;
@@ -151,6 +151,9 @@ inline ConfigRef get_config_ref(const std::string& path) {
     }
     if (path == "general/touch_input") {
         return &c->general.touch_input;
+    }
+    if (path == "general/touch_drum_size") {
+        return &c->general.touch_drum_size;
     }
     // limits
     if (path == "limits/timer_frozen") {

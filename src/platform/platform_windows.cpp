@@ -7,13 +7,16 @@
 #include <portaudio.h>
 #include <spdlog/spdlog.h>
 #include <string>
+
+#include "platform.h"
 // clang-format off
 #include <windows.h>
 #include <dbghelp.h>  // must follow windows.h
 #include <psapi.h>    // must follow windows.h
 #include <shellapi.h> // must follow windows.h
 
-#include "../libs/sdl_compat.h"
+#include "../libs/gfx.h"
+#include "../libs/gfx/sdl_compat.h"
 // clang-format on
 
 namespace {
@@ -198,7 +201,7 @@ std::vector<std::string> win32_utf8_args() {
     return out;
 }
 
-std::filesystem::path win32_get_executable_dir() {
+std::filesystem::path platform_get_working_directory() {
     wchar_t buffer[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, buffer, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) {
@@ -256,9 +259,13 @@ void win32_lower_thread_priority() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
 }
 
-void win32_install_crash_handlers() {
+void platform_install_crash_handlers() {
     std::signal(SIGINT, [](int) { std::_Exit(0); });
     SetUnhandledExceptionFilter(crash_exception_filter);
+}
+
+void platform_close_window() {
+    close_window();
 }
 
 bool win32_app_has_focus() {
@@ -648,4 +655,8 @@ void win32_close_portaudio() {
         g_pa_stream = nullptr;
         Pa_Terminate();
     }
+}
+
+bool platform_retains_assets() {
+    return true;
 }

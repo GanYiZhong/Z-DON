@@ -18,12 +18,13 @@
 #include <utility>
 #include <vector>
 
-#include "audio.h"
-#include "config.h"
+#include "audio/audio.h"
+#include "file/config.h"
+#include "gfx.h" // IWYU pragma: keep
+#include "gfx/sdl_compat.h"
 #include "global_data.h"
-#include "ray.h" // IWYU pragma: keep
-#include "sdl_compat.h"
-#include "song_parser.h"
+#include "parsers/song_parser.h"
+#include "raylib_ns.h"
 
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
 using ray::Matrix;
@@ -127,9 +128,9 @@ void main() {
             std::vector<float> mix;
 
             Gl gl;
-            bool nv12 = false;              // kNv12Shader (else RGBA, flipped by ffmpeg)
-            ray::RenderTexture2D copy_rt{}; // the window's frame, sampled by the shader
-            ray::RenderTexture2D nv12_rt{}; // W/4 x 1.5H
+            bool nv12 = false;      // kNv12Shader (else RGBA, flipped by ffmpeg)
+            RenderTarget copy_rt{}; // the window's frame, sampled by the shader
+            RenderTarget nv12_rt{}; // W/4 x 1.5H
             ray::Shader shader{};
             size_t frame_bytes = 0;
             std::array<unsigned int, kPbo> pbo{};
@@ -379,7 +380,7 @@ void main() {
             s.nv12 = blits && ew % 4 == 0 && eh % 2 == 0 && !(rgba_env && *rgba_env == '1');
             if (s.nv12) {
                 s.shader = ray::LoadShaderFromMemory(nullptr, kNv12Shader);
-                if (s.shader.id == 0 || s.shader.id == rlGetShaderIdDefault()) {
+                if (s.shader.id == 0 || s.shader.id == ray::rlGetShaderIdDefault()) {
                     spdlog::warn("[record] the NV12 shader did not compile; recording RGBA");
                     s.nv12 = false;
                 } else {
@@ -679,7 +680,7 @@ void main() {
             const auto ms_since = [](clk::time_point t) {
                 return std::chrono::duration<double, std::milli>(clk::now() - t).count();
             };
-            rlDrawRenderBatchActive();
+            ray::rlDrawRenderBatchActive();
             const int w = ray::GetRenderWidth();
             const int h = ray::GetRenderHeight();
             if (!s.video && !start_video(w, h)) {
@@ -724,13 +725,12 @@ void main() {
                 rw = ew / 4;
                 rh = eh * 3 / 2;
                 ray::BeginTextureMode(s.nv12_rt);
-                rlDisableColorBlend(); // the alpha byte is data
+                ray::rlDisableColorBlend(); // the alpha byte is data
                 ray::BeginShaderMode(s.shader);
-                ray::DrawTexturePro(s.copy_rt.texture, ray::Rectangle{0, 0, (float)ew, (float)eh},
-                                    ray::Rectangle{0, 0, (float)rw, (float)rh}, ray::Vector2{0, 0}, 0.0f,
-                                    ray::Color{255, 255, 255, 255});
+                ray::DrawTexturePro(s.copy_rt.texture, Rect{0, 0, (float)ew, (float)eh},
+                                    Rect{0, 0, (float)rw, (float)rh}, Vec2{0, 0}, 0.0f, ray::Color{255, 255, 255, 255});
                 ray::EndShaderMode();
-                rlEnableColorBlend();
+                ray::rlEnableColorBlend();
                 ray::EndTextureMode();
                 s.gl.bind_fb(Gl::READ_FRAMEBUFFER, s.nv12_rt.id);
             }

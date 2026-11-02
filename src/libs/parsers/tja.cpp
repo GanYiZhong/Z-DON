@@ -17,14 +17,11 @@
 #include <utility>
 
 #include "../fixed_step.h"
-#include "../md5.h"
+#include "../gfx/sdl_compat.h"
+#include "../gfx/text.h"
+#include "../math/md5.h"
 #include "../profiler.h"
-#include "../sdl_compat.h"
-#include "../text.h"
-
-#ifdef _WIN32
 #include "platform/platform_windows.h"
-#endif
 
 double get_ms_per_measure(double bpm_val, double time_sig) {
     if (bpm_val == 0) {
@@ -271,9 +268,9 @@ static std::vector<std::string> read_lines_once(const std::filesystem::path& pat
     return lines;
 }
 
-TJAParser::TJAParser(const std::filesystem::path& path, int start_delay, int player_num)
-    : file_path(path), start_ms(static_cast<double>(start_delay)), current_ms(static_cast<double>(start_delay)),
-      player_num(player_num) {
+TJAParser::TJAParser(std::filesystem::path path, int start_delay, int player_num)
+    : file_path(std::move(path)), start_ms(static_cast<double>(start_delay)),
+      current_ms(static_cast<double>(start_delay)), player_num(player_num) {
     PROFILE_SCOPE();
 
     std::vector<std::string> lines = read_lines_once(file_path, encoding);
@@ -565,7 +562,7 @@ TJAParser::notes_to_position(int diff) {
     ParserState state;
     state.bpm = metadata.bpm;
     state.balloons = metadata.course_data[diff].balloon;
-    state.branch_balloons = metadata.course_data[diff].branch_balloon;
+    state.route_balloons = metadata.course_data[diff].branch_balloon;
     state.curr_note_list = &master_notes.notes;
     state.curr_timeline = &master_notes.timeline;
     master_notes.tempo_map.points = {{current_ms, 0.0, metadata.bpm}};
@@ -1270,7 +1267,7 @@ void TJAParser::handle_JPOSSCROLL(const std::string& part, ParserState& state) {
     // field width ("3/5"); the distance is one component or a complex "x+yi" / "x-yi" / "yi"
     auto component = [&](std::string c, double& out) -> bool {
         if (c.empty() || c == "+" || c == "-") {
-            c += "1";
+            c += '1';
         }
         size_t slash = c.find('/');
         try {
@@ -1482,23 +1479,18 @@ Note TJAParser::add_note(char item, ParserState& state) {
         note.color = 255;
     } else if (note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) {
         state.balloon_index++;
-        // A branch's own list counts the balloons on its route; outside the branches, the
-        // normal branch's list (one note for every route). Without one, BALLOON as before.
-        const size_t route = state.branch == -1 ? 0 : static_cast<size_t>(state.branch);
-        const std::vector<int>& own = state.branch_balloons[route];
-        if (!own.empty()) {
-            const size_t i = state.branch_balloon_route_cursor[route];
-            note.count = i < own.size() ? own[i] : 1;
-        } else {
-            note.count = (state.balloon_cursor < state.balloons.size()) ? state.balloons[state.balloon_cursor] : 1;
-        }
-        // A balloon outside the branches is on every route
+        // own route list if set, else BALLOON; a balloon outside the branches advances every route
+        const size_t route = std::max(state.branch, 0);
+        const auto& own = state.route_balloons[route];
+        const size_t cursor = own.empty() ? state.balloon_cursor : state.route_cursor[route];
+        const auto& list = own.empty() ? state.balloons : own;
+        note.count = cursor < list.size() ? list[cursor] : 1;
         if (state.branch == -1) {
-            for (size_t& i : state.branch_balloon_route_cursor) {
+            for (size_t& i : state.route_cursor) {
                 i++;
             }
         } else {
-            state.branch_balloon_route_cursor[route]++;
+            state.route_cursor[route]++;
         }
         state.balloon_cursor++;
     }
@@ -1556,8 +1548,8 @@ void modifier_random(NoteList& notes, int value) {
     std::mt19937 gen(fixed_step::seed());
 
     std::vector<int> indices(notes.notes.size());
-    std::ranges::iota(indices, 0);
-    std::shuffle(indices.begin(), indices.end(), gen);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::ranges::shuffle(indices, gen);
 
     std::vector<int> selected_notes(indices.begin(), indices.begin() + percentage);
 
@@ -1592,11 +1584,9 @@ void modifier_moji(NoteList& notes) {
                     notes.notes[i].moji = 4;
                 }
             }
-            if (length == 3) {
-                if (notes.notes[start + 0].type == NoteType::DON && notes.notes[start + 1].type == NoteType::DON &&
-                    notes.notes[start + 2].type == NoteType::DON) {
-                    notes.notes[start + 1].moji = 2;
-                }
+            if (length == 3 && notes.notes[start + 0].type == NoteType::DON &&
+                notes.notes[start + 1].type == NoteType::DON && notes.notes[start + 2].type == NoteType::DON) {
+                notes.notes[start + 1].moji = 2;
             }
         }
     }

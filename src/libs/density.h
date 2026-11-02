@@ -13,8 +13,9 @@
 //   the target.
 // With d == 1 nothing here runs and the frame draws straight to the window as before.
 
-#include "math_types.h"
-#include "ray.h"
+#include "gfx.h"
+#include "math/math_types.h"
+#include "raylib_ns.h"
 
 namespace density {
     // the active skin's texture density (1: off)
@@ -30,11 +31,11 @@ namespace density {
     void end_frame(Color border);
 
     // the finished frame as an image: the target's (physical size) or the window's
-    ray::Image capture();
+    Image capture();
 
     // a window position (mouse) -> render (target) pixels
     Vec2 window_to_render(Vec2 p);
 
     // a camera of the target -> the same mapping onto the window
-    ray::Camera2D to_window(const ray::Camera2D& cam);
+    Camera2D to_window(const Camera2D& cam);
 } // namespace density

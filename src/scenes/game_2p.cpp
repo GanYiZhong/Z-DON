@@ -2,8 +2,8 @@
 
 #include <algorithm>
 
-#include "../libs/animation.h"
-#include "../libs/input.h"
+#include "../libs/input/input.h"
+#include "../libs/math/animation.h"
 #include "../objects/game/zdon_ai.h"
 
 // Z-DON AI battle: leaving goes back to the AI song select
@@ -37,16 +37,19 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
 
     load_song_audio(AudioLoadMode::Sync);
 
+    const auto p1_index = static_cast<int>(PlayerNum::P1);
+    const auto p2_index = static_cast<int>(PlayerNum::P2);
+
     players.push_back(std::make_unique<Player>(parser, PlayerNum::P1,
-                                               global_data.session_data[(int)PlayerNum::P1].selected_difficulty, false,
+                                               global_data.session_data[p1_index].selected_difficulty, false,
                                                get_player_modifiers(PlayerNum::P1)));
     Modifiers mods_2p = get_player_modifiers(PlayerNum::P2);
     if (ai_battle) {
         mods_2p = get_player_modifiers(PlayerNum::P1); // the same speed / options as the player
         mods_2p.auto_play = false;
     }
-    players.push_back(std::make_unique<Player>(
-        parser_2p, PlayerNum::P2, global_data.session_data[(int)PlayerNum::P2].selected_difficulty, true, mods_2p));
+    players.push_back(std::make_unique<Player>(parser_2p, PlayerNum::P2,
+                                               global_data.session_data[p2_index].selected_difficulty, true, mods_2p));
     if (ai_battle) {
         const int level = global_data.config->general.zdon_ai_level;
         players[1]->enable_zdon_ai(level);
@@ -70,8 +73,8 @@ std::optional<Screens> Game2PScreen::update() {
     if (pause_menu.active()) {
         return update_pause_menu(zdon_song_select()); // Z-DON: pause menu (pause_menu.h)
     }
-    transition->update(current_time);
     clock.update(current_time);
+    transition->update(current_time);
     update_gameplay(current_time);
     if (global_data.zdon_ai.active && players.size() == 2) {
         zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
@@ -91,7 +94,7 @@ std::optional<Screens> Game2PScreen::update() {
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }
 
-    if (key_pressed(global_data.config->keys.restart_key)) {
+    if (check_key_pressed(global_data.config->keys.restart_key)) {
         restart_song();
     }
     if (check_key_pressed(global_data.config->keys.back_key)) {

@@ -7,8 +7,8 @@
 #include "../objects/entry/zdon_outfit_menu.h"
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
+#include "file/script.h"
 #include "global_data.h"
-#include "script.h"
 
 namespace {
     bool valid_player(int player_num) {

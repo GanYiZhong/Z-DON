@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../libs/network.h"
-#include "../libs/scores.h"
+#include "../libs/file/scores.h"
+#include "../libs/network/network.h"
 #include "../libs/screen.h"
 #include "../objects/entry/box_manager.h"
 #include "../objects/entry/entry_script.h"
@@ -57,6 +57,7 @@ private:
     std::unique_ptr<Chara3D> chara;
     std::unique_ptr<Chara3D> wait_chara[2]; // wait panels, P1 / P2
     bool announce_played = false;
+    double wait_idle_since_ = 0; // WAITING: time of the last input, for the AFK popup
     std::vector<std::unique_ptr<EntryPlayer>> players;
 
 #ifdef CARD_READER_ENABLED
@@ -87,7 +88,7 @@ private:
 
     bool login_slot(const std::string& card_hex, std::function<void()> then);
     void finish_login(RemoteLogin remote);
-    void finish_slot(int slot, PlayerData pd);
+    void finish_slot(int slot, const PlayerData& pd);
     bool login_pending() const { return pending_login_.valid(); }
     void join_with_card(const std::string& card_hex);
 

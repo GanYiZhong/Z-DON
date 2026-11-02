@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "../../libs/file/scores.h"
 #include "../../libs/parsers/tja.h"
-#include "../../libs/scores.h"
 #include "../song_select/file_navigator/box_dan.h"
 
 struct DanBoxData {
@@ -23,6 +23,7 @@ struct DanBoxData {
     int rank = -1;
     int dan_index = -1;
     bool gaiden = false;
+    bool gen3 = false; // "gen3": true forces gen3 scoring for this course
     std::vector<DanSongEntry> songs;
     std::vector<Exam> exams;
     int total_notes = 0;

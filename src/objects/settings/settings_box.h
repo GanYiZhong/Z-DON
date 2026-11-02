@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "../../libs/text.h"
+#include "../../libs/gfx/text.h"
 #include "option_box.h"
 
 class SettingsBox {
@@ -36,7 +36,7 @@ public:
     std::string box_name;
     bool in_box{false};
 
-    SettingsBox(const std::string& name, const std::string& label_text, const rapidjson::Value& options_json);
+    SettingsBox(std::string name, const std::string& label_text, const rapidjson::Value& options_json);
     ~SettingsBox();
 
     void set_y(float new_y);
@@ -59,6 +59,7 @@ public:
     bool take_capture_done();
     // Z-DON: the highlighted option is a number that a held kat repeats.
     bool adjusting_number() const;
+    bool editing() const;
 
     void select();
 

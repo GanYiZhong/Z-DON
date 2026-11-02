@@ -1,5 +1,5 @@
 #pragma once
-#include "../libs/scores.h"
+#include "../libs/file/scores.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/nameplate.h"

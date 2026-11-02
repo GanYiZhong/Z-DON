@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
 
 // Z-DON: a derived cache of each screen's texture files, so a screen reads one file sequentially
 // instead of a few hundred small PNGs (on a hard drive those are random reads: about a second for

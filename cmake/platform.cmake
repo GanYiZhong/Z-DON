@@ -211,7 +211,8 @@ else()
       message(STATUS "Z-DON PGO: ${ZDON_PGO} (${ZDON_PGO_DIR})")
     endif()
   elseif(IOS)
-    target_compile_options(${PROJECT_NAME} PRIVATE -O2 -DNDEBUG)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O2 -DNDEBUG -flto=thin)
+    target_link_options(${PROJECT_NAME} PRIVATE -flto=thin)
   elseif(APPLE)
     target_compile_options(${PROJECT_NAME} PRIVATE
           -O2
@@ -222,7 +223,9 @@ else()
     target_compile_options(${PROJECT_NAME} PRIVATE
           -O2
           -DNDEBUG
+          -flto=thin
       )
+    target_link_options(${PROJECT_NAME} PRIVATE -flto=thin)
   elseif(EMSCRIPTEN)
     target_compile_options(${PROJECT_NAME} PRIVATE
           -O2

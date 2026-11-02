@@ -2,10 +2,10 @@
 
 #include <algorithm>
 
-#include "../../libs/audio.h"
-#include "../../libs/input.h"
-#include "../../libs/scores.h"
-#include "../../libs/texture.h"
+#include "../../libs/audio/audio.h"
+#include "../../libs/file/scores.h"
+#include "../../libs/gfx/texture.h"
+#include "../../libs/input/input.h"
 
 int zdon_outfit_count() {
     auto it = tex.skin_config_by_name.find("zdon_outfits");

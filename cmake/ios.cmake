@@ -24,7 +24,24 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
   XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
   XCODE_ATTRIBUTE_ENABLE_BITCODE "NO"
+  # CMake leaves INSTALL_PATH empty, so Archive would produce an empty
+  # Generic Xcode Archive instead of an iOS App Archive.
+  XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
+  XCODE_ATTRIBUTE_SKIP_INSTALL "NO"
+  XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+  # App Store Connect expects a dSYM for every archive, Release included.
+  XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS "YES"
+  XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym"
+  # Build into Xcode's standard products folder instead of the shared bin/
+  # directory. Archive then uses its own folder: a fixed path let Archive leave
+  # a symlink to its (later deleted) install copy where the next build writes
+  # the app, and kept the dSYM out of the archive.
+  XCODE_ATTRIBUTE_CONFIGURATION_BUILD_DIR "$(SYMROOT)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)"
   XCODE_GENERATE_SCHEME TRUE)
+# A single 1024x1024 AppIcon; actool generates the per-device sizes.
+target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/ios/Assets.xcassets")
+set_source_files_properties("${CMAKE_SOURCE_DIR}/ios/Assets.xcassets" PROPERTIES
+  MACOSX_PACKAGE_LOCATION Resources)
 if(IOS_DEVELOPMENT_TEAM)
   set_target_properties(${PROJECT_NAME} PROPERTIES
     XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${IOS_DEVELOPMENT_TEAM}")
@@ -33,15 +50,11 @@ endif()
 # works. Unsigned command-line checks disable signing for that build only.
 
 set(IOS_SONGS_DIR "${CMAKE_SOURCE_DIR}/Songs" CACHE PATH "Songs included in the iOS app")
-if(NOT EXISTS "${YATAIDON_SKINS_DIR}/PyTaikoGreen/Graphics/skin_config.json")
-  message(FATAL_ERROR "PyTaikoGreen assets are missing. Populate the skin submodule or set YATAIDON_SKINS_DIR to a complete Skins directory.")
-endif()
 # Use a resource directory, not thousands of individual Xcode file entries.
 # Refresh it on every build, including asset-only edits.
 add_custom_target(ios_assets
   COMMAND ${CMAKE_COMMAND}
     "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
-    "-DSKINS_DIR=${YATAIDON_SKINS_DIR}"
     "-DSONGS_DIR=${IOS_SONGS_DIR}"
     "-DDEST_DIR=${CMAKE_BINARY_DIR}/ios-resources/GameData"
     -P "${CMAKE_SOURCE_DIR}/cmake/ios_assets.cmake"

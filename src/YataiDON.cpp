@@ -1,47 +1,47 @@
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <format>
 #include <iostream>
-#include <rlgl.h>
 
-#include "libs/animation.h"
-#include "libs/audio.h"
-#include "libs/camera_utils.h"
+#include "libs/asset_cache.h"
+#include "libs/audio/audio.h"
 #include "libs/density.h"
-#include "libs/filesystem.h"
+#include "libs/file/filesystem.h"
+#include "libs/file/logging.h"
+#include "libs/file/script.h"
 #include "libs/fixed_step.h"
+#include "libs/gfx.h"
+#include "libs/gfx/camera_utils.h"
+#include "libs/gfx/text.h"
 #include "libs/global_data.h"
-#include "libs/ime_ui.h"
-#include "libs/input.h"
-#include "libs/logging.h"
-#include "libs/network.h"
+#include "libs/input/ime_ui.h"
+#include "libs/input/input.h"
+#include "libs/math/animation.h"
+#include "libs/network/network.h"
+#include "libs/network/skin_updater.h"
+#include "libs/parsers/song_parser.h"
 #include "libs/profiler.h"
+#include "libs/raylib_ns.h" // Z-DON: rlgl draw counters, hidden-window and vsync hint calls
 #include "libs/screen.h"
-#include "libs/script.h"
-#include "libs/skin_updater.h"
-#include "libs/song_parser.h"
+#include "libs/song_library_loader.h"
 #include "libs/test_mode.h"
-#include "libs/text.h"
 #include "libs/texture_bc7.h"
 #include "libs/texture_lazy.h"
-#include "libs/webcam.h"
+#include "libs/video/webcam.h"
 #include "libs/zdon_os.h"
 #include "libs/zdon_record.h"
 #include "objects/global/chara_3d.h"
+#include "platform/platform.h"
+#include "platform/platform_emscripten.h"
+#include "platform/platform_ios.h"
+#include "platform/platform_windows.h"
 #include "platform/vblank_pacing.h"
 
-#ifdef _WIN32
-#include "platform/platform_windows.h"
-#elif defined(__ANDROID__)
-#include "platform/platform_android.h"
-#elif defined(__EMSCRIPTEN__)
-#include "platform/platform_emscripten.h"
-#elif defined(__linux__)
-#include "platform/platform_linux.h"
-#endif
-
-#ifdef PLATFORM_ANDROID
-#include "libs/sdl_main_compat.h"
+// On iOS SDL must own main() to start UIKit before SDL_Init(VIDEO) can succeed.
+#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
+#include "libs/gfx/sdl_main_compat.h"
 #endif
 
 #include "objects/global/debug_menu.h"
@@ -68,6 +68,7 @@
 #include "scenes/song_select_practice.h"
 #include "scenes/song_select_record.h"
 #include "scenes/title.h"
+#include "scenes/tutorial.h"
 
 void draw_outer_border(int screen_width, int screen_height, Color last_color) {
     for (int dy = -1; dy <= 1; dy++) {
@@ -94,12 +95,12 @@ static void draw_skin_update_status() {
     if (!st.current_skin.empty() && st.files_total > 0) {
         skin_line += " (" + std::to_string(st.files_done) + " / " + std::to_string(st.files_total) + " files)";
     }
-    ray::Font skin_font = font_manager.get_font(skin_line, size);
+    Font skin_font = font_manager.get_font(skin_line, size);
     draw_text_ex(skin_font, skin_line.c_str(), Vec2{x, y}, static_cast<float>(size), 1.0f, Color::YELLOW);
 
     if (!st.current_file.empty()) {
         y += static_cast<float>(size);
-        ray::Font file_font = font_manager.get_font(st.current_file, size);
+        Font file_font = font_manager.get_font(st.current_file, size);
         draw_text_ex(file_font, st.current_file.c_str(), Vec2{x, y}, static_cast<float>(size), 1.0f, Color::WHITE);
     }
 }
@@ -349,7 +350,7 @@ Screens check_args(int argc, char* argv[]) {
 struct LoopState {
     std::unordered_map<Screens, std::unique_ptr<Screen>> screens;
     Screens current_screen = Screens::LOADING;
-    ray::Camera2D camera = {};
+    Camera2D camera;
     std::chrono::steady_clock::duration target_duration =
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / 60.0));
     std::chrono::time_point<std::chrono::steady_clock> next_frame_time = std::chrono::steady_clock::now();
@@ -363,6 +364,7 @@ static bool screen_fade_applies(Screens from, Screens to) {
     case Screens::GAME:
     case Screens::GAME_2P:
     case Screens::GAME_DAN:
+    case Screens::TUTORIAL:
     case Screens::GAME_PRACTICE:
     case Screens::AI_GAME:
     case Screens::RESULT:
@@ -416,6 +418,7 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<InputTestScreen>(screens, except, Screens::INPUT_TEST);
     put_screen<RetryGameScreen>(screens, except, Screens::RETRY_GAME);
     put_screen<OnboardingScreen>(screens, except, Screens::ONBOARDING);
+    put_screen<TutorialScreen>(screens, except, Screens::TUTORIAL);
 }
 
 void drop_other_screens_for_skin_reload() {
@@ -579,7 +582,7 @@ static bool draw_stats_on() {
     static const bool on = [] {
         const char* e = std::getenv("ZDON_EAGER_BLEND");
         if (e && *e == '1') {
-            rlSetBlendModeLazy(false);
+            ray::rlSetBlendModeLazy(false);
         }
         const char* v = std::getenv("YATAIDON_DRAW_STATS");
         return v && *v == '1';
@@ -597,7 +600,7 @@ static void draw_stats_add(const std::string& screen_name) {
     static unsigned int frames = 0;
     static auto window = std::chrono::steady_clock::now();
     unsigned int now_stats[4];
-    rlGetDrawStats(now_stats);
+    ray::rlGetDrawStats(now_stats);
     for (int i = 0; i < 4; i++) {
         const unsigned int d = now_stats[i] - last[i];
         last[i] = now_stats[i];
@@ -621,6 +624,12 @@ static void draw_stats_add(const std::string& screen_name) {
     }
 }
 
+static std::chrono::steady_clock::duration frame_duration(double fps) {
+    return fps > 0.0 && !fixed_step::on() ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                std::chrono::duration<double>(1.0 / fps))
+                                          : std::chrono::steady_clock::duration::zero();
+}
+
 static void run_frame() {
     PROFILE_FRAME();
     PROFILE_SCOPE();
@@ -629,17 +638,24 @@ static void run_frame() {
     draw_stats_on();   // reads ZDON_EAGER_BLEND before the first draw
     const auto frame_start = std::chrono::steady_clock::now();
     seg_mark(SEG_START);
+    // Settings can change the target frame rate while running; the platform may adjust it
+    // (written back so settings show what is in effect).
+    static int applied_fps = global_data.config->video.target_fps;
+    if (global_data.config->video.target_fps != applied_fps) {
+        applied_fps = global_data.config->video.target_fps =
+            platform_apply_target_fps(global_data.config->video.target_fps);
+        L.target_duration = frame_duration(applied_fps);
+        L.next_frame_time = std::chrono::steady_clock::now();
+    }
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
 
     poll_input_events();
-#if defined(YATAIDON_PLATFORM_IOS)
-    if (ios_is_suspended_state()) {
+    if (platform_is_suspended()) {
         return;
     }
-#endif
-#if defined(YATAIDON_PLATFORM_IOS) || defined(__EMSCRIPTEN__)
-    poll_keyboard_once(); // no input thread on these platforms
+#ifndef YATAIDON_INPUT_THREAD
+    poll_keyboard_once(); // no input thread polling it
 #endif
     poll_touch_once();
 
@@ -708,8 +724,8 @@ static void run_frame() {
     seg_mark(SEG_UPDATE);
     sync_text_input();
 
-    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title|practice_select|settings>;<ms>" jumps there
-    // once, <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
+    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title|practice_select|settings|tutorial>;<ms>"
+    // jumps there once, <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
     {
         const double since = dev_hook_clock(); // frames with YATAIDON_FIXED_STEP_MS
         static bool jump_done = false;
@@ -737,6 +753,8 @@ static void run_frame() {
                     debug_menu.requested_screen = Screens::RECORD_SELECT;
                 } else if (name == "settings") {
                     debug_menu.requested_screen = Screens::SETTINGS;
+                } else if (name == "tutorial") {
+                    debug_menu.requested_screen = Screens::TUTORIAL;
                 }
             }
         }
@@ -804,6 +822,7 @@ static void run_frame() {
         }
     }
     if (!next_screen.has_value() && debug_menu.requested_screen.has_value()) {
+        clear_asset_caches(); // a debug jump re-reads the skin from disk, so edits show up
         next_screen = screen->on_screen_end(debug_menu.requested_screen.value());
         debug_menu.requested_screen.reset();
     }
@@ -853,9 +872,9 @@ static void run_frame() {
     }
 
     seg_mark(SEG_SWITCH);
-    draw_touch_drum();
-
     if (!global_data.skinless) {
+        draw_touch_drum();
+
         if (global_data.config->general.fps_counter) {
             L.fps_counter.update();
             L.fps_counter.draw();
@@ -894,15 +913,33 @@ static void run_frame() {
     }
 
     if (key_pressed(SDL_SCANCODE_F12)) {
-        static int screenshot_counter = 0;
-        ray::Image image = density::capture(); // the density target's full size
+        Image image = density::capture(); // the density target's full size
         if (L.current_screen == Screens::RESULT && tex.options[SCO::CROP_RESULT_SCREENSHOT]) {
-            image_crop(&image, {0, 0, (float)image.width, (float)image.height / 2.0f});
+            const auto image_width = static_cast<float>(image.width);
+            const auto crop_height = static_cast<float>(image.height / 2);
+            Image top = image_from_image(image, {0, 0, image_width, crop_height});
+            unload_image(image);
+            image = top;
         }
-        export_image(image, text_format("screenshot%03i.png", screenshot_counter));
+        const PlayerNum p = global_data.player_num == PlayerNum::P2 ? PlayerNum::P2 : PlayerNum::P1;
+        const SessionData& sd = global_data.session_data[static_cast<int>(p)];
+        const std::time_t now = std::time(nullptr);
+        char date[32];
+        std::strftime(date, sizeof(date), "%Y-%m-%d_%H-%M-%S", std::localtime(&now));
+        std::string name = std::string(date) + "_" + sd.song_title + "_" + std::to_string(sd.selected_difficulty);
+        for (char& c : name) {
+            if (c == ' ' || std::strchr("/\\:*?\"<>|", c)) {
+                c = '_';
+            }
+        }
+        fs::create_directories("Screenshots");
+        const std::string path = "Screenshots/" + name + ".png";
+        if (export_image(image, path.c_str())) {
+            spdlog::info("Screenshot saved: {}", path);
+        } else {
+            spdlog::error("Screenshot failed: {}", path);
+        }
         unload_image(image);
-        screenshot_counter++;
-        spdlog::info("Screenshot saved");
     }
 
     texture_lazy::warm_tick(); // Z-DON: textures the screen will draw, uploaded ahead in the frame's spare time
@@ -987,7 +1024,7 @@ static bool dump_screen_tick() {
                           : std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     // grab the frames in memory and write them after the last one: exporting a PNG takes several
     // frames and would stall the game (auto play hits once per frame)
-    static std::vector<std::pair<std::string, ray::Image>> shots;
+    static std::vector<std::pair<std::string, Image>> shots;
     bool grabbed = false;
     while (g_dump_screen.next < g_dump_screen.times.size() && ms >= g_dump_screen.times[g_dump_screen.next]) {
         const std::string name = g_dump_screen.by_frame
@@ -1036,15 +1073,15 @@ static int dump_chara(const std::string& spec) {
     ch->set_bpm(120.0f);
     ch->set_anim(static_cast<AnimIndex>(std::atoi(f[2].c_str())));
     const int shots = std::atoi(f[3].c_str());
-    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD,
-                              RL_FUNC_ADD);
+    ray::rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD,
+                                   RL_FUNC_ADD);
     double ms = 0.0;
     for (int i = 0; i < shots; i++) {
         for (int k = 0; k < 15; k++) {
             ms += 16.6667;
             ch->update(ms);
         } // ~250 ms of animation
-        ray::Camera2D cam = compute_camera2d(tex.screen_width, tex.screen_height);
+        Camera2D cam = compute_camera2d(tex.screen_width, tex.screen_height);
         begin_drawing();
         clear_background(Color{200, 220, 200, 255});
         begin_mode_2d(cam);
@@ -1052,7 +1089,7 @@ static int dump_chara(const std::string& spec) {
         ch->draw(tex.screen_width * 0.5f, tex.screen_height * 0.55f, 2.0f);
         end_blend_mode();
         end_mode_2d();
-        ray::Image img = load_image_from_screen();
+        Image img = load_image_from_screen();
         end_drawing();
         export_image(img, (fs::path(f[0]) / (std::to_string(i) + ".png")).string().c_str());
         unload_image(img);
@@ -1060,7 +1097,7 @@ static int dump_chara(const std::string& spec) {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
+static int game_main(int argc, char* argv[]) {
 #ifdef _WIN32
     // The CRT's argv is in the ANSI code page: a song path with characters outside it (Japanese on a
     // Chinese-locale system) came through as '?' and was "not found". Take the arguments from the
@@ -1093,7 +1130,7 @@ int main(int argc, char* argv[]) {
         global_data.force_auto_play = true;
     }
     init_scores_manager(global_data.config->general.score_method == ScoreMethod::GEN3);
-    unsigned int flags = window_flag::RESIZABLE;
+    unsigned int flags = platform_window_flags(0);
     if (global_data.config->video.vsync && !fixed_step::on()) {
         flags |= window_flag::VSYNC;
         spdlog::info("VSync enabled");
@@ -1123,10 +1160,8 @@ int main(int argc, char* argv[]) {
         LoadingScreen::start_library_walk_early();
     }
 
-    ime_ui_set_hint();
-    init_window(1280, 720, "YataiDON");
+    platform_init_window();
     texture_bc7::init(global_data.config->video.zdon_texture_compression);
-    ime_ui_install();
     try {
         load_skin();
     } catch (const std::exception& e) {
@@ -1171,11 +1206,10 @@ int main(int argc, char* argv[]) {
         skin_updater.start();
     }
 
-#ifdef YATAIDON_PLATFORM_IOS
-    ios_initialize_after_window();
-#endif
+    platform_initialize_after_window();
 
-    double target_fps = global_data.config->video.target_fps;
+    const int target_fps = global_data.config->video.target_fps =
+        platform_apply_target_fps(global_data.config->video.target_fps);
     if (target_fps != -1) {
         spdlog::info("Target FPS set to {}", target_fps);
     }
@@ -1185,10 +1219,7 @@ int main(int argc, char* argv[]) {
 
     L.current_screen = initial_screen;
     global_data.current_screen = screens_to_string(initial_screen);
-    L.target_duration = (target_fps > 0.0 && !fixed_step::on())
-                            ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                  std::chrono::duration<double>(1.0 / target_fps))
-                            : std::chrono::steady_clock::duration::zero();
+    L.target_duration = frame_duration(target_fps);
 
     vblank_pacing::init(global_data.config->video.vsync, target_fps);
     if (vblank_pacing::wants_vsync()) {
@@ -1220,8 +1251,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD,
-                              RL_FUNC_ADD);
+    set_separate_alpha_blend();
     disable_exit_key();
     hide_cursor();
 
@@ -1231,7 +1261,9 @@ int main(int argc, char* argv[]) {
 #elif defined(YATAIDON_PLATFORM_IOS)
     return ios_run_main_loop(run_frame);
 #else
+#ifdef YATAIDON_INPUT_THREAD
     input_thread = std::thread(input_polling_thread);
+#endif
     start_midi_input(global_data.config->midi);
 
     while (!window_should_close() && !g_dump_screen_done) {
@@ -1257,18 +1289,20 @@ int main(int argc, char* argv[]) {
     g_loop = nullptr;
     const bool record_ok = zdon_record::end(); // encodes the rest and muxes the audio in
     zdon_record::export_cancel();              // the recording mode's recording, if the game quit during it
+    get_song_library_loader().stop();
     // Cleanup needs a live SDL/OpenGL context and config.
     webcam.close();
     unload_skin();
     texture_bc7::shutdown();
     delete global_data.config;
     global_data.config = nullptr;
-#if defined(__linux__) && !defined(__ANDROID__)
-    unix_close_window();
-#else
-    close_window();
-#endif
+    platform_close_window();
     spdlog::info("Game closed");
     return record_ok ? 0 : 1;
 #endif
+    return 0;
+}
+
+int main(int argc, char* argv[]) {
+    return platform_run_main(game_main, argc, argv);
 }

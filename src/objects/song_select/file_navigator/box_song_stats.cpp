@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <spdlog/spdlog.h>
 
+#include "../../../libs/file/scores.h"
 #include "../../../libs/jobs.h"
-#include "../../../libs/scores.h"
 #include "box_song.h"
 
 namespace {

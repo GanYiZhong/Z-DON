@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <numeric>
 
-#include "../../libs/text.h"
-#include "../../libs/texture.h"
+#include "../../libs/gfx/text.h"
+#include "../../libs/gfx/texture.h"
 
 FPSCounter::FPSCounter() {
     lastTime = get_current_ms();
@@ -16,12 +17,12 @@ void FPSCounter::update() {
     double deltaTime = currentTime - lastTime;
     lastTime = currentTime;
 
-    frameTimes[currentFrame] = (float)std::clamp(deltaTime, 0.0, 1000.0);
+    frameTimes[currentFrame] = std::clamp(deltaTime, 0.0, 1000.0);
     currentFrame = (currentFrame + 1) % SAMPLE_SIZE;
 }
 
 float FPSCounter::get_fps() const {
-    const float sum = std::ranges::fold_left(frameTimes, 0.0f, std::plus{});
+    const float sum = std::accumulate(std::begin(frameTimes), std::end(frameTimes), 0.0f);
     float avgFrameTime = sum / SAMPLE_SIZE;
     if (!(avgFrameTime > 0.0f)) {
         return 0.0f;
@@ -31,12 +32,12 @@ float FPSCounter::get_fps() const {
 
 void FPSCounter::draw() {
     int curr_fps = get_fps();
-    int size = (int)(20.0f * global_tex.screen_scale);
-    float pos = (float)size;
+    int size = static_cast<int>(20.0f * global_tex.screen_scale);
+    float pos = size;
 
     Color color;
     std::string fps_text = std::to_string(curr_fps) + " FPS";
-    ray::Font font = font_manager.get_font(fps_text, size);
+    Font font = font_manager.get_font(fps_text, size);
 
     if (curr_fps < 30) {
         color = Color::RED;

@@ -3,7 +3,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
+#include "raylib_ns.h"
 
 struct AVFrame;
 
@@ -59,13 +60,13 @@ namespace video_yuv {
         bool valid() const { return y.id != 0; }
         int width() const { return y.width; }
         int height() const { return y.height; }
-        void draw(ray::Rectangle source, ray::Rectangle dest);
+        void draw(Rect source, Rect dest);
         // ZDON_VIDEO_YUV_CHECK: compares the shader's output for the uploaded frame with `rgb`
         void check(const std::vector<uint8_t>& rgb, int frame_index);
         void unload();
 
     private:
-        ray::Texture2D y{}, u{}, v{};
+        Texture y{}, u{}, v{};
         Format fmt{};
         ray::Shader shader{};
         int loc_u = -1, loc_v = -1, loc_off = -1, loc_r = -1, loc_g = -1, loc_b = -1, loc_size = -1, loc_shift = -1;

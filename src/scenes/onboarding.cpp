@@ -2,13 +2,11 @@
 
 #include <algorithm>
 
-#include "../libs/filesystem.h"
+#include "../libs/file/filesystem.h"
+#include "../libs/gfx/text.h"
 #include "../libs/global_data.h"
-#include "../libs/input.h"
-#include "../libs/skin_updater.h"
-#include "../libs/text.h"
-
-void save_config(const Config& config);
+#include "../libs/input/input.h"
+#include "../libs/network/skin_updater.h"
 
 namespace {
     struct SkinEntry {
@@ -102,6 +100,14 @@ void OnboardingScreen::begin_download() {
     if (std::ranges::none_of(selected, [](bool b) { return b; })) {
         error = "Select at least one skin";
         return;
+    }
+    if (!SkinUpdater::available()) {
+        for (int i = 0; i < kSkinCount; ++i) {
+            if (selected[i] && !installed[i]) {
+                error = "Install selected skins in " + fs::absolute("Skins").string() + " first";
+                return;
+            }
+        }
     }
     downloading = true;
     download_started = false;
@@ -197,31 +203,37 @@ std::optional<Screens> OnboardingScreen::update() {
         return on_screen_end(skinless_start ? Screens::LOADING : Screens::TITLE);
     }
 
+    // Up/Down (arrows or D-pad) move between rows; the drum-only scheme below still works
     const int rows = kSkinCount + 2;
-    if (key_pressed(SDL_SCANCODE_UP)) {
+    if (key_pressed(SDL_SCANCODE_UP) || check_key_pressed(10000 + 1)) {
         row = (row + rows - 1) % rows;
-    } else if (key_pressed(SDL_SCANCODE_DOWN)) {
+        return std::nullopt;
+    }
+    if (key_pressed(SDL_SCANCODE_DOWN) || check_key_pressed(10000 + 3)) {
         row = (row + 1) % rows;
-    } else if (is_l_kat_pressed() || menu_left_pressed() || is_r_kat_pressed() || menu_right_pressed()) {
-        if (row == online_row()) {
-            online = !online;
+        return std::nullopt;
+    }
+    // drum-only: don moves down (starts the download on Continue), kat toggles the current row
+    if (menu_confirm_pressed()) {
+        if (row == continue_row()) {
+            begin_download();
+        } else {
+            row++;
         }
-    } else if (is_l_don_pressed() || is_r_don_pressed() || menu_confirm_pressed()) {
+    } else if (menu_left_pressed() || menu_right_pressed()) {
         if (row < kSkinCount) {
             toggle_skin(row);
         } else if (row == online_row()) {
             online = !online;
-            row = continue_row();
         } else {
-            begin_download();
+            row = 0; // kat on Continue: back to the top
         }
     }
     return std::nullopt;
 }
 
 void OnboardingScreen::draw_line(const std::string& text, float y, int size, Color color) {
-    // no skin yet means no skin font; the raylib default covers the ASCII this screen uses
-    ray::Font font = skinless_start ? get_font_default() : font_manager.get_font(text, size);
+    Font font = font_manager.get_font(text, size);
     Vec2 dim = measure_text_ex(font, text.c_str(), static_cast<float>(size), 1.0f);
     draw_text_ex(font, text.c_str(), Vec2{(tex.screen_width - dim.x) / 2.0f, y}, static_cast<float>(size), 1.0f, color);
 }
@@ -265,6 +277,5 @@ void OnboardingScreen::draw() {
     if (!error.empty()) {
         draw_line(error, 565 * s, static_cast<int>(22 * s), Color::RED);
     }
-    draw_line("Up/Down: move    Enter / don: select    Left/Right: toggle online", 650 * s, static_cast<int>(20 * s),
-              Color::GRAY);
+    draw_line("Don: next / continue    Ka: toggle    Up/Down: move", 650 * s, static_cast<int>(20 * s), Color::GRAY);
 }

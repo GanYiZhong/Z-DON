@@ -244,8 +244,7 @@ struct NoteList {
 struct CourseData {
     double level = 0;
     std::vector<int> balloon;
-    // BALLOONNOR / BALLOONEXP / BALLOONMAS: the balloons of one branch's route through the chart,
-    // in order (the parts before and after the branches included); empty: BALLOON is used
+    // BALLOONNOR/EXP/MAS: balloons along each branch's route; empty: BALLOON is used
     std::array<std::vector<int>, 3> branch_balloon;
     std::vector<int> scoreinit;
     double scorediff = 0;
@@ -256,7 +255,7 @@ struct TJAMetadata {
     std::map<std::string, std::string> title = {{"en", ""}};
     std::map<std::string, std::string> subtitle = {{"en", ""}};
     bool subtitle_full_display = false;
-    std::string genre = "";
+    std::string genre;
     fs::path wave;
     double demostart = 0.0f;
     double offset = 0.0f;
@@ -264,7 +263,7 @@ struct TJAMetadata {
     fs::path bgmovie;
     double movieoffset = 0.0f;
     fs::path preimage;
-    std::string scene_preset = "";
+    std::string scene_preset;
     std::map<int, CourseData> course_data;
 };
 
@@ -288,8 +287,8 @@ struct ParserState {
     size_t balloon_cursor = 0;
     double balloon_index = 0;
     size_t branch_balloon_cursor = 0;
-    std::array<std::vector<int>, 3> branch_balloons; // normal, expert, master
-    std::array<size_t, 3> branch_balloon_route_cursor{};
+    std::array<std::vector<int>, 3> route_balloons; // normal, expert, master
+    std::array<size_t, 3> route_cursor{};
     int branch = -1; // 0 #N, 1 #E, 2 #M; -1 outside the branches
     bool barline_added = false;
     double sudden_appear = 0.0f;
@@ -328,7 +327,7 @@ public:
 
     TJAParser() = default;
 
-    TJAParser(const std::filesystem::path& path, int start_delay = 0, int player_num = 0);
+    TJAParser(std::filesystem::path path, int start_delay = 0, int player_num = 0);
 
     std::filesystem::path file_path;
     TJAMetadata metadata;

@@ -5,9 +5,9 @@
 #include <memory>
 #include <unordered_map>
 
+#include "../../libs/gfx.h"
+#include "../../libs/gfx/texture.h"
 #include "../../libs/global_data.h"
-#include "../../libs/ray.h"
-#include "../../libs/texture.h"
 #include "../../libs/time.h"
 
 namespace zhud {

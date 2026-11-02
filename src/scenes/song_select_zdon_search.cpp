@@ -3,8 +3,8 @@
 // nothing picked, Enter keeps the old behaviour (the search folder). Tab: genre, F3: course, PgUp / PgDn: level.
 // The mouse: a row under it is picked, a click goes to it, the wheel moves the pick, a filter chip clicked
 // (right click: back) steps it.
-#include "../libs/input.h"
-#include "../libs/scores.h"
+#include "../libs/file/scores.h"
+#include "../libs/input/input.h"
 #include "../objects/global/zdon_hud.h"
 #include "song_select.h"
 

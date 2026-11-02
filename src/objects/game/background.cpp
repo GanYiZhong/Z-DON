@@ -1,6 +1,7 @@
 #include "background.h"
 
-#include "../../libs/script.h"
+#include "../../libs/audio/audio.h"
+#include "../../libs/file/script.h"
 
 Background::Background(PlayerNum player_num, float bpm, const std::string& scene_preset) {
     if (!script_manager.lua) {
@@ -81,27 +82,33 @@ void Background::update(double current_ms, float bpm) {
 }
 
 void Background::handle_good(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_good, "handle_good", static_cast<int>(player_num));
 }
 
 void Background::handle_ok(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_ok, "handle_ok", static_cast<int>(player_num));
 }
 
 void Background::handle_bad(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_bad, "handle_bad", static_cast<int>(player_num));
 }
 
 void Background::handle_drumroll(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_drumroll, "handle_drumroll", static_cast<int>(player_num));
 }
 
 void Background::handle_balloon(PlayerNum player_num, int remaining) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_balloon, "handle_balloon", static_cast<int>(player_num), remaining);
 }
 
 // A kusudama hit: skins without handle_kusudama get handle_balloon, as before.
 void Background::handle_kusudama(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     if (!fn_handle_kusudama.valid()) {
         handle_balloon(player_num);
         return;
@@ -115,35 +122,43 @@ void Background::handle_kusudama(PlayerNum player_num) {
 
 void Background::handle_gauge(PlayerNum player_num, float progress, bool is_clear, bool is_rainbow,
                               float clear_progress, float flash) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_gauge, "handle_gauge", static_cast<int>(player_num), progress, is_clear, is_rainbow,
            clear_progress, flash);
 }
 
 void Background::handle_song_end(PlayerNum player_num, int good, int ok, int bad, int total_notes) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_song_end, "handle_song_end", static_cast<int>(player_num), good, ok, bad, total_notes);
 }
 
 void Background::handle_dan(PlayerNum player_num, const sol::table& state) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_dan, "handle_dan", static_cast<int>(player_num), state);
 }
 
 void Background::handle_score(PlayerNum player_num, int score) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_score, "handle_score", static_cast<int>(player_num), score);
 }
 
 void Background::handle_ending(PlayerNum player_num, const std::string& kind) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_ending, "handle_ending", static_cast<int>(player_num), kind);
 }
 
 void Background::draw_ending(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_draw_ending, "draw_ending", static_cast<int>(player_num));
 }
 
 void Background::handle_balloon_end(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_balloon_end, "handle_balloon_end", static_cast<int>(player_num));
 }
 
 void Background::handle_skip(PlayerNum player_num, const sol::table& state) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_skip, "handle_skip", static_cast<int>(player_num), state);
 }
 
@@ -156,13 +171,16 @@ void Background::draw_fore() {
 }
 
 void Background::draw_gauge(PlayerNum player_num) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_draw_gauge, "draw_gauge", static_cast<int>(player_num));
 }
 
 void Background::handle_miss_streak(PlayerNum player_num, bool on) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_miss_streak, "handle_miss_streak", static_cast<int>(player_num), on);
 }
 
 void Background::handle_gogo(PlayerNum player_num, bool on) {
+    PlayerSoundScope audio_owner(player_num);
     invoke(fn_handle_gogo, "handle_gogo", static_cast<int>(player_num), on);
 }

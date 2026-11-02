@@ -5,6 +5,9 @@ FFmpeg decoding, and touch drum controls with Android. It builds a landscape app
 for iPhone and iPad running iOS 16.3 or later. This is a source port; physical-device
 latency and distribution signing still need validation.
 
+To install a pre-built beta instead of building, join the
+[TestFlight beta](https://testflight.apple.com/join/ZzrXBUsb).
+
 ## Build on a Mac
 
 Install Xcode (including the iOS SDK) and CMake 3.24 or newer. Select the full Xcode
@@ -12,18 +15,9 @@ installation with `sudo xcode-select -s /Applications/Xcode.app/Contents/Develop
 if the command-line tools are selected instead. Python 3, Git, and curl are also
 required. The first build downloads and compiles dependencies.
 
-Populate the skin submodules before building on a fresh checkout:
-
-```sh
-git submodule update --init --recursive
-```
-
-Do not run that command over skin changes you want to keep. If your assets live
-elsewhere, pass `-DYATAIDON_SKINS_DIR=/absolute/path/to/Skins` to the build script.
-Use the complete `Skins` directory from the matching submodule revisions, including
-`PyTaikoGreen` and `YataiDONNijiiro`: texture IDs are generated across skins. All
-skins placed there are included. `-DIOS_SONGS_DIR=/absolute/path/to/Songs` changes the bundled
-song library. Large skin videos increase both app size and first-launch copy time.
+Skins are not bundled in the iOS app. On first launch the app opens the onboarding
+screen and downloads the selected skins in-game, which keeps the IPA small.
+`-DIOS_SONGS_DIR=/absolute/path/to/Songs` changes the bundled song library.
 
 ### Simulator
 
@@ -74,7 +68,6 @@ tool and credentials before installing it on an iPhone or iPad.
 
 The job reuses the existing repository secrets:
 
-- `GITEA_USER` and `GITEA_TOKEN` to fetch the private skin submodules.
 - `NETWORK_URL` and `NETWORK_AUTH_KEY` to enable the online client. When either is
   absent, the build uses the offline implementation; runtime network switches
   still follow the configuration described below.

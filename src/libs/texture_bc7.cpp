@@ -25,6 +25,7 @@
 #endif
 
 #include "jobs.h"
+#include "raylib_ns.h"
 
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
 using ray::Matrix;
@@ -115,14 +116,14 @@ namespace texture_bc7 {
             return size_t{(w + 3) / 4} * ((h + 3) / 4) * 16;
         }
 
-        bool encodable(const ray::Image& img) {
+        bool encodable(const Image& img) {
             return img.data && img.mipmaps == 1 && img.width > 0 && img.height > 0 &&
                    (img.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 ||
                     img.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8);
         }
 
         // the image's pixels as RGBA8 (a copy for RGB8)
-        std::vector<uint8_t> rgba_copy(const ray::Image& img) {
+        std::vector<uint8_t> rgba_copy(const Image& img) {
             const size_t n = size_t(img.width) * img.height;
             std::vector<uint8_t> out(n * 4);
             const auto* src = static_cast<const uint8_t*>(img.data);
@@ -139,7 +140,7 @@ namespace texture_bc7 {
             return out;
         }
 
-        uint64_t key_of(const ray::Image& img) {
+        uint64_t key_of(const Image& img) {
             const size_t bpp = img.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 ? 4 : 3;
             const uint64_t h = hash64(static_cast<const uint8_t*>(img.data), size_t(img.width) * img.height * bpp);
             return h ^ ((uint64_t(uint32_t(img.width)) << 32 | uint32_t(img.height)) * 0x9E3779B97F4A7C15ull) ^ bpp;
@@ -482,7 +483,7 @@ namespace texture_bc7 {
         if (const char* v = std::getenv("ZDON_BC7")) {
             want = v[0] == '1';
         }
-        const bool supported = rlIsTextureCompressionBPTCSupported();
+        const bool supported = ray::rlIsTextureCompressionBPTCSupported();
         const bool on = want && supported;
         if (want && !supported) {
             spdlog::info("BC7 textures: off (the GL driver has no BPTC)");
@@ -499,7 +500,7 @@ namespace texture_bc7 {
         return state().on.load(std::memory_order_acquire);
     }
 
-    void compress(ray::Image& image) {
+    void compress(Image& image) {
         State& s = state();
         if (!enabled() || !encodable(image)) {
             return;
@@ -573,7 +574,7 @@ namespace texture_bc7 {
                      [key, w, h, px = rgba_copy(image)]() mutable { encode_job(key, w, h, std::move(px)); });
     }
 
-    Rect alpha_border(const ray::Image& image) {
+    Rect alpha_border(const Image& image) {
         State& s = state();
         const int w = image.width, h = image.height;
         const auto* blocks = static_cast<const uint8_t*>(image.data);

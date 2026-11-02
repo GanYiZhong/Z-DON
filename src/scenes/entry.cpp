@@ -3,11 +3,11 @@
 #include <algorithm>
 #include <thread>
 
-#include "../libs/config.h"
+#include "../libs/file/config.h"
+#include "../libs/file/scores.h"
 #include "../libs/global_data.h"
-#include "../libs/input.h"
-#include "../libs/network.h"
-#include "../libs/scores.h"
+#include "../libs/input/input.h"
+#include "../libs/network/network.h"
 
 void EntryScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -66,6 +66,7 @@ void EntryScreen::on_screen_start() {
         }
     });
 
+    wait_idle_since_ = get_current_ms();
     lua_entry = std::make_unique<EntryScript>();
     lua_entry->start_side_select();
     reload_preview_chara(PlayerNum::P1);
@@ -204,6 +205,9 @@ void EntryScreen::finish_login(RemoteLogin remote) {
             pd.chara_cos_index = u.costume->cos_index;
             pd.chara_is_costume = u.costume->is_costume;
         }
+        if (u.acce_index) {
+            pd.chara_acce_index = *u.acce_index;
+        }
         if (u.import_requested) {
             scores_manager.export_to_hiroba(code, code);
             network.clear_import_flag(code);
@@ -280,7 +284,7 @@ void EntryScreen::end_name_entry() {
     }
 }
 
-void EntryScreen::finish_slot(int slot, PlayerData pd) {
+void EntryScreen::finish_slot(int slot, const PlayerData& pd) {
     (slot == 0 ? scores_manager.player_1 : scores_manager.player_2) = pd.player_id;
     (slot == 0 ? scores_manager.player_1_data : scores_manager.player_2_data) = pd;
     scores_manager.save_player_data(pd);
@@ -314,8 +318,10 @@ void EntryScreen::on_card_login() {
 }
 
 void EntryScreen::start_second_player_join() {
+    audio.set_two_player_mode(true);
     const PlayerNum first = global_data.entry_joined_seat;
     const PlayerNum second = (first == PlayerNum::P1) ? PlayerNum::P2 : PlayerNum::P1;
+    PlayerSoundScope audio_owner(second);
 
     side = (first == PlayerNum::P1) ? 0 : 2;
     global_data.player_num = first;
@@ -326,15 +332,15 @@ void EntryScreen::start_second_player_join() {
     global_data.player_num = second;
     players[1] = std::make_unique<EntryPlayer>(second, second_side, box_manager.get());
     players[1]->start_animations();
-    audio.play_sound("cloud", VolumePreset::SOUND);
-    audio.play_sound("entry_start_" + std::to_string((int)second) + "p", VolumePreset::VOICE);
+    audio.play_player_sound("cloud", PlayerNum::ALL, VolumePreset::SOUND);
+    audio.play_sound("entry_start_" + std::to_string(static_cast<int>(second)) + "p", VolumePreset::VOICE);
 
     global_data.player_num = PlayerNum::P1;
     is_2p = true;
     side = 1;
     state = EntryState::SELECT_MODE;
-    spdlog::info("[2P join] ENTRY resumed: {}P kept (first_login {}P), {}P entered, mode select", (int)first,
-                 (int)global_data.first_login_player, (int)second);
+    spdlog::info("[2P join] ENTRY resumed: {}P kept (first_login {}P), {}P entered, mode select",
+                 static_cast<int>(first), static_cast<int>(global_data.first_login_player), static_cast<int>(second));
 }
 
 std::unique_ptr<Chara3D> EntryScreen::make_preview_chara(PlayerNum player_num) {
@@ -391,6 +397,7 @@ bool EntryScreen::seat_joined(PlayerNum player_num) const {
 }
 
 void EntryScreen::join_player(PlayerNum player_num, bool do_login) {
+    PlayerSoundScope audio_owner(player_num);
     bool loading = false;
     if (do_login && !login_ready_) {
         if (login_pending()) {
@@ -411,6 +418,7 @@ void EntryScreen::join_player(PlayerNum player_num, bool do_login) {
     global_data.player_num = player_num;
 
     if (players[0]) {
+        audio.set_two_player_mode(true);
         players[1] = std::make_unique<EntryPlayer>(global_data.player_num, side, box_manager.get());
         players[1]->start_animations(loading && !network_msg.available);
         global_data.player_num = PlayerNum::P1;
@@ -420,9 +428,10 @@ void EntryScreen::join_player(PlayerNum player_num, bool do_login) {
         players[0] = std::make_unique<EntryPlayer>(global_data.player_num, side, box_manager.get());
         players[0]->start_animations(loading && !network_msg.available);
         is_2p = false;
+        audio.set_two_player_mode(false);
     }
-    audio.play_sound("cloud", VolumePreset::SOUND);
-    audio.play_sound("entry_start_" + std::to_string((int)player_num) + "p", VolumePreset::VOICE);
+    audio.play_player_sound("cloud", PlayerNum::ALL, VolumePreset::SOUND);
+    audio.play_sound("entry_start_" + std::to_string(static_cast<int>(player_num)) + "p", VolumePreset::VOICE);
     if (state == EntryState::SELECT_SIDE) {
         lua_entry->decide_side_select(side);
     }
@@ -458,6 +467,9 @@ std::optional<Screens> EntryScreen::handle_input() {
     if (state == EntryState::WAITING) {
         const bool enter = key_pressed(SDL_SCANCODE_RETURN);
         const bool don = is_l_don_pressed() || is_r_don_pressed();
+        if (enter || don || menu_left_pressed() || menu_right_pressed()) {
+            wait_idle_since_ = get_current_ms();
+        }
         if (!enter && !don) {
             return std::nullopt;
         }
@@ -681,8 +693,9 @@ std::optional<Screens> EntryScreen::update() {
         return on_screen_end(box_manager->selected_box());
     }
     for (auto& player : players) {
-        if (!announce_played && state != EntryState::NAME_ENTRY && player && player->is_cloud_animation_finished() &&
-            !audio.is_sound_playing("entry_start_" + std::to_string((int)global_data.player_num) + "p")) {
+        if (player && player->is_cloud_animation_finished() &&
+            !audio.is_sound_playing("entry_start_" + std::to_string(static_cast<int>(global_data.player_num)) + "p") &&
+            !announce_played && state != EntryState::NAME_ENTRY) {
             audio.play_sound("select_mode", VolumePreset::VOICE);
             announce_played = true;
         }
@@ -740,7 +753,7 @@ void EntryScreen::draw() {
     draw_player_drum();
 
     if (state == EntryState::WAITING) {
-        lua_entry->draw_waiting();
+        lua_entry->draw_waiting(login_pending() ? 0 : get_current_ms() - wait_idle_since_);
         for (int i = 0; i < 2; i++) {
             auto pos = lua_entry->wait_chara_pos(i == 1);
             if (!pos) {

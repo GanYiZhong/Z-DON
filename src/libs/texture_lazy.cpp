@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "global_data.h"
+#include "raylib_ns.h"
 #include "texture_retain.h"
 #include "zdon_os.h"
 
@@ -24,7 +25,7 @@ namespace texture_lazy {
         constexpr size_t kMB = size_t{1} << 20;
 
         struct Pending {
-            ray::Image image{};
+            Image image{};
             int filter = -1;
             int wrap = -1;
             std::string screen;
@@ -59,7 +60,7 @@ namespace texture_lazy {
             return *m;
         }
         size_t pending_bytes = 0;
-        ray::Image (*decoder)(const std::filesystem::path&) = nullptr;
+        Image (*decoder)(const std::filesystem::path&) = nullptr;
 
         size_t cap_bytes() {
             static const size_t cap = [] {
@@ -99,7 +100,7 @@ namespace texture_lazy {
                 pending_bytes -= std::min(pending_bytes, it->second.bytes);
             }
             if (it->second.gl_id != 0) {
-                rlUnloadTexture(it->second.gl_id);
+                ray::rlUnloadTexture(it->second.gl_id);
             }
             texture_retain::free_image_async(it->second.image);
             pending_map().erase(it);
@@ -115,10 +116,9 @@ namespace texture_lazy {
         // select 11-13 ms again, in the batch flush); a texture drawn while still empty is moved then, and the
         // bands uploaded after that go to it directly (the longest warm-up frame 15 -> 2.4 ms).
         void warm_touch(const Texture& t) {
-            static ray::RenderTexture2D rt = ray::LoadRenderTexture(1, 1); // never unloaded, like the GL context
+            static RenderTarget rt = ray::LoadRenderTexture(1, 1); // never unloaded, like the GL context
             ray::BeginTextureMode(rt);
-            ray::DrawTexturePro(t, ray::Rectangle{0, 0, 1, 1}, ray::Rectangle{0, 0, 1, 1}, ray::Vector2{0, 0}, 0,
-                                ray::Color{255, 255, 255, 255});
+            ray::DrawTexturePro(t, Rect{0, 0, 1, 1}, Rect{0, 0, 1, 1}, Vec2{0, 0}, 0, ray::Color{255, 255, 255, 255});
             ray::EndTextureMode();
         }
 
@@ -242,9 +242,8 @@ namespace texture_lazy {
         return on;
     }
 
-    std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
-                                  const std::filesystem::path& source, const std::string& owner, uint64_t size,
-                                  uint64_t mtime) {
+    std::shared_ptr<Texture> make(const Image& image, const std::string& screen, const std::filesystem::path& source,
+                                  const std::string& owner, uint64_t size, uint64_t mtime) {
         if (!enabled() || !image.data || during_gameplay(screen)) {
             return nullptr;
         }
@@ -299,7 +298,7 @@ namespace texture_lazy {
         Pending& p = it->second;
         if (p.evicted) {
             // drawn before a screen load gave it its image back: decode it now (a hitch, hence the log)
-            ray::Image img = decoder ? decoder(p.source) : ray::Image{};
+            Image img = decoder ? decoder(p.source) : Image{};
             refill(t, img);
             spdlog::info("Lazy texture upload: {} decoded again on first use ({:.1f} ms)", p.source.string(),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
@@ -313,9 +312,9 @@ namespace texture_lazy {
         if (p.gl_id != 0) {
             // warm_tick had uploaded the first rows: the rest now
             const size_t row_bytes = image_bytes(p.image.width, 1, p.image.format);
-            rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, p.image.height - p.rows_done, p.image.format,
-                            static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
-            rlDisableTexture();
+            ray::rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, p.image.height - p.rows_done, p.image.format,
+                                 static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
+            ray::rlDisableTexture();
             up.id = p.gl_id;
             up.width = p.image.width;
             up.height = p.image.height;
@@ -387,7 +386,7 @@ namespace texture_lazy {
         std::vector<Pending*> candidates;
         for (auto& [t, p] : pending_map()) {
             if (p.gl_id != 0) { // an ahead-of-use upload the screen did not finish: dropped, as if never begun
-                rlUnloadTexture(p.gl_id);
+                ray::rlUnloadTexture(p.gl_id);
                 p.gl_id = 0;
                 p.rows_done = 0;
             }
@@ -438,7 +437,7 @@ namespace texture_lazy {
         return out;
     }
 
-    void refill(const Texture* t, ray::Image image) {
+    void refill(const Texture* t, Image image) {
         auto it = pending_map().find(t);
         if (it == pending_map().end() || !it->second.evicted || !image.data) {
             texture_retain::free_image_async(image);
@@ -473,7 +472,7 @@ namespace texture_lazy {
         return out;
     }
 
-    size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, ray::Image>>& images) {
+    size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, Image>>& images) {
         std::map<std::filesystem::path, std::vector<const Texture*>> by_file;
         for (const auto& [t, p] : pending_map()) {
             if (p.evicted && p.owner == owner) {
@@ -489,7 +488,7 @@ namespace texture_lazy {
             }
             const auto& texs = it->second;
             for (size_t i = 0; i < texs.size(); ++i) {
-                refill(texs[i], i + 1 < texs.size() ? ray::ImageCopy(image) : image);
+                refill(texs[i], i + 1 < texs.size() ? image_copy(image) : image);
             }
             n += texs.size();
         }
@@ -510,7 +509,7 @@ namespace texture_lazy {
         return enabled() && evict_enabled() ? n : 0;
     }
 
-    void set_decoder(ray::Image (*decode)(const std::filesystem::path& source)) {
+    void set_decoder(Image (*decode)(const std::filesystem::path& source)) {
         decoder = decode;
     }
 
@@ -539,7 +538,7 @@ namespace texture_lazy {
             } else {
                 // a band of rows per call, so one big texture spreads over several frames
                 if (p.gl_id == 0) {
-                    p.gl_id = rlLoadTexture(nullptr, p.image.width, p.image.height, p.image.format, 1);
+                    p.gl_id = ray::rlLoadTexture(nullptr, p.image.width, p.image.height, p.image.format, 1);
                     if (p.gl_id == 0) {
                         ++warm_pos; // left for its first use
                         continue;
@@ -557,9 +556,9 @@ namespace texture_lazy {
                 const size_t row_bytes = std::max<size_t>(1, image_bytes(p.image.width, 1, p.image.format));
                 const int rows =
                     std::clamp(static_cast<int>(kWarmBandBytes / row_bytes), 1, p.image.height - p.rows_done);
-                rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, rows, p.image.format,
-                                static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
-                rlDisableTexture();
+                ray::rlUpdateTexture(p.gl_id, 0, p.rows_done, p.image.width, rows, p.image.format,
+                                     static_cast<const unsigned char*>(p.image.data) + row_bytes * p.rows_done);
+                ray::rlDisableTexture();
                 p.rows_done += rows;
                 ScreenStats& st = stats()[p.screen];
                 st.warm_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -595,17 +594,17 @@ namespace texture_lazy {
         }
     }
 
-    bool bandable(const ray::Image& image) {
+    bool bandable(const Image& image) {
         return image.data && image.mipmaps == 1 && image.format < ray::PIXELFORMAT_COMPRESSED_DXT1_RGB &&
                image.height > 0;
     }
 
-    bool upload_band(const ray::Image& image, BandUpload& st) {
+    bool upload_band(const Image& image, BandUpload& st) {
         if (!bandable(image)) {
             return false;
         }
         if (st.id == 0) {
-            st.id = rlLoadTexture(nullptr, image.width, image.height, image.format, 1);
+            st.id = ray::rlLoadTexture(nullptr, image.width, image.height, image.format, 1);
             if (st.id == 0) {
                 return false;
             }
@@ -620,9 +619,9 @@ namespace texture_lazy {
         }
         const size_t row_bytes = std::max<size_t>(1, image_bytes(image.width, 1, image.format));
         const int rows = std::clamp(static_cast<int>(kWarmBandBytes / row_bytes), 1, image.height - st.rows_done);
-        rlUpdateTexture(st.id, 0, st.rows_done, image.width, rows, image.format,
-                        static_cast<const unsigned char*>(image.data) + row_bytes * st.rows_done);
-        rlDisableTexture();
+        ray::rlUpdateTexture(st.id, 0, st.rows_done, image.width, rows, image.format,
+                             static_cast<const unsigned char*>(image.data) + row_bytes * st.rows_done);
+        ray::rlDisableTexture();
         st.rows_done += rows;
         if (st.rows_done < image.height) {
             return false;

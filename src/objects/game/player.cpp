@@ -3,25 +3,33 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <iterator>
 #include <numbers>
 #include <optional>
 #include <ranges>
 #include <vector>
 
-#include "../../libs/audio.h"
-#include "../../libs/input.h"
-#include "../../libs/scores.h"
-#include "../../libs/text.h"
+#include "../../libs/audio/audio.h"
+#include "../../libs/file/scores.h"
+#include "../../libs/gfx/text.h"
+#include "../../libs/input/input.h"
+
+// Z-DON: plays a resolved sound id as `who` (upstream routes a player's sounds by PlayerSoundScope)
+static void play_as(PlayerNum who, SoundId id, VolumePreset preset, float gain = 1.0f) {
+    PlayerSoundScope scope(who);
+    audio.play_sound(id, preset, gain);
+}
 
 Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
-               bool is_2p_param, const Modifiers& modifiers_param)
+               bool is_2p_param, const Modifiers& modifiers_param, const std::string& score_method_param)
     : is_2p(is_2p_param), player_num(player_num_param), difficulty(difficulty_param),
-      visual_offset(global_data.config->general.visual_offset), score_method(global_data.config->general.score_method),
+      visual_offset(global_data.config->general.visual_offset), score_method(score_method_param),
       modifiers(modifiers_param), parser(parser_ref), combo_display(combo, 0), score_counter(is_2p, player_num) {
+    PlayerSoundScope audio_owner(player_num);
     init_player_textures();
     reset_chart();
-    don_hitsound = "hitsound_don_" + std::to_string((int)player_num) + "p";
-    kat_hitsound = "hitsound_kat_" + std::to_string((int)player_num) + "p";
+    don_hitsound = "hitsound_don_" + std::to_string(static_cast<int>(player_num)) + "p";
+    kat_hitsound = "hitsound_kat_" + std::to_string(static_cast<int>(player_num)) + "p";
     don_hitsound_id = audio.sound_id(don_hitsound);
     kat_hitsound_id = audio.sound_id(kat_hitsound);
     audio.make_polyphonic(don_hitsound_id); // Z-DON: hits ring out over each other (ZDON_HIT_POLYPHONY)
@@ -29,7 +37,7 @@ Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_n
     balloon_pop_id = audio.sound_id("balloon_pop");
     kusudama_pop_id = audio.sound_id("kusudama_pop");
 
-    std::string pnum = std::to_string((int)player_num);
+    std::string pnum = std::to_string(static_cast<int>(player_num));
     lane_cover_tex_id = tex.get_texture("lane/" + pnum + "p_lane_cover");
     lane_icon_tex_id = tex.get_texture("lane/" + pnum + "p_icon");
     for (int t = 1; t <= 9; ++t) {
@@ -37,11 +45,10 @@ Player::Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_n
         note_tex_ids[t] = tex.has_texture(name) ? tex.get_texture(name) : nullptr;
     }
 
-    if (parser && !parser->metadata.course_data.empty()) {
-        if (parser->metadata.course_data[difficulty].is_branching) {
-            branch_indicator = BranchIndicator();
-        }
+    if (parser && !parser->metadata.course_data.empty() && parser->metadata.course_data[difficulty].is_branching) {
+        branch_indicator = BranchIndicator();
     }
+
     std::string player_id = get_player_id(player_num);
     auto pd = scores_manager.get_player_data(player_id);
     nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", player_num, pd ? pd->dan : -1,
@@ -180,6 +187,7 @@ void Player::on_miss() {
 }
 
 void Player::spawn_ending_anim(Background* background) {
+    PlayerSoundScope audio_owner(player_num);
     ending_background = background;
     if (skipped_run) {
         ending_anim.reset();
@@ -277,7 +285,7 @@ void Player::handle_timeline(double ms_from_start) {
         timeline.pop_front();
     }
 
-    for (int i = (int)timeline_buffer.size() - 1; i >= 0; i--) {
+    for (auto i = std::ssize(timeline_buffer) - 1; i >= 0; i--) {
         // NOTE: handlers may erase timeline_buffer[i]; take a copy and stop
         // dispatching as soon as the entry has been consumed.
         TimelineObject entry = timeline_buffer[i];
@@ -304,7 +312,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             autoplay_hit_side = autoplay_hit_side == Side::LEFT ? Side::RIGHT : Side::LEFT;
             spawn_hit_effects(hit_type, autoplay_hit_side);
             if (!zdon_auto_catchup) {
-                audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+                play_as(player_num, don_hitsound_id, VolumePreset::HITSOUND);
             }
             check_note(ms_from_start, hit_type, current_ms, background);
         }
@@ -319,7 +327,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             }
         };
 
-        const double bad_window = (difficulty <= (int)Difficulty::NORMAL) ? Timing::BAD_EASY : Timing::BAD;
+        const double bad_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
 
         while (!don_notes.empty() && ms_from_start >= don_notes.front().hit_ms) {
             if (ms_from_start > don_notes.front().hit_ms + bad_window) {
@@ -329,7 +337,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             hit_type = DrumType::DON;
             autoplay_hit(hit_type, don_notes.front().type == NoteType::DON_L);
             if (!zdon_auto_catchup) {
-                audio.play_sound(don_hitsound_id, VolumePreset::HITSOUND);
+                play_as(player_num, don_hitsound_id, VolumePreset::HITSOUND);
             }
             check_note(ms_from_start, hit_type, current_ms, background);
             last_note_hit = current_ms;
@@ -346,7 +354,7 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             hit_type = DrumType::KAT;
             autoplay_hit(hit_type, kat_notes.front().type == NoteType::KAT_L);
             if (!zdon_auto_catchup) {
-                audio.play_sound(kat_hitsound_id, VolumePreset::HITSOUND);
+                play_as(player_num, kat_hitsound_id, VolumePreset::HITSOUND);
             }
             check_note(ms_from_start, hit_type, current_ms, background);
             if (kat_notes.size() == remaining) {
@@ -393,9 +401,12 @@ void Player::evaluate_branch(double current_ms) {
     if (current_ms >= branch_end_ms) {
         is_branch = false;
         if (branch_condition == "p") {
-            branch_p_count = branch_note_count != 0
-                                 ? std::max(std::min((int)((double)branch_p_count / branch_note_count * 100), 100), 0)
-                                 : 0;
+            branch_p_count =
+                branch_note_count != 0
+                    ? std::max(std::min(static_cast<int>(static_cast<double>(branch_p_count) / branch_note_count * 100),
+                                        100),
+                               0)
+                    : 0;
         } else if (branch_condition == "r") {
             branch_r_count = std::max(curr_drumroll_count, branch_r_count);
         }
@@ -468,6 +479,7 @@ void Player::evaluate_branch(double current_ms) {
 }
 
 void Player::update(double ms_from_start, double current_ms, std::optional<Background>& background) {
+    PlayerSoundScope audio_owner(player_num);
     bg_hook = background.has_value() ? &background.value() : nullptr;
 
     // Z-DON: a stalled frame (the window dragged: Windows blocks the loop while the song plays on) jumps the
@@ -571,8 +583,8 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
         if (background.has_value()) {
             background->handle_gauge(player_num, gauge->get_length() / 100.0f, gauge->get_is_clear(),
                                      gauge->get_is_rainbow());
-            if ((int)is_gogo_time != last_reported_gogo) {
-                last_reported_gogo = (int)is_gogo_time;
+            if (static_cast<int>(is_gogo_time) != last_reported_gogo) {
+                last_reported_gogo = static_cast<int>(is_gogo_time);
                 background->handle_gogo(player_num, is_gogo_time);
             }
             if (score != last_reported_score) {
@@ -634,6 +646,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
 }
 
 void Player::draw(double ms_from_start, float x, float y) {
+    PlayerSoundScope audio_owner(player_num);
     tex.draw_texture(t_lane_background, {.y = y});
     if (player_num == PlayerNum::AI) {
         tex.draw_texture(t_ai_lane_background, {.y = y});
@@ -979,7 +992,7 @@ void Player::reset_chart() {
     if (score_method == ScoreMethod::SHINUCHI) {
         base_score = calculate_base_score(total_notes);
     } else if (score_method == ScoreMethod::GEN3) {
-        if (difficulty < 0 || difficulty >= (int)parser->metadata.course_data.size()) {
+        if (difficulty < 0 || difficulty >= std::ssize(parser->metadata.course_data)) {
             score_init = calculate_base_score(total_notes);
             score_diff = 0;
             return;
@@ -1019,7 +1032,8 @@ std::optional<Note> Player::get_first_note() {
         });
         return *first;
     }
-    return draw_note_list.front();
+    auto first = std::ranges::find_if(draw_note_list, [](const Note& n) { return n.type != NoteType::BARLINE; });
+    return first != draw_note_list.end() ? *first : draw_note_list.front();
 }
 
 // #BMSCROLL / #HBSCROLL: distance = beats to the note, so the field speeds up and slows down
@@ -1287,15 +1301,15 @@ void Player::handle_camera(double ms_from_start, const TimelineObject& timeline_
             global_data.camera = CameraConfig();
             global_data.camera.border_color = border;
         } else if (ev.prop == CamProp::BORDER_COLOR) {
-            global_data.camera.border_color = {(unsigned char)std::clamp(ev.from, 0.0, 255.0),
-                                               (unsigned char)std::clamp(ev.to, 0.0, 255.0),
-                                               (unsigned char)std::clamp(ev.extra, 0.0, 255.0), 255};
+            global_data.camera.border_color = {static_cast<unsigned char>(std::clamp(ev.from, 0.0, 255.0)),
+                                               static_cast<unsigned char>(std::clamp(ev.to, 0.0, 255.0)),
+                                               static_cast<unsigned char>(std::clamp(ev.extra, 0.0, 255.0)), 255};
         } else if (ev.ease) {
             std::erase_if(camera_eases, [&](const TimelineObject& t) { return t.cam->prop == ev.prop; });
             camera_eases.push_back(timeline_object);
         } else {
             std::erase_if(camera_eases, [&](const TimelineObject& t) { return t.cam->prop == ev.prop; });
-            apply_camera_prop(ev.prop, (float)ev.to);
+            apply_camera_prop(ev.prop, ev.to);
         }
     }
     consume_timeline_entry(buffer_index);
@@ -1307,13 +1321,13 @@ void Player::update_camera(double ms_from_start) {
         double len = t.end_time - t.start_time;
         double p = len > 0 ? (ms_from_start - t.start_time) / len : 1.0;
         double e = ease_progress(p, ev.dir, ev.calc);
-        apply_camera_prop(ev.prop, (float)(ev.from + (ev.to - ev.from) * e));
+        apply_camera_prop(ev.prop, ev.from + (ev.to - ev.from) * e);
     }
     std::erase_if(camera_eases, [&](const TimelineObject& t) { return ms_from_start >= t.end_time; });
 }
 
 void Player::play_note_manager(double current_ms, std::optional<Background>& background) {
-    const double miss_window = (difficulty <= (int)Difficulty::NORMAL) ? Timing::BAD_EASY : Timing::BAD;
+    const double miss_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
     for (std::deque<Note>* lane : {&don_notes, &kat_notes}) {
         while (!lane->empty() && lane->front().hit_ms + miss_window < current_ms) {
             combo = 0;
@@ -1441,10 +1455,8 @@ void Player::note_correct(const Note& note, double current_ms) {
         other_notes.pop_front();
     }
 
-    if (note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) {
-        if (!other_notes.empty()) {
-            other_notes.pop_front();
-        }
+    if ((note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA) && !other_notes.empty()) {
+        other_notes.pop_front();
     }
 
     if (note.type < NoteType::BALLOON_HEAD) {
@@ -1525,7 +1537,7 @@ void Player::check_balloon(double current_ms, DrumType drum_type, const Note& ba
     if (curr_balloon_count == balloon.count.value()) {
         is_balloon = false;
         balloon_counter->update(current_ms, curr_balloon_count);
-        audio.play_sound(balloon_pop_id, VolumePreset::HITSOUND);
+        play_as(player_num, balloon_pop_id, VolumePreset::HITSOUND);
         note_correct(balloon, current_ms);
         curr_balloon_count = 0;
     }
@@ -1558,7 +1570,7 @@ void Player::check_kusudama(double current_ms, DrumType drum_type, const Note& b
     owner->kusudama_counter->update(current_ms, owner->kusudama_shared_hits);
 
     if (owner->kusudama_shared_hits == balloon.count.value()) {
-        audio.play_sound(kusudama_pop_id, VolumePreset::HITSOUND);
+        play_as(PlayerNum::ALL, kusudama_pop_id, VolumePreset::HITSOUND); // shared by both players
 
         is_balloon = false;
         note_correct(balloon, current_ms);
@@ -1608,7 +1620,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
     float good_window_ms;
     float ok_window_ms;
     float bad_window_ms;
-    if (difficulty <= (int)Difficulty::NORMAL) {
+    if (difficulty <= static_cast<int>(Difficulty::NORMAL)) {
         good_window_ms = Timing::GOOD_EASY;
         ok_window_ms = Timing::OK_EASY;
         bad_window_ms = Timing::BAD_EASY;
@@ -1834,6 +1846,7 @@ void Player::spawn_hit_effects(DrumType drum_type, Side side) {
 }
 
 void Player::handle_input(double ms_from_start, double current_ms, std::optional<Background>& background) {
+    PlayerSoundScope audio_owner(player_num);
     if (modifiers.auto_play || zdon_ai) {
         return;
     }
@@ -1845,7 +1858,7 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
                 (log_type == InputLogType::DON_L || log_type == InputLogType::DON_R) ? DrumType::DON : DrumType::KAT;
             Side side = (log_type == InputLogType::DON_L || log_type == InputLogType::KAT_L) ? Side::LEFT : Side::RIGHT;
             spawn_hit_effects(drum_type, side);
-            audio.play_sound(drum_type == DrumType::DON ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
+            play_as(player_num, drum_type == DrumType::DON ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
             check_note(log_ms, drum_type, current_ms, background);
             ++replay_cursor;
         }
@@ -1869,7 +1882,7 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
         float strength = 1.0f;
         while (input.check_func(player_num, &strength)) {
             spawn_hit_effects(input.drum_type, input.side);
-            audio.play_sound(input.sound, VolumePreset::HITSOUND, strength);
+            play_as(player_num, input.sound, VolumePreset::HITSOUND, strength);
             InputLogType log_type;
             if (input.drum_type == DrumType::DON) {
                 log_type = input.side == Side::LEFT ? InputLogType::DON_L : InputLogType::DON_R;
@@ -1929,7 +1942,8 @@ void Player::draw_drumroll(double current_ms, float y, const Note& head, int cur
     bool is_big = head.type == NoteType::ROLL_HEAD_L;
     float end_position = get_position_x(tail, current_ms);
     float length = end_position - start_position;
-    Color color = Color{255, (unsigned char)head.color.value(), (unsigned char)head.color.value(), 255};
+    const auto color_channel = static_cast<unsigned char>(head.color.value());
+    Color color = Color{255, color_channel, color_channel, 255};
     float y_pos = y + tex.get_skin_config(SC::GAME_NOTES)->y + get_position_y(head, current_ms) + judge_y;
     start_position += judge_x;
     end_position += judge_x;
@@ -1954,10 +1968,10 @@ void Player::draw_drumroll(double current_ms, float y, const Note& head, int cur
         } else {
             tex.draw_texture(t_drumroll_tail, {.color = color, .x = end_position, .y = y_pos});
         }
-        tex.draw_texture(note_tex_ids[(int)head.type], {.color = color,
-                                                        .frame = current_eighth % 2,
-                                                        .x = start_position - t_notes_9->width / 2.0f,
-                                                        .y = y_pos + judge_y});
+        tex.draw_texture(note_tex_ids[static_cast<int>(head.type)], {.color = color,
+                                                                     .frame = current_eighth % 2,
+                                                                     .x = start_position - t_notes_9->width / 2.0f,
+                                                                     .y = y_pos + judge_y});
     }
 }
 
@@ -1988,7 +2002,7 @@ void Player::draw_balloon(double current_ms, float y, const Note& head, int curr
         return;
     }
     if (head.display) {
-        tex.draw_texture(note_tex_ids[(int)head.type],
+        tex.draw_texture(note_tex_ids[static_cast<int>(head.type)],
                          {.frame = current_eighth % 2, .x = position - offset - t_notes_9->width / 2.0f, .y = y_pos});
         tex.draw_texture(t_notes_10, {.frame = current_eighth % 2,
                                       .x = position - offset + t_notes_10->width - t_notes_9->width / 2.0f,
@@ -2087,11 +2101,11 @@ void Player::draw_notes(double current_ms, float y) {
             }
             Color tint = dim ? Color{120, 120, 128, 255} : Color::WHITE;
             tint.a = static_cast<unsigned char>(255.0f * alpha);
-            tex.draw_texture(note_tex_ids[(int)note.type], {.color = tint,
-                                                            .frame = current_eighth % 2,
-                                                            .center = true,
-                                                            .x = pos->first - (t_notes_9->width / 2.0f),
-                                                            .y = pos->second + notes_y});
+            tex.draw_texture(note_tex_ids[static_cast<int>(note.type)], {.color = tint,
+                                                                         .frame = current_eighth % 2,
+                                                                         .center = true,
+                                                                         .x = pos->first - (t_notes_9->width / 2.0f),
+                                                                         .y = pos->second + notes_y});
         }
     }
 
@@ -2117,7 +2131,7 @@ void Player::draw_notes(double current_ms, float y) {
 }
 
 void Player::draw_song_timer(double current_ms, float y) {
-    float progress = end_time > 0 ? (float)(current_ms / end_time) : 0.0f;
+    float progress = end_time > 0 ? static_cast<float>(current_ms / end_time) : 0.0f;
     const SkinInfo& cfg = *tex.get_skin_config(SC::GAME_SONG_TIMER);
     float width = cfg.width * std::max(std::min(progress, 1.0f), 0.0f);
     draw_rectangle(cfg.x, y + cfg.y, width, cfg.height, Color(0, 255, 158, 255));
@@ -2129,9 +2143,9 @@ void Player::draw_modifiers(float y) {
         if (!is_2p) {
             return y;
         }
-        float cover_h = (float)t_lane_score_cover->y2[0];
-        float json_y = (float)id->y[0];
-        float icon_h = (float)id->y2[0];
+        float cover_h = t_lane_score_cover->y2[0];
+        float json_y = id->y[0];
+        float icon_h = id->y2[0];
         return y + tex.get_skin_config(SC::GAME_SCORE_COUNTER_2P_Y_OFFSET)->y + cover_h - icon_h - 2.0f * json_y;
     };
 
@@ -2149,11 +2163,11 @@ void Player::draw_modifiers(float y) {
             const float gy = grid->y + (slot / cols) * grid->height;
             float by = y + gy;
             if (is_2p) {
-                float cover_h = (float)t_lane_score_cover->y2[0];
-                float icon_h = (float)id->y2[0];
+                float cover_h = t_lane_score_cover->y2[0];
+                float icon_h = id->y2[0];
                 by = y + tex.get_skin_config(SC::GAME_SCORE_COUNTER_2P_Y_OFFSET)->y + cover_h - icon_h - 2.0f * gy;
             }
-            tex.draw_texture(id, {.x = gx - (float)id->x[0], .y = by - (float)id->y[0]});
+            tex.draw_texture(id, {.x = gx - id->x[0], .y = by - id->y[0]});
             slot++;
         }
         if (score_method == ScoreMethod::SHINUCHI && t_mod_shinuchi) {
@@ -2209,15 +2223,19 @@ void Player::draw_overlays(float y) {
     tex.draw_texture(lane_icon_tex_id, {.y = y, .index = is_2p});
     int frame = is_dan ? 6 : difficulty;
     int index = is_dan ? 0 : is_2p;
-    tex.draw_texture(t_lane_difficulty, {.frame = frame, .y = y, .index = index});
+    if (lane_mark) {
+        tex.draw_texture(lane_mark, {.y = y});
+    } else {
+        tex.draw_texture(t_lane_difficulty, {.frame = frame, .y = y, .index = index});
+    }
     draw_modifiers(y);
     if (judge_counter.has_value()) {
         judge_counter->draw();
     }
 
-    if (modifiers.auto_play) {
+    if (show_lane_name && modifiers.auto_play) {
         tex.draw_texture(t_auto_icon, {.y = y, .index = is_2p});
-    } else {
+    } else if (show_lane_name) {
         auto [nx, ny] = tex.nameplate_xy(is_2p ? "game_p2" : "game_p1");
         nameplate.draw(nx, y + ny);
     }
@@ -2257,7 +2275,7 @@ void Player::draw_lyric(float y) {
     const SkinInfo* lyric_cfg = tex.get_skin_config(SC::LYRIC);
     float lyric_y = (lyric_cfg && lyric_cfg->y > 0)
                         ? lyric_cfg->y
-                        : static_cast<float>(tex.screen_height - (int)(current_lyric->height * 1.5));
+                        : static_cast<float>(tex.screen_height - static_cast<int>(current_lyric->height * 1.5));
     current_lyric->draw({.x = (tex.screen_width / 2) - current_lyric->width / 2, .y = lyric_y});
 }
 
@@ -2290,7 +2308,7 @@ void Player::seek_to(double resume_time) {
         TimelineObject entry = timeline.front();
         timeline.pop_front();
         timeline_buffer.push_back(entry);
-        int idx = (int)timeline_buffer.size() - 1;
+        int idx = static_cast<int>(timeline_buffer.size()) - 1;
         dispatch_timeline_entry(resume_time, entry, idx);
     }
 

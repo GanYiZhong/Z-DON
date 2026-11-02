@@ -1,0 +1,383 @@
+#include "video.h"
+
+#include <climits>
+#include <spdlog/spdlog.h>
+
+#include "../../platform/platform.h"
+#include "../audio/audio.h"
+#include "../fixed_step.h"
+#include "../gfx/texture.h"
+#include "../profiler.h"
+
+VideoPlayer::VideoPlayer(const fs::path& path) : is_finished_arr{false, false} {
+    source_path = path;
+    if (path.extension() == ".png" || path.extension() == ".jpg") {
+        texture = load_texture(path.string().c_str());
+        is_static = true;
+        if (!is_texture_valid(texture.value())) {
+            spdlog::error("Failed to load static texture for video: {}", path.stem().string());
+            unload_texture(texture.value());
+            texture.reset();
+            return;
+        }
+        return;
+    }
+
+#ifndef __EMSCRIPTEN__
+    is_finished_arr = {true, true};
+    try {
+        container = av::AVContainer::open(path);
+        if (!container) {
+            spdlog::error("Failed to open video: {}", path.string());
+            return;
+        }
+        try {
+            video_stream = container->streams().video(0);
+        } catch (const std::exception& e) {
+            spdlog::error("Video has no video stream: {} ({})", path.string(), e.what());
+            container.reset();
+            return;
+        }
+        audio_stream = container->streams().audio(0);
+        if (!video_stream) {
+            spdlog::error("Video has no video stream: {}", path.string());
+            container.reset();
+            return;
+        }
+
+        if (audio_stream) {
+            audio_s = audio.load_music_stream_memory(*audio_stream, "video_player");
+        } else {
+            is_finished_arr[1] = true; // no audio track: audio side is trivially done
+        }
+
+        fps = video_stream->average_rate().value_or(0.f);
+
+        duration = (container->duration() > 0)
+                       ? static_cast<double>(container->duration()) / av::AVContainer::time_base()
+                       : 0.0;
+
+        frame_count = (fps > 0.f) ? static_cast<int>(duration * fps) + 1 : 0;
+
+        frame_index = 0;
+        frame_duration = (fps > 0.f) ? 1000.0 / fps : 0.0;
+        is_finished_arr = {false, !audio_stream};
+    } catch (const std::exception& error) {
+        spdlog::error("Skipping video {}: {}", path.string(), error.what());
+        video_stream.reset();
+        audio_stream.reset();
+        container.reset();
+        is_finished_arr = {true, true};
+    }
+#endif
+}
+
+VideoPlayer::~VideoPlayer() {
+    stop();
+}
+
+void VideoPlayer::audio_manager() {
+    if (is_finished_arr[1]) {
+        return;
+    }
+    if (!is_started()) {
+        return;
+    }
+
+    if (!audio_started) {
+        audio.play_music_stream(audio_s);
+        audio_started = true;
+    }
+
+    is_finished_arr[1] = audio.get_music_time_played(audio_s) >= audio.get_music_time_length(audio_s);
+}
+
+void VideoPlayer::decode_loop() {
+    PROFILE_THREAD_NAME("video decode");
+#ifndef __EMSCRIPTEN__
+    SwsContext* sws = nullptr; // reused for every frame of this run
+    try {
+        container->seek(0);
+        frame_generator = container->decode_video(0);
+
+        int produced = 0;
+        auto hardware = platform_open_video_decoder(source_path, decode_stop);
+        while (!decode_stop.load(std::memory_order_relaxed)) {
+            DecodedFrame frame;
+            {
+                std::scoped_lock lock(queue_mutex);
+                if (!spare_buffers.empty()) {
+                    frame.bytes = std::move(spare_buffers.back());
+                    spare_buffers.pop_back();
+                }
+            }
+            if (hardware) {
+                try {
+                    if (!hardware->next(frame.bytes, frame.width, frame.height)) {
+                        break;
+                    }
+                    frame.yuv = false;
+                } catch (const std::exception& error) {
+                    spdlog::warn("Hardware video failed at frame {}: {}; switching to software", produced,
+                                 error.what());
+                    hardware.reset();
+                    // The software decoder has not consumed packets yet. Catch
+                    // it up so fallback neither repeats frames nor restarts audio.
+                    for (int i = 0; i < produced && !decode_stop.load(); ++i) {
+                        if (!frame_generator->next(current_decoded_frame)) {
+                            break;
+                        }
+                        current_decoded_frame.reset();
+                    }
+                    continue;
+                }
+            } else {
+                if (!frame_generator->next(current_decoded_frame)) {
+                    break;
+                }
+                // Z-DON: the Y, U and V planes as decoded, converted while drawing (video_yuv.h)
+                frame.yuv = video_yuv::enabled() &&
+                            video_yuv::copy_planes(current_decoded_frame->raw(), frame.bytes, frame.format);
+                if (frame.yuv) {
+                    if (video_yuv::check_enabled() && produced % 30 == 0) {
+                        video_yuv::reference_rgb(current_decoded_frame->raw(), frame.check_rgb);
+                    }
+                } else {
+                    current_decoded_frame->to_rgba(sws, frame.bytes);
+                }
+                frame.width = current_decoded_frame->width();
+                frame.height = current_decoded_frame->height();
+                current_decoded_frame.reset();
+            }
+            frame.index = produced++;
+
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            queue_cv.wait(lock, [&] {
+                return decode_stop.load(std::memory_order_relaxed) || frame_queue.size() < MAX_QUEUED_FRAMES;
+            });
+            if (decode_stop.load(std::memory_order_relaxed)) {
+                break;
+            }
+            frame_queue.push_back(std::move(frame));
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Video decode thread error: {}", e.what());
+    }
+    sws_freeContext(sws);
+    std::scoped_lock lock(queue_mutex);
+    decode_eof = true;
+#endif
+}
+
+void VideoPlayer::stop_decode_thread() {
+    decode_stop.store(true);
+    queue_cv.notify_all();
+    if (decode_thread.joinable()) {
+        decode_thread.join();
+    }
+    // Reset the decoder before the container is closed so AVFrameDecoder's
+    // fmt_ctx_ pointer is never left dangling
+    frame_generator.reset();
+    current_decoded_frame.reset();
+    std::scoped_lock lock(queue_mutex);
+    frame_queue.clear();
+    spare_buffers.clear();
+    decode_eof = false;
+}
+
+void VideoPlayer::upload_frame(const DecodedFrame& frame) {
+    if (frame.yuv) {
+        if (texture.has_value()) {
+            unload_texture(texture.value());
+            texture.reset();
+        }
+        if (yuv_textures.upload(frame.format, frame.bytes.data()) && !frame.check_rgb.empty()) {
+            yuv_textures.check(frame.check_rgb, frame.index);
+        }
+        return;
+    }
+    yuv_textures.unload();
+    std::swap(texture, upload_spares[upload_slot]);
+    upload_slot = (upload_slot + 1) % upload_spares.size();
+    const void* pixels_ptr = static_cast<const void*>(frame.bytes.data());
+
+    if (texture.has_value() && (texture->width != frame.width || texture->height != frame.height)) {
+        unload_texture(texture.value());
+        texture.reset();
+    }
+
+    if (!texture.has_value()) {
+        Image image{};
+        image.data = const_cast<void*>(pixels_ptr); // raylib copies on load
+        image.width = frame.width;
+        image.height = frame.height;
+        image.mipmaps = 1;
+        image.format = pixel_format::RGBA8;
+
+        Texture tex = load_texture_from_image(image);
+        set_texture_filter(tex, texture_filter::TRILINEAR);
+        texture = tex;
+    } else {
+        update_texture(texture.value(), pixels_ptr);
+    }
+}
+
+bool VideoPlayer::is_started() const {
+    return start_ms.has_value();
+}
+
+void VideoPlayer::start(double current_ms) {
+    if (is_static || !container) {
+        return;
+    }
+
+    stop_decode_thread();
+    audio.stop_music_stream(audio_s);
+    decode_stop.store(false);
+    frame_index = 0;
+    is_finished_arr = {false, !audio_stream};
+    audio_started = false;
+    start_ms = current_ms;
+    try {
+        decode_thread = std::thread(&VideoPlayer::decode_loop, this);
+    } catch (const std::system_error& e) {
+        spdlog::error("VideoPlayer: failed to start decode thread: {}", e.what());
+        start_ms.reset();
+        is_finished_arr = {true, true};
+    }
+}
+
+bool VideoPlayer::is_finished() const {
+    return is_finished_arr[0] && is_finished_arr[1];
+}
+
+void VideoPlayer::set_volume(float volume) {
+    if (is_static || !container) {
+        return;
+    }
+    audio.set_music_volume(audio_s, volume);
+}
+
+void VideoPlayer::update(double current_ms) {
+    if (is_static || !container) {
+        return;
+    }
+
+    audio_manager();
+
+    if (!is_started()) {
+        return;
+    }
+
+    double elapsed_ms = current_ms - start_ms.value();
+    // Unknown fps/duration: drain whatever the decoder has produced and rely
+    // on decode_eof (below) to signal completion instead of a frame estimate.
+    int target_frame = (frame_duration > 0.0) ? static_cast<int>(elapsed_ms / frame_duration) : INT_MAX;
+
+    // Drain all due frames from the decode queue but upload only the newest;
+    // intermediate catch-up frames skip the GPU entirely
+    std::optional<DecodedFrame> latest;
+    bool drained_at_eof;
+    bool queue_empty;
+    for (;;) {
+        {
+            std::scoped_lock lock(queue_mutex);
+            while (!frame_queue.empty() && frame_queue.front().index <= target_frame) {
+                if (latest.has_value()) {
+                    spare_buffers.push_back(std::move(latest->bytes));
+                }
+                latest = std::move(frame_queue.front());
+                frame_queue.pop_front();
+            }
+            queue_empty = frame_queue.empty();
+            drained_at_eof = decode_eof && queue_empty;
+        }
+        queue_cv.notify_one();
+        // YATAIDON_FIXED_STEP_MS: wait for the decoder to reach the frame this clock shows
+        const int have = latest.has_value() ? latest->index : frame_index - 1;
+        if (!fixed_step::on() || drained_at_eof || !queue_empty || target_frame == INT_MAX || have >= target_frame) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (latest.has_value()) {
+        upload_frame(latest.value());
+        frame_index = latest->index + 1;
+        std::scoped_lock lock(queue_mutex);
+        spare_buffers.push_back(std::move(latest->bytes));
+    } else if (drained_at_eof) {
+        is_finished_arr[0] = true;
+    } else if (frame_count > 0 && frame_index >= frame_count && queue_empty) {
+        is_finished_arr[0] = true;
+    }
+}
+
+void VideoPlayer::draw() {
+    clear_background(Color::BLACK);
+    const bool yuv = yuv_textures.valid();
+    if (!yuv && !texture.has_value()) {
+        return;
+    }
+    const int tex_w = yuv ? yuv_textures.width() : texture->width;
+    const int tex_h = yuv ? yuv_textures.height() : texture->height;
+
+    Rect source{0.f, 0.f, static_cast<float>(tex_w), static_cast<float>(tex_h)};
+
+    float texture_aspect = static_cast<float>(tex_w) / static_cast<float>(tex_h);
+    float screen_aspect = static_cast<float>(tex.screen_width) / static_cast<float>(tex.screen_height);
+
+    float dest_width, dest_height, dest_x, dest_y;
+
+    if (texture_aspect > screen_aspect) {
+        // Letterbox
+        dest_width = static_cast<float>(tex.screen_width);
+        dest_height = static_cast<float>(tex.screen_width) / texture_aspect;
+        dest_x = 0.f;
+        dest_y = (static_cast<float>(tex.screen_height) - dest_height) / 2.f;
+    } else {
+        // Pillarbox
+        dest_height = static_cast<float>(tex.screen_height);
+        dest_width = static_cast<float>(tex.screen_height) * texture_aspect;
+        dest_x = (static_cast<float>(tex.screen_width) - dest_width) / 2.f;
+        dest_y = 0.f;
+    }
+
+    Rect destination{dest_x, dest_y, dest_width, dest_height};
+    Vec2 origin{0.f, 0.f};
+
+    if (yuv) {
+        yuv_textures.draw(source, destination);
+    } else {
+        draw_texture_pro(texture.value(), source, destination, origin, 0.f, Color::WHITE);
+    }
+}
+
+void VideoPlayer::stop() {
+    stop_decode_thread();
+    for (auto& spare : upload_spares) {
+        if (spare) {
+            unload_texture(*spare);
+        }
+        spare.reset();
+    }
+    upload_slot = 0;
+    start_ms.reset();
+
+    if (container) {
+        container->close();
+        container.reset();
+    }
+
+    if (texture.has_value()) {
+        unload_texture(texture.value());
+        texture.reset();
+    }
+    yuv_textures.unload();
+
+    if (!audio_s.empty()) {
+        audio.stop_music_stream(audio_s);
+        audio.unload_music_stream(audio_s);
+        audio_s.clear();
+    }
+}

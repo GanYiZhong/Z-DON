@@ -1,19 +1,14 @@
 #include "box_base.h"
 
-#include "../../../libs/text.h"
+#include <string_view>
+#include <utility>
+
+#include "../../../libs/color_shader.h"
+#include "../../../libs/gfx/text.h"
 #include "color_utils.h"
 
-void set_recolor_uniforms(ray::Shader& shader, const ray::Color& target) {
-    float src[3] = {142 / 255.0f, 212 / 255.0f, 30 / 255.0f};
-    float tgt[3] = {target.r / 255.0f, target.g / 255.0f, target.b / 255.0f};
-    int source_loc = get_shader_location(shader, "sourceColor");
-    int target_loc = get_shader_location(shader, "targetColor");
-    set_shader_value(shader, source_loc, src, shader_uniform::VEC3);
-    set_shader_value(shader, target_loc, tgt, shader_uniform::VEC3);
-}
-
-BaseBox::BaseBox(const fs::path& path, const BoxDef& box_def)
-    : path(path), texture_index(box_def.texture_index), genre_index(box_def.genre_index),
+BaseBox::BaseBox(fs::path path, const BoxDef& box_def)
+    : path(std::move(path)), texture_index(box_def.texture_index), genre_index(box_def.genre_index),
       genre_label(box_def.genre_label), collection(box_def.collection), explanation(box_def.explanation) {
     BoxColors colors = resolve_box_colors(box_def.box_color, box_def.back_color, box_def.fore_color);
     this->back_color = colors.box;
@@ -35,11 +30,7 @@ BaseBox::BaseBox(const fs::path& path, const BoxDef& box_def)
     fade_in(100);
 }
 
-BaseBox::~BaseBox() {
-    if (shader_loaded) {
-        unload_shader(shader);
-    }
-}
+BaseBox::~BaseBox() = default;
 
 void BaseBox::preregister_text() {
     font_manager.register_text(text_name, (int)box_name_font_size());
@@ -49,9 +40,9 @@ void BaseBox::load_text() {
     name = make_unique<OutlinedText>(text_name, box_name_font_size(), text_color, fore_color, true);
 
     if (back_color.has_value()) {
-        shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
-        shader_loaded = true;
-        set_recolor_uniforms(shader, back_color.value());
+        shader_owner = load_color_shader(back_color.value());
+        shader = *shader_owner;
+        shader_loaded = is_shader_valid(shader);
     }
 
     text_loaded = true;
@@ -133,7 +124,7 @@ void BaseBox::update(double current_time) {
     if (!move->is_finished) {
         position += move->attribute - prev_position;
         if (move_delta != 0.0f && cross_lead != 0.0f) {
-            float p = (float)(move->attribute / move_delta);
+            float p = move->attribute / move_delta;
             if (p < 0.0f) {
                 p = 0.0f;
             } else if (p > 1.0f) {
@@ -153,7 +144,7 @@ void BaseBox::update(double current_time) {
     if (yellow_box_active) {
         // The Lua skin advances the shared yellow-box animations; read their current
         // attributes to derive the box bounds the navigator uses for the inline-list bg.
-        auto yb = [](int id) { return (MoveAnimation*)tex.get_animation(id); };
+        auto yb = [](int id) { return dynamic_cast<MoveAnimation*>(tex.get_animation(id)); };
         if (is_diff_select) {
             left_bound = position + (yb(13)->attribute - yb(13)->start_position);
             right_bound = yb(14)->attribute - yb(14)->start_position;

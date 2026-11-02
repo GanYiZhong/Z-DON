@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -45,7 +46,8 @@ enum SongSelectState {
     SONG_SELECTED = 1,
     DIFF_SORTING = 2,
     SEARCHING = 3,
-    DAN_SELECTED = 4
+    DAN_SELECTED = 4,
+    TUTORIAL_SELECTED = 5
 };
 
 inline std::string branch_diff_to_string(BranchDifficulty difficulty) {
@@ -55,7 +57,7 @@ inline std::string branch_diff_to_string(BranchDifficulty difficulty) {
         "master"  // 2
     };
     int index = static_cast<int>(difficulty);
-    if (index < 0 || index >= (int)names.size()) {
+    if (index < 0 || index >= std::ssize(names)) {
         return names[0];
     }
     return names[index];
@@ -69,6 +71,9 @@ enum class TextureIndex : int {
     FAVORITE = 4,
     RECENT = 5
 };
+
+// Chart inside a GENRE:TUTORIAL folder (box.def); song select plays it as the tutorial
+inline constexpr const char* TUTORIAL_CHART = "Tutorial.tja";
 
 enum class GenreIndex : int {
     TUTORIAL = 0,

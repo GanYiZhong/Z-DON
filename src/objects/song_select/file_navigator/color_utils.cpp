@@ -4,9 +4,9 @@
 
 Color darken_color(const Color& rgb) {
     constexpr float darkening_factor = 0.63f;
-    return Color((unsigned char)std::round(rgb.r * darkening_factor),
-                 (unsigned char)std::round(rgb.g * darkening_factor),
-                 (unsigned char)std::round(rgb.b * darkening_factor), rgb.a);
+    return Color(static_cast<unsigned char>(std::round(rgb.r * darkening_factor)),
+                 static_cast<unsigned char>(std::round(rgb.g * darkening_factor)),
+                 static_cast<unsigned char>(std::round(rgb.b * darkening_factor)), rgb.a);
 }
 
 BoxColors resolve_box_colors(const std::optional<Color>& box_color, const std::optional<Color>& back_color,

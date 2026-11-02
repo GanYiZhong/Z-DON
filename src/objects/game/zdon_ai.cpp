@@ -7,9 +7,9 @@
 #include <numeric>
 #include <spdlog/spdlog.h>
 
-#include "../../libs/audio.h"
+#include "../../libs/audio/audio.h"
+#include "../../libs/file/scores.h"
 #include "../../libs/global_data.h"
-#include "../../libs/scores.h"
 #include "player.h"
 
 namespace {

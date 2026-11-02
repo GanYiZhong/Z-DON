@@ -8,11 +8,12 @@
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/debug_menu.h"
 #include "../objects/song_select/file_navigator/navigator.h"
-#include "audio.h"
-#include "filesystem.h"
-#include "script.h"
-#include "text.h"
-#include "texture.h"
+#include "../platform/platform.h"
+#include "audio/audio.h"
+#include "file/filesystem.h"
+#include "file/script.h"
+#include "gfx/text.h"
+#include "gfx/texture.h"
 #include "texture_retain.h"
 
 GlobalData global_data;
@@ -26,7 +27,11 @@ void queue_window_resize(int width, int height) {
 }
 
 bool apply_queued_window_resize() {
-#ifndef YATAIDON_PLATFORM_IOS
+#if !defined(YATAIDON_PLATFORM_IOS)
+    if (!(platform_window_flags(0) & window_flag::RESIZABLE)) {
+        queued_window_resize.reset(); // fixed display (console)
+        return false;
+    }
     if (!queued_window_resize) {
         return false;
     }
@@ -115,7 +120,10 @@ void load_skin() {
     }
 }
 
+// Cached shaders/textures must be released while the GL context is still alive.
+#include "asset_cache.h"
 void unload_skin() {
+    clear_asset_caches();
     navigator.reset_for_skin_reload();
     debug_menu.clear_selection();
     debug_menu.unload_fonts();
@@ -135,8 +143,8 @@ void unload_skin() {
 }
 
 void reset_session() {
-    global_data.session_data[(int)PlayerNum::P1] = SessionData();
-    global_data.session_data[(int)PlayerNum::P2] = SessionData();
+    global_data.session_data[static_cast<int>(PlayerNum::P1)] = SessionData();
+    global_data.session_data[static_cast<int>(PlayerNum::P2)] = SessionData();
 }
 
 std::string get_player_id(PlayerNum player_num) {
@@ -145,7 +153,7 @@ std::string get_player_id(PlayerNum player_num) {
         return "";
     }
     if (player_num != PlayerNum::P1 && player_num != PlayerNum::P2) {
-        spdlog::error("get_player_id() called with invalid player_num: {}", (int)player_num);
+        spdlog::error("get_player_id() called with invalid player_num: {}", static_cast<int>(player_num));
         return "";
     }
     return (player_num == global_data.first_login_player) ? global_data.config->network.access_code_1

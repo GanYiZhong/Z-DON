@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 
-#include "../../libs/text.h"
+#include "../../libs/gfx/text.h"
 
 // Z-DON: the pause menu of a normal song (GameScreen, Game2PScreen). Escape (back_key) or Space
 // (pause_key) opens it; the screen freezes the song clock, the audio, the video and the notes while it

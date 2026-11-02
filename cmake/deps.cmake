@@ -71,45 +71,88 @@ else()
   target_include_directories(SQLite3_lib PUBLIC ${sqlite3_SOURCE_DIR})
 endif()
 
-# raylib
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
-set(PLATFORM "SDL" CACHE STRING "" FORCE)
-set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
-set(SUPPORT_MODULE_RAUDIO OFF CACHE BOOL "" FORCE)
-set(SUPPORT_CUSTOM_FRAME_CONTROL ON CACHE BOOL "" FORCE)
-set(SUPPORT_FILEFORMAT_JPG ON CACHE BOOL "" FORCE)
-set(SUPPORT_SCREEN_CAPTURE OFF CACHE BOOL "" FORCE)
-if(ANDROID OR IOS OR EMSCRIPTEN)
-  set(OPENGL_VERSION "ES 3.0" CACHE STRING "" FORCE)
-endif()
-message(STATUS "Fetching raylib...")
-FetchContent_Declare(
-  raylib
-  GIT_REPOSITORY https://github.com/raysan5/raylib.git
-  GIT_TAG        6.2
-  GIT_SHALLOW    TRUE
-  UPDATE_DISCONNECTED TRUE
-)
-FetchContent_GetProperties(raylib)
-FetchContent_MakeAvailable(raylib)
-# Z-DON: lazy blend mode switches in rlgl (End/BeginBlendMode around consecutive blended sprites no
-# longer flush the batch) + draw counters (rlGetDrawStats); a flush uploads the normals only for a shader
-# that reads them and keeps its VAO bound from the upload to the draws. Applied at configure time, idempotent.
-execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-lazy-blend.patch
-                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
-# Z-DON: the SDL platform ignored FLAG_WINDOW_HIDDEN (the window was always created shown and focused);
-# test runs (YATAIDON_TEST=1) create theirs hidden
-execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-sdl-hidden-window.patch
-                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
-# Z-DON: BC7 textures (PIXELFORMAT_COMPRESSED_BPTC_RGBA, GL 4.2 / GL_ARB_texture_compression_bptc; src/libs/texture_bc7.h)
-execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-bptc.patch
-                        -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
-# three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
-target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
-if(IOS)
-  target_include_directories(raylib PUBLIC "${CMAKE_SOURCE_DIR}/ios/compat")
-  target_link_libraries(raylib PUBLIC "-framework OpenGLES")
+# raylib (the bgfx backend only uses the stb/cgltf headers in its src/external)
+if(YATAIDON_GFX_BACKEND STREQUAL "raylib")
+  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+  set(PLATFORM "SDL" CACHE STRING "" FORCE)
+  set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
+  set(SUPPORT_MODULE_RAUDIO OFF CACHE BOOL "" FORCE)
+  set(SUPPORT_CUSTOM_FRAME_CONTROL ON CACHE BOOL "" FORCE)
+  set(SUPPORT_FILEFORMAT_JPG ON CACHE BOOL "" FORCE)
+  set(SUPPORT_SCREEN_CAPTURE OFF CACHE BOOL "" FORCE)
+  if(ANDROID OR IOS OR EMSCRIPTEN)
+    set(OPENGL_VERSION "ES 3.0" CACHE STRING "" FORCE)
+  endif()
+  message(STATUS "Fetching raylib...")
+  FetchContent_Declare(
+    raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG        6.2
+    GIT_SHALLOW    TRUE
+    UPDATE_DISCONNECTED TRUE
+  )
+  FetchContent_GetProperties(raylib)
+  FetchContent_MakeAvailable(raylib)
+  # Z-DON: lazy blend mode switches in rlgl (End/BeginBlendMode around consecutive blended sprites no
+  # longer flush the batch) + draw counters (rlGetDrawStats); a flush uploads the normals only for a shader
+  # that reads them and keeps its VAO bound from the upload to the draws. Applied at configure time, idempotent.
+  execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-lazy-blend.patch
+                          -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+  # Z-DON: the SDL platform ignored FLAG_WINDOW_HIDDEN (the window was always created shown and focused);
+  # test runs (YATAIDON_TEST=1) create theirs hidden
+  execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-sdl-hidden-window.patch
+                          -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+  # Z-DON: BC7 textures (PIXELFORMAT_COMPRESSED_BPTC_RGBA, GL 4.2 / GL_ARB_texture_compression_bptc; src/libs/texture_bc7.h)
+  execute_process(COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/raylib-bptc.patch
+                          -DSOURCE_DIR=${raylib_SOURCE_DIR} -P ${CMAKE_CURRENT_LIST_DIR}/apply_git_patch.cmake)
+  # three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
+  target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
+  if(IOS)
+    target_include_directories(raylib PUBLIC "${CMAKE_SOURCE_DIR}/ios/compat")
+    target_link_libraries(raylib PUBLIC "-framework OpenGLES")
+  endif()
+else()
+  FetchContent_Declare(
+    raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG        6.2
+    GIT_SHALLOW    TRUE
+    UPDATE_DISCONNECTED TRUE
+    SOURCE_SUBDIR  headers-only # no CMakeLists there: populate without building
+  )
+  FetchContent_MakeAvailable(raylib)
+
+  set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_SHADER ON CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_TEXTURE OFF CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_GEOMETRY OFF CACHE BOOL "" FORCE)
+  set(BGFX_BUILD_TOOLS_BIN2C OFF CACHE BOOL "" FORCE)
+  set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
+  set(BGFX_CUSTOM_TARGETS OFF CACHE BOOL "" FORCE)
+  message(STATUS "Fetching bgfx...")
+  FetchContent_Declare(
+    bgfx
+    GIT_REPOSITORY https://github.com/bkaradzic/bgfx.cmake.git
+    GIT_TAG        v1.167.9590-598
+    GIT_SHALLOW    TRUE
+    UPDATE_DISCONNECTED TRUE
+  )
+  if(CMAKE_CROSSCOMPILING)
+    # shaderc must run on the host: reuse the one a desktop bgfx tree built
+    set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  endif()
+  FetchContent_MakeAvailable(bgfx)
+  if(CMAKE_CROSSCOMPILING)
+    set(YATAIDON_HOST_SHADERC "${CMAKE_SOURCE_DIR}/.cmake-deps/bgfx-build/cmake/bgfx/shaderc" CACHE FILEPATH "Host shaderc")
+    if(NOT EXISTS "${YATAIDON_HOST_SHADERC}")
+      message(FATAL_ERROR "Host shaderc not found at ${YATAIDON_HOST_SHADERC}: build a desktop bgfx tree first or set YATAIDON_HOST_SHADERC")
+    endif()
+    add_executable(bgfx::shaderc IMPORTED GLOBAL)
+    set_target_properties(bgfx::shaderc PROPERTIES IMPORTED_LOCATION "${YATAIDON_HOST_SHADERC}")
+  endif()
 endif()
 
 # RapidJSON
@@ -489,6 +532,8 @@ if(ANDROID AND NOT EMSCRIPTEN)
   set(OPENSSL_ROOT_DIR "${ANDROID_OPENSSL_PREFIX}" CACHE PATH "" FORCE)
   set(OPENSSL_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
   list(APPEND CMAKE_FIND_ROOT_PATH "${ANDROID_OPENSSL_PREFIX}")
+  set(ENV{PKG_CONFIG_LIBDIR} "${ANDROID_OPENSSL_PREFIX}/lib/pkgconfig")
+  set(ENV{PKG_CONFIG_PATH} "")
 endif()
 
 if(IOS)

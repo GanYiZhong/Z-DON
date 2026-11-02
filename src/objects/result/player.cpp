@@ -1,11 +1,14 @@
 #include "player.h"
 
-#include "../../libs/audio.h"
-#include "../../libs/scores.h"
+#include <iterator>
+
+#include "../../libs/audio/audio.h"
+#include "../../libs/file/scores.h"
 #include "../game/zdon_ai.h"
 
 ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     : player_num(player_num), has_2p(has_2p), is_2p(is_2p) {
+    PlayerSoundScope audio_owner(player_num);
     std::string player_id = get_player_id(player_num);
     auto pd = scores_manager.get_player_data(player_id);
     if (global_data.zdon_ai.active && player_num == PlayerNum::P2) {
@@ -22,7 +25,7 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     }
     chara->set_anim(AnimIndex::DON_NORMAL);
 
-    SessionData& sd = global_data.session_data[(int)player_num];
+    SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
     if (!sd.result_data.cleared) {
         chara->set_anim(AnimIndex::DON_MISS_NORMAL);
     }
@@ -74,9 +77,9 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
         preload("HighScoreIndicator", "high_score_indicator");
     }
 
-    if (!load("ResultPlayer", "result_player", (int)player_num, is_2p, has_2p, sd.result_data.gauge_length,
-              sd.selected_difficulty, sd.selected_difficulty, (int)crown_type, score_diff, is_shinuchi, mods.display,
-              mods.inverse, mods.random, mods.speed)) {
+    if (!load("ResultPlayer", "result_player", static_cast<int>(player_num), is_2p, has_2p, sd.result_data.gauge_length,
+              sd.selected_difficulty, sd.selected_difficulty, static_cast<int>(crown_type), score_diff, is_shinuchi,
+              mods.display, mods.inverse, mods.random, mods.speed)) {
         return;
     }
 
@@ -120,61 +123,62 @@ void ResultPlayer::assign_field(const std::string& field_name, const std::string
 
 void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
     if (is_skipped) {
-        while (update_index < (int)update_list.size()) {
+        while (update_index < std::ssize(update_list)) {
             auto& [field_name, value] = update_list[update_index];
             assign_field(field_name, std::to_string(value));
             update_index++;
         }
     } else if (count_up_instant) {
-        if (score_delay.has_value() && update_index < (int)update_list.size() && current_ms > score_delay.value()) {
+        if (score_delay.has_value() && update_index < std::ssize(update_list) && current_ms > score_delay.value()) {
             auto& [field_name, value] = update_list[update_index];
             assign_field(field_name, std::to_string(value));
-            bool is_last = (update_index == (int)update_list.size() - 1);
+            bool is_last = (update_index == std::ssize(update_list) - 1);
             if (!count_up_sound_1p_only || player_num == PlayerNum::P1) {
-                audio.play_sound(is_last ? count_up_score_sound : count_up_row_sound, VolumePreset::SOUND);
+                audio.play_player_sound(is_last ? count_up_score_sound : count_up_row_sound,
+                                        count_up_sound_1p_only ? PlayerNum::ALL : player_num, VolumePreset::SOUND);
             }
             update_index++;
-            score_delay.value() += (update_index == (int)update_list.size() - 1) ? count_up_score_ms : count_up_row_ms;
+            score_delay.value() += (update_index == std::ssize(update_list) - 1) ? count_up_score_ms : count_up_row_ms;
         }
-    } else if (score_delay.has_value() && update_index < (int)update_list.size()) {
-        if (current_ms > score_delay.value()) {
-            if (score_animator.has_value() && !score_animator->is_finished) {
-                auto& [field_name, curr_num] = update_list[update_index];
-                std::string next_score_str = score_animator->next_score();
-                int new_num = std::stoi(next_score_str);
-                assign_field(field_name, next_score_str);
-                if (new_num != curr_num) {
-                    audio.play_sound("num_up", VolumePreset::SOUND);
-                }
-                if (score_animator->is_finished) {
-                    audio.play_sound("don", VolumePreset::SOUND);
-                    score_delay.value() += 750;
-                    if (update_index == (int)update_list.size() - 1) {
-                        rows_done_ms = current_ms;
-                        return;
-                    }
-                    update_index++;
-                    if (update_index < (int)update_list.size()) {
-                        score_animator = ScoreAnimator(std::get<1>(update_list[update_index]));
-                    }
-                }
-                score_delay.value() += 16.67 * 3;
+    } else if (score_delay.has_value() && update_index < std::ssize(update_list) && current_ms > score_delay.value() &&
+               score_animator.has_value() && !score_animator->is_finished) {
+        auto& [field_name, curr_num] = update_list[update_index];
+        std::string next_score_str = score_animator->next_score();
+        int new_num = std::stoi(next_score_str);
+        assign_field(field_name, next_score_str);
+        if (new_num != curr_num) {
+            audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+        }
+        if (score_animator->is_finished) {
+            audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+            score_delay.value() += 750;
+            if (update_index == std::ssize(update_list) - 1) {
+                rows_done_ms = current_ms;
+                return;
+            }
+            update_index++;
+            if (update_index < std::ssize(update_list)) {
+                score_animator = ScoreAnimator(std::get<1>(update_list[update_index]));
             }
         }
+        score_delay.value() += 16.67 * 3;
     }
-    if (rows_done_ms == 0 && update_index >= (int)update_list.size()) {
+
+    if (rows_done_ms == 0 && update_index >= std::ssize(update_list)) {
         rows_done_ms = current_ms;
     }
     if (!score.empty() && !high_score_sound_played) {
-        SessionData& sd = global_data.session_data[(int)player_num];
+        SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
         if (sd.result_data.score > sd.result_data.prev_score) {
-            audio.play_sound("high_score_voice_" + std::to_string((int)player_num) + "p", VolumePreset::VOICE);
+            audio.play_player_sound("high_score_voice_" + std::to_string(static_cast<int>(player_num)) + "p",
+                                    player_num, VolumePreset::VOICE);
             high_score_sound_played = true;
         }
     }
 }
 
 void ResultPlayer::update(double current_ms, bool fade_in_finished, bool is_skipped) {
+    PlayerSoundScope audio_owner(player_num);
     if (!score_delay.has_value() && lua_object.valid()) {
         sol::optional<bool> lua_started = lua_object["fade_in_started"];
         if (lua_started && lua_started.value()) {
@@ -217,9 +221,10 @@ void ResultPlayer::draw_song_info(const std::string& title, const std::string& s
 }
 
 void ResultPlayer::draw() {
+    PlayerSoundScope audio_owner(player_num);
     call(fn_draw, "ResultPlayer:draw");
     auto [cx, cy] = tex.chara_xy("result");
-    cy += (int)is_2p * tex.screen_height / 2;
+    cy += static_cast<int>(is_2p) * tex.screen_height / 2;
     float cs = 1.0f;
     if (auto pos = call_r<sol::table>(fn_chara_pos, "ResultPlayer:chara_pos")) {
         cx = (*pos)[1].get_or((float)cx);

@@ -6,8 +6,8 @@
 #include <cstdio>
 #include <thread>
 
-#include "../libs/audio.h"
-#include "../libs/input.h"
+#include "../libs/audio/audio.h"
+#include "../libs/input/input.h"
 #include "../libs/test_mode.h"
 #include "../libs/zdon_record.h"
 #include "../objects/global/zdon_hud.h"

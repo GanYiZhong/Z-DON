@@ -7,7 +7,8 @@
 #include <utility>
 #include <vector>
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
+#include "raylib_ns.h"
 
 // Z-DON: skin textures are uploaded to the GPU on first use instead of when their screen loads.
 // Song select alone loads ~525 textures (~456 MB of RGBA) of which only a fraction is drawn on entry
@@ -63,9 +64,8 @@ namespace texture_lazy {
     // the texture: the caller must not free it (it may keep reading it until it forgets the struct).
     // source: the image's file (to decode it again after an eviction); owner: the screen whose load made it
     // size / mtime: the source as listed (the texture pack checks them when it is decoded again)
-    std::shared_ptr<Texture> make(const ray::Image& image, const std::string& screen,
-                                  const std::filesystem::path& source, const std::string& owner, uint64_t size = 0,
-                                  uint64_t mtime = 0);
+    std::shared_ptr<Texture> make(const Image& image, const std::string& screen, const std::filesystem::path& source,
+                                  const std::string& owner, uint64_t size = 0, uint64_t mtime = 0);
 
     // an eager upload at load, for the per-screen log
     void count_eager(const std::string& screen, const Texture& t);
@@ -86,7 +86,7 @@ namespace texture_lazy {
     std::vector<std::filesystem::path> evicted_sources(const std::string& owner);
     // gives an evicted texture its decoded image back (the texture owns it from then on; freed when no
     // longer evicted or when image.data is null)
-    void refill(const Texture* t, ray::Image image);
+    void refill(const Texture* t, Image image);
     // the evicted files of owner, each once (sorted by path), and the RAM their images take
     struct EvictedFile {
         std::filesystem::path source;
@@ -97,13 +97,13 @@ namespace texture_lazy {
     std::vector<EvictedFile> evicted_files(const std::string& owner);
     // gives each image to the evicted textures of owner made from its file (a copy for the second and
     // later ones); images nothing takes are freed. Returns the textures refilled.
-    size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, ray::Image>>& images);
+    size_t refill_from(const std::string& owner, std::vector<std::pair<std::filesystem::path, Image>>& images);
     // how many more bytes of images may wait in RAM under the cap (ZDON_LAZY_UPLOAD_MB)
     size_t room_bytes();
     // ZDON_LAZY_PREFILL: 0 = off, else the number of background jobs
     unsigned prefill_jobs();
     // how to decode a source when an evicted texture is drawn
-    void set_decoder(ray::Image (*decode)(const std::filesystem::path& source));
+    void set_decoder(Image (*decode)(const std::filesystem::path& source));
 
     // Logs the pending textures uploaded since the last call (all screens), then what screen_name's
     // load uploaded at once vs left pending; queues the warm-up of screen_name.
@@ -119,7 +119,7 @@ namespace texture_lazy {
         unsigned int id = 0;
         int rows_done = 0;
     };
-    bool bandable(const ray::Image& image);
-    bool upload_band(const ray::Image& image, BandUpload& st);
+    bool bandable(const Image& image);
+    bool upload_band(const Image& image, BandUpload& st);
 
 } // namespace texture_lazy

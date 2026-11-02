@@ -3,7 +3,8 @@
 #include <memory>
 #include <string>
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
+#include "raylib_ns.h"
 
 struct TextureObject;
 
@@ -46,6 +47,6 @@ namespace texture_retain {
 
     // Frees a decoded image on a background thread (the frees of a screen's images took tens of
     // ms on the main thread). Frees in place when too much is already waiting.
-    void free_image_async(ray::Image& image);
+    void free_image_async(Image& image);
 
 } // namespace texture_retain

@@ -8,6 +8,8 @@
 #include <spdlog/spdlog.h>
 #include <string>
 
+#include "raylib_ns.h"
+
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
 using ray::Matrix;
 #include <rlgl.h>
@@ -70,8 +72,8 @@ void main() {
         }
 
         // one plane as an R8 texture; the shader reads it with texelFetch, so filter and wrap don't matter
-        ray::Texture2D plane_texture(const uint8_t* data, int w, int h) {
-            ray::Image img{};
+        Texture plane_texture(const uint8_t* data, int w, int h) {
+            Image img{};
             img.data = const_cast<uint8_t*>(data); // raylib copies on load
             img.width = w;
             img.height = h;
@@ -191,7 +193,7 @@ void main() {
         if (!shader.id) {
             const std::string fs = std::string(kHeader) + kFragment;
             shader = ray::LoadShaderFromMemory(nullptr, fs.c_str());
-            if (shader.id == 0 || shader.id == rlGetShaderIdDefault()) {
+            if (shader.id == 0 || shader.id == ray::rlGetShaderIdDefault()) {
                 spdlog::error("Video: the YUV shader did not compile, videos use the RGB path");
                 shader = ray::Shader{};
                 shader_failed = true;
@@ -219,7 +221,7 @@ void main() {
         return true;
     }
 
-    void Textures::draw(ray::Rectangle source, ray::Rectangle dest) {
+    void Textures::draw(Rect source, Rect dest) {
         if (!valid() || !shader.id) {
             return;
         }
@@ -255,19 +257,19 @@ void main() {
             return;
         }
         // called mid-frame (VideoPlayer::update runs inside BeginMode2D): EndTextureMode resets both matrices
-        const Matrix proj = rlGetMatrixProjection();
-        const Matrix view = rlGetMatrixModelview();
-        ray::RenderTexture2D rt = ray::LoadRenderTexture(w, h);
+        const Matrix proj = ray::rlGetMatrixProjection();
+        const Matrix view = ray::rlGetMatrixModelview();
+        RenderTarget rt = ray::LoadRenderTexture(w, h);
         ray::BeginTextureMode(rt);
         ray::ClearBackground(Color::BLACK);
         draw({0.0f, 0.0f, (float)w, (float)h}, {0.0f, 0.0f, (float)w, (float)h});
         end_texture_mode(); // back to the texture-density target, if the frame draws into one
-        rlSetMatrixProjection(proj);
-        rlSetMatrixModelview(view);
-        ray::Image img = ray::LoadImageFromTexture(rt.texture);
+        ray::rlSetMatrixProjection(proj);
+        ray::rlSetMatrixModelview(view);
+        Image img = ray::LoadImageFromTexture(rt.texture);
         ray::UnloadRenderTexture(rt);
-        ray::ImageFlipVertical(&img);
-        ray::ImageFormat(&img, ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8);
+        ray::ImageFlipVertical(reinterpret_cast<ray::Image*>(&img));
+        ray::ImageFormat(reinterpret_cast<ray::Image*>(&img), ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8);
         const auto* got = static_cast<const uint8_t*>(img.data);
         int max_d[3] = {0, 0, 0};
         double sum[3] = {0, 0, 0};
@@ -291,11 +293,11 @@ void main() {
     }
 
     void Textures::unload() {
-        for (ray::Texture2D* t : {&y, &u, &v}) {
+        for (Texture* t : {&y, &u, &v}) {
             if (t->id != 0) {
                 ray::UnloadTexture(*t);
             }
-            *t = ray::Texture2D{};
+            *t = Texture{};
         }
         if (shader.id != 0) {
             ray::UnloadShader(shader);

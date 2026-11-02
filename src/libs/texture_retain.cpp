@@ -11,8 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "sdl_compat.h"
-#include "texture.h"
+#include "gfx/sdl_compat.h"
+#include "gfx/texture.h"
+#include "raylib_ns.h"
 #include "zdon_os.h"
 
 #ifdef _WIN32
@@ -221,7 +222,7 @@ namespace texture_retain {
                     auto [data, bytes] = queue.front();
                     queue.pop_front();
                     lock.unlock();
-                    ray::Image img{};
+                    Image img{};
                     img.data = data;
                     ray::UnloadImage(img);
                     lock.lock();
@@ -330,7 +331,7 @@ namespace texture_retain {
         total_bytes = 0;
     }
 
-    void free_image_async(ray::Image& image) {
+    void free_image_async(Image& image) {
         if (!image.data) {
             return;
         }

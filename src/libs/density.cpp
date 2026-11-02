@@ -4,7 +4,8 @@
 #include <cstdlib>
 #include <spdlog/spdlog.h>
 
-#include "texture.h"
+#include "gfx/texture.h"
+#include "raylib_ns.h"
 #include "zdon_record.h"
 
 // raylib.h (inside namespace ray) already defined RL_MATRIX_TYPE, so rlgl.h declares its functions with this
@@ -74,26 +75,27 @@ namespace density {
         ray::EndTextureMode();
         zdon_density::bound = false;
         clear_background(border);
-        const ray::Texture2D& t = zdon_density::target.texture;
+        const Texture& t = zdon_density::target.texture;
         const auto w = static_cast<float>(t.width);
         const auto h = static_cast<float>(t.height);
         // a plain copy: the target's alpha is not blended into the window
-        rlDrawRenderBatchActive();
-        rlDisableColorBlend();
+        ray::rlDrawRenderBatchActive();
+        ray::rlDisableColorBlend();
         draw_texture_pro(t, {0.0f, 0.0f, w, -h},
                          {zdon_density::off_x, zdon_density::off_y, w * zdon_density::scale, h * zdon_density::scale},
                          {0.0f, 0.0f}, 0.0f, Color::WHITE);
-        rlDrawRenderBatchActive();
-        rlEnableColorBlend();
+        ray::rlDrawRenderBatchActive();
+        ray::rlEnableColorBlend();
     }
 
-    ray::Image capture() {
+    Image capture() {
         if (!zdon_density::on || zdon_density::target.id == 0) {
             return load_image_from_screen();
         }
-        ray::Image img = ray::LoadImageFromTexture(zdon_density::target.texture);
-        ray::ImageFlipVertical(&img);
-        ray::ImageFormat(&img, ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8); // opaque, like a screen read
+        Image img = ray::LoadImageFromTexture(zdon_density::target.texture);
+        ray::ImageFlipVertical(reinterpret_cast<ray::Image*>(&img));
+        ray::ImageFormat(reinterpret_cast<ray::Image*>(&img),
+                         ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8); // opaque, like a screen read
         return img;
     }
 
@@ -104,11 +106,11 @@ namespace density {
         return {(p.x - zdon_density::off_x) / zdon_density::scale, (p.y - zdon_density::off_y) / zdon_density::scale};
     }
 
-    ray::Camera2D to_window(const ray::Camera2D& cam) {
+    Camera2D to_window(const Camera2D& cam) {
         if (!zdon_density::on) {
             return cam;
         }
-        ray::Camera2D c = cam;
+        Camera2D c = cam;
         c.zoom = cam.zoom * zdon_density::scale;
         c.offset = {cam.offset.x * zdon_density::scale + zdon_density::off_x,
                     cam.offset.y * zdon_density::scale + zdon_density::off_y};

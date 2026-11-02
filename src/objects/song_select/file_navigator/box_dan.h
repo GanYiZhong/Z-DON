@@ -1,7 +1,7 @@
 #pragma once
 
+#include "../../../libs/file/scores.h"
 #include "../../../libs/global_data.h"
-#include "../../../libs/scores.h"
 #include "box_base.h"
 
 class DanBox : public BaseBox {
@@ -15,6 +15,7 @@ public:
     int dan_rank = -1;                   // -1 = unearned/not yet ranked
     int dan_index = -1;                  // -1 = unselected
     bool gaiden = false;
+    bool gen3 = false;
     bool is_back = false; // the "back" folder: no course, leaves to song select
     std::vector<DanSongEntry> songs;
     std::vector<Exam> exams;

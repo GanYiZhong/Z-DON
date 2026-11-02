@@ -4,9 +4,10 @@
 #include <cstdint>
 #include <mutex>
 #include <queue>
+#include <stop_token>
 #include <unordered_map>
 
-#include "../../../libs/filesystem.h"
+#include "../../../libs/file/filesystem.h"
 #include "box_song.h"
 #include "genre_bg.h"
 
@@ -149,6 +150,7 @@ private:
     void load_collection_new(const fs::path& path, const BoxDef& box_def);
     void load_collection_recommended(const fs::path& path, const BoxDef& box_def);
     void load_collection_search(const fs::path& path, const BoxDef& box_def);
+    void load_collection_play_count(const fs::path& path, const BoxDef& box_def);
     void load_songs_inline_async(const fs::path path, BoxDef box_def);
     void promote_recent_box(const SongBox* song);
     void collapse_inline_now();
@@ -172,6 +174,7 @@ public:
     SongSelectScript* script = nullptr;
 
     void join_loader();
+    void cancel_loading() { join_loader(); } // upstream's name for join_loader
     void clear_folder_caches();
     void apply_genre_of(const fs::path& song_path, SongBox* song);
     void enqueue_inline_back_every_ten(int songs_added, const fs::path& parent);
@@ -200,7 +203,7 @@ public:
     bool is_directory(BaseBox* item);
     bool is_song(BaseBox* item);
     BaseBox* get_current_item();
-    Statistics get_statistics(const fs::path& path);
+    Statistics get_statistics(const fs::path& path, const std::stop_token& stop = {});
 
     std::optional<fs::path> find_song_by_title(const std::string& title, const std::string& subtitle);
 

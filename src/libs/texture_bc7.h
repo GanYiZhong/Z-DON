@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ray.h" // IWYU pragma: keep
+#include "gfx.h" // IWYU pragma: keep
+#include "raylib_ns.h"
 
 // Z-DON: skin textures as BC7 (GL_COMPRESSED_RGBA_BPTC_UNORM): a quarter of the video memory of RGBA8, and of the
 // copy the GL driver keeps in system memory. An image is compressed when every visible pixel comes back within
@@ -20,10 +21,10 @@ namespace texture_bc7 {
 
     // An image just decoded from a skin file (any thread): RGBA8 / RGB8 becomes BC7 when the cache has its blocks;
     // anything else stays as it is.
-    void compress(ray::Image& image);
+    void compress(Image& image);
 
     // GetImageAlphaBorder(image, 0) of a BC7 image: the border of its pixels before compression
-    Rect alpha_border(const ray::Image& image);
+    Rect alpha_border(const Image& image);
 
     // saves what was encoded; queued encodes are dropped
     void shutdown();

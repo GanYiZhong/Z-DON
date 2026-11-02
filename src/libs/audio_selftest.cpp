@@ -4,7 +4,7 @@
 #include <fstream>
 #include <vector>
 
-#include "audio.h"
+#include "audio/audio.h"
 #include "audio_dev.h"
 #include "spdlog/spdlog.h"
 

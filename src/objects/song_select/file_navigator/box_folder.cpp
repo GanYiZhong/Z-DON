@@ -7,10 +7,10 @@
 #include <deque>
 #include <mutex>
 
-#include "../../../libs/audio.h"
-#include "../../../libs/filesystem.h"
+#include "../../../libs/audio/audio.h"
+#include "../../../libs/file/filesystem.h"
+#include "../../../libs/file/scores.h"
 #include "../../../libs/library_index.h"
-#include "../../../libs/scores.h"
 #include "navigator.h"
 
 namespace {

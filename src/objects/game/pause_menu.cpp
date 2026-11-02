@@ -4,10 +4,10 @@
 #include <cmath>
 #include <map>
 
-#include "../../libs/audio.h"
+#include "../../libs/audio/audio.h"
+#include "../../libs/gfx/texture.h"
 #include "../../libs/global_data.h"
-#include "../../libs/input.h"
-#include "../../libs/texture.h"
+#include "../../libs/input/input.h"
 
 namespace {
 
@@ -147,7 +147,7 @@ void PauseMenu::draw(double now_ms) {
     const float w = static_cast<float>(tex.screen_width);
     const float h = static_cast<float>(tex.screen_height);
     const float s = tex.screen_scale;
-    ray::DrawRectangle(0, 0, tex.screen_width, tex.screen_height, ray::Fade(Color::BLACK, open ? 0.55f : 0.35f));
+    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, fade(Color::BLACK, open ? 0.55f : 0.35f));
 
     if (counting()) {
         const double left = kCountdownMs - (now_ms - *countdown_start);
@@ -176,9 +176,9 @@ void PauseMenu::draw(double now_ms) {
     if (panel) {
         draw_at(panel, px, py);
     } else {
-        const ray::Rectangle r{px, py, pw, ph};
-        ray::DrawRectangleRec(r, ray::Color{24, 24, 32, 235});
-        ray::DrawRectangleLinesEx(r, 4 * s, Color::WHITE);
+        const Rect r{px, py, pw, ph};
+        draw_rectangle(r, Color{24, 24, 32, 235});
+        draw_rectangle_lines_ex(r, 4 * s, Color::WHITE);
     }
     title->draw({.x = px + (pw - title->width) / 2.0f, .y = py + ph * 0.2f});
 
@@ -193,9 +193,9 @@ void PauseMenu::draw(double now_ms) {
         if (button) {
             draw_at(sel ? button_sel : button, bx, by);
         } else {
-            const ray::Rectangle r{bx, by, bw, bh};
-            ray::DrawRectangleRec(r, sel ? ray::Color{232, 96, 40, 255} : ray::Color{72, 72, 84, 255});
-            ray::DrawRectangleLinesEx(r, 3 * s, sel ? Color::WHITE : Color::GRAY);
+            const Rect r{bx, by, bw, bh};
+            draw_rectangle(r, sel ? Color{232, 96, 40, 255} : Color{72, 72, 84, 255});
+            draw_rectangle_lines_ex(r, 3 * s, sel ? Color::WHITE : Color::GRAY);
         }
         rows[i]->draw({.x = bx + (bw - rows[i]->width) / 2.0f, .y = by + (bh - rows[i]->height) / 2.0f});
     }

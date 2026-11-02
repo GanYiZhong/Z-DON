@@ -3,8 +3,9 @@
 #include "song_select_script.h"
 
 SearchBox::SearchBox() {
-    bg_resize = (TextureResizeAnimation*)tex.get_animation(19);
-    diff_fade_in = (FadeAnimation*)tex.get_animation(20);
+    current_search = "";
+    bg_resize = dynamic_cast<TextureResizeAnimation*>(tex.get_animation(19));
+    diff_fade_in = dynamic_cast<FadeAnimation*>(tex.get_animation(20));
     bg_resize->start();
     diff_fade_in->start();
 }

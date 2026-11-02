@@ -13,5 +13,4 @@ SongBoxOsu::SongBoxOsu(const fs::path& path, const BoxDef& box_def, SongParser p
     if (!diff_fade_in) {
         throw std::runtime_error("SongBoxOsu: animation 12 is not a FadeAnimation");
     }
-    refresh_scores();
 }

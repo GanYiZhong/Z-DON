@@ -3,7 +3,7 @@
 #include <string>
 #include <utility>
 
-#include "../../libs/script.h"
+#include "../../libs/file/script.h"
 
 // The fail / clear / full-combo / donderful ending animations differ only in the Lua class and
 // script they load (and the extra "donderful" argument of the full-combo one).

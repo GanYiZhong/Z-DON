@@ -3,12 +3,12 @@
 #include <algorithm>
 #include <cctype>
 
-#include "../../../libs/filesystem.h"
+#include "../../../libs/file/filesystem.h"
 #include "../../../libs/fixed_step.h"
-#include "../../../libs/han_fold_table.h"
+#include "../../../libs/gfx/han_fold_table.h"
+#include "../../../libs/gfx/text.h"
 #include "../../../libs/jobs.h"
 #include "../../../libs/library_index.h"
-#include "../../../libs/text.h"
 #include "../../dan_select/dan_navigator.h"
 #include "../song_select_script.h"
 #include "box_back.h"
@@ -1066,7 +1066,7 @@ void Navigator::parse_song_list(const fs::path& path, BoxDef box_def, bool inlin
     }
 
     if (needs_rewrite) {
-        write_song_list(path, out_entries);
+        queue_song_list_write(path, out_entries);
     }
 }
 
@@ -1216,6 +1216,9 @@ void Navigator::load_current_directory_async(const fs::path path) {
                     BoxDef entry_box_def = parse_box_def(curr_path);
                     if (hide_dan && entry_box_def.genre_index == GenreIndex::DAN) {
                         continue;
+                    }
+                    if (entry_box_def.genre_index == GenreIndex::TUTORIAL && !fs::exists(curr_path / TUTORIAL_CHART)) {
+                        continue; // the tutorial folder only shows while its chart is there
                     }
                     auto folder = std::make_unique<FolderBox>(curr_path, entry_box_def);
                     if (entry_box_def.collection == "RECOMMENDED") {
@@ -1511,7 +1514,7 @@ void Navigator::toggle_favorite(SongBox* song) {
         song->is_favorite = true;
     }
 
-    write_song_list(song_list_path, entries);
+    queue_song_list_write(song_list_path, entries);
 }
 
 fs::path Navigator::find_box_def_folder(const fs::path& song_path) {
@@ -1545,7 +1548,7 @@ void Navigator::add_to_recent(const SongBox* song) {
         entries.resize(25);
     }
 
-    write_song_list(song_list_path, entries);
+    queue_song_list_write(song_list_path, entries);
     promote_recent_box(song);
 }
 
@@ -1652,6 +1655,40 @@ void Navigator::load_collection_search(const fs::path& path, const BoxDef& box_d
         }
         enqueue_inline_back_every_ten(songs_added, path.parent_path());
         auto song = make_song_box(song_path, box_def, take_parser(preparsed, song_path));
+        apply_genre_of(song_path, song.get());
+        song->fade_in(266);
+        enqueue_inline_box(std::move(song));
+        songs_added++;
+    }
+}
+
+// The player's most played songs, most plays first
+void Navigator::load_collection_play_count(const fs::path& path, const BoxDef& box_def) {
+    std::unordered_map<fs::path, int> plays;
+    for (const auto& [hash, count] : scores_manager.get_play_counts(scores_manager.player_1)) {
+        if (auto song_path = scores_manager.get_path_by_diff_hash(hash)) {
+            plays[*song_path] += count;
+        }
+    }
+    std::vector<std::pair<fs::path, int>> hits(plays.begin(), plays.end());
+    std::ranges::sort(hits, [](const auto& a, const auto& b) {
+        return a.second != b.second ? a.second > b.second : a.first < b.first;
+    });
+    std::vector<fs::path> hit_paths;
+    hit_paths.reserve(hits.size());
+    for (const auto& h : hits) {
+        hit_paths.push_back(h.first);
+    }
+    auto preparsed = parse_songs_parallel(hit_paths, abort_loading);
+
+    int songs_added = 0;
+    for (const fs::path& song_path : hit_paths) {
+        if (abort_loading) {
+            break;
+        }
+        enqueue_inline_back_every_ten(songs_added, path.parent_path());
+        auto song = make_song_box(song_path, box_def, take_parser(preparsed, song_path));
+        song->preserve_order = true;
         apply_genre_of(song_path, song.get());
         song->fade_in(266);
         enqueue_inline_box(std::move(song));
@@ -1883,6 +1920,11 @@ void Navigator::load_songs_inline_async(const fs::path path, BoxDef box_def) {
 
     if (box_def.collection == "SEARCH") {
         run_collection("search", [&] { load_collection_search(path, box_def); });
+        return;
+    }
+
+    if (box_def.collection == "PLAY_COUNT") {
+        run_collection("play count", [&] { load_collection_play_count(path, box_def); });
         return;
     }
 
@@ -3291,7 +3333,7 @@ void Navigator::draw_score_history() {
 // Course clear counts for the difficulty sort. The levels come from the startup scan (song_levels),
 // not a parse of every chart on disk: song select waits for this before it opens the difficulty
 // sort and before it hands over to the next screen.
-Statistics Navigator::get_statistics(const fs::path& path) {
+Statistics Navigator::get_statistics(const fs::path& path, const std::stop_token& stop) {
     Statistics stats;
 
     for (int course = 0; course <= 4; course++) {
@@ -3301,15 +3343,18 @@ Statistics Navigator::get_statistics(const fs::path& path) {
     }
 
     // Wait for the scan without joining its thread (the loader does that)
-    while (!song_files_ready.load() && !abort_loading.load()) {
+    while (!song_files_ready.load() && !abort_loading.load() && !stop.stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(4));
     }
-    if (!song_files_ready.load()) {
+    if (!song_files_ready.load() || stop.stop_requested()) {
         return stats;
     }
 
     // Songs below a folder of `path` (not files directly in it), as the directory walk counted them
     for (const auto& [path_str, levels] : song_levels) {
+        if (stop.stop_requested()) {
+            break;
+        }
         fs::path song_path(path_str);
         fs::path rel = song_path.lexically_relative(path);
         if (rel.empty() || *rel.begin() == ".." || std::distance(rel.begin(), rel.end()) < 2) {
