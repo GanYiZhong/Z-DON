@@ -20,6 +20,7 @@ public:
     double last_moved;
     double next_repeat = 0;
     int hold_dir = 0;
+    double pending_select_ms = -1; // Z-DON: a don pressed while the wheel still scrolls, taken once it settles
     bool selected_song;
     bool is_ready;
     bool is_ura;

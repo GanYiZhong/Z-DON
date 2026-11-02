@@ -296,7 +296,18 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         }
     }
 
-    if (!navigated && (l_don || r_don)) {
+    // Z-DON: a don pressed with (or just after) a move would open the new box while the wheel still
+    // scrolls, so the decide animation played on the old box; it waits for the scroll (166 ms) instead
+    constexpr double SCROLL_MS = 166.0;
+    if (l_don || r_don) {
+        pending_select_ms = current_ms;
+    }
+    const bool settled = current_ms >= last_moved + SCROLL_MS;
+    if (pending_select_ms >= 0 && current_ms - pending_select_ms > SCROLL_MS + 100.0) {
+        pending_select_ms = -1; // stale (e.g. pressed in another state)
+    }
+    if (pending_select_ms >= 0 && settled) {
+        pending_select_ms = -1;
         BaseBox* item = navigator.get_current_item();
         if (navigator.is_directory(item) && item->collection == COLLECTIONS[5]) {
             search_guard = true;
