@@ -25,7 +25,7 @@ class RecordSongSelectScreen : public SongSelectScreen {
         Failed
     };
     Modal modal = Modal::None;
-    // the Choose window's cursor: 0 auto play, 1 no hits (Don records), 2.. the song's courses (Don ticks one)
+    // the Choose window's cursor: 0 auto play, 1 no hits (Don records), 2.. the song's courses (all ticked at first)
     int cursor = 0;
     std::filesystem::path song;
     int difficulty = 0;             // the decided course: always ticked first, the top lane (1P of two)

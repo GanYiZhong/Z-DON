@@ -29,9 +29,10 @@ void RecordSongSelectScreen::select_song(SongBox* box) {
     cursor = 0;
     available.clear();
     ticked = {};
-    for (int c = 0; c < (int)ticked.size(); c++) {
+    for (int c = 0; c < (int)ticked.size(); c++) { // every course of the song starts ticked
         if (box->course_info(c).has_course) {
             available.push_back(c);
+            ticked[c] = true;
         }
     }
     if (difficulty >= 0 && difficulty < (int)ticked.size()) {
