@@ -16,7 +16,8 @@ namespace {
                 lane_mark = tex.get_texture("tutorial/wakaba");
             }
             show_lane_name = false;
-            show_drumroll_count = false; // the cabinet's tutorial shows no drumroll count
+            show_drumroll_count = false; // the cabinet's tutorial shows no drumroll count,
+            show_lane_badges = false;    // no 1P icon and no modifier (shinuchi) badges
         }
 
         void spawn_hit_effects(DrumType drum_type, Side side) override {

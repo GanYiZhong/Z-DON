@@ -163,6 +163,7 @@ protected:
     TextureObject* lane_mark = nullptr; // drawn instead of the difficulty mark (tutorial wakaba)
     bool show_lane_name = true;         // auto icon / nameplate
     bool show_drumroll_count = true;    // the "N hits" counter during a drumroll
+    bool show_lane_badges = true;       // the player icon (1P/2P) and the modifier badges
 
 private:
     bool is_2p;
