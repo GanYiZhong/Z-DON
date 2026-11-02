@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <format>
 #include <iostream>
+#include <thread>
 
 #include "libs/asset_cache.h"
 #include "libs/audio/audio.h"
@@ -1179,7 +1181,18 @@ static int game_main(int argc, char* argv[]) {
         spdlog::error("[record] needs a skin and a song on the command line");
         std::exit(1);
     }
-    apply_queued_window_resize();
+    {
+        const int w0 = get_render_width();
+        const int h0 = get_render_height();
+        // a recording takes the size of its first frame: wait until the window has taken the new size
+        // (SDL reports it with an event, not on SetWindowSize's return)
+        if (apply_queued_window_resize() && zdon_record::active()) {
+            for (int i = 0; i < 200 && get_render_width() == w0 && get_render_height() == h0; i++) {
+                poll_window_events();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
 
     // Apply config defaults for empty access codes
     if (global_data.config->network.access_code_1.empty()) {

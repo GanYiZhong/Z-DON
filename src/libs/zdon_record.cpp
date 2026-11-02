@@ -144,6 +144,7 @@ void main() {
             std::vector<std::vector<unsigned char>> spare;
             bool closing = false;
             bool pipe_failed = false;
+            bool stopped = false; // record_picture gave up: the video ends early
 
             long long frames = 0;
             long long result_frames = 0; // frames on the result screen so far
@@ -625,6 +626,7 @@ void main() {
             s.ms_game += std::chrono::duration<double, std::milli>(clk::now() - s.frame_end).count();
         }
         if (recording && !record_picture()) {
+            s.stopped = true;
             return true;
         }
 
@@ -780,6 +782,9 @@ void main() {
         if (vrc != 0 || s.pipe_failed) {
             spdlog::error("[record] ffmpeg failed encoding the video ({}); the parts are {} and {}", vrc,
                           utf8(s.video_tmp), utf8(s.audio_tmp));
+            return false;
+        }
+        if (s.stopped) { // the recording stopped early (logged there): a cut-off video is a failure
             return false;
         }
         if (s.part >= 0) {
