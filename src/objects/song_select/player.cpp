@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string_view>
 
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
@@ -296,17 +297,22 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         }
     }
 
-    // Z-DON: a don pressed with (or just after) a move would open the new box while the wheel still
-    // scrolls, so the decide animation played on the old box; it waits for the scroll (166 ms) instead
-    constexpr double SCROLL_MS = 166.0;
+    // Z-DON: a don pressed with (or just after) a move opened the new box while the wheel still
+    // scrolled; the skin then played the decide on the box it last drew open (the old one), which
+    // stayed open over the new one. The don now waits until the box the cursor moved to has stopped
+    // and been drawn open for a frame (at most 500 ms).
+    if (current_ms - last_browse_ms > 100.0) {
+        pending_select_ms = -1; // pressed before another state took the input
+        open_frames = 0;
+    }
+    last_browse_ms = current_ms;
+    BaseBox* current = navigator.get_current_item();
+    open_frames = (current && std::string_view(current->draw_state()) != "closed") ? open_frames + 1 : 0;
     if (l_don || r_don) {
         pending_select_ms = current_ms;
     }
-    const bool settled = current_ms >= last_moved + SCROLL_MS;
-    if (pending_select_ms >= 0 && current_ms - pending_select_ms > SCROLL_MS + 100.0) {
-        pending_select_ms = -1; // stale (e.g. pressed in another state)
-    }
-    if (pending_select_ms >= 0 && settled) {
+    const bool settled = open_frames >= 2 || current_ms - pending_select_ms >= 500.0;
+    if (pending_select_ms >= 0 && !navigated && settled) {
         pending_select_ms = -1;
         BaseBox* item = navigator.get_current_item();
         if (navigator.is_directory(item) && item->collection == COLLECTIONS[5]) {
