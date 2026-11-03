@@ -15,6 +15,7 @@
 #include "../libs/network/network.h"
 #include "../libs/test_mode.h"
 #include "../libs/zdon_record.h"
+#include "../objects/game/zdon_ai.h"
 #include "../objects/global/zdon_hud.h"
 #include "../platform/vblank_pacing.h"
 
@@ -816,7 +817,9 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
             // one
             if (global_data.zdon_ai.active && global_data.zdon_ai.finished &&
                 tex.skin_config_by_name.contains("zdon_ai_cutin_first")) {
-                ai_ending_pending = true;
+                // zdon_ai_banner: the skin draws the cabinet's own full combo banner after the cut-in (no Nijiiro
+                // ending anim at all)
+                ai_ending_pending = !tex.skin_config_by_name.contains("zdon_ai_banner");
             } else {
                 player->spawn_ending_anim(background ? &*background : nullptr);
             }
@@ -845,7 +848,12 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         }
     }
 
-    if (clock.position() >= end_time + transition_delay && !result_transition.is_started) {
+    // zdon_ai_banner (Nijiiro): after a full combo win the result follows the skin's banner 6.2 s after the battle
+    // ended (footage MBAZD6xA1D8: the emblem 156.2, black 162.4)
+    const bool ai_banner_done = global_data.zdon_ai.active && global_data.zdon_ai.finished && global_data.zdon_ai.won &&
+                                tex.skin_config_by_name.contains("zdon_ai_banner") && players[0]->get_bad() == 0 &&
+                                get_current_ms() >= global_data.zdon_ai.finished_at_ms + 6200.0;
+    if ((clock.position() >= end_time + transition_delay || ai_banner_done) && !result_transition.is_started) {
         result_transition.start();
         audio.play_sound("result_transition", VolumePreset::VOICE);
         spdlog::info("Result transition started and voice played");

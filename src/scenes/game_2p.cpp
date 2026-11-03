@@ -86,8 +86,7 @@ std::optional<Screens> Game2PScreen::update() {
     if (global_data.zdon_ai.active && players.size() == 2) {
         zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
         if (global_data.zdon_ai.finished && !ai_music_cut && song_music &&
-            (tex.skin_config_by_name.contains("zdon_ai_cutin_first") ||
-             tex.skin_config_by_name.contains("zdon_ai_end_delay"))) {
+            (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
             audio.stop_sound(
                 *song_music); // the cabinet cuts the song when the battle ends (the emblem and voice follow)
             ai_music_cut = true;
@@ -102,8 +101,13 @@ std::optional<Screens> Game2PScreen::update() {
     }
 
     if (clock.position() >= end_time) {
-        const double transition_delay =
-            global_data.config->general.fast_transitions ? kFastResultTransitionDelayMs : 8533.34;
+        double transition_delay = global_data.config->general.fast_transitions ? kFastResultTransitionDelayMs : 8533.34;
+        // Z-DON AI battle, skin_config zdon_ai_end_delay (Green): the cabinet holds the battle emblem ~16.5 s after the
+        // last note (footage Tl7g8XXXvAM: emblem 265.0, black 277, result bgm + announce 278.6, last note 260.5), so
+        // the result comes 5.25 s later than a normal play's
+        if (global_data.zdon_ai.active && !global_data.config->general.fast_transitions && zdon_ai_end_delay_on()) {
+            transition_delay += 5250.0;
+        }
 
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }

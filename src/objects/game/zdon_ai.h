@@ -98,6 +98,8 @@ PlayerData zdon_ai_player_data(int level);
 // and course mark (the skin draws the arena, the AI and its plate)
 bool zdon_ai_skin_arena();
 bool zdon_ai_arena_game();
+// skin_config zdon_ai_end_delay with x != 0 (Green's cue timing; a child skin switches it off with x = 0)
+bool zdon_ai_end_delay_on();
 // GAME_2P of an AI battle in a skin with "zdon_ai_lane" (the AI lane's own cover / background, no badges)
 bool zdon_ai_lane_game();
 

@@ -54,6 +54,15 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
     auto color_it = DEFAULT_COLORS.find(genre_bucket);
     Color target = (color_it != DEFAULT_COLORS.end() && color_it->second[1].has_value()) ? color_it->second[1].value()
                                                                                          : Color{101, 0, 82, 255};
+    // Z-DON: zdon_ai_song_info "height": 1 = the AI stage's genre pill takes the genre's bright colour (the cabinet's
+    // orange Namco Original pill) instead of the dark one
+    if (zdon_ai_arena_game()) {
+        if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info");
+            it != tex.skin_config_by_name.end() && it->second.height > 0.0f && color_it != DEFAULT_COLORS.end() &&
+            color_it->second[0].has_value()) {
+            target = color_it->second[0].value();
+        }
+    }
 
     genre_shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
     genre_shader_loaded = genre_shader.id != 0;

@@ -64,6 +64,7 @@ namespace {
     // the arcade's cues (se_aienso_v12g, voice_aienso_v12g) when the skin has them: Sounds/game/ai/<name>,
     // Sounds/game/aivoice/<name>[_<n>] (a random one of the numbered takes)
     void cue(const std::string& se, const std::string& voice, int takes) {
+        spdlog::info("AI cue se='{}' voice='{}' at {:.0f} ms", se, voice, get_current_ms());
         if (!se.empty() && audio.has_sound("ai_" + se)) {
             audio.play_sound("ai_" + se, VolumePreset::SOUND);
         }
@@ -105,6 +106,11 @@ const ZdonAiTuning& zdon_ai_tuning(int level) {
     // skin_config "zdon_ai_tuning" (PyTaikoGreen): Green's ghosttuning instead of the CHN05 table
     const auto* table = tex.skin_config_by_name.contains("zdon_ai_tuning") ? kTuningGreen : kTuning;
     return table[std::clamp(level, 1, 11) - 1];
+}
+
+bool zdon_ai_end_delay_on() {
+    const auto it = tex.skin_config_by_name.find("zdon_ai_end_delay");
+    return it != tex.skin_config_by_name.end() && it->second.x != 0.0f;
 }
 
 int zdon_ai_tuning_level(double star_level) {
@@ -489,7 +495,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.finished_at_ms = get_current_ms();
         const int wins_p = (int)std::ranges::count(b.winners, 0);
         b.won = wins_p >= (int)b.winners.size() - wins_p;
-        if (tex.skin_config_by_name.contains("zdon_ai_end_delay")) {
+        if (zdon_ai_end_delay_on()) {
             end_cue_pending = true;
             end_cue_won = b.won;
             end_cue_at_ms = get_current_ms() + kEndCueDelayMs;
