@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 #include <spdlog/spdlog.h>
 
 #include "gfx/texture.h"
@@ -13,6 +14,16 @@ using ray::Matrix;
 #include <rlgl.h>
 
 namespace density {
+    namespace {
+        float g_desat_request = 0.0f; // set by the skin during a frame
+        float g_desat_apply = 0.0f;   // this frame's (the previous frame's request)
+        std::optional<Shader> g_gray;
+    } // namespace
+
+    void request_desaturate(float amount) {
+        g_desat_request = std::clamp(amount, 0.0f, 1.0f);
+    }
+
     int factor() {
         // a recording draws straight into its window (the video's size): the skin's high-density textures are
         // drawn scaled down there, not into a target 4x the video's pixels (a GPU-bound parallel recording)
@@ -27,8 +38,10 @@ namespace density {
     }
 
     bool begin_frame(Color clear) {
-        const int d = factor();
-        if (d <= 1) {
+        g_desat_apply = g_desat_request;
+        g_desat_request = 0.0f;
+        const int d = std::max(factor(), g_desat_apply > 0.0f ? 1 : 0); // desaturating: a screen-size target (d = 1)
+        if (d <= 1 && g_desat_apply <= 0.0f) {
             if (zdon_density::target.id != 0) {
                 unload_render_texture(zdon_density::target);
                 zdon_density::target = {};
@@ -81,10 +94,22 @@ namespace density {
         // a plain copy: the target's alpha is not blended into the window
         ray::rlDrawRenderBatchActive();
         ray::rlDisableColorBlend();
+        const bool gray = g_desat_apply > 0.0f;
+        if (gray) {
+            if (!g_gray) {
+                g_gray = load_shader("shader/dummy.vs", "shader/grayscale.fs");
+            }
+            const float amount = g_desat_apply;
+            set_shader_value(*g_gray, get_shader_location(*g_gray, "amount"), &amount, shader_uniform::FLOAT);
+            begin_shader_mode(*g_gray);
+        }
         draw_texture_pro(t, {0.0f, 0.0f, w, -h},
                          {zdon_density::off_x, zdon_density::off_y, w * zdon_density::scale, h * zdon_density::scale},
                          {0.0f, 0.0f}, 0.0f, Color::WHITE);
         ray::rlDrawRenderBatchActive();
+        if (gray) {
+            end_shader_mode();
+        }
         ray::rlEnableColorBlend();
     }
 
@@ -96,6 +121,16 @@ namespace density {
         ray::ImageFlipVertical(reinterpret_cast<ray::Image*>(&img));
         ray::ImageFormat(reinterpret_cast<ray::Image*>(&img),
                          ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8); // opaque, like a screen read
+        if (g_desat_apply > 0.0f) {                             // the window shows it grayscale: so does the capture
+            auto* px = static_cast<unsigned char*>(img.data);
+            const float amt = g_desat_apply;
+            for (long i = 0, n = static_cast<long>(img.width) * img.height; i < n; ++i, px += 3) {
+                const float y = 0.299f * px[0] + 0.587f * px[1] + 0.114f * px[2];
+                for (int c = 0; c < 3; ++c) {
+                    px[c] = static_cast<unsigned char>(px[c] + (y - px[c]) * amt + 0.5f);
+                }
+            }
+        }
         return img;
     }
 

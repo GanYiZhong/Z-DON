@@ -33,6 +33,11 @@ namespace density {
     // the finished frame as an image: the target's (physical size) or the window's
     Image capture();
 
+    // Screen desaturation (a skin's tex.set_screen_desaturate): 0..1, set while a frame draws; the NEXT frame then
+    // renders into the target and is drawn into the window through a grayscale shader. Off (0) by default: no
+    // target, no shader, nothing runs. It needs a frame of lead, so a skin calls it every frame it wants it.
+    void request_desaturate(float amount);
+
     // a window position (mouse) -> render (target) pixels
     Vec2 window_to_render(Vec2 p);
 
