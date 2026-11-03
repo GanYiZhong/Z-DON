@@ -87,6 +87,13 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     sol::optional<double> crm = lua_object["count_up_row_ms"];
     sol::optional<double> csm = lua_object["count_up_score_ms"];
     count_up_instant = ci.value_or(false);
+    sol::optional<bool> cpar = lua_object["count_up_parallel"];
+    count_up_parallel = cpar.value_or(false);
+    if (count_up_parallel) {
+        for (auto& [field_name, value] : update_list) {
+            parallel_animators.emplace_back(value);
+        }
+    }
     count_up_row_ms = crm.value_or(count_up_row_ms);
     count_up_score_ms = csm.value_or(count_up_score_ms);
     sol::optional<std::string> crs = lua_object["count_up_row_sound"];
@@ -127,6 +134,33 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
             auto& [field_name, value] = update_list[update_index];
             assign_field(field_name, std::to_string(value));
             update_index++;
+        }
+    } else if (count_up_parallel) {
+        if (score_delay.has_value() && rows_done_ms == 0 && current_ms > score_delay.value()) {
+            bool changed = false, all_done = true;
+            for (size_t i = 0; i < parallel_animators.size(); i++) {
+                auto& an = parallel_animators[i];
+                if (an.is_finished) {
+                    continue;
+                }
+                auto& [field_name, value] = update_list[i];
+                const std::string next = an.next_score();
+                assign_field(field_name, next);
+                changed = changed || !an.is_finished;
+                all_done = all_done && an.is_finished;
+                if (!an.is_finished) {
+                    all_done = false;
+                }
+            }
+            if (changed) {
+                audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+            }
+            score_delay.value() += 16.67 * 3;
+            if (all_done) {
+                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                update_index = std::ssize(update_list);
+                rows_done_ms = current_ms;
+            }
         }
     } else if (count_up_instant) {
         if (score_delay.has_value() && update_index < std::ssize(update_list) && current_ms > score_delay.value()) {

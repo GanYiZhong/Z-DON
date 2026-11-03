@@ -932,9 +932,18 @@ std::optional<Screens> GameScreen::update() {
     // Z-DON: a course of a stacked recording ends with the longest course (zdon_record.h --record-tracks)
     const double song_end = std::max(players[0]->end_time, zdon_record::sync_end_ms());
     if (clock.position() >= song_end) {
+        // Z-DON: skin_config "zdon_result_delay" {x = ms} replaces the 8533 ms song end -> result fade delay of a
+        // normal (non-AI) play; Nijiiro: direct feeds YKjsle7VBCI (clear 545.28 s, FC 186.46 s) show the fade 7.05 s
+        // after the banner's SE, 0.5 s earlier than the default's 7.53 s
+        double normal_delay = 8533.34;
+        if (!global_data.zdon_ai.active) {
+            if (auto it = tex.skin_config_by_name.find("zdon_result_delay"); it != tex.skin_config_by_name.end()) {
+                normal_delay = it->second.x;
+            }
+        }
         const double transition_delay = global_data.config->general.fast_transitions
                                             ? kFastResultTransitionDelayMs
-                                            : (players[0]->was_skipped() ? 2800.0 : 8533.34);
+                                            : (players[0]->was_skipped() ? 2800.0 : normal_delay);
 
         end_song(song_end, transition_delay, BackgroundNotification::Enabled);
     }

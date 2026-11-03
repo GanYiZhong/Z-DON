@@ -29,6 +29,8 @@ class ResultPlayer : public LuaScript {
     bool high_score_sound_played = false;
     bool miss_loop_started = false;
     bool count_up_instant = false;
+    bool count_up_parallel = false; // every row counts up at the same time (the Green AI battle result)
+    std::vector<ScoreAnimator> parallel_animators;
     double rows_done_ms = 0;
     double count_up_row_ms = 416.667;
     double count_up_score_ms = 833.333;
