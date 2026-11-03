@@ -231,6 +231,16 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
     tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
 
+    // tex.ai_diff_stage() -> nil, or the cursor (0 back, 1..4 easy..oni, 5 recommended, 6 last) while the AI select
+    // shows its course columns (skin_config zdon_ai_diff_first)
+    tex.set_function("ai_diff_stage", [](sol::this_state ts) -> sol::object {
+        int cursor = 0;
+        if (!zdon_ai_diff_stage(&cursor)) {
+            return sol::make_object(ts, sol::lua_nil);
+        }
+        return sol::make_object(ts, cursor);
+    });
+
     // tex.ai_transition() -> true while an AI battle is being started: from the song select's decide (the VS window and
     // loading card of its game transition) until the battle ends. Unlike ai_active it is already true there
     tex.set_function("ai_transition",

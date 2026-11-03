@@ -152,6 +152,23 @@ bool zdon_ai_revealed() {
     return result_revealed;
 }
 
+namespace {
+    bool diff_stage_on = false;
+    int diff_stage_cursor = 0;
+} // namespace
+
+void zdon_ai_set_diff_stage(bool on, int cursor) {
+    diff_stage_on = on;
+    diff_stage_cursor = cursor;
+}
+
+bool zdon_ai_diff_stage(int* cursor) {
+    if (cursor) {
+        *cursor = diff_stage_cursor;
+    }
+    return diff_stage_on;
+}
+
 void zdon_ai_set_title_alpha(float a) {
     title_alpha = a;
 }

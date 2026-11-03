@@ -3,6 +3,7 @@
 
 #include "../libs/audio/audio.h"
 #include "../libs/file/scores.h"
+#include "../libs/input/input.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/nameplate.h"
@@ -21,12 +22,12 @@ protected:
         return Screens::GAME_2P;
     }
     bool hides_dan() override { return true; }
-
     // the game transition (VS window, loading card) is an AI one: the skin asks tex.ai_transition()
     void select_song(SongBox* song) override {
         global_data.zdon_ai.requested = true;
         SongSelectScreen::select_song(song);
     }
+
     // ai_song_select_all.lua: one timer, 100 s on the song list; the course board keeps what is left, at least
     // 30 s (30 s after a time-up on the list); backing out tops it up to 30 s; each time-up sounds don_big
     int diff_select_seconds() override { return std::max(30, select_timer ? select_timer->time() : 0); }
@@ -48,6 +49,7 @@ protected:
     int seek_moved = 0;
     double seek_next_ms = 0;
     void list_time_up() {
+        set_diff_stage(false);
         on_select_time_up();
         if (state != SongSelectState::BROWSING) {
             return;
@@ -82,6 +84,45 @@ protected:
     }
     bool allows_second_player_join() override { return false; }
 
+    // skin_config zdon_ai_diff_first (Green): the cabinet asks for the course first (columns: back, easy .. oni, the
+    // recommended one, the last one; footage Tl7g8XXXvAM 1:50), then the song list; the chosen course is the one
+    // the course board opens on
+    bool diff_stage = false;
+    int diff_cursor = 5;
+    bool diff_leave = false;
+    void set_diff_stage(bool on) {
+        diff_stage = on;
+        zdon_ai_set_diff_stage(on, diff_cursor);
+    }
+    void handle_input_browsing(double current_ms) override {
+        if (!diff_stage) {
+            SongSelectScreen::handle_input_browsing(current_ms);
+            return;
+        }
+        if (is_l_kat_pressed(PlayerNum::P1)) {
+            diff_cursor = std::max(0, diff_cursor - 1);
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+        } else if (is_r_kat_pressed(PlayerNum::P1)) {
+            diff_cursor = std::min(6, diff_cursor + 1);
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+        } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
+            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+            if (diff_cursor == 0) {
+                diff_leave = true;
+                return;
+            }
+            const int last = global_data.last_difficulty[0];
+            int course = diff_cursor <= 4 ? diff_cursor - 1 : static_cast<int>(Difficulty::ONI);
+            if (diff_cursor == 6 && last >= static_cast<int>(Difficulty::EASY)) {
+                course = std::min(last, static_cast<int>(Difficulty::ONI));
+            }
+            global_data.last_difficulty[0] = course;
+            set_diff_stage(false);
+            return;
+        }
+        zdon_ai_set_diff_stage(true, diff_cursor);
+    }
+
     void draw_extra_players() override {
         if (zdon_ai_skin_arena()) {
             return; // the skin draws the AI (global/ai_battle.lua)
@@ -102,6 +143,9 @@ public:
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
         select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { list_time_up(); });
         seek_steps = 0;
+        diff_leave = false;
+        diff_cursor = 5;
+        set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
             audio.stop_sound("bgm");
@@ -118,6 +162,11 @@ public:
 
     std::optional<Screens> update() override {
         auto next = SongSelectScreen::update();
+        if (diff_leave && !next) {
+            diff_leave = false;
+            set_diff_stage(false);
+            return on_screen_end(Screens::ENTRY);
+        }
         const double now = get_frame_ms();
         ai_plate.update(now);
         if (ai_chara) {

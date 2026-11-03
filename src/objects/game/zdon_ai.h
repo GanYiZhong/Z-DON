@@ -60,6 +60,10 @@ void zdon_ai_set_revealed(bool revealed);
 bool zdon_ai_revealed();
 // the game's song title visibility this frame (SongInfo: the title / song number swap), for skins that draw next
 // to the title (Green's genre pill)
+// the AI select's course-first stage (skin_config zdon_ai_diff_first; Green): the screen sets it, the skin draws the
+// course columns (tex.ai_diff_stage()) and the cursor
+void zdon_ai_set_diff_stage(bool on, int cursor);
+bool zdon_ai_diff_stage(int* cursor);
 void zdon_ai_set_title_alpha(float a);
 float zdon_ai_title_alpha();
 bool zdon_ai_pages_open();
