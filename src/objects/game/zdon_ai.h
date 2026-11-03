@@ -52,8 +52,9 @@ void zdon_ai_new_session();
 int zdon_ai_next_reward(int wins);
 
 // the Green (System 357) ghost rank, ghostinfo.xml: rank k needs `acquired` points; at rank k a win on course c
-// (easy, normal, hard, oni, ura) counts when its star level is at least least[c] (0: the course no longer
-// counts; rank 0 takes any), +1 point (winpoint_bonus_highlevel) from bonus[c] stars, +1 on a chart's first win
+// (easy, normal, hard, oni, ura) counts when its star level is at least row k+1's least[c] (0: the course no
+// longer counts; ai_rankup_todo shows that row), +1 point (winpoint_bonus_highlevel) from its bonus[c] stars,
+// +1 on a chart's first win
 struct ZdonAiRank {
     int acquired;
     std::array<int, 5> least, bonus;

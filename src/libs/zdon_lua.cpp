@@ -229,11 +229,12 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.ai_rank() -> the player's AI battle rank (the Green ghost rank, objects/game/zdon_ai.h):
     //   {rank = 0..11, points =, next = points still needed for the next rank (0 at the top),
-    //    least = {e, n, h, m, x} (the lowest star level that counts at this rank, 0 = not counted), bonus = {...}}
+    //    least = {e, n, h, m, x} (the lowest star level that counts toward the next rank: the next row; 0 = not
+    //    counted, 99 = only the task folder's songs), bonus = {...}}
     tex.set_function("ai_rank", [](sol::this_state s) {
         sol::state_view lua(s);
         auto [points, rank] = scores_manager.get_zdon_ai_rank(get_player_id(PlayerNum::P1));
-        const ZdonAiRank& r = zdon_ai_rank_info(rank);
+        const ZdonAiRank& r = zdon_ai_rank_info(std::min(rank + 1, kZdonAiRanks - 1));
         sol::table t = lua.create_table();
         t["rank"] = rank;
         t["points"] = points;

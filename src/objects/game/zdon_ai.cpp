@@ -404,9 +404,11 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             if (b.won) {
                 const int c = std::clamp(sd.selected_difficulty, 0, 4);
                 const int star = (int)b.star;
-                const ZdonAiRank& r = zdon_ai_rank_info(rank);
+                // the rank-up conditions are the next rank's row (ai_rankup_todo rank_r shows row r + 1's
+                // minimums; at rank 10 only the task folder's songs count = least 99, not reachable here)
+                const ZdonAiRank& r = zdon_ai_rank_info(std::min(rank + 1, kZdonAiRanks - 1));
                 const bool first = scores_manager.add_zdon_ai_first_win(get_player_id(PlayerNum::P1), sd.song_hash, c);
-                if (rank == 0 || (r.least[c] > 0 && star >= r.least[c])) {
+                if (rank + 1 < kZdonAiRanks && r.least[c] > 0 && star >= r.least[c]) {
                     b.rank_gain = 1 + ((r.bonus[c] > 0 && star >= r.bonus[c]) ? 1 : 0) + (first ? 1 : 0);
                 }
                 b.points = points + b.rank_gain;
