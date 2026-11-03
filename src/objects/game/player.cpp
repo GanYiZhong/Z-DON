@@ -329,8 +329,15 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
         };
 
         const double bad_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
+        // Z-DON dev hook: ZDON_AUTO_DON_LATE_MS=<ms> makes auto play hit every 10th don that late (a full combo with
+        // a few "ok"s, for result-path tests)
+        static const double don_late_ms = [] {
+            const char* v = std::getenv("ZDON_AUTO_DON_LATE_MS");
+            return v ? std::atof(v) : 0.0;
+        }();
+        const double don_late = (don_late_ms > 0.0 && don_notes.size() % 10 == 0) ? don_late_ms : 0.0;
 
-        while (!don_notes.empty() && ms_from_start >= don_notes.front().hit_ms) {
+        while (!don_notes.empty() && ms_from_start >= don_notes.front().hit_ms + don_late) {
             if (ms_from_start > don_notes.front().hit_ms + bad_window) {
                 break;
             }
