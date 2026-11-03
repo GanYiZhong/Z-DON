@@ -2189,6 +2189,13 @@ void Player::draw_lane_cover(float y) {
     if ((!is_balloon || (balloon_idle && !balloon_counter.has_value())) && !zdon_ai_arena_game()) {
         auto [cx, cy] = tex.chara_xy(is_2p ? "game_p2" : "game_p1");
         chara->draw(cx, y + cy, 1.0f);
+    } else if (auto& b = global_data.zdon_ai; !zdon_ai && b.don_show && chara && zdon_ai_arena_game()) {
+        // the skin's arena asked for the player's Don (tex.ai_draw_don): stood in it, turned towards the AI
+        const Chara3DConfig& cfg = tex.chara_3d_config;
+        chara->set_rotation(cfg.rot_x, b.don_rot, cfg.rot_z);
+        chara->set_draw_scale(b.don_scale);
+        chara->draw(b.don_x, b.don_y);
+        b.don_show = false;
     }
     tex.draw_texture(lane_cover_tex_id, {.y = y});
     if (is_dan) {

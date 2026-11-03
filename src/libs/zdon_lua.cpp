@@ -224,6 +224,18 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
     tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
 
+    // tex.ai_draw_don(x, y, scale, rot_y): the arena (skin_config zdon_ai_arena) shows the player's 3D Don this frame
+    // at x, y (the character's feet, 1080p px), scaled, turned rot_y degrees (the cabinet's AI battle stands it in
+    // the arena facing the AI). Drawn by the player's lane after the background; call it every frame it shows
+    tex.set_function("ai_draw_don", [](float x, float y, sol::optional<float> scale, sol::optional<float> rot) {
+        auto& b = global_data.zdon_ai;
+        b.don_show = b.active;
+        b.don_x = x;
+        b.don_y = y;
+        b.don_scale = scale.value_or(1.0f);
+        b.don_rot = rot.value_or(0.0f);
+    });
+
     // tex.ai_level() / tex.ai_condition() -> the AI's condition this session, 1 worst .. 5 best (its tension; the
     // arcade's aiCondition, rolled once per session). ai_level is the old name.
     tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });

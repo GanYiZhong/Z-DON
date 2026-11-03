@@ -185,6 +185,14 @@ public:
     void set_bpm(float bpm);
     void set_anim(AnimIndex idx);
     void set_rotation(float x, float y, float z);
+    // Z-DON: the size on screen relative to the skin's (the AI battle arena shows a smaller Don)
+    void set_draw_scale(float s) {
+        if (s != draw_scale) {
+            draw_scale = s;
+            render_dirty = true;
+            last_draw_x = std::numeric_limits<float>::lowest();
+        }
+    }
     void set_frozen(bool value);
     void set_anim_progress(float progress);
     int get_anim_count() const;

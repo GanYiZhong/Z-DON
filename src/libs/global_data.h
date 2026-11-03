@@ -307,6 +307,10 @@ struct GlobalData {
         bool finished = false;
         bool won = false;                  // finished: the player won the match
         std::vector<float> player_offsets; // the player's recent hit offsets (the AI's "trace")
+        // the skin's arena asks for the player's Don this frame (tex.ai_draw_don): where, how big, turned how far
+        // (degrees about the vertical axis). The player's lane draws it, then clears don_show
+        bool don_show = false;
+        float don_x = 0, don_y = 0, don_scale = 1, don_rot = 0;
     } zdon_ai;
     int zdon_ai_condition = 0; // the session's AI condition 1..5; 0 = roll it at the next AI song select
     // the AI battles of this credit (the play-all summary): title, the player's score / judges / cleared, won,
