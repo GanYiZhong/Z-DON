@@ -128,6 +128,7 @@ protected:
     // skin_config zdon_ai_page0 (Green): the cabinet opens on the genre shelf with a "choose by difficulty" box (page
     // 0, tex.ai_diff_stage() = -1); a don opens it into the course columns, "back" there returns to the shelf
     bool page0 = false, page0_enabled = false;
+    int page0_off = 0;
     bool board_enabled = false; // skin_config zdon_ai_song_board (Green)
     void set_diff_stage(bool on) {
         diff_stage = on;
@@ -207,8 +208,25 @@ protected:
             return;
         }
         if (page0) {
-            if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
-                audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+            // the shelf scrolls on kats (the engine's genre boxes beside the box); the box is slot 0, one slot per kat
+            const bool strict = tex.skin_config_by_name.contains("zdon_green_strict");
+            const bool kl = is_l_kat_pressed(PlayerNum::P1), kr = is_r_kat_pressed(PlayerNum::P1);
+            if (kl || kr) {
+                if (strict && (kr || (kl && page0_off > 0))) {
+                    page0_off += kr ? 1 : -1;
+                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+                    if (kr) {
+                        navigator.move_right(); // the input was read above, so the shelf is moved here
+                    } else {
+                        navigator.move_left();
+                    }
+                    zdon_ai_set_diff_stage(true, page0_off == 0 ? -1 : -2);
+                } else {
+                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+                }
+            } else if (strict && page0_off > 0) {
+                // another genre of the shelf is focused: the normal song select reads the don (the shelf is its own)
+                SongSelectScreen::handle_input_browsing(current_ms);
             } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
                 audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
                 page0 = false;
@@ -286,6 +304,7 @@ public:
         page0_enabled =
             tex.skin_config_by_name.contains("zdon_ai_page0") && tex.skin_config_by_name.contains("zdon_ai_diff_first");
         page0 = page0_enabled;
+        page0_off = 0;
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
