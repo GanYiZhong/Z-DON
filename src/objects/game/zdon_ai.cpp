@@ -98,6 +98,18 @@ namespace {
     bool last_cue_won = false;
     double last_cue_at_ms = 0.0;
 
+    // skin_config zdon_ai_end_hold x (Nijiiro): ms from the last section's end to the emblem; 0 = off
+    double end_hold_ms() {
+        const auto it = tex.skin_config_by_name.find("zdon_ai_end_hold");
+        if (it == tex.skin_config_by_name.end() || it->second.x <= 0.0f) {
+            return 0.0;
+        }
+        const auto ed = tex.skin_config_by_name.find("zdon_ai_end_delay");
+        return (ed != tex.skin_config_by_name.end() && ed->second.x != 0.0f) ? 0.0 : (double)it->second.x;
+    }
+    // Nijiiro: the ready SE follows the start voice by 0.37 s (footage 1Lg6EXE2mo8: voice 1.54 s, SE 1.91 s)
+    constexpr double kReadySeLagMs = 370.0;
+
     int section_points(const Player& p, const ZdonAiTuning& t) {
         return p.get_good() * t.ryo + p.get_ok() * t.ka + p.get_bad() * t.fuka;
     }
@@ -453,6 +465,10 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             cue("", "ready", 3);
             ready_se_pending = true;
             ready_se_at_ms = get_current_ms() + kReadySeDelayMs;
+        } else if (end_hold_ms() > 0) {
+            cue("", "ready", 3);
+            ready_se_pending = true;
+            ready_se_at_ms = get_current_ms() + kReadySeLagMs;
         } else {
             cue("ready", "ready", 3);
         }
@@ -518,8 +534,12 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         }
     }
     if (!b.finished && b.section >= (int)b.bounds.size()) {
+        // skin_config zdon_ai_end_hold (Nijiiro): the last section's own SE comes at the section end and the
+        // emblem (cut-in, song cue) follows 3.25 s later (footage MBAZD6xA1D8: last note 152.5 s, section flash 153.0,
+        // emblem 156.25; n6a4oDaaJ4w: the last section's SE alone 0.43 s after the last note)
+        const double hold_ms = end_hold_ms();
         b.finished = true;
-        b.finished_at_ms = get_current_ms();
+        b.finished_at_ms = get_current_ms() + std::max(0.0, hold_ms);
         const int wins_p = (int)std::ranges::count(b.winners, 0);
         b.won = wins_p >= (int)b.winners.size() - wins_p;
         if (zdon_ai_end_delay_on()) {
@@ -529,6 +549,11 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             last_cue_pending = !b.winners.empty();
             last_cue_won = !b.winners.empty() && b.winners.back() == 0;
             last_cue_at_ms = get_current_ms() + kLastSectionCueDelayMs;
+        } else if (hold_ms > 0 && !b.winners.empty()) {
+            cue(b.winners.back() == 0 ? "section_win" : "section_lose", "", 1);
+            end_cue_pending = true;
+            end_cue_won = b.won;
+            end_cue_at_ms = b.finished_at_ms;
         } else {
             cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
         }

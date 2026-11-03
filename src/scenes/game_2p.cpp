@@ -89,7 +89,8 @@ std::optional<Screens> Game2PScreen::update() {
     update_gameplay(current_time);
     if (global_data.zdon_ai.active && players.size() == 2) {
         zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
-        if (global_data.zdon_ai.finished && !ai_music_cut && song_music &&
+        if (global_data.zdon_ai.finished && get_current_ms() >= global_data.zdon_ai.finished_at_ms && !ai_music_cut &&
+            song_music &&
             (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
             audio.stop_sound(
                 *song_music); // the cabinet cuts the song when the battle ends (the emblem and voice follow)
