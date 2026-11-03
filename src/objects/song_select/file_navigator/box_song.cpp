@@ -25,6 +25,8 @@ namespace {
     }
 } // namespace
 
+std::string SongBox::bgm_sound = "bgm";
+
 void SongBox::reset_bgm_slot() {
     bgm_resume_at = 0.0;
     preview_holders = 0;
@@ -42,7 +44,7 @@ void SongBox::service_bgm_resume(double current_ms) {
         return;
     }
     bgm_resume_at = 0.0;
-    audio.play_sound("bgm", VolumePreset::MUSIC);
+    audio.play_sound(bgm_sound, VolumePreset::MUSIC);
 }
 
 SongBox::SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser) : BaseBox(path, box_def) {
@@ -244,7 +246,7 @@ void SongBox::play_preview(float seek_position) {
         return;
     }
     music_playing = true;
-    audio.stop_sound("bgm");
+    audio.stop_sound(bgm_sound);
     audio.play_music_stream("preview", VolumePreset::MUSIC);
     audio.seek_music_stream("preview", seek_position);
 }

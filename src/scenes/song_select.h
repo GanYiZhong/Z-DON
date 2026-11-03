@@ -99,6 +99,11 @@ protected:
     virtual void draw_overlays();
     virtual void draw_extra_players() {} // Z-DON: after the player (AiSongSelectScreen: the AI on the 2P side)
 
+    // Z-DON: the course select's timer (seconds), the cue when a timer runs out, backing out of the course select
+    virtual int diff_select_seconds() { return 60; }
+    virtual void on_select_time_up() {}
+    virtual void on_diff_select_cancelled(double /*current_ms*/) {}
+
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool is_2p_screen() { return false; }
     virtual Screens get_game_screen_target() { return Screens::GAME; }

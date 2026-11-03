@@ -1,4 +1,7 @@
 #pragma once
+#include <algorithm>
+
+#include "../libs/audio/audio.h"
 #include "../libs/file/scores.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/global/chara_3d.h"
@@ -18,6 +21,23 @@ protected:
         return Screens::GAME_2P;
     }
     bool hides_dan() override { return true; }
+
+    // ai_song_select_all.lua: one timer, 100 s on the song list; the course board keeps what is left, at least
+    // 30 s (30 s after a time-up on the list); backing out tops it up to 30 s; each time-up sounds don_big
+    int diff_select_seconds() override { return std::max(30, select_timer ? select_timer->time() : 0); }
+    void on_select_time_up() override {
+        if (audio.has_sound("ai_don_big")) {
+            audio.play_sound("ai_don_big", VolumePreset::SOUND);
+        }
+    }
+    void on_diff_select_cancelled(double current_ms) override {
+        if (!select_timer || select_timer->time() <= 30) {
+            select_timer = std::make_unique<Timer>(30, current_ms, [this] {
+                on_select_time_up();
+                player->select_song();
+            });
+        }
+    }
     bool allows_second_player_join() override { return false; }
 
     void draw_extra_players() override {
@@ -38,6 +58,17 @@ public:
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
+        select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] {
+            on_select_time_up();
+            player->select_song();
+        });
+        // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
+        if (audio.has_sound("ai_bgm")) {
+            audio.stop_sound("bgm");
+            SongBox::bgm_sound = "ai_bgm";
+            audio.set_sound_loop("ai_bgm", true);
+            audio.play_sound("ai_bgm", VolumePreset::MUSIC);
+        }
         const PlayerData pd = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
         ai_plate = Nameplate(pd.username, pd.title, PlayerNum::AI, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
         ai_chara = make_chara_from_player_data(&pd, true);

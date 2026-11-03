@@ -13,6 +13,7 @@ void SongSelectScreen::on_screen_start() {
     audio.set_sound_volume("ura_switch", 0.25f);
     audio.set_sound_volume("add_favorite", 3.0f);
     SongBox::reset_bgm_slot();
+    SongBox::bgm_sound = "bgm";
     audio.play_sound("bgm", VolumePreset::MUSIC);
     audio.play_sound("voice_enter", VolumePreset::VOICE);
 
@@ -376,6 +377,7 @@ std::optional<Screens> SongSelectScreen::update() {
             navigator.exit_diff_select();
             state = SongSelectState::BROWSING;
             player->reset_selection();
+            on_diff_select_cancelled(current_time);
         }
     }
 
@@ -423,7 +425,8 @@ std::optional<Screens> SongSelectScreen::update() {
             set_keyboard_visible(false);
         }
         if (state == SongSelectState::SONG_SELECTED) {
-            diff_select_timer = std::make_unique<Timer>(60, current_time, [this] {
+            diff_select_timer = std::make_unique<Timer>(diff_select_seconds(), current_time, [this] {
+                on_select_time_up();
                 if (auto* item = dynamic_cast<SongBox*>(navigator.get_current_item())) {
                     if (pick_course_on_timeout(*player)) {
                         select_song(item);

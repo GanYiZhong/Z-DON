@@ -74,6 +74,7 @@ public:
 
     static void service_bgm_resume(double current_ms);
     static void reset_bgm_slot();
+    static std::string bgm_sound; // Z-DON: the select bgm a preview stops and resumes (AI select: "ai_bgm")
     void release_preview_slot();
     void stop_preview_load();
     void play_preview(float seek_position);

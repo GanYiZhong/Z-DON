@@ -13,6 +13,15 @@ void Result2PScreen::on_screen_start() {
     fade_in.emplace(PlayerNum::TWO_PLAYER);
     player_1.emplace(PlayerNum::P1, true, false);
     player_2.emplace(PlayerNum::P2, true, true);
+    // Z-DON AI battle (AiResultMain.lua): bgm_airesult and the announce, when the skin has them
+    if (global_data.zdon_ai.active && audio.has_sound("ai_bgm")) {
+        audio.stop_sound("bgm");
+        audio.set_sound_loop("ai_bgm", true);
+        audio.play_sound("ai_bgm", VolumePreset::MUSIC);
+        if (audio.has_sound("aivoice_announce")) {
+            audio.play_sound("aivoice_announce", VolumePreset::VOICE);
+        }
+    }
 }
 
 double Result2PScreen::reveal_end_ms() {
