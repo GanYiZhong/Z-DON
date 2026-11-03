@@ -6,6 +6,8 @@
 #include <random>
 #include <unordered_map>
 
+#include "spdlog/spdlog.h"
+
 namespace fixed_step {
     unsigned int seed() {
         return on() ? 20261019u : std::random_device{}();
@@ -49,11 +51,20 @@ namespace fixed_step {
 
     void audio_play(const std::string& name, bool music) {
         std::scoped_lock lock(g_mutex);
+        // ZDON_AUDIO_TRACE=1: log every start / stop with the frame clock (ms since frame 0), to time cues in test runs
+        static const bool trace = std::getenv("ZDON_AUDIO_TRACE") != nullptr;
+        if (trace) {
+            spdlog::info("[audio-trace] play {} {} at {:.1f} ms", music ? "music" : "sound", name, now_ms() - kStartMs);
+        }
         g_voices[key(name, music)] = Voice{true, now_ms(), 0.0};
     }
 
     void audio_stop(const std::string& name, bool music) {
         std::scoped_lock lock(g_mutex);
+        static const bool trace = std::getenv("ZDON_AUDIO_TRACE") != nullptr;
+        if (trace) {
+            spdlog::info("[audio-trace] stop {} {} at {:.1f} ms", music ? "music" : "sound", name, now_ms() - kStartMs);
+        }
         g_voices.erase(key(name, music));
     }
 

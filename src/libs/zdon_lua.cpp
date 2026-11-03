@@ -279,6 +279,10 @@ void register_zdon_lua_bindings(sol::table& tex) {
     tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });
     tex.set_function("ai_condition", []() -> int { return zdon_ai_condition(); });
 
+    // tex.ai_skill() -> the AI's skill level 1..10 ([general] zdon_ai_level, +1 per match won, -1 per loss); the
+    // course board's "pick the difficulty level" pillars show it
+    tex.set_function("ai_skill", []() -> int { return std::clamp(global_data.config->general.zdon_ai_level, 1, 10); });
+
     // tex.ai_rank() -> the player's AI battle rank (the Green ghost rank, objects/game/zdon_ai.h):
     //   {rank = 0..11, points =, next = points still needed for the next rank (0 at the top),
     //    least = {e, n, h, m, x} (the lowest star level that counts toward the next rank: the next row; 0 = not
