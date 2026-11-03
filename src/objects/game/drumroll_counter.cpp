@@ -17,6 +17,9 @@ DrumrollCounter::DrumrollCounter() {
     }
     t_bubble = tex.get_texture("drumroll_counter/bubble");
     t_counter = tex.get_texture("drumroll_counter/counter");
+    if (tex.has_texture("drumroll_counter/bubble_unfold")) {
+        t_unfold = tex.get_texture("drumroll_counter/bubble_unfold");
+    }
 }
 
 void DrumrollCounter::update_count(int count) {
@@ -34,6 +37,10 @@ void DrumrollCounter::update(double current_ms, int count) {
 }
 
 void DrumrollCounter::update_animations(double current_ms) {
+    if (start_ms < 0.0) {
+        start_ms = current_ms;
+    }
+    now_ms = current_ms;
     fade->update(current_ms);
     stretch->update(current_ms);
 }
@@ -48,7 +55,31 @@ void DrumrollCounter::draw(float y) {
             y += it->second.y;
         }
     }
-    tex.draw_texture(t_bubble, {.x = x, .y = y, .fade = fade->attribute});
+    // Z-DON: the arcade's renda_number movie (60 fps) opens the fan over its first 12 frames: shapes 58/60/62/64 on
+    // frames 0-4 (alpha 0, .33, .67, 1, 1), 5-6, 7-8, 9-11, then the open fan (the "bubble" texture); the digits and
+    // 連打 fade in on frames 8-12 (.2 steps).
+    static constexpr int UNFOLD_FRAMES = 12;
+    static constexpr int UNFOLD_SHAPE[UNFOLD_FRAMES] = {0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3};
+    static constexpr double UNFOLD_ALPHA[5] = {0.0, 0.332, 0.668, 1.0, 1.0};
+    double bubble_alpha = 1.0;
+    double digit_alpha = 1.0;
+    int unfold_shape = -1;
+    if (t_unfold != nullptr && start_ms >= 0.0) {
+        const int k = static_cast<int>(std::max(now_ms - start_ms, 0.0) * 60.0 / 1000.0);
+        if (k < UNFOLD_FRAMES) {
+            unfold_shape = UNFOLD_SHAPE[k];
+            bubble_alpha = k < 5 ? UNFOLD_ALPHA[k] : 1.0;
+            digit_alpha = k < 8 ? 0.0 : 0.2 * (k - 7);
+        }
+    }
+    if (unfold_shape >= 0) {
+        tex.draw_texture(t_unfold, {.frame = unfold_shape, .x = x, .y = y, .fade = fade->attribute * bubble_alpha});
+    } else {
+        tex.draw_texture(t_bubble, {.x = x, .y = y, .fade = fade->attribute});
+    }
+    if (digit_alpha <= 0.0) {
+        return;
+    }
     std::string counter = std::to_string(drumroll_count);
     const float margin = tex.get_skin_config(SC::GAME_DRUMROLL_COUNTER_MARGIN)->x;
     float total_width = static_cast<float>(counter.length()) * margin;
@@ -61,7 +92,7 @@ void DrumrollCounter::draw(float y) {
                                      .x = x - (total_width / 2.0f) + (i * margin),
                                      .y = y - static_cast<float>(stretch->attribute),
                                      .y2 = static_cast<float>(stretch->attribute),
-                                     .fade = fade->attribute});
+                                     .fade = fade->attribute * digit_alpha});
     }
 }
 
