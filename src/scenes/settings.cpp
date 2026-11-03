@@ -17,6 +17,10 @@ void SettingsScreen::on_screen_start() {
         throw std::runtime_error("SettingsScreen: global_data.config is null");
     }
 
+    // Z-DON: the language row shows "auto" or the language (config_ref general/language)
+    global_data.config->general.zdon_language_choice =
+        global_data.config->general.zdon_language_auto ? "auto" : global_data.config->general.language;
+
     fs::path skin_dir = fs::path("Skins") / global_data.config->paths.skin / "Graphics";
     fs::path tmpl_path = skin_dir / "settings_template.json";
     if (!fs::exists(tmpl_path)) {
@@ -48,6 +52,7 @@ void SettingsScreen::on_screen_start() {
 }
 
 Screens SettingsScreen::on_screen_end(Screens next_screen) {
+    apply_language_choice(*global_data.config); // Z-DON
     save_config(*global_data.config);
     scores_manager.save_player_data(scores_manager.player_1_data);
     scores_manager.save_player_data(scores_manager.player_2_data);

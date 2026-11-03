@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <algorithm>
+#include <cctype>
 #include <spdlog/spdlog.h>
 #include <string_view>
 
@@ -237,6 +238,49 @@ static std::vector<int> parseIntArrayOrDefault(const toml::table* section, const
     return def;
 }
 
+std::string detect_system_language() {
+    static constexpr std::string_view kLanguages[] = {"en", "ja", "zh", "ko"};
+    std::vector<std::string> preferred;
+#ifdef YATAIDON_USE_SDL2
+    if (SDL_Locale* locales = SDL_GetPreferredLocales()) {
+        for (SDL_Locale* l = locales; l->language; ++l) {
+            preferred.emplace_back(l->language);
+        }
+        SDL_free(locales);
+    }
+#else
+    int count = 0;
+    if (SDL_Locale** locales = SDL_GetPreferredLocales(&count)) {
+        for (int i = 0; i < count; ++i) {
+            if (locales[i] && locales[i]->language) {
+                preferred.emplace_back(locales[i]->language);
+            }
+        }
+        SDL_free(locales);
+    }
+#endif
+    for (std::string lang : preferred) {
+        std::ranges::transform(lang, lang.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (std::ranges::find(kLanguages, lang) != std::end(kLanguages)) {
+            spdlog::info("Language: {} (the system's {})", lang, preferred.front());
+            return lang;
+        }
+    }
+    spdlog::info("Language: ja (none of the system's {} languages is one the game has)", preferred.size());
+    return "ja";
+}
+
+void apply_language_choice(Config& config) {
+    auto& g = config.general;
+    if (g.zdon_language_choice == "auto") {
+        g.zdon_language_auto = true;
+        g.language = detect_system_language();
+    } else if (!g.zdon_language_choice.empty()) {
+        g.zdon_language_auto = false;
+        g.language = g.zdon_language_choice;
+    }
+}
+
 Config get_config() {
     fs::path config_path = config_file_path();
 
@@ -273,7 +317,13 @@ Config get_config() {
     config.general.fps_counter = config_file["general"]["fps_counter"].value_or(false);
     config.general.audio_offset = config_file["general"]["audio_offset"].value_or(0);
     config.general.visual_offset = config_file["general"]["visual_offset"].value_or(0);
-    config.general.language = config_file["general"]["language"].value_or("en");
+    // Z-DON: a file without a language (a new install) follows the system's
+    const auto file_language = config_file["general"]["language"].value<std::string>();
+    config.general.zdon_language_auto =
+        config_file["general"]["zdon_language_auto"].value_or(!file_language.has_value());
+    config.general.language =
+        config.general.zdon_language_auto ? detect_system_language() : file_language.value_or("en");
+    config.general.zdon_language_choice = config.general.zdon_language_auto ? "auto" : config.general.language;
     config.general.song_timer = config_file["general"]["song_timer"].value_or(false);
     config.general.judge_counter = config_file["general"]["judge_counter"].value_or(false);
     config.general.show_timing_offset = config_file["general"]["show_timing_offset"].value_or(false);
@@ -477,6 +527,7 @@ void save_config(const Config& config) {
                                                {"audio_offset", config.general.audio_offset},
                                                {"visual_offset", config.general.visual_offset},
                                                {"language", config.general.language},
+                                               {"zdon_language_auto", config.general.zdon_language_auto},
                                                {"song_timer", config.general.song_timer},
                                                {"judge_counter", config.general.judge_counter},
                                                {"show_timing_offset", config.general.show_timing_offset},

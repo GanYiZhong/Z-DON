@@ -19,6 +19,11 @@ struct GeneralConfig {
     int audio_offset = 0;
     int visual_offset = 0;
     std::string language;
+    // Z-DON: the language follows the system's (detect_system_language) on every start; `language` keeps
+    // what it resolved to, so upstream builds still read a language they know
+    bool zdon_language_auto = false;
+    // Z-DON: the settings screen's choice, "auto" or a language (apply_language_choice)
+    std::string zdon_language_choice;
     bool song_timer = false;
     bool judge_counter = false;
     bool show_timing_offset = false;
@@ -150,6 +155,13 @@ std::string getKeyString(int key_code);
 std::vector<int> parseIntArray(const toml::array& arr);
 
 Config get_config();
+
+// Z-DON: the first of the system's preferred languages the game has (en, ja, zh, ko; any Chinese is zh),
+// else ja
+std::string detect_system_language();
+
+// Z-DON: the settings screen's language choice into the config ("auto": detect it now)
+void apply_language_choice(Config& config);
 
 // Z-DON: true while the config in memory differs from the player's on purpose (a recording, zdon_record.h):
 // save_config writes nothing

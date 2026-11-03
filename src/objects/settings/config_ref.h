@@ -108,7 +108,7 @@ inline ConfigRef get_config_ref(const std::string& path) {
         return &c->general.visual_offset;
     }
     if (path == "general/language") {
-        return &c->general.language;
+        return &c->general.zdon_language_choice; // Z-DON: "auto" too, applied when the settings close
     }
     if (path == "general/song_timer") {
         return &c->general.song_timer;

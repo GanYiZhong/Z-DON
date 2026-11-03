@@ -39,6 +39,14 @@ std::unique_ptr<BaseOptionBox> SettingsBox::make_option_box(const rapidjson::Val
         }
     }
 
+    // Z-DON: the language can follow the system's (apply_language_choice); skins only list the languages
+    if (path == "general/language" && !values_map.empty()) {
+        static const std::map<std::string, std::string> auto_label = {
+            {"en", "AUTO (system)"}, {"ja", "AUTO（システム）"}, {"zh", "AUTO（系统）"}, {"ko", "AUTO (시스템)"}};
+        auto it = auto_label.find(lang);
+        values_map["auto"] = it != auto_label.end() ? it->second : auto_label.at("en");
+    }
+
     if (type == "audiooffset") {
         return std::make_unique<AudioOffsetOptionBox>(name, desc, path);
     }
