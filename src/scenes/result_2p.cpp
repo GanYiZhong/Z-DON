@@ -64,6 +64,17 @@ std::optional<Screens> Result2PScreen::update() {
 
     update_input_and_timeout(current_time);
 
+    if (zdon_freeze_exit == 2) { // zdon_end_over_result: the held summary frame goes under the ending curtain
+        zdon_freeze_exit = 0;
+        global_data.zdon_ai.play_all = false;
+        global_data.zdon_ai.active = false;
+        global_data.songs_played = 0;
+        return on_screen_end(Screens::GAME_OVER);
+    }
+    if (zdon_freeze_exit == 1) {
+        zdon_freeze_exit = 2;
+    }
+
     if (fade_out) {
         fade_out->update(current_time);
         if (fade_out->is_finished) {

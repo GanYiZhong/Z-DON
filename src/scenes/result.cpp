@@ -68,8 +68,13 @@ bool ResultScreen::retry_pending() const {
 // Z-DON: a skin with skin_config zdon_end_over_result (Nijiiro) ends the credit over the live result board: the last
 // result frame is held for the GAME_OVER screen and there is no fade to black in between
 bool ResultScreen::zdon_freeze_to_game_over() const {
-    return !zdon_two_boards() && tex.skin_config_by_name.contains("zdon_end_over_result") &&
-           global_data.config->limits.song_limit > 0 &&
+    if (!tex.skin_config_by_name.contains("zdon_end_over_result")) {
+        return false;
+    }
+    if (zdon_two_boards()) { // the AI battle's credit end: the play-all summary stays under the curtain
+        return global_data.zdon_ai.play_all;
+    }
+    return global_data.config->limits.song_limit > 0 &&
            global_data.config->limits.song_limit == global_data.songs_played;
 }
 
