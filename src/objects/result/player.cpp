@@ -225,6 +225,13 @@ void ResultPlayer::update(double current_ms, bool fade_in_finished, bool is_skip
         if (miss_loop && miss_loop.value()) {
             chara->set_anim(AnimIndex::DON_MISS6);
             miss_loop_started = true;
+            // Z-DON: skin_config "zdon_result_fail_color" {x = r, y = g, width = b} paints the whole Don in that
+            // colour in the miss pose (Nijiiro: the dark blue Don of a failed song, direct feed 2EWGAtPd0MM)
+            if (auto it = tex.skin_config_by_name.find("zdon_result_fail_color"); it != tex.skin_config_by_name.end()) {
+                const Color c{static_cast<unsigned char>(it->second.x), static_cast<unsigned char>(it->second.y),
+                              static_cast<unsigned char>(it->second.width), 255};
+                chara->set_don_colors(c, c, c);
+            }
         }
     }
     call(fn_update, "ResultPlayer:update", current_ms, fade_in_finished, score, good, ok, bad, max_combo,
