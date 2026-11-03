@@ -812,8 +812,10 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         }
 
         for (const auto& player : players) {
-            // Z-DON AI battle: the cabinet shows its battle win / end cut-in first, then the clear / full combo one
-            if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+            // Z-DON AI battle (skin_config zdon_ai_cutin_first, Nijiiro): the battle cut-in first, then the full combo
+            // one
+            if (global_data.zdon_ai.active && global_data.zdon_ai.finished &&
+                tex.skin_config_by_name.contains("zdon_ai_cutin_first")) {
                 ai_ending_pending = true;
             } else {
                 player->spawn_ending_anim(background ? &*background : nullptr);
