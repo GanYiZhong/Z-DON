@@ -22,6 +22,11 @@ protected:
     }
     bool hides_dan() override { return true; }
 
+    // the game transition (VS window, loading card) is an AI one: the skin asks tex.ai_transition()
+    void select_song(SongBox* song) override {
+        global_data.zdon_ai.requested = true;
+        SongSelectScreen::select_song(song);
+    }
     // ai_song_select_all.lua: one timer, 100 s on the song list; the course board keeps what is left, at least
     // 30 s (30 s after a time-up on the list); backing out tops it up to 30 s; each time-up sounds don_big
     int diff_select_seconds() override { return std::max(30, select_timer ? select_timer->time() : 0); }

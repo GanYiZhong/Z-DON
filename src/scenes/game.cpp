@@ -812,7 +812,12 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         }
 
         for (const auto& player : players) {
-            player->spawn_ending_anim(background ? &*background : nullptr);
+            // Z-DON AI battle: the cabinet shows its battle win / end cut-in first, then the clear / full combo one
+            if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+                ai_ending_pending = true;
+            } else {
+                player->spawn_ending_anim(background ? &*background : nullptr);
+            }
 
             if (notification == BackgroundNotification::Enabled && background) {
                 int g = player->get_good(), o = player->get_ok(), b = player->get_bad();
@@ -826,6 +831,16 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         // ending plays (never while notes are still to be hit)
         tex.start_predecode("result");
         audio.predecode_screen_sounds("result");
+    }
+
+    if (ai_ending_pending && get_current_ms() >= global_data.zdon_ai.finished_at_ms + kZdonAiCutinMs) {
+        ai_ending_pending = false;
+        // the cabinet's own cut-in after the battle one is the full combo / donderful banner only
+        for (const auto& player : players) {
+            if (!player->is_zdon_ai() && player->get_bad() == 0) {
+                player->spawn_ending_anim(background ? &*background : nullptr);
+            }
+        }
     }
 
     if (clock.position() >= end_time + transition_delay && !result_transition.is_started) {

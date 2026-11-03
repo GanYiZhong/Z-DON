@@ -21,6 +21,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     // Z-DON AI battle (also on a restart): 2P plays 1P's chart
     const bool ai_battle = global_data.zdon_ai.requested || global_data.zdon_ai.active;
     global_data.zdon_ai.requested = false;
+    ai_music_cut = false;
+    ai_ending_pending = false;
     if (ai_battle) {
         auto& s1 = global_data.session_data[(int)PlayerNum::P1];
         auto& s2 = global_data.session_data[(int)PlayerNum::P2];
@@ -83,6 +85,11 @@ std::optional<Screens> Game2PScreen::update() {
     update_gameplay(current_time);
     if (global_data.zdon_ai.active && players.size() == 2) {
         zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
+        if (global_data.zdon_ai.finished && !ai_music_cut && song_music) {
+            audio.stop_sound(
+                *song_music); // the cabinet cuts the song when the battle ends (the emblem and voice follow)
+            ai_music_cut = true;
+        }
     }
     result_transition.update(current_time);
 

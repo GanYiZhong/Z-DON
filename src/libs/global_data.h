@@ -305,7 +305,9 @@ struct GlobalData {
         int live_p = 0, live_ai = 0;              // the current section's points so far
         std::array<int, 4> judge_p{}, judge_ai{}; // good, ok, bad, drumroll hits so far (score boards)
         bool finished = false;
-        bool won = false;                  // finished: the player won the match
+        double finished_at_ms =
+            0;            // wall clock (get_current_ms) when finished turned true: the skin's cut-in starts then
+        bool won = false; // finished: the player won the match
         std::vector<float> player_offsets; // the player's recent hit offsets (the AI's "trace")
         // the skin's arena asks for the player's Don this frame (tex.ai_draw_don): where, how big, turned how far
         // (degrees about the vertical axis). The player's lane draws it, then clears don_show

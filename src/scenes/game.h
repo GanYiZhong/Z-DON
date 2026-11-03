@@ -62,6 +62,8 @@ public:
     double start_delay = 1000.0;
     bool song_started = false;
     bool score_saved = false;
+    bool ai_music_cut = false;      // Z-DON AI battle: the song audio was cut when the battle ended
+    bool ai_ending_pending = false; // Z-DON AI battle: the ending anim waits for the skin's battle cut-in
     float bpm = 0.0f;
 
     std::unique_ptr<VideoPlayer> movie;
@@ -79,6 +81,7 @@ public:
     std::optional<Transition> transition;
     ResultTransition result_transition;
     static constexpr double kFastResultTransitionDelayMs = 3000.0;
+    static constexpr double kZdonAiCutinMs = 2600.0; // the AI battle cut-in (skin ai_battle.lua END) before the ending
     AllNetIcon allnet_indicator;
     std::optional<Background> background;
 

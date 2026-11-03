@@ -231,6 +231,11 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
     tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
 
+    // tex.ai_transition() -> true while an AI battle is being started: from the song select's decide (the VS window and
+    // loading card of its game transition) until the battle ends. Unlike ai_active it is already true there
+    tex.set_function("ai_transition",
+                     []() -> bool { return global_data.zdon_ai.requested || global_data.zdon_ai.active; });
+
     // tex.ai_draw_don(x, y, scale, rot_y): the arena (skin_config zdon_ai_arena) shows the player's 3D Don this frame
     // at x, y (the character's feet, 1080p px), scaled, turned rot_y degrees (the cabinet's AI battle stands it in
     // the arena facing the AI). Drawn by the player's lane after the background; call it every frame it shows

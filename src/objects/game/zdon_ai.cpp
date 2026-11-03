@@ -474,6 +474,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                                                                      sd.selected_difficulty);
             std::vector<std::array<int, 5>> rec(b.bounds.size());
             for (size_t i = 0; i < rec.size(); ++i) {
+        b.finished_at_ms = get_current_ms();
                 rec[i] = {b.section_score[i], b.section_judge[i][0], b.section_judge[i][1], b.section_judge[i][2],
                           b.section_judge[i][3]};
             }
