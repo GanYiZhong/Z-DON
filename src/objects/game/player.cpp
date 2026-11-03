@@ -2287,10 +2287,11 @@ void Player::draw_overlays(float y) {
     }
 
     // Z-DON: on the skin's AI stage with its own roll bubble spot (zdon_ai_drumroll) only the player's shows
-    const bool ai_bubble_hidden =
-        zdon_ai && tex.skin_config_by_name.contains("zdon_ai_drumroll") && zdon_ai_arena_game();
+    const bool ai_bubble_hidden = zdon_ai && tex.skin_config_by_name.contains("zdon_ai_drumroll") &&
+                                  !tex.skin_config_by_name.contains("zdon_ai_drumroll_ai") && zdon_ai_arena_game();
     if (drumroll_counter.has_value() && show_drumroll_count && !ai_bubble_hidden) {
-        drumroll_counter->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
+        drumroll_counter->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p),
+                               zdon_ai != nullptr);
     }
     if (balloon_counter.has_value()) {
         balloon_counter->draw(y);

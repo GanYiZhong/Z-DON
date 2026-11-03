@@ -590,7 +590,15 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                 // minimums; at rank 10 only the task folder's songs count = least 99, not reachable here)
                 const ZdonAiRank& r = zdon_ai_rank_info(std::min(rank + 1, kZdonAiRanks - 1));
                 const bool first = scores_manager.add_zdon_ai_first_win(get_player_id(PlayerNum::P1), sd.song_hash, c);
-                if (rank + 1 < kZdonAiRanks && r.least[c] > 0 && star >= r.least[c]) {
+                int least = r.least[c];
+                // test hook: ZDON_AI_TASK_STAR=N lets a course of N stars or more count at rank 10 (the cabinet's task
+                // folder songs are not in Z-DON), so the rank 10 -> 10+ cut-ins can be reproduced
+                if (rank + 1 == kZdonAiRanks - 1) {
+                    if (const char* env = std::getenv("ZDON_AI_TASK_STAR")) {
+                        least = std::atoi(env);
+                    }
+                }
+                if (rank + 1 < kZdonAiRanks && least > 0 && star >= least) {
                     last_bonus_high = r.bonus[c] > 0 && star >= r.bonus[c];
                     last_first_win = first;
                     b.rank_gain = 1 + (last_bonus_high ? 1 : 0) + (first ? 1 : 0);

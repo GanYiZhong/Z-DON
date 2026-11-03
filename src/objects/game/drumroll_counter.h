@@ -12,6 +12,9 @@ private:
     TextureObject* t_counter = nullptr;
     // Z-DON: optional skin frames of the bubble opening (the arcade folding fan); null = skin has none
     TextureObject* t_unfold = nullptr;
+    // Z-DON: the AI battle's own (teal) fan, used on the AI stage when the skin has bubble_ai / bubble_unfold_ai
+    TextureObject* t_bubble_ai = nullptr;
+    TextureObject* t_unfold_ai = nullptr;
     double start_ms = -1.0;
     double now_ms = 0.0;
 
@@ -24,7 +27,8 @@ public:
 
     void update_animations(double current_ms);
 
-    void draw(float y);
+    // ai: this is the AI player's counter (skin_config zdon_ai_drumroll_ai places it)
+    void draw(float y, bool ai = false);
 
     bool is_finished() const;
 };

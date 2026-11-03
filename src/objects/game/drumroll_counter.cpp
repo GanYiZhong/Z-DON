@@ -20,6 +20,12 @@ DrumrollCounter::DrumrollCounter() {
     if (tex.has_texture("drumroll_counter/bubble_unfold")) {
         t_unfold = tex.get_texture("drumroll_counter/bubble_unfold");
     }
+    if (tex.has_texture("drumroll_counter/bubble_ai")) {
+        t_bubble_ai = tex.get_texture("drumroll_counter/bubble_ai");
+    }
+    if (tex.has_texture("drumroll_counter/bubble_unfold_ai")) {
+        t_unfold_ai = tex.get_texture("drumroll_counter/bubble_unfold_ai");
+    }
 }
 
 void DrumrollCounter::update_count(int count) {
@@ -45,15 +51,25 @@ void DrumrollCounter::update_animations(double current_ms) {
     stretch->update(current_ms);
 }
 
-void DrumrollCounter::draw(float y) {
+void DrumrollCounter::draw(float y, bool ai) {
     // Z-DON: skin_config "zdon_ai_drumroll" {x, y} moves the bubble on the skin's AI stage (Green's AI battle shows
     // it over the arena, next to the clash)
     float x = 0.0f;
+    bool use_ai_art = false;
     if (zdon_ai_arena_game()) {
-        if (auto it = tex.skin_config_by_name.find("zdon_ai_drumroll"); it != tex.skin_config_by_name.end()) {
+        // the AI's own spot (zdon_ai_drumroll_ai) when the skin gives one; the AI counter then shows too
+        auto it = tex.skin_config_by_name.end();
+        if (ai) {
+            it = tex.skin_config_by_name.find("zdon_ai_drumroll_ai");
+        }
+        if (it == tex.skin_config_by_name.end()) {
+            it = tex.skin_config_by_name.find("zdon_ai_drumroll");
+        }
+        if (it != tex.skin_config_by_name.end()) {
             x = it->second.x;
             y += it->second.y;
         }
+        use_ai_art = t_bubble_ai != nullptr;
     }
     // Z-DON: the arcade's renda_number movie (60 fps) opens the fan over its first 12 frames: shapes 58/60/62/64 on
     // frames 0-4 (alpha 0, .33, .67, 1, 1), 5-6, 7-8, 9-11, then the open fan (the "bubble" texture); the digits and
@@ -73,9 +89,10 @@ void DrumrollCounter::draw(float y) {
         }
     }
     if (unfold_shape >= 0) {
-        tex.draw_texture(t_unfold, {.frame = unfold_shape, .x = x, .y = y, .fade = fade->attribute * bubble_alpha});
+        tex.draw_texture((use_ai_art && t_unfold_ai) ? t_unfold_ai : t_unfold,
+                         {.frame = unfold_shape, .x = x, .y = y, .fade = fade->attribute * bubble_alpha});
     } else {
-        tex.draw_texture(t_bubble, {.x = x, .y = y, .fade = fade->attribute});
+        tex.draw_texture(use_ai_art ? t_bubble_ai : t_bubble, {.x = x, .y = y, .fade = fade->attribute});
     }
     if (digit_alpha <= 0.0) {
         return;
