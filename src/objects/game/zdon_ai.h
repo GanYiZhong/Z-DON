@@ -71,6 +71,8 @@ PlayerData zdon_ai_player_data(int level);
 // and course mark (the skin draws the arena, the AI and its plate)
 bool zdon_ai_skin_arena();
 bool zdon_ai_arena_game();
+// GAME_2P of an AI battle in a skin with "zdon_ai_lane" (the AI lane's own cover / background, no badges)
+bool zdon_ai_lane_game();
 
 // a new battle at a tuning level (the player's recent timing is kept)
 void zdon_ai_battle_begin(int level);

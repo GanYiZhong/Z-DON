@@ -148,6 +148,10 @@ bool zdon_ai_skin_arena() {
     return tex.skin_config_by_name.contains("zdon_ai_arena");
 }
 
+bool zdon_ai_lane_game() {
+    return zdon_ai_arena_game() && tex.skin_config_by_name.contains("zdon_ai_lane");
+}
+
 bool zdon_ai_arena_game() {
     return global_data.zdon_ai.active && zdon_ai_skin_arena();
 }
@@ -167,6 +171,12 @@ void Player::enable_zdon_ai(int level) {
     const char* seed_env = std::getenv("ZDON_AI_SEED");
     const unsigned seed = seed_env ? (unsigned)std::strtoul(seed_env, nullptr, 10) : std::random_device{}();
     zdon_ai = std::make_shared<ZdonAiDriver>(std::clamp(level, 1, 11), seed);
+    // skin_config "zdon_ai_lane": the AI's lane is the AI's own (Green ghost: lane/ai_lane_cover, the circuit obi,
+    // lane/ai_lane_background, no lane badges)
+    if (zdon_ai_skin_arena() && tex.skin_config_by_name.contains("zdon_ai_lane") &&
+        tex.has_texture("lane/ai_lane_cover")) {
+        lane_cover_tex_id = tex.get_texture("lane/ai_lane_cover");
+    }
 }
 
 std::vector<double> Player::zdon_note_times() const {

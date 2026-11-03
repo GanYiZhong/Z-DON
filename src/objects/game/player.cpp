@@ -649,7 +649,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
 void Player::draw(double ms_from_start, float x, float y) {
     PlayerSoundScope audio_owner(player_num);
     tex.draw_texture(t_lane_background, {.y = y});
-    if (player_num == PlayerNum::AI) {
+    if (player_num == PlayerNum::AI || (zdon_ai && zdon_ai_lane_game() && t_ai_lane_background)) {
         tex.draw_texture(t_ai_lane_background, {.y = y});
     }
     if (branch_indicator.has_value()) {
@@ -2221,18 +2221,19 @@ void Player::draw_overlays(float y) {
     if (combo_announce.has_value()) {
         combo_announce->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
     }
-    if (show_lane_badges) {
+    const bool arena_ai = zdon_ai && zdon_ai_arena_game(); // Z-DON: the skin draws the AI lane's plate
+    const bool ai_lane = zdon_ai && zdon_ai_lane_game();
+    if (show_lane_badges && !ai_lane) {
         tex.draw_texture(lane_icon_tex_id, {.y = y, .index = is_2p});
     }
     int frame = is_dan ? 6 : difficulty;
     int index = is_dan ? 0 : is_2p;
-    const bool arena_ai = zdon_ai && zdon_ai_arena_game(); // Z-DON: the skin draws the AI lane's plate
     if (lane_mark && !arena_ai) {
         tex.draw_texture(lane_mark, {.y = y});
     } else if (!arena_ai) {
         tex.draw_texture(t_lane_difficulty, {.frame = frame, .y = y, .index = index});
     }
-    if (show_lane_badges) {
+    if (show_lane_badges && !ai_lane) {
         draw_modifiers(y);
     }
     if (judge_counter.has_value()) {
