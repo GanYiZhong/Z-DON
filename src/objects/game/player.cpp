@@ -2251,7 +2251,8 @@ void Player::draw_overlays(float y) {
 
     // Z-DON: the auto marker is an extra for normal play; in an AI battle the cabinet's plate (title + name) shows
     // skin_config "zdon_auto_badge" (Nijiiro): the cabinet always shows the plate, so auto play keeps it and the
-    // auto marker becomes a badge moved by the entry's x / y (nothing is drawn when the plate is kept without it)
+    // auto marker becomes a badge moved by the entry's x / y and scaled by its outline (nothing is drawn when the plate
+    // is kept without it)
     const auto badge_it = tex.skin_config_by_name.find("zdon_auto_badge");
     const bool keep_plate = badge_it != tex.skin_config_by_name.end();
     if (show_lane_name && modifiers.auto_play && !zdon_ai_arena_game() && !keep_plate) {
@@ -2260,7 +2261,9 @@ void Player::draw_overlays(float y) {
         auto [nx, ny] = tex.nameplate_xy(is_2p ? "game_p2" : "game_p1");
         nameplate.draw(nx, y + ny);
         if (keep_plate && modifiers.auto_play && !zdon_ai_arena_game()) {
-            tex.draw_texture(t_auto_icon, {.x = badge_it->second.x, .y = y + badge_it->second.y, .index = is_2p});
+            const SkinInfo& b = badge_it->second; // outline: the badge's scale (unset = full size)
+            tex.draw_texture(t_auto_icon,
+                             {.scale = b.outline > 0 ? b.outline : 1.0f, .x = b.x, .y = y + b.y, .index = is_2p});
         }
     }
     if (is_balloon) {
