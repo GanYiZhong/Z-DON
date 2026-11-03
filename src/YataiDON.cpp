@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -463,7 +464,12 @@ static double dev_hook_clock() {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
-static bool dump_screen_tick();         // dev hook, defined below
+static bool dump_screen_tick();   // dev hook, defined below
+static bool draw_log_dev_hook() { // ZDON_DRAW_LOG=1: YATAIDON_DUMP_* frames also get <frame>.draws.tsv
+    static const bool on = std::getenv("ZDON_DRAW_LOG") != nullptr;
+    return on;
+}
+static void write_draw_log(const std::string& path);
 static bool g_dump_screen_done = false; // the dump hook's last shot is taken: leave the main loop
 
 // Dev hook: YATAIDON_FRAME_STATS=1 logs, every 2 s, the CPU time each frame spent before present
@@ -679,6 +685,10 @@ static void run_frame() {
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
     if (!global_data.skinless) {
         debug_menu.update(L.camera);
+    }
+    if (draw_log_dev_hook()) { // dev hook ZDON_DRAW_LOG: keep this frame's draw calls for dump_screen_tick
+        debug_draw_log.clear();
+        debug_log_draws = true;
     }
 
     begin_drawing();
@@ -1016,6 +1026,20 @@ static void dump_screen_init() {
     fs::create_directories(g_dump_screen.outdir);
     g_dump_screen.active = true;
 }
+static void write_draw_log(const std::string& path) {
+    // one row per draw call in draw order (= layer order): idx name x y w h tex_index scale center rotation lua site
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        return;
+    }
+    int i = 0;
+    for (const DrawLogEntry& e : debug_draw_log) {
+        std::fprintf(f, "%d\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%.4f\t%d\t%.2f\t%s:%d\t%s\n", i++, e.name.c_str(),
+                     e.rect.x, e.rect.y, e.rect.width, e.rect.height, e.index, e.scale, e.center ? 1 : 0, e.rotation,
+                     e.lua_source.c_str(), e.lua_line, e.lua_function.c_str());
+    }
+    std::fclose(f);
+}
 // call between BeginDrawing and EndDrawing; returns true when the last shot was taken
 static bool dump_screen_tick() {
     if (!g_dump_screen.active) {
@@ -1034,6 +1058,9 @@ static bool dump_screen_tick() {
                                      ? std::to_string((long long)g_dump_screen.times[g_dump_screen.next]) + ".png"
                                      : std::to_string(g_dump_screen.next) + "_" +
                                            std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
+        if (draw_log_dev_hook()) {
+            write_draw_log((fs::path(g_dump_screen.outdir) / (name + ".draws.tsv")).string());
+        }
         if (!grabbed) {
             shots.emplace_back(name, density::capture()); // the density target's full size
             grabbed = true;

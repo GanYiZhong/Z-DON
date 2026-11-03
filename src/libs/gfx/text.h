@@ -127,6 +127,7 @@ private:
     float font_size;
     float outline_thickness;
     float v_advance = 1.0f;
+    std::string dbg_font; // dev draw log: "<font file or default>@<logical size>"
 
     Font worker_font;
     GlyphSubset worker_glyphs; // backs worker_font

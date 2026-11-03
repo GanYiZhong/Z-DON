@@ -820,7 +820,8 @@ OutlinedText::OutlinedText(std::string text, int logical_font_size, Color color,
     : text(std::move(text)), density(std::max(global_tex.texture_density, 1)),
       font_size(static_cast<float>(logical_font_size * density)),
       outline_thickness(outline_thickness * global_tex.screen_scale * static_cast<float>(density)),
-      v_advance(v_advance) {
+      v_advance(v_advance),
+      dbg_font((font_name.empty() ? std::string("default") : font_name) + "@" + std::to_string(logical_font_size)) {
     text_stats::Scope stat(text_stats::CTOR);
     // Z-DON texture density: the text is rasterised at the physical size (x density) and drawn at the logical one
     const int font_size = logical_font_size * density;
@@ -1154,7 +1155,7 @@ void OutlinedText::draw(const DrawTextureParams& params) {
     }
     if (debug_log_draws) {
         std::string label = text.size() > 40 ? text.substr(0, 40) + "..." : text;
-        debug_draw_log.push_back({"\"" + label + "\"", dst});
+        debug_draw_log.push_back({"\"" + label + "\" {" + dbg_font + "}", dst});
         log_lua_site(debug_draw_log.back(), script_lua_state());
     }
 
