@@ -86,6 +86,12 @@ void register_box_lua_bindings(sol::state& lua) {
             return course_table(info,
                                 diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
         },
+        // Z-DON: box:best_score(diff) -> the player's best score on that course (0 = none)
+        "best_score",
+        [](SongBox& self, double diff) {
+            const int d = static_cast<int>(diff);
+            return (d >= 0 && d < std::ssize(self.scores) && self.scores[d].has_value()) ? self.scores[d]->score : 0;
+        },
         // Z-DON: box:chart_stats(diff) -> { notes, length_ms, bpm_min, bpm_max } (box_song_stats.cpp)
         "chart_stats",
         [](SongBox& self, double diff, sol::this_state s) {

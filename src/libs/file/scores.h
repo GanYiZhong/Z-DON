@@ -175,6 +175,9 @@ public:
     // Z-DON per-player options (table zdon_player_options): get / set an integer by key
     int get_zdon_option(const std::string& player_id, const std::string& key, int fallback = 0);
     void set_zdon_option(const std::string& player_id, const std::string& key, int value);
+    // Z-DON record counts over the player's charts of difficulty >= min_difficulty (best per chart): [0..6] = ranks
+    // white..rainbow, [7..9] = crowns clear / full combo / donder full combo
+    std::array<int, 10> get_zdon_record_counts(const std::string& player_id, int min_difficulty);
     // Z-DON PB pace (table zdon_ghost): the best play's score over the song, as (chart ms, score) points
     std::vector<std::pair<float, int>> get_zdon_ghost(const std::string& hash, int difficulty,
                                                       const std::string& player_id);

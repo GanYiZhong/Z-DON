@@ -61,6 +61,14 @@ double ZdonAiDriver::draw_offset(double bad_window_ms) {
     return off;
 }
 
+bool zdon_ai_skin_arena() {
+    return tex.skin_config_by_name.contains("zdon_ai_arena");
+}
+
+bool zdon_ai_arena_game() {
+    return global_data.zdon_ai.active && zdon_ai_skin_arena();
+}
+
 PlayerData zdon_ai_player_data(int level) {
     PlayerData pd;
     pd.username = "AI";

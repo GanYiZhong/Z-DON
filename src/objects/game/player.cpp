@@ -13,6 +13,7 @@
 #include "../../libs/file/scores.h"
 #include "../../libs/gfx/text.h"
 #include "../../libs/input/input.h"
+#include "zdon_ai.h"
 
 // Z-DON: plays a resolved sound id as `who` (upstream routes a player's sounds by PlayerSoundScope)
 static void play_as(PlayerNum who, SoundId id, VolumePreset preset, float gain = 1.0f) {
@@ -654,8 +655,8 @@ void Player::draw(double ms_from_start, float x, float y) {
     if (branch_indicator.has_value()) {
         branch_indicator->draw(y);
     }
-    if (gauge.has_value()) {
-        if (arc_player() == PlayerNum::P2) { // the bottom gauge only when two play
+    if (gauge.has_value() && !(zdon_ai && zdon_ai_arena_game())) { // Z-DON: the arena has no AI gauge
+        if (arc_player() == PlayerNum::P2) {                       // the bottom gauge only when two play
             gauge->draw(y + tex.get_skin_config(SC::GAME_GAUGE_2P_OFFSET)->y);
         } else {
             gauge->draw(y);
@@ -2185,7 +2186,7 @@ void Player::draw_modifiers(float y) {
 }
 
 void Player::draw_lane_cover(float y) {
-    if (!is_balloon || (balloon_idle && !balloon_counter.has_value())) {
+    if ((!is_balloon || (balloon_idle && !balloon_counter.has_value())) && !zdon_ai_arena_game()) {
         auto [cx, cy] = tex.chara_xy(is_2p ? "game_p2" : "game_p1");
         chara->draw(cx, y + cy, 1.0f);
     }
@@ -2225,9 +2226,10 @@ void Player::draw_overlays(float y) {
     }
     int frame = is_dan ? 6 : difficulty;
     int index = is_dan ? 0 : is_2p;
-    if (lane_mark) {
+    const bool arena_ai = zdon_ai && zdon_ai_arena_game(); // Z-DON: the skin draws the AI lane's plate
+    if (lane_mark && !arena_ai) {
         tex.draw_texture(lane_mark, {.y = y});
-    } else {
+    } else if (!arena_ai) {
         tex.draw_texture(t_lane_difficulty, {.frame = frame, .y = y, .index = index});
     }
     if (show_lane_badges) {
@@ -2239,7 +2241,7 @@ void Player::draw_overlays(float y) {
 
     if (show_lane_name && modifiers.auto_play) {
         tex.draw_texture(t_auto_icon, {.y = y, .index = is_2p});
-    } else if (show_lane_name) {
+    } else if (show_lane_name && !arena_ai) {
         auto [nx, ny] = tex.nameplate_xy(is_2p ? "game_p2" : "game_p1");
         nameplate.draw(nx, y + ny);
     }

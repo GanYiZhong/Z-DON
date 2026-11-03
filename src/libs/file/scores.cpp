@@ -866,6 +866,31 @@ int ScoresManager::get_zdon_option(const std::string& player_id, const std::stri
     return value;
 }
 
+std::array<int, 10> ScoresManager::get_zdon_record_counts(const std::string& player_id, int min_difficulty) {
+    std::array<int, 10> counts{};
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "SELECT MAX(rank), MAX(crown) FROM scores WHERE player_id = ? AND difficulty >= ? "
+                           "GROUP BY hash, difficulty;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return counts;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, min_difficulty);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const int rank = sqlite3_column_int(stmt, 0);
+        const int crown = sqlite3_column_int(stmt, 1);
+        if (rank >= 1 && rank <= 7) {
+            counts[rank - 1]++;
+        }
+        if (crown >= 1 && crown <= 3) {
+            counts[6 + crown]++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return counts;
+}
+
 void ScoresManager::set_zdon_option(const std::string& player_id, const std::string& key, int value) {
     if (player_id.empty()) {
         return;

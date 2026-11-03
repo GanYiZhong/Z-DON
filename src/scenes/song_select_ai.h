@@ -21,6 +21,9 @@ protected:
     bool allows_second_player_join() override { return false; }
 
     void draw_extra_players() override {
+        if (zdon_ai_skin_arena()) {
+            return; // the skin draws the AI (global/ai_battle.lua)
+        }
         auto [nx, ny] = tex.nameplate_xy("song_select_2p");
         ai_plate.draw(nx, ny);
         if (ai_chara) {

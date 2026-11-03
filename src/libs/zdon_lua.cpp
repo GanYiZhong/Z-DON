@@ -7,6 +7,7 @@
 #include "../objects/entry/zdon_outfit_menu.h"
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
+#include "file/scores.h"
 #include "file/script.h"
 #include "global_data.h"
 
@@ -183,5 +184,19 @@ void register_zdon_lua_bindings(sol::table& tex) {
             return 0;
         }
         return global_data.session_data[player_num].result_data.prev_score;
+    });
+
+    // tex.record_counts(player_num, min_difficulty) -> { ranks = {white..rainbow}, crowns = {clear, fc, dfc} }: the
+    // player's best rank / crown per chart of that difficulty or higher, counted (the AI battle's player board)
+    tex.set_function("record_counts", [](int player_num, int min_difficulty, sol::this_state s) -> sol::object {
+        if (player_num != 1 && player_num != 2) {
+            return sol::lua_nil;
+        }
+        const std::array<int, 10> c =
+            scores_manager.get_zdon_record_counts(get_player_id(static_cast<PlayerNum>(player_num)), min_difficulty);
+        sol::state_view lua(s);
+        sol::table ranks = lua.create_table_with(1, c[0], 2, c[1], 3, c[2], 4, c[3], 5, c[4], 6, c[5], 7, c[6]);
+        sol::table crowns = lua.create_table_with(1, c[7], 2, c[8], 3, c[9]);
+        return lua.create_table_with("ranks", ranks, "crowns", crowns);
     });
 }

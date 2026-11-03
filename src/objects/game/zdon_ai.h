@@ -30,6 +30,12 @@ struct ZdonAiDriver {
 // PlayerNum::AI (skins draw their AI plate: global/nameplate/ai)
 PlayerData zdon_ai_player_data(int level);
 
+// the skin draws the AI battle's own stage (skin_config "zdon_ai_arena"): the AI song select leaves out the AI's
+// nameplate and character, and an AI battle's game leaves out both players' characters and the AI lane's nameplate
+// and course mark (the skin draws the arena, the AI and its plate)
+bool zdon_ai_skin_arena();
+bool zdon_ai_arena_game();
+
 // a new battle (the player's learned timing is kept)
 void zdon_ai_battle_begin(int level);
 // per frame, after the players updated: on the song's first frame cuts the sections (equal note counts;
