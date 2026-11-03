@@ -3,6 +3,7 @@
 #include "../libs/input/input.h"
 #include "../libs/zdon_record.h"
 #include "../objects/game/player.h"
+#include "../objects/game/zdon_ai.h"
 #include "../objects/global/zdon_hud.h"
 
 void ResultScreen::on_screen_start() {
@@ -118,7 +119,9 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     if (!fade_out || exiting()) {
         return;
     }
-    zdon_hist_input();
+    if (zdon_hist_input()) {
+        return; // the skin's AI battle cut-in pages take the input and hold the timeout
+    }
 
     if (skip_enabled_ms == 0 && fade_in.has_value() && fade_in->is_finished()) {
         skip_enabled_ms =
@@ -205,14 +208,25 @@ void ResultScreen::draw_unsaved_note() const {
 }
 
 // Z-DON: a kat opens / closes the player's hit timing panel (only with recorded hits)
-void ResultScreen::zdon_hist_input() {
-    // AI battle (AiResultSectionMain SwitchSection): kat switches the VS panel's simple / detail view
+bool ResultScreen::zdon_hist_input() {
     if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+        // the skin's cut-in pages (Green's rank up / reward: a kat turns the page, a don ends them)
+        if (zdon_ai_pages_open()) {
+            if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
+                zdon_ai_page_next();
+                audio.play_sound("kat", VolumePreset::SOUND);
+            } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
+                zdon_ai_pages_finish();
+                audio.play_sound("don", VolumePreset::SOUND);
+            }
+            return true;
+        }
+        // AI battle (AiResultSectionMain SwitchSection): kat switches the VS panel's simple / detail view
         if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
             global_data.zdon_ai.detail = !global_data.zdon_ai.detail;
             audio.play_sound("kat", VolumePreset::SOUND);
         }
-        return;
+        return false;
     }
     for (int pn = 1; pn <= 2; ++pn) {
         if (global_data.session_data[pn].result_data.hit_offsets.empty()) {
@@ -227,6 +241,7 @@ void ResultScreen::zdon_hist_input() {
             audio.play_sound("kat", VolumePreset::SOUND);
         }
     }
+    return false;
 }
 
 // the hits' offsets in bins across the OK window (gold inside GOOD), mean, SD, early / late; or a small hint

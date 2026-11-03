@@ -47,6 +47,14 @@ namespace {
         {100, 25, {0, 50, 0}, {5, -20, 60}, -6, 6, 0, 0, 540, 3, 1, 0, 5, 6},
     };
 
+    // which rank bonuses the last finished battle got (the result's notes)
+    bool last_first_win = false;
+    bool last_bonus_high = false;
+    // the result's cut-in pages (zdon_ai_pages_*): open this frame, kat presses so far, ended by a don
+    bool pages_open = false;
+    int page_steps = 0;
+    bool pages_finished = false;
+
     // the arcade's AI battle win-count rewards (reward.bin, releaseType 42)
     constexpr int kRewardWins[] = {1,   2,   10,  25,  50,  75,  100,  125,  150,  175,  200,  250,  300,
                                    350, 400, 500, 600, 765, 876, 1000, 2000, 3000, 4000, 5000, 10000};
@@ -132,6 +140,42 @@ int zdon_ai_rank_of(int points) {
         }
     }
     return r;
+}
+
+bool zdon_ai_pages_open() {
+    return pages_open && !pages_finished;
+}
+
+void zdon_ai_pages_set(bool open) {
+    if (open && !pages_open) {
+        page_steps = 0;
+        pages_finished = false;
+    }
+    pages_open = open;
+}
+
+int zdon_ai_page_steps() {
+    return page_steps;
+}
+
+bool zdon_ai_pages_finished() {
+    return pages_finished;
+}
+
+void zdon_ai_page_next() {
+    ++page_steps;
+}
+
+void zdon_ai_pages_finish() {
+    pages_finished = true;
+}
+
+bool zdon_ai_last_first_win() {
+    return last_first_win;
+}
+
+bool zdon_ai_last_bonus_high() {
+    return last_bonus_high;
 }
 
 int zdon_ai_next_reward(int wins) {
@@ -421,6 +465,9 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             auto [points, rank] = scores_manager.get_zdon_ai_rank(get_player_id(PlayerNum::P1));
             b.points_before = b.points = points;
             b.rank_before = b.rank = rank;
+            last_first_win = last_bonus_high = false;
+            pages_open = pages_finished = false; // a new result: its cut-in pages start closed
+            page_steps = 0;
             if (b.won) {
                 const int c = std::clamp(sd.selected_difficulty, 0, 4);
                 const int star = (int)b.star;
@@ -429,7 +476,9 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                 const ZdonAiRank& r = zdon_ai_rank_info(std::min(rank + 1, kZdonAiRanks - 1));
                 const bool first = scores_manager.add_zdon_ai_first_win(get_player_id(PlayerNum::P1), sd.song_hash, c);
                 if (rank + 1 < kZdonAiRanks && r.least[c] > 0 && star >= r.least[c]) {
-                    b.rank_gain = 1 + ((r.bonus[c] > 0 && star >= r.bonus[c]) ? 1 : 0) + (first ? 1 : 0);
+                    last_bonus_high = r.bonus[c] > 0 && star >= r.bonus[c];
+                    last_first_win = first;
+                    b.rank_gain = 1 + (last_bonus_high ? 1 : 0) + (first ? 1 : 0);
                 }
                 b.points = points + b.rank_gain;
                 b.rank = zdon_ai_rank_of(b.points);

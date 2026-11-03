@@ -188,6 +188,8 @@ void register_zdon_lua_bindings(sol::table& tex) {
             t["points_before"] = b.points_before;
             t["points"] = b.points;
             t["rank_gain"] = b.rank_gain;
+            t["first_win"] = zdon_ai_last_first_win();
+            t["bonus_high"] = zdon_ai_last_bonus_high();
             t["play_all"] = b.play_all;
         }
         t["sections"] = secs;
@@ -234,6 +236,14 @@ void register_zdon_lua_bindings(sol::table& tex) {
         b.don_y = y;
         b.don_scale = scale.value_or(1.0f);
         b.don_rot = rot.value_or(0.0f);
+    });
+
+    // tex.ai_pages(open) -> steps, finished: a skin's result cut-in pages (Green's rank up / reward). open = the
+    // pages show this frame (the result screen then turns a kat into the next page and a don into the end, and holds
+    // its timeout); steps = kat presses since they opened, finished = a don ended them
+    tex.set_function("ai_pages", [](bool open) -> std::tuple<int, bool> {
+        zdon_ai_pages_set(open);
+        return {zdon_ai_page_steps(), zdon_ai_pages_finished()};
     });
 
     // tex.ai_level() / tex.ai_condition() -> the AI's condition this session, 1 worst .. 5 best (its tension; the

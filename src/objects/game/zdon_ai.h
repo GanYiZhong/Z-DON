@@ -49,6 +49,20 @@ int zdon_ai_tuning_level(double star_level);
 int zdon_ai_condition();
 void zdon_ai_new_session();
 
+// the rank bonuses the last finished battle got: its first win on the chart (winpoint_bonus_firstclear), the course
+// at or above the rank's bonus stars (winpoint_bonus_highlevel); the result's "この曲で初バトル勝利" /
+// "条件の難易度をこえて勝利" notes
+bool zdon_ai_last_first_win();
+// a skin's result cut-in pages: tex.ai_pages(open) holds them open each frame; the result screen turns a kat into
+// the next page and a don into the end (and holds its own input / timeout meanwhile)
+bool zdon_ai_pages_open();
+void zdon_ai_pages_set(bool open);
+int zdon_ai_page_steps();
+bool zdon_ai_pages_finished();
+void zdon_ai_page_next();
+void zdon_ai_pages_finish();
+bool zdon_ai_last_bonus_high();
+
 // wins still needed for the next AI battle reward (the arcade's win-count rewards); 0 past the last one
 int zdon_ai_next_reward(int wins);
 
