@@ -181,6 +181,11 @@ void register_zdon_lua_bindings(sol::table& tex) {
             t["result"] = b.won ? "win" : "lose";
             t["new_best"] = b.new_best;
             t["detail"] = b.detail;
+            t["rank_before"] = b.rank_before;
+            t["rank"] = b.rank;
+            t["points_before"] = b.points_before;
+            t["points"] = b.points;
+            t["rank_gain"] = b.rank_gain;
             t["play_all"] = b.play_all;
         }
         t["sections"] = secs;
@@ -221,6 +226,22 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // arcade's aiCondition, rolled once per session). ai_level is the old name.
     tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });
     tex.set_function("ai_condition", []() -> int { return zdon_ai_condition(); });
+
+    // tex.ai_rank() -> the player's AI battle rank (the Green ghost rank, objects/game/zdon_ai.h):
+    //   {rank = 0..11, points =, next = points still needed for the next rank (0 at the top),
+    //    least = {e, n, h, m, x} (the lowest star level that counts at this rank, 0 = not counted), bonus = {...}}
+    tex.set_function("ai_rank", [](sol::this_state s) {
+        sol::state_view lua(s);
+        auto [points, rank] = scores_manager.get_zdon_ai_rank(get_player_id(PlayerNum::P1));
+        const ZdonAiRank& r = zdon_ai_rank_info(rank);
+        sol::table t = lua.create_table();
+        t["rank"] = rank;
+        t["points"] = points;
+        t["next"] = rank + 1 < kZdonAiRanks ? std::max(0, zdon_ai_rank_info(rank + 1).acquired - points) : 0;
+        t["least"] = lua.create_table_with(1, r.least[0], 2, r.least[1], 3, r.least[2], 4, r.least[3], 5, r.least[4]);
+        t["bonus"] = lua.create_table_with(1, r.bonus[0], 2, r.bonus[1], 3, r.bonus[2], 4, r.bonus[3], 5, r.bonus[4]);
+        return t;
+    });
 
     // tex.ai_next_reward() -> wins still needed for the next AI battle reward (0: past the last one)
     tex.set_function("ai_next_reward",

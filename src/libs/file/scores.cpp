@@ -951,6 +951,69 @@ void ScoresManager::set_zdon_ai_section_crowns(const std::string& player_id, con
     sqlite3_finalize(stmt);
 }
 
+static void ensure_ai_rank_tables(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_ai_rank (player_id TEXT PRIMARY KEY NOT NULL, points INTEGER NOT "
+                 "NULL, rank INTEGER NOT NULL);"
+                 "CREATE TABLE IF NOT EXISTS zdon_ai_first_wins (player_id TEXT NOT NULL, hash TEXT NOT NULL, "
+                 "difficulty INTEGER NOT NULL, PRIMARY KEY (player_id, hash, difficulty));",
+                 nullptr, nullptr, nullptr);
+}
+
+std::pair<int, int> ScoresManager::get_zdon_ai_rank(const std::string& player_id) {
+    std::pair<int, int> out{0, 0};
+    ensure_ai_rank_tables(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "SELECT points, rank FROM zdon_ai_rank WHERE player_id = ?;", -1, &stmt, nullptr) !=
+        SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        out = {sqlite3_column_int(stmt, 0), sqlite3_column_int(stmt, 1)};
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+void ScoresManager::set_zdon_ai_rank(const std::string& player_id, int points, int rank) {
+    if (player_id.empty()) {
+        return;
+    }
+    ensure_ai_rank_tables(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT INTO zdon_ai_rank (player_id, points, rank) VALUES (?, ?, ?) ON CONFLICT "
+                           "(player_id) DO UPDATE SET points = excluded.points, rank = excluded.rank;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, points);
+    sqlite3_bind_int(stmt, 3, rank);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+bool ScoresManager::add_zdon_ai_first_win(const std::string& player_id, const std::string& hash, int difficulty) {
+    if (player_id.empty() || hash.empty()) {
+        return false;
+    }
+    ensure_ai_rank_tables(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT OR IGNORE INTO zdon_ai_first_wins (player_id, hash, difficulty) VALUES (?, ?, ?);",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, difficulty);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return sqlite3_changes(db_fsd) > 0;
+}
+
 static void ensure_ai_section_best_table(sqlite3* db) {
     sqlite3_exec(db,
                  "CREATE TABLE IF NOT EXISTS zdon_ai_section_best (player_id TEXT NOT NULL, hash TEXT NOT NULL, "

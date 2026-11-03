@@ -183,6 +183,11 @@ public:
     std::vector<int> get_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty);
     // the best AI battle play of a chart, per section (table zdon_ai_section_best): score, good, ok, bad,
     // drumroll; total is that play's score. set_ replaces the record when total beats it (returns true then)
+    // Z-DON AI battle rank (Green ghost rank): the player's rank points and rank (0, 0 when none yet); a chart
+    // and course's first win (add_ returns true only the first time)
+    std::pair<int, int> get_zdon_ai_rank(const std::string& player_id);
+    void set_zdon_ai_rank(const std::string& player_id, int points, int rank);
+    bool add_zdon_ai_first_win(const std::string& player_id, const std::string& hash, int difficulty);
     std::vector<std::array<int, 5>> get_zdon_ai_section_best(const std::string& player_id, const std::string& hash,
                                                              int difficulty, int* total = nullptr);
     bool set_zdon_ai_section_best(const std::string& player_id, const std::string& hash, int difficulty, int total,

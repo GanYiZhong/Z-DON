@@ -89,6 +89,31 @@ void zdon_ai_new_session() {
     global_data.zdon_ai_credit.clear();
 }
 
+namespace {
+    constexpr ZdonAiRank kRanks[kZdonAiRanks] = {
+        {0, {0, 0, 0, 0, 0}, {0, 0, 0, 0, 0}},     {1, {1, 1, 1, 1, 1}, {2, 2, 1, 1, 1}},
+        {8, {3, 2, 1, 1, 1}, {4, 3, 1, 1, 1}},     {15, {5, 4, 1, 1, 1}, {0, 5, 2, 1, 1}},
+        {30, {0, 6, 3, 2, 2}, {0, 7, 4, 3, 3}},    {45, {0, 7, 4, 3, 3}, {0, 0, 5, 4, 4}},
+        {60, {0, 0, 6, 5, 5}, {0, 0, 7, 6, 6}},    {75, {0, 0, 8, 7, 7}, {0, 0, 0, 8, 8}},
+        {90, {0, 0, 0, 8, 8}, {0, 0, 0, 9, 9}},    {105, {0, 0, 0, 9, 9}, {0, 0, 0, 10, 10}},
+        {120, {0, 0, 0, 10, 10}, {0, 0, 0, 0, 0}}, {150, {0, 0, 0, 99, 99}, {0, 0, 0, 0, 0}},
+    };
+} // namespace
+
+const ZdonAiRank& zdon_ai_rank_info(int rank) {
+    return kRanks[std::clamp(rank, 0, kZdonAiRanks - 1)];
+}
+
+int zdon_ai_rank_of(int points) {
+    int r = 0;
+    for (int k = 0; k < kZdonAiRanks; ++k) {
+        if (points >= kRanks[k].acquired) {
+            r = k;
+        }
+    }
+    return r;
+}
+
 int zdon_ai_next_reward(int wins) {
     for (int need : kRewardWins) {
         if (wins < need) {
@@ -232,7 +257,12 @@ void zdon_ai_battle_begin(int level) {
 static void make_sections(const std::vector<double>& note_times, const std::vector<double>& bar_times) {
     auto& b = global_data.zdon_ai;
     const size_t n = note_times.size();
-    const size_t count = n >= 200 ? 5 : 3;
+    // 5 sections from 200 notes (music_ai_section's usual split); a skin's "zdon_ai_rules" x overrides it
+    // (Green ghosttuning.xml thres5section = 120)
+    const auto rules = tex.skin_config_by_name.find("zdon_ai_rules");
+    const size_t five_from =
+        rules != tex.skin_config_by_name.end() && rules->second.x > 0 ? (size_t)rules->second.x : 200;
+    const size_t count = n >= five_from ? 5 : 3;
     // AiEnsoGameManager (disassembly of its section setup): step = (LastOnpuDurationTime + 500) / count from the
     // chart's start; section i ends at SyusetsuJustTime(NumberOfSyousetsuByTime((i + 1) * step) + 1), the bar line
     // that starts the measure after the one holding that time; the last one ends 500 ms after the last note
@@ -357,6 +387,22 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             }
             b.new_best = scores_manager.set_zdon_ai_section_best(get_player_id(PlayerNum::P1), sd.song_hash,
                                                                  sd.selected_difficulty, player.get_score(), rec);
+            // the Green ghost rank (ghostsetting.xml: a win 1 point, high level +1, first win +1)
+            auto [points, rank] = scores_manager.get_zdon_ai_rank(get_player_id(PlayerNum::P1));
+            b.points_before = b.points = points;
+            b.rank_before = b.rank = rank;
+            if (b.won) {
+                const int c = std::clamp(sd.selected_difficulty, 0, 4);
+                const int star = (int)b.star;
+                const ZdonAiRank& r = zdon_ai_rank_info(rank);
+                const bool first = scores_manager.add_zdon_ai_first_win(get_player_id(PlayerNum::P1), sd.song_hash, c);
+                if (rank == 0 || (r.least[c] > 0 && star >= r.least[c])) {
+                    b.rank_gain = 1 + ((r.bonus[c] > 0 && star >= r.bonus[c]) ? 1 : 0) + (first ? 1 : 0);
+                }
+                b.points = points + b.rank_gain;
+                b.rank = zdon_ai_rank_of(b.points);
+                scores_manager.set_zdon_ai_rank(get_player_id(PlayerNum::P1), b.points, b.rank);
+            }
         }
     }
 }

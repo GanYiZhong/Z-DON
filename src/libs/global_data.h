@@ -295,7 +295,10 @@ struct GlobalData {
         bool new_best = false;
         bool detail = false;   // the result shows the per-section detail view (kat toggles it)
         bool play_all = false; // the credit's last result shows the play-all summary (AiResultPlayAllMain)
-        int base_score = 0;    // the player's score at the section's start
+        double star = 0;       // the course's star level (the Green rank's per-course minimums)
+        // the Green ghost rank (zdon_ai_rank_*): before and after this play, the points it gave
+        int rank_before = 0, rank = 0, points_before = 0, points = 0, rank_gain = 0;
+        int base_score = 0; // the player's score at the section's start
         int section = 0;
         int base_p = 0, base_ai = 0;              // the score totals at the current section's start
         std::array<int, 4> base_judge{};          // the player's good / ok / bad / drumroll at the section's start

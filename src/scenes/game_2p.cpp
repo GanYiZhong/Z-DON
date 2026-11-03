@@ -59,6 +59,7 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         players[1]->enable_zdon_ai(level);
         players[1]->apply_replay_appearance(zdon_ai_player_data(level));
         zdon_ai_battle_begin(level);
+        global_data.zdon_ai.star = course != parser->metadata.course_data.end() ? course->second.level : 0.0;
     }
 
     players[0]->kusudama_partner = players[1].get();
