@@ -178,6 +178,11 @@ public:
     // Z-DON record counts over the player's charts of difficulty >= min_difficulty (best per chart): [0..6] = ranks
     // white..rainbow, [7..9] = crowns clear / full combo / donder full combo
     std::array<int, 10> get_zdon_record_counts(const std::string& player_id, int min_difficulty);
+    // Z-DON AI battle section crowns (table zdon_ai_sections): the best crown per section of a chart, 0 none ..
+    // 3 donderful; set keeps the better of the stored and the new one
+    std::vector<int> get_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty);
+    void set_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty,
+                                    const std::vector<int>& crowns);
     // Z-DON PB pace (table zdon_ghost): the best play's score over the song, as (chart ms, score) points
     std::vector<std::pair<float, int>> get_zdon_ghost(const std::string& hash, int difficulty,
                                                       const std::string& player_id);

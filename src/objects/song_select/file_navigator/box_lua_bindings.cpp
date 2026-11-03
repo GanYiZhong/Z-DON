@@ -92,6 +92,20 @@ void register_box_lua_bindings(sol::state& lua) {
             const int d = static_cast<int>(diff);
             return (d >= 0 && d < std::ssize(self.scores) && self.scores[d].has_value()) ? self.scores[d]->score : 0;
         },
+        // Z-DON: box:ai_section_crowns(diff) -> { crown per section, 0 none .. 3 donderful } of the player's AI
+        // battles on that course (scores.db zdon_ai_sections)
+        "ai_section_crowns",
+        [](SongBox& self, double diff, sol::this_state s) {
+            sol::state_view lua(s);
+            const int d = static_cast<int>(diff);
+            const std::vector<int> crowns =
+                scores_manager.get_zdon_ai_section_crowns(get_player_id(PlayerNum::P1), self.hash_for(d), d);
+            sol::table t = lua.create_table((int)crowns.size(), 0);
+            for (size_t i = 0; i < crowns.size(); ++i) {
+                t[i + 1] = crowns[i];
+            }
+            return t;
+        },
         // Z-DON: box:chart_stats(diff) -> { notes, length_ms, bpm_min, bpm_max } (box_song_stats.cpp)
         "chart_stats",
         [](SongBox& self, double diff, sol::this_state s) {

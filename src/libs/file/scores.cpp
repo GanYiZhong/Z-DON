@@ -891,6 +891,66 @@ std::array<int, 10> ScoresManager::get_zdon_record_counts(const std::string& pla
     return counts;
 }
 
+static void ensure_ai_section_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_ai_sections (player_id TEXT NOT NULL, hash TEXT NOT NULL, "
+                 "difficulty INTEGER NOT NULL, section INTEGER NOT NULL, crown INTEGER NOT NULL, "
+                 "PRIMARY KEY (player_id, hash, difficulty, section));",
+                 nullptr, nullptr, nullptr);
+}
+
+std::vector<int> ScoresManager::get_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash,
+                                                           int difficulty) {
+    std::vector<int> crowns;
+    ensure_ai_section_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "SELECT section, crown FROM zdon_ai_sections WHERE player_id = ? AND hash = ? AND "
+                           "difficulty = ? ORDER BY section;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return crowns;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, difficulty);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const int section = sqlite3_column_int(stmt, 0);
+        if (section >= 0 && section < 16) {
+            crowns.resize(std::max<size_t>(crowns.size(), (size_t)section + 1), 0);
+            crowns[section] = sqlite3_column_int(stmt, 1);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return crowns;
+}
+
+void ScoresManager::set_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty,
+                                               const std::vector<int>& crowns) {
+    if (player_id.empty() || hash.empty()) {
+        return;
+    }
+    ensure_ai_section_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT INTO zdon_ai_sections (player_id, hash, difficulty, section, crown) "
+                           "VALUES (?, ?, ?, ?, ?) ON CONFLICT (player_id, hash, difficulty, section) "
+                           "DO UPDATE SET crown = MAX(crown, excluded.crown);",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("set_zdon_ai_section_crowns: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    for (size_t i = 0; i < crowns.size(); ++i) {
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, difficulty);
+        sqlite3_bind_int(stmt, 4, (int)i);
+        sqlite3_bind_int(stmt, 5, crowns[i]);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
+}
+
 void ScoresManager::set_zdon_option(const std::string& player_id, const std::string& key, int value) {
     if (player_id.empty()) {
         return;
