@@ -20,6 +20,9 @@ NoteArc::NoteArc(NoteType note_type, double current_ms, PlayerNum player_num, bo
         fn_draw = lua_object["draw"];
         firework_frames = lua_object["firework_frames"].get_or(0);
     }
+    if (const auto it = tex.skin_config_by_name.find("zdon_note_arc_dwell"); it != tex.skin_config_by_name.end()) {
+        dwell_frames = std::max(0, static_cast<int>(it->second.x));
+    }
 }
 
 void NoteArc::update(double current_ms) {
@@ -29,7 +32,7 @@ void NoteArc::update(double current_ms) {
 }
 
 void NoteArc::draw(float y) {
-    call(fn_draw, "NoteArc:draw", y, elapsed_ms, arc_duration * 16.67);
+    call(fn_draw, "NoteArc:draw", y, elapsed_ms, (arc_duration + dwell_frames) * 16.67);
 }
 
 bool NoteArc::is_finished() const {
@@ -37,7 +40,7 @@ bool NoteArc::is_finished() const {
     if (is_balloon) {
         end_ms *= 1.5;
     }
-    end_ms += firework_frames * 16.67;
+    end_ms += std::max(firework_frames, dwell_frames) * 16.67;
     return elapsed_ms >= end_ms;
 }
 

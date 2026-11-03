@@ -29,6 +29,10 @@ GogoTime::GogoTime() {
         fire_fade = std::clamp(f->x, 0.0f, 1.0f);
     }
 
+    if (const auto it = tex.skin_config_by_name.find("zdon_gogo_fire_add"); it != tex.skin_config_by_name.end()) {
+        fire_additive = it->second.x > 0;
+    }
+
     fire_resize->start();
     fire_change->start();
 
@@ -64,5 +68,6 @@ void GogoTime::draw(float judge_x, float judge_y) {
                               .center = true,
                               .x = judge_x,
                               .y = judge_y,
-                              .fade = fire_fade});
+                              .fade = fire_fade,
+                              .blend = fire_additive ? std::optional<int>(blend_mode::ADDITIVE) : std::nullopt});
 }

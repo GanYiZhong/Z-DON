@@ -1,5 +1,6 @@
 #include "result.h"
 
+#include "../libs/density.h"
 #include "../libs/input/input.h"
 #include "../libs/zdon_record.h"
 #include "../objects/game/player.h"
@@ -18,6 +19,8 @@ void ResultScreen::on_screen_start() {
     fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(0));
     retry_message.reset();
     retrying = false;
+    zdon_freeze_exit = 0;
+    density::freeze_release();
     fade_in.emplace(global_data.player_num);
     skipped_time = 0;
     skip_enabled_ms = 0;
@@ -62,8 +65,16 @@ bool ResultScreen::retry_pending() const {
            !limit_reached && script_manager.has_lua_script("retry_game");
 }
 
+// Z-DON: a skin with skin_config zdon_end_over_result (Nijiiro) ends the credit over the live result board: the last
+// result frame is held for the GAME_OVER screen and there is no fade to black in between
+bool ResultScreen::zdon_freeze_to_game_over() const {
+    return !zdon_two_boards() && tex.skin_config_by_name.contains("zdon_end_over_result") &&
+           global_data.config->limits.song_limit > 0 &&
+           global_data.config->limits.song_limit == global_data.songs_played;
+}
+
 bool ResultScreen::exiting() const {
-    return retrying || (fade_out && fade_out->is_started);
+    return retrying || zdon_freeze_exit > 0 || (fade_out && fade_out->is_started);
 }
 
 // Z-DON AI battle: the credit's last song (limits.song_limit reached) shows the credit's AI songs before it ends
@@ -86,6 +97,9 @@ void ResultScreen::begin_exit() {
     if (retrying) {
         audio.play_sound("retry_transition", VolumePreset::SOUND);
         fade_in->start_reverse();
+    } else if (zdon_freeze_to_game_over()) {
+        zdon_freeze_exit = 1; // this frame still draws (and is held); the next update leaves
+        density::freeze_handoff();
     } else {
         fade_out->start();
     }
@@ -156,6 +170,15 @@ std::optional<Screens> ResultScreen::update() {
     }
 
     update_input_and_timeout(current_time);
+
+    if (zdon_freeze_exit == 2) {
+        zdon_freeze_exit = 0;
+        global_data.songs_played = 0;
+        return on_screen_end(Screens::GAME_OVER);
+    }
+    if (zdon_freeze_exit == 1) {
+        zdon_freeze_exit = 2;
+    }
 
     if (retrying) {
         if (fade_in->is_finished()) {
@@ -363,6 +386,9 @@ void ResultScreen::zdon_draw_hist() const {
 }
 
 void ResultScreen::draw_overlay() {
+    if (zdon_freeze_to_game_over() && !exiting()) {
+        density::request_freeze();
+    }
     draw_unsaved_note();
     zdon_draw_hist();
     if (fade_in.has_value()) {

@@ -19,6 +19,8 @@ protected:
     // after the fade out of a failed run: the revive message, then the retry mini-game
     std::optional<ResultRetryMessage> retry_message;
     bool retrying = false;
+    int zdon_freeze_exit = 0; // Z-DON zdon_end_over_result: 1 = leaving for GAME_OVER with the frame held, 2 = go
+    bool zdon_freeze_to_game_over() const;
     bool allow_retry = true;
     AllNetIcon allnet_indicator;
     CoinOverlay coin_overlay;

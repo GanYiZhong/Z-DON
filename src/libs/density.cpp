@@ -18,7 +18,42 @@ namespace density {
         float g_desat_request = 0.0f; // set by the skin during a frame
         float g_desat_apply = 0.0f;   // this frame's (the previous frame's request)
         std::optional<Shader> g_gray;
+        bool g_freeze_request = false;
+        bool g_freeze_apply = false;
+        bool g_freeze_handoff = false;
+        RenderTarget g_freeze{}; // the held frame
     } // namespace
+
+    void request_freeze() {
+        g_freeze_request = true;
+    }
+
+    void freeze_handoff() {
+        g_freeze_handoff = g_freeze.id != 0;
+    }
+
+    bool freeze_handoff_active() {
+        return g_freeze_handoff;
+    }
+
+    void freeze_release() {
+        g_freeze_handoff = false;
+        g_freeze_request = false;
+        if (g_freeze.id != 0) {
+            unload_render_texture(g_freeze);
+            g_freeze = {};
+        }
+    }
+
+    bool draw_frozen(float w, float h) {
+        if (g_freeze.id == 0) {
+            return false;
+        }
+        const Texture& t = g_freeze.texture;
+        draw_texture_pro(t, {0.0f, 0.0f, static_cast<float>(t.width), -static_cast<float>(t.height)},
+                         {0.0f, 0.0f, w, h}, {0.0f, 0.0f}, 0.0f, Color::WHITE);
+        return true;
+    }
 
     void request_desaturate(float amount) {
         g_desat_request = std::clamp(amount, 0.0f, 1.0f);
@@ -40,8 +75,11 @@ namespace density {
     bool begin_frame(Color clear) {
         g_desat_apply = g_desat_request;
         g_desat_request = 0.0f;
-        const int d = std::max(factor(), g_desat_apply > 0.0f ? 1 : 0); // desaturating: a screen-size target (d = 1)
-        if (d <= 1 && g_desat_apply <= 0.0f) {
+        g_freeze_apply = g_freeze_request;
+        g_freeze_request = false;
+        const bool special = g_desat_apply > 0.0f || g_freeze_apply;
+        const int d = std::max(factor(), special ? 1 : 0); // desaturating or freezing: a screen-size target (d = 1)
+        if (d <= 1 && !special) {
             if (zdon_density::target.id != 0) {
                 unload_render_texture(zdon_density::target);
                 zdon_density::target = {};
@@ -87,10 +125,29 @@ namespace density {
         }
         ray::EndTextureMode();
         zdon_density::bound = false;
-        clear_background(border);
         const Texture& t = zdon_density::target.texture;
         const auto w = static_cast<float>(t.width);
         const auto h = static_cast<float>(t.height);
+        if (g_freeze_apply) { // keep this frame: a plain copy into the held target
+            if (g_freeze.id == 0 || g_freeze.texture.width != t.width || g_freeze.texture.height != t.height) {
+                if (g_freeze.id != 0) {
+                    unload_render_texture(g_freeze);
+                }
+                g_freeze = load_render_texture(t.width, t.height);
+                if (g_freeze.id != 0) {
+                    set_texture_filter(g_freeze.texture, texture_filter::BILINEAR);
+                }
+            }
+            if (g_freeze.id != 0) {
+                ray::BeginTextureMode(g_freeze);
+                ray::rlDisableColorBlend();
+                draw_texture_pro(t, {0.0f, 0.0f, w, -h}, {0.0f, 0.0f, w, h}, {0.0f, 0.0f}, 0.0f, Color::WHITE);
+                ray::rlDrawRenderBatchActive();
+                ray::rlEnableColorBlend();
+                ray::EndTextureMode();
+            }
+        }
+        clear_background(border);
         // a plain copy: the target's alpha is not blended into the window
         ray::rlDrawRenderBatchActive();
         ray::rlDisableColorBlend();

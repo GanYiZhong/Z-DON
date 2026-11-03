@@ -8,6 +8,7 @@ private:
     TextureResizeAnimation* fire_resize = nullptr;
     TextureChangeAnimation* fire_change = nullptr;
     float fire_fade;
+    bool fire_additive = false; // skin_config zdon_gogo_fire_add: the flame adds onto the lane (the cabinet's rim)
     TextureObject* t_fire = nullptr;
     TextureResizeAnimation* lane_resize = nullptr;
     TextureObject* t_lane_effect = nullptr;

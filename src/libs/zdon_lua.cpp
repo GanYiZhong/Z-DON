@@ -266,6 +266,13 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // render target and a grayscale shader (libs/density.cpp); never called = no target, no shader, no cost
     tex.set_function("set_screen_desaturate", [](float amount) { density::request_desaturate(amount); });
 
+    // tex.draw_frozen_screen() -> bool: draws the held frame (density::request_freeze; the result screen keeps its
+    // last frame for a skin_config zdon_end_over_result skin) over the whole screen; false = none held
+    tex.set_function("draw_frozen_screen", [] {
+        return density::draw_frozen(static_cast<float>(script_manager.tex.screen_width),
+                                    static_cast<float>(script_manager.tex.screen_height));
+    });
+
     // tex.ai_pages(open) -> steps, finished: a skin's result cut-in pages (Green's rank up / reward). open = the
     // pages show this frame (the result screen then turns a kat into the next page and a don into the end, and holds
     // its timeout); steps = kat presses since they opened, finished = a don ended them

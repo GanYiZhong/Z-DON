@@ -9,6 +9,7 @@ class NoteArc : public LuaScript {
 private:
     bool is_balloon;
     int arc_duration{31};
+    int dwell_frames{0}; // skin_config zdon_note_arc_dwell: frames the note keeps drawing at the soul after the flight
     float current_progress{0};
     double elapsed_ms{0};
     bool note_finished_handled{false};

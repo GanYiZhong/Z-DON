@@ -849,6 +849,9 @@ static void run_frame() {
         g_spike_draw_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     } else {
         g_spike_draw_ms = 0;
+        if (density::freeze_handoff_active()) { // Z-DON: the old screen is gone, the next one not up yet
+            density::draw_frozen(static_cast<float>(tex.screen_width), static_cast<float>(tex.screen_height));
+        }
     }
     seg_mark(SEG_DRAW);
     if (L.screen_fade_start > 0.0) {
@@ -866,7 +869,8 @@ static void run_frame() {
     if (next_screen.has_value()) {
         spdlog::info("Screen changed from {} to {}", L.current_screen, next_screen.value());
         clear_input_buffers();
-        if (tex.get_skin_config(SC::SCREEN_FADE_MS) && screen_fade_applies(L.current_screen, next_screen.value())) {
+        if (tex.get_skin_config(SC::SCREEN_FADE_MS) && screen_fade_applies(L.current_screen, next_screen.value()) &&
+            !density::freeze_handoff_active()) {
             L.screen_fade_start = g_frame_ms;
         } else {
             L.screen_fade_start = 0.0;

@@ -38,6 +38,19 @@ namespace density {
     // target, no shader, nothing runs. It needs a frame of lead, so a skin calls it every frame it wants it.
     void request_desaturate(float amount);
 
+    // Z-DON frozen frame: call request_freeze() every frame (e.g. from a result screen's draw) that the finished
+    // frame should be kept. The NEXT frame renders through a screen-size target and is copied into a held target at
+    // its end, so when the calls stop, the last frame drawn before that stays held. Never called = no target, no
+    // copy, no cost.
+    void request_freeze();
+    // mark the held frame as handed to the next screen (draw_frozen below; the main loop also bridges it over the
+    // one frame in which the old screen is already gone); freeze_release() drops it
+    void freeze_handoff();
+    bool freeze_handoff_active();
+    void freeze_release();
+    // draw the held frame over (0,0)-(w,h); false when there is none
+    bool draw_frozen(float w, float h);
+
     // a window position (mouse) -> render (target) pixels
     Vec2 window_to_render(Vec2 p);
 

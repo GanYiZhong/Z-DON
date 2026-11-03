@@ -114,6 +114,9 @@ static DrawTextureParams parse_draw_params_legacy(const sol::optional<sol::table
     params.rotation = t["rotation"].get_or(params.rotation);
     params.fade = t["fade"].get_or(params.fade);
     params.index = t["index"].get_or(params.index);
+    if (sol::optional<std::string> blend = t["blend"]; blend && *blend == "add") {
+        params.blend = blend_mode::ADDITIVE; // Z-DON: opt-in additive draw
+    }
 
     sol::optional<std::string> mirror = t["mirror"];
     if (mirror) {
@@ -244,6 +247,10 @@ static DrawTextureParams parse_draw_params(const sol::optional<sol::table>& para
                 if (lua_is_table_like(L, v)) {
                     params.origin.x = lua_index_or(L, v, 1, params.origin.x);
                     params.origin.y = lua_index_or(L, v, 2, params.origin.y);
+                }
+            } else if (key == "blend") {
+                if (lua_type(L, v) == LUA_TSTRING && std::string_view(lua_tostring(L, v)) == "add") {
+                    params.blend = blend_mode::ADDITIVE; // Z-DON: opt-in additive draw
                 }
             } else if (key == "mirror") {
                 if (lua_type(L, v) == LUA_TSTRING) {

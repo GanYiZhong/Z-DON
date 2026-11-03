@@ -1,5 +1,7 @@
 #include "game_over.h"
 
+#include "../libs/density.h"
+
 void GameOverScreen::on_screen_start() {
     Screen::on_screen_start();
     sequence.emplace();
@@ -7,6 +9,7 @@ void GameOverScreen::on_screen_start() {
 
 Screens GameOverScreen::on_screen_end(Screens next_screen) {
     sequence.reset();
+    density::freeze_release();
     return Screen::on_screen_end(next_screen);
 }
 
