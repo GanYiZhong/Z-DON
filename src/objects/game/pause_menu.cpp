@@ -14,12 +14,12 @@ namespace {
     // built-in texts, for skins without pause_menu_* (or practice menu) keys
     const std::map<std::string, std::map<std::string, std::string>>& builtin_texts() {
         static const std::map<std::string, std::map<std::string, std::string>> t = {
-            {"pause_menu_title", {{"en", "Paused"}, {"ja", "一時停止中"}, {"zh", "暂停中"}, {"ko", "일시 정지"}}},
-            {"pause_menu_resume", {{"en", "Resume"}, {"ja", "演奏にもどる"}, {"zh", "继续演奏"}, {"ko", "계속 연주"}}},
+            {"pause_menu_title", {{"en", "Paused"}, {"ja", "一時停止中"}, {"zh", "暫停中"}, {"ko", "일시 정지"}}},
+            {"pause_menu_resume", {{"en", "Resume"}, {"ja", "演奏にもどる"}, {"zh", "繼續演奏"}, {"ko", "계속 연주"}}},
             {"pause_menu_restart",
-             {{"en", "From the Top"}, {"ja", "最初から演奏"}, {"zh", "从头演奏"}, {"ko", "처음부터 연주"}}},
+             {{"en", "From the Top"}, {"ja", "最初から演奏"}, {"zh", "從頭演奏"}, {"ko", "처음부터 연주"}}},
             {"pause_menu_back",
-             {{"en", "Another Song"}, {"ja", "ほかの曲を演奏"}, {"zh", "选其他歌曲"}, {"ko", "다른 곡 연주"}}},
+             {{"en", "Another Song"}, {"ja", "ほかの曲を演奏"}, {"zh", "選其他歌曲"}, {"ko", "다른 곡 연주"}}},
         };
         return t;
     }

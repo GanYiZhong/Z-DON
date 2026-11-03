@@ -11,6 +11,7 @@
 #include "../../../libs/file/scores.h"
 #include "../../../libs/song_library.h"
 #include "../../../libs/song_library_loader.h"
+#include "../../../libs/zdon_lang.h"
 #include "color_utils.h"
 #include "navigation_scan.h"
 #ifdef SUPPORT_FUMEN
@@ -987,6 +988,8 @@ BoxDef parse_navigation_box_def(const fs::path& path, const std::string& languag
     result.collection = "";
     bool title_localized = false;
     std::array<bool, 3> explanation_localized = {false, false, false};
+    int title_rank = 0; // Z-DON: zdon_lang_tag_rank of the localized title / explanation lines taken
+    std::array<int, 3> explanation_rank = {0, 0, 0};
 
     while (std::getline(boxDef, line)) {
         if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
@@ -1011,13 +1014,14 @@ BoxDef parse_navigation_box_def(const fs::path& path, const std::string& languag
                 result.name = get_value("#TITLE:");
             }
         } else if (line.starts_with("#TITLE")) {
-            const std::string& lang = language;
-            std::string lang_upper = lang;
-            std::ranges::transform(lang_upper, lang_upper.begin(), ::toupper);
-            std::string lang_prefix = "#TITLE" + lang_upper + ":";
-            if (line.starts_with(lang_prefix)) {
-                result.name = get_value(lang_prefix);
-                title_localized = true;
+            // Z-DON: the tag that fits the language best (zdon_lang.h: TITLEZH_TW over TITLEZH)
+            if (const size_t colon = line.find(':'); colon != std::string::npos) {
+                const int rank = zdon_lang_tag_rank(std::string_view(line).substr(6, colon - 6), language);
+                if (rank > title_rank) {
+                    result.name = line.substr(colon + 1);
+                    title_rank = rank;
+                    title_localized = true;
+                }
             }
         } else if (line.starts_with("#COLLECTION:")) {
             result.collection = get_value("#COLLECTION:");
@@ -1041,13 +1045,13 @@ BoxDef parse_navigation_box_def(const fs::path& path, const std::string& languag
                     result.explanation[n] = get_value(plain_prefix);
                 }
             }
-            const std::string& lang = language;
-            std::string lang_upper = lang;
-            std::ranges::transform(lang_upper, lang_upper.begin(), ::toupper);
-            for (int n = 0; n < 3; n++) {
-                std::string lang_prefix = "#BOXEXPLANATION" + lang_upper + std::to_string(n + 1) + ":";
-                if (line.starts_with(lang_prefix)) {
-                    result.explanation[n] = get_value(lang_prefix);
+            // Z-DON: #BOXEXPLANATION<tag><1-3>: the tag that fits the language best (zdon_lang.h)
+            if (const size_t colon = line.find(':'); colon != std::string::npos && colon > 16) {
+                const int n = line[colon - 1] - '1';
+                const int rank = zdon_lang_tag_rank(std::string_view(line).substr(15, colon - 16), language);
+                if (n >= 0 && n < 3 && rank > explanation_rank[n]) {
+                    result.explanation[n] = line.substr(colon + 1);
+                    explanation_rank[n] = rank;
                     explanation_localized[n] = true;
                 }
             }

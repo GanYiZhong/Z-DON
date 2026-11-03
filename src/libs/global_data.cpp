@@ -65,8 +65,9 @@ void load_skin() {
         fs::path root_skin_path = fs::path("Skins") / global_data.config->paths.skin;
         set_skin_graphics_path(root_skin_path / "Graphics");
 
+        // Z-DON: zh is Traditional Chinese (upstream's zh is Simplified)
         static const std::unordered_map<std::string, std::string> font_family = {
-            {"zh", "cn"},    {"ko", "kr"},    {"ja", "jp"},    {"zh_tw", "tw"},
+            {"zh", "tw"},    {"ko", "kr"},    {"ja", "jp"},    {"zh_tw", "tw"},
             {"zh-tw", "tw"}, {"zh_cn", "cn"}, {"zh-cn", "cn"},
         };
         const std::string& lang = global_data.config->general.language;

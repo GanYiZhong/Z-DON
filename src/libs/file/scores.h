@@ -121,7 +121,7 @@ struct SongCacheEntry {
 
 // Bump when get_diff_hash / the parsers produce different hashes or metadata for the same file,
 // so every chart is parsed again.
-constexpr int SONG_CACHE_VERSION = 3; // 3: Shift-JIS charts read as UTF-8
+constexpr int SONG_CACHE_VERSION = 4; // 3: Shift-JIS charts read as UTF-8; 4: Z-DON TITLEZH_TW over TITLEZH
 
 struct RemoteScore;
 

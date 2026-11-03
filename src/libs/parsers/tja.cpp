@@ -14,6 +14,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 #include "../fixed_step.h"
@@ -21,6 +22,7 @@
 #include "../gfx/text.h"
 #include "../math/md5.h"
 #include "../profiler.h"
+#include "../zdon_lang.h"
 #include "platform/platform_windows.h"
 
 double get_ms_per_measure(double bpm_val, double time_sig) {
@@ -327,6 +329,8 @@ void TJAParser::get_metadata() {
     };
     std::map<size_t, StartValues> start_values;
     std::map<int, CourseData> style_base;
+    // Z-DON: the rank of the tag each title / subtitle came from (zdon_lang.h: TITLEZH_TW over TITLEZH)
+    std::map<std::string, int> title_rank, subtitle_rank;
     // the per-chart values of a course; level and is_branching stay the course's
     auto take_chart_values = [](CourseData& to, const CourseData& from) {
         to.balloon = from.balloon;
@@ -346,9 +350,14 @@ void TJAParser::get_metadata() {
             continue;
         } else if (item.starts_with("SUBTITLE")) {
             std::string region_code = "en";
+            int rank = 1;
             if (item.size() > 8 && item[8] != ':') {
-                region_code = to_lower(item.substr(8, 2));
+                std::tie(region_code, rank) = zdon_lang_region(item.substr(8, item.find(':') - 8));
             }
+            if (rank < subtitle_rank[region_code]) {
+                continue; // Z-DON: a Traditional subtitle is already there
+            }
+            subtitle_rank[region_code] = rank;
             std::string value = split_after_colon(item);
             if (value.starts_with("++")) {
                 metadata.subtitle_full_display = true;
@@ -367,9 +376,14 @@ void TJAParser::get_metadata() {
             }
         } else if (item.starts_with("TITLE")) {
             std::string region_code = "en";
+            int rank = 1;
             if (item.size() > 5 && item[5] != ':') {
-                region_code = to_lower(item.substr(5, 2));
+                std::tie(region_code, rank) = zdon_lang_region(item.substr(5, item.find(':') - 5));
             }
+            if (rank < title_rank[region_code]) {
+                continue; // Z-DON: a Traditional title is already there
+            }
+            title_rank[region_code] = rank;
             metadata.title[region_code] = split_after_colon(item);
         } else if (const auto field = std::ranges::find_if(
                        numeric_fields, [&](const NumericField& field) { return item.starts_with(field.keyword); });
