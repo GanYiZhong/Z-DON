@@ -68,6 +68,7 @@ private:
     sol::protected_function fn_draw_footer;
     sol::protected_function fn_draw_overlays;
     sol::protected_function fn_draw_top;
+    sol::protected_function fn_draw_song_num;
     sol::protected_function fn_draw_box;
     sol::protected_function fn_draw_box_bg;
     sol::protected_function fn_draw_background;
@@ -94,6 +95,8 @@ public:
     void draw_footer();
     void draw_overlays(int state);
     void draw_top(float dan_progress);
+    // true when the skin drew the "N song" chip text itself (the engine text is skipped); false/absent = engine draws
+    bool draw_song_num();
 
     bool draw_box(BaseBox* box);
     bool draw_box_bg(BaseBox* box);

@@ -18,6 +18,7 @@ SongSelectScript::SongSelectScript() {
     fn_draw_footer = lua_object["draw_footer"];
     fn_draw_overlays = lua_object["draw_overlays"];
     fn_draw_top = lua_object["draw_top"];
+    fn_draw_song_num = lua_object["draw_song_num"];
     fn_draw_box = lua_object["draw_box"];
     fn_draw_box_bg = lua_object["draw_box_bg"];
     fn_draw_background = lua_object["draw_background"];
@@ -125,6 +126,10 @@ void SongSelectScript::draw_top(float dan_progress) {
         return;
     }
     call(fn_draw_top, "SongSelect:draw_top", dan_progress);
+}
+
+bool SongSelectScript::draw_song_num() {
+    return fn_draw_song_num.valid() && call_handled(fn_draw_song_num, "SongSelect:draw_song_num");
 }
 
 sol::object SongSelectScript::box_to_lua(BaseBox* box) {

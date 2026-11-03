@@ -489,8 +489,10 @@ void SongSelectScreen::draw_overlays() {
 
     if (!uses_session_timer()) {
         tex.draw_texture(t_song_num_bg, {.x = -(song_num->width - 127), .x2 = (song_num->width - 127), .fade = 0.75});
-        song_num->draw(font_manager.get_text_info("song_num")->x - song_num->width,
-                       font_manager.get_text_info("song_num")->y, 1.0);
+        if (!script->draw_song_num()) {
+            song_num->draw(font_manager.get_text_info("song_num")->x - song_num->width,
+                           font_manager.get_text_info("song_num")->y, 1.0);
+        }
     }
     if (uses_session_timer()) {
         if (auto* session = PracticeTimer::active()) {
