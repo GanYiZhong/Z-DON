@@ -108,22 +108,30 @@ void SongInfo::draw() {
     }
     // Z-DON: skin_config "zdon_ai_song_info" {x, y} moves the whole block in the skin's AI battle stage (the
     // cabinet's AI battle shows the title and the genre / song number plate at the bottom right)
+    // "width": 1 = the skin draws its own genre pill and shows the title and the song number in one spot (Green):
+    // the engine leaves the pill out and the one fades out before the other fades in. Without it (Nijiiro) the
+    // title stays and only the plate under it swaps the genre and the song number, as the cabinet does
     float dx = 0.0f;
     float dy = 0.0f;
+    bool on_stage = false;
+    bool skin_pill = false;
     if (zdon_ai_arena_game()) {
         if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info"); it != tex.skin_config_by_name.end()) {
             dx = it->second.x;
             dy = it->second.y;
+            on_stage = true;
+            skin_pill = it->second.width > 0.0f;
         }
     }
-    // the title and the song number swap with a cross-fade; on the skin's AI stage (one spot for both, the
-    // cabinet's bottom right) the one fades out before the other fades in, so they never show on top of each other
     const auto f = static_cast<float>(fade->attribute);
     float a_num = f;
     float a_title = 1 - f;
-    if (dx != 0.0f || dy != 0.0f) {
+    float a_genre = 1 - f;
+    if (skin_pill) {
         a_title = std::clamp(1.0f - 2.0f * f, 0.0f, 1.0f);
         a_num = std::clamp(2.0f * f - 1.0f, 0.0f, 1.0f);
+    } else if (on_stage) {
+        a_title = 1.0f;
     }
     zdon_ai_set_title_alpha(a_title);
     float text_x = tex.get_skin_config(SC::GAME_SONG_INFO)->x + dx;
@@ -144,19 +152,19 @@ void SongInfo::draw() {
     }
 
     auto draw_genre = [&](float y_offset) {
-        if (!(genre_text && t_genre) || dx != 0.0f || dy != 0.0f) { // the skin's AI stage draws its own pill
+        if (!(genre_text && t_genre) || skin_pill) { // the skin's AI stage draws its own pill
             return;
         }
         if (genre_shader_loaded) {
             begin_shader_mode(genre_shader);
         }
-        tex.draw_texture(t_genre, {.x = dx, .y = y_offset + dy, .fade = a_title});
+        tex.draw_texture(t_genre, {.x = dx, .y = y_offset + dy, .fade = a_genre});
         if (genre_shader_loaded) {
             end_shader_mode();
         }
         genre_text->draw({.x = t_genre->x[0] + dx + t_genre->width / 2.0f - genre_text->width / 2.0f,
                           .y = t_genre->y[0] + y_offset + dy + t_genre->height / 2.0f - genre_text->height / 2.0f,
-                          .fade = a_title});
+                          .fade = a_genre});
     };
 
     if (const SkinInfo* plate = tex.get_skin_config(SC::SONG_NUM_GAME)) {
