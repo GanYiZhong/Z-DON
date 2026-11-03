@@ -51,6 +51,7 @@ protected:
     int seek_moved = 0;
     double seek_next_ms = 0;
     void list_time_up() {
+        page0 = false;
         set_diff_stage(false);
         close_board();
         on_select_time_up();
@@ -124,13 +125,16 @@ protected:
     bool diff_stage = false;
     int diff_cursor = 5;
     bool diff_leave = false;
+    // skin_config zdon_ai_page0 (Green): the cabinet opens on the genre shelf with a "choose by difficulty" box (page
+    // 0, tex.ai_diff_stage() = -1); a don opens it into the course columns, "back" there returns to the shelf
+    bool page0 = false, page0_enabled = false;
     bool board_enabled = false; // skin_config zdon_ai_song_board (Green)
     void set_diff_stage(bool on) {
         diff_stage = on;
         if (!on) {
             zdon_ai_board_info_set(false, 0, {});
         }
-        zdon_ai_set_diff_stage(on, diff_cursor);
+        zdon_ai_set_diff_stage(on, on && page0 ? -1 : diff_cursor);
     }
     // the course-filtered song board (tex.ai_board(); footage Tl7g8XXXvAM 1:55-2:10): kats walk the songs, a don goes
     // to the song's course board; the first strip is "back"
@@ -202,6 +206,16 @@ protected:
             SongSelectScreen::handle_input_browsing(current_ms);
             return;
         }
+        if (page0) {
+            if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
+                audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+            } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
+                audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+                page0 = false;
+                zdon_ai_set_diff_stage(true, diff_cursor);
+            }
+            return;
+        }
         if (is_l_kat_pressed(PlayerNum::P1)) {
             diff_cursor = std::max(0, diff_cursor - 1);
             audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
@@ -211,6 +225,11 @@ protected:
         } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
             audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
             if (diff_cursor == 0) {
+                if (page0_enabled) {
+                    page0 = true;
+                    zdon_ai_set_diff_stage(true, -1);
+                    return;
+                }
                 diff_leave = true;
                 return;
             }
@@ -264,6 +283,9 @@ public:
         board_stage = board_jump = false;
         col_known.fill(false);
         board_enabled = tex.skin_config_by_name.contains("zdon_ai_song_board");
+        page0_enabled =
+            tex.skin_config_by_name.contains("zdon_ai_page0") && tex.skin_config_by_name.contains("zdon_ai_diff_first");
+        page0 = page0_enabled;
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
