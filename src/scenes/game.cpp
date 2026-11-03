@@ -848,11 +848,13 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         }
     }
 
-    // zdon_ai_banner (Nijiiro): after a full combo win the result follows the skin's banner 6.2 s after the battle
-    // ended (footage MBAZD6xA1D8: the emblem 156.2, black 162.4)
+    // zdon_ai_banner (Nijiiro): after a full combo win the result follows the skin's banner, 6.2 s after the battle
+    // ended for a donderful (footage MBAZD6xA1D8: the emblem 156.2, black 162.4) and 5.0 s for a full combo with oks
+    // (7ifN-P3qKOE: the result BGM 1.2 s earlier than after a donderful)
+    const double ai_banner_ms = players[0]->get_ok() == 0 ? 6200.0 : 5000.0;
     const bool ai_banner_done = global_data.zdon_ai.active && global_data.zdon_ai.finished && global_data.zdon_ai.won &&
                                 tex.skin_config_by_name.contains("zdon_ai_banner") && players[0]->get_bad() == 0 &&
-                                get_current_ms() >= global_data.zdon_ai.finished_at_ms + 6200.0;
+                                get_current_ms() >= global_data.zdon_ai.finished_at_ms + ai_banner_ms;
     if ((clock.position() >= end_time + transition_delay || ai_banner_done) && !result_transition.is_started) {
         result_transition.start();
         audio.play_sound("result_transition", VolumePreset::VOICE);
