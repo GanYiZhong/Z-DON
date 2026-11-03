@@ -8,6 +8,8 @@
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
 #include "../objects/game/zdon_ai.h"
+#include "../objects/game/zdon_ai_board.h"
+#include "density.h"
 #include "file/scores.h"
 #include "file/script.h"
 #include "global_data.h"
@@ -241,6 +243,8 @@ void register_zdon_lua_bindings(sol::table& tex) {
         return sol::make_object(ts, cursor);
     });
 
+    zdon_ai_board_bind(tex); // tex.ai_board(), tex.ai_diff_info()
+
     // tex.ai_transition() -> true while an AI battle is being started: from the song select's decide (the VS window and
     // loading card of its game transition) until the battle ends. Unlike ai_active it is already true there
     tex.set_function("ai_transition",
@@ -257,6 +261,10 @@ void register_zdon_lua_bindings(sol::table& tex) {
         b.don_scale = scale.value_or(1.0f);
         b.don_rot = rot.value_or(0.0f);
     });
+
+    // tex.set_screen_desaturate(amount): 0..1, call it every frame it should apply. The next frame renders through a
+    // render target and a grayscale shader (libs/density.cpp); never called = no target, no shader, no cost
+    tex.set_function("set_screen_desaturate", [](float amount) { density::request_desaturate(amount); });
 
     // tex.ai_pages(open) -> steps, finished: a skin's result cut-in pages (Green's rank up / reward). open = the
     // pages show this frame (the result screen then turns a kat into the next page and a don into the end, and holds

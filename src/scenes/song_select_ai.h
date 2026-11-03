@@ -5,6 +5,7 @@
 #include "../libs/file/scores.h"
 #include "../libs/input/input.h"
 #include "../objects/game/zdon_ai.h"
+#include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/nameplate.h"
 #include "song_select.h"
@@ -50,6 +51,7 @@ protected:
     double seek_next_ms = 0;
     void list_time_up() {
         set_diff_stage(false);
+        close_board();
         on_select_time_up();
         if (state != SongSelectState::BROWSING) {
             return;
@@ -59,6 +61,20 @@ protected:
         seek_next_ms = 0;
     }
     void after_select_timers(double now) override {
+        if (board_jump && state == SongSelectState::BROWSING && !navigator.is_processing &&
+            !navigator.inline_streaming) {
+            BaseBox* item = navigator.get_current_item();
+            if (navigator.is_song(item) && now >= board_jump_since + 300) {
+                board_jump = false;
+                close_board();
+                state = player->select_song();
+                return;
+            }
+            if (now > board_jump_since + 8000) { // the jump never landed: leave it to the wheel
+                board_jump = false;
+                close_board();
+            }
+        }
         if (seek_steps <= 0 || state != SongSelectState::BROWSING || navigator.is_processing ||
             navigator.inline_streaming || now < seek_next_ms) {
             return;
@@ -90,11 +106,80 @@ protected:
     bool diff_stage = false;
     int diff_cursor = 5;
     bool diff_leave = false;
+    bool board_enabled = false; // skin_config zdon_ai_song_board (Green)
     void set_diff_stage(bool on) {
         diff_stage = on;
+        if (!on) {
+            zdon_ai_board_info_set(false, 0, {});
+        }
         zdon_ai_set_diff_stage(on, diff_cursor);
     }
+    // the course-filtered song board (tex.ai_board(); footage Tl7g8XXXvAM 1:55-2:10): kats walk the songs, a don goes
+    // to the song's course board; the first strip is "back"
+    bool board_stage = false, board_jump = false;
+    double board_jump_since = 0;
+    int board_cursor = 0;
+    AiBoardCourse board_course;
+    std::vector<fs::path> board_songs;
+    std::array<AiBoardCourse, 7> col_info;
+    std::array<bool, 7> col_known{};
+    void close_board() {
+        if (board_stage) {
+            board_stage = false;
+            zdon_ai_board_set(false, board_course, {}, 0);
+        }
+    }
+    bool open_board(int column) {
+        const int last = global_data.last_difficulty[0];
+        AiBoardCourse c = zdon_ai_board_course(column, last >= 0 ? last : -1, last_diff_sort.second);
+        auto songs = zdon_ai_board_songs(c);
+        if (songs.empty()) {
+            return false;
+        }
+        board_course = c;
+        board_songs = std::move(songs);
+        board_cursor = 0;
+        board_stage = true;
+        zdon_ai_board_set(true, c, board_songs, board_cursor);
+        return true;
+    }
+    void handle_board_input(double current_ms) {
+        if (board_jump) {
+            return;
+        }
+        const int n = static_cast<int>(board_songs.size());
+        int next = board_cursor;
+        if (is_l_kat_pressed(PlayerNum::P1)) {
+            next = std::max(-1, board_cursor - 1);
+        } else if (is_r_kat_pressed(PlayerNum::P1)) {
+            next = std::min(n - 1, board_cursor + 1);
+        }
+        if (next != board_cursor) {
+            board_cursor = next;
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+        } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
+            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+            if (board_cursor < 0) {
+                close_board();
+                set_diff_stage(true);
+                return;
+            }
+            global_data.last_difficulty[0] = board_course.course;
+            if (navigator.jump_to_song_path(board_songs[board_cursor])) {
+                board_jump = true;
+                board_jump_since = current_ms;
+            } else {
+                close_board();
+            }
+            return;
+        }
+        zdon_ai_board_set(true, board_course, board_songs, board_cursor);
+    }
     void handle_input_browsing(double current_ms) override {
+        if (board_stage) {
+            handle_board_input(current_ms);
+            return;
+        }
         if (!diff_stage) {
             SongSelectScreen::handle_input_browsing(current_ms);
             return;
@@ -118,9 +203,22 @@ protected:
             }
             global_data.last_difficulty[0] = course;
             set_diff_stage(false);
+            if (board_enabled) {
+                open_board(diff_cursor);
+            }
             return;
         }
         zdon_ai_set_diff_stage(true, diff_cursor);
+        if (board_enabled && diff_cursor >= 1) {
+            if (!col_known[diff_cursor]) {
+                const int last = global_data.last_difficulty[0];
+                col_info[diff_cursor] = zdon_ai_board_course(diff_cursor, last >= 0 ? last : -1, last_diff_sort.second);
+                col_known[diff_cursor] = true;
+            }
+            zdon_ai_board_info_set(true, diff_cursor, col_info[diff_cursor]);
+        } else {
+            zdon_ai_board_info_set(false, diff_cursor, {});
+        }
     }
 
     void draw_extra_players() override {
@@ -145,6 +243,9 @@ public:
         seek_steps = 0;
         diff_leave = false;
         diff_cursor = 5;
+        board_stage = board_jump = false;
+        col_known.fill(false);
+        board_enabled = tex.skin_config_by_name.contains("zdon_ai_song_board");
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
