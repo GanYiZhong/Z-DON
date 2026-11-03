@@ -25,6 +25,7 @@ protected:
     // ai_song_select_all.lua: one timer, 100 s on the song list; the course board keeps what is left, at least
     // 30 s (30 s after a time-up on the list); backing out tops it up to 30 s; each time-up sounds don_big
     int diff_select_seconds() override { return std::max(30, select_timer ? select_timer->time() : 0); }
+    int options_time_up_extra_seconds() override { return 10; }
     void on_select_time_up() override {
         if (audio.has_sound("ai_don_big")) {
             audio.play_sound("ai_don_big", VolumePreset::SOUND);
@@ -32,11 +33,47 @@ protected:
     }
     void on_diff_select_cancelled(double current_ms) override {
         if (!select_timer || select_timer->time() <= 30) {
-            select_timer = std::make_unique<Timer>(30, current_ms, [this] {
-                on_select_time_up();
-                player->select_song();
-            });
+            select_timer = std::make_unique<Timer>(30, current_ms, [this] { list_time_up(); });
         }
+    }
+
+    // a time-up on the song list: the song under the cursor, else the cabinet's TimeUpSequence (open the genre,
+    // take a song): step through the list to a song; a list without one opens the next genre folder
+    int seek_steps = 0;
+    int seek_moved = 0;
+    double seek_next_ms = 0;
+    void list_time_up() {
+        on_select_time_up();
+        if (state != SongSelectState::BROWSING) {
+            return;
+        }
+        seek_steps = 600;
+        seek_moved = 0;
+        seek_next_ms = 0;
+    }
+    void after_select_timers(double now) override {
+        if (seek_steps <= 0 || state != SongSelectState::BROWSING || navigator.is_processing ||
+            navigator.inline_streaming || now < seek_next_ms) {
+            return;
+        }
+        --seek_steps;
+        BaseBox* item = navigator.get_current_item();
+        if (navigator.is_song(item)) {
+            seek_steps = 0;
+            state = player->select_song();
+            return;
+        }
+        const bool genre = navigator.is_directory(item) && item->genre_index >= GenreIndex::JPOP &&
+                           item->genre_index <= GenreIndex::NAMCO;
+        if (genre && seek_moved >= 60) { // no song in this list: open a genre
+            player->select_song();
+            seek_moved = 0;
+            seek_next_ms = now + 500;
+            return;
+        }
+        navigator.move_right();
+        ++seek_moved;
+        seek_next_ms = now + 50;
     }
     bool allows_second_player_join() override { return false; }
 
@@ -58,10 +95,8 @@ public:
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
-        select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] {
-            on_select_time_up();
-            player->select_song();
-        });
+        select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { list_time_up(); });
+        seek_steps = 0;
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
             audio.stop_sound("bgm");

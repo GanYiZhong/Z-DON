@@ -103,6 +103,14 @@ protected:
     virtual int diff_select_seconds() { return 60; }
     virtual void on_select_time_up() {}
     virtual void on_diff_select_cancelled(double /*current_ms*/) {}
+    // a time-up on the course select with the option / neiro panel open: close it and give this many seconds more
+    // (once; 0 = pick the course right away)
+    virtual int options_time_up_extra_seconds() { return 0; }
+    // runs right after the select timers (a state set here is seen by this frame's state change)
+    virtual void after_select_timers(double /*current_ms*/) {}
+    void arm_diff_select_timer(int seconds, double current_ms);
+    bool diff_timer_extend_pending = false;
+    bool diff_timer_extended = false;
 
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool is_2p_screen() { return false; }

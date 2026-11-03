@@ -64,6 +64,26 @@ void SongSelectScreen::on_screen_start() {
     join_request_ms = -1.0;
 }
 
+void SongSelectScreen::arm_diff_select_timer(int seconds, double current_ms) {
+    diff_select_timer = std::make_unique<Timer>(seconds, current_ms, [this] {
+        on_select_time_up();
+        // Z-DON (AI select): an open option panel is closed first and the timer gets a few more seconds
+        const bool panel = player->modifier_selector.has_value() || player->neiro_selector.has_value();
+        if (panel && !diff_timer_extended && options_time_up_extra_seconds() > 0) {
+            player->modifier_selector.reset();
+            player->neiro_selector.reset();
+            scores_manager.save_player_data(player->player_data);
+            diff_timer_extend_pending = true; // re-armed after this timer's update (not from inside it)
+            return;
+        }
+        if (auto* item = dynamic_cast<SongBox*>(navigator.get_current_item())) {
+            if (pick_course_on_timeout(*player)) {
+                select_song(item);
+            }
+        }
+    });
+}
+
 bool SongSelectScreen::pick_course_on_timeout(SongSelectPlayer& p) {
     // time ran out on back / options / neiro (not a course): play the lowest course instead of starting the game on
     // difficulty -3..-1 (the result screen threw on it)
@@ -312,6 +332,12 @@ void SongSelectScreen::update_selection_ui(double current_time, bool advance_tim
         if (diff_select_timer != nullptr) {
             diff_select_timer->update(current_time);
         }
+        after_select_timers(current_time);
+        if (diff_timer_extend_pending) {
+            diff_timer_extend_pending = false;
+            diff_timer_extended = true;
+            arm_diff_select_timer(options_time_up_extra_seconds(), current_time);
+        }
     }
     indicator->update(current_time);
     if (search_box) {
@@ -377,6 +403,7 @@ std::optional<Screens> SongSelectScreen::update() {
             navigator.exit_diff_select();
             state = SongSelectState::BROWSING;
             player->reset_selection();
+            diff_select_timer = nullptr; // Z-DON: else its time-up later starts a song from the song list
             on_diff_select_cancelled(current_time);
         }
     }
@@ -425,14 +452,8 @@ std::optional<Screens> SongSelectScreen::update() {
             set_keyboard_visible(false);
         }
         if (state == SongSelectState::SONG_SELECTED) {
-            diff_select_timer = std::make_unique<Timer>(diff_select_seconds(), current_time, [this] {
-                on_select_time_up();
-                if (auto* item = dynamic_cast<SongBox*>(navigator.get_current_item())) {
-                    if (pick_course_on_timeout(*player)) {
-                        select_song(item);
-                    }
-                }
-            });
+            diff_timer_extended = false;
+            arm_diff_select_timer(diff_select_seconds(), current_time);
         } else if (state == SongSelectState::SEARCHING) {
             start_search();
         } else if (state == SongSelectState::DAN_SELECTED) {
