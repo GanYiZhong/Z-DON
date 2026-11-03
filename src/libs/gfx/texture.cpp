@@ -1491,9 +1491,11 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
     bool child_has_folder = false;
     const std::vector<std::unordered_set<std::string>> skips =
         subset_skips(dirs, own_dir, ancestor_dirs, child_has_folder);
+    bool any_folder = dirs.is_file(own_dir, "texture.json");
     for (size_t i = ancestor_graphics_paths.size(); i-- > 0;) {
         const fs::path dir = ancestor_graphics_paths[i] / screen_name / subset;
         if (dirs.is_file(dir, "texture.json")) {
+            any_folder = true;
             load_from_path(dir, ancestor_scales[i], &skips[i], 1);
         }
     }
@@ -1506,7 +1508,13 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
         return;
     }
     if (loaded_count == 0) {
-        spdlog::error("No textures loaded for {}/{}", screen_name, subset);
+        if (!any_folder) {
+            // no skin in the chain has the folder at all: a script probing an optional art set (Green's
+            // fc_animation asks for game/ending_donderful and falls back to ending_anim), not a broken skin
+            spdlog::debug("No textures loaded for {}/{}: no skin in the chain has the folder", screen_name, subset);
+        } else {
+            spdlog::error("No textures loaded for {}/{}", screen_name, subset);
+        }
     } else {
         loaded_subsets.insert(dedup_key);
         subset_loaded_ids[dedup_key] = ids_this_call;

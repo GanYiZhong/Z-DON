@@ -1170,8 +1170,16 @@ void Chara3D::draw(float x, float y, float scale_mul) {
     if (tex.options[SCO::DISABLE_CHARA_3D]) {
         return;
     }
+    // Z-DON: scale_mul (a skin's chara_pos / draw_drum_back third value) scales the model for this call
+    const float base_scale = scale;
+    scale = base_scale * scale_mul;
+    if (scale != last_scale) {
+        last_scale = scale;
+        render_dirty = true;
+    }
     draw_body(x, y);
     draw_puchi(x, y);
+    scale = base_scale;
 }
 
 void Chara3D::draw_puchi(float x, float y) {

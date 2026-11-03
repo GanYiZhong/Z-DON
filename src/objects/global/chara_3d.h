@@ -129,6 +129,7 @@ private:
     int region_x = 0;
     int region_y = 0;
     float last_zoom = 0.0f;
+    float last_scale = 0.0f;
     float last_cam_x = 0.0f;
     float last_cam_y = 0.0f;
     int last_rw = 0;
