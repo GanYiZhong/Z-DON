@@ -8,7 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -532,6 +534,56 @@ namespace texture_bc7 {
             write_files(); // after the entries: a record of an entry the file left out is dropped
         }
 
+        // BC7 encodes and moves to zstd go through this queue: at most work_limit() Background jobs take them, in
+        // order. Submitted one job each, a skin the cache had not seen yet (hundreds of encodes) or a cache from an
+        // earlier build (hundreds of moves) kept every worker the pool gives Background work, so every core, busy
+        // for many seconds, and the notes of the song playing meanwhile stuttered. ZDON_BC7_JOBS=<n> (default 2).
+        struct Work {
+            std::mutex mutex;
+            std::deque<std::function<void()>> queue;
+            unsigned running = 0;
+        };
+        Work& work() {
+            static auto* w = new Work(); // never destroyed, like state()
+            return *w;
+        }
+        unsigned work_limit() {
+            static const unsigned n = [] {
+                const char* v = std::getenv("ZDON_BC7_JOBS");
+                const long k = v && *v ? std::strtol(v, nullptr, 10) : 2;
+                return static_cast<unsigned>(std::clamp(k, 1L, 64L));
+            }();
+            return n;
+        }
+        void run_work() {
+            Work& w = work();
+            while (true) {
+                std::function<void()> fn;
+                {
+                    std::scoped_lock lock(w.mutex);
+                    if (w.queue.empty()) {
+                        --w.running;
+                        return;
+                    }
+                    fn = std::move(w.queue.front());
+                    w.queue.pop_front();
+                }
+                fn();
+            }
+        }
+        void submit_work(std::function<void()> fn) {
+            Work& w = work();
+            {
+                std::scoped_lock lock(w.mutex);
+                w.queue.push_back(std::move(fn));
+                if (w.running >= work_limit()) {
+                    return;
+                }
+                ++w.running;
+            }
+            jobs::submit(jobs::Priority::Background, run_work);
+        }
+
         // write_file, again while encodes finished meanwhile
         void save_job() {
             State& s = state();
@@ -661,7 +713,7 @@ namespace texture_bc7 {
                 s.queued.insert(key);
                 s.queued_bytes += blocks.size();
             }
-            jobs::submit(jobs::Priority::Background, [key, w, h, blocks = std::move(blocks)] {
+            submit_work([key, w, h, blocks = std::move(blocks)] {
                 State& s = state();
                 std::vector<uint8_t> z = pack_blocks(blocks.data(), blocks.size());
                 std::unique_lock lock(s.mutex);
@@ -869,8 +921,7 @@ namespace texture_bc7 {
             s.queued.insert(key);
             s.queued_bytes += bytes;
         }
-        jobs::submit(jobs::Priority::Background,
-                     [key, w, h, px = rgba_copy(image)]() mutable { encode_job(key, w, h, std::move(px)); });
+        submit_work([key, w, h, px = rgba_copy(image)]() mutable { encode_job(key, w, h, std::move(px)); });
     }
 
     Rect alpha_border(const Image& image) {
