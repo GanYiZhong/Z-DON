@@ -8,9 +8,11 @@
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../objects/game/zdon_ai.h"
 
 void EntryScreen::on_screen_start() {
     Screen::on_screen_start();
+    zdon_ai_new_session(); // Z-DON AI battle: a new session rolls a new AI condition
     side = 1;
     is_2p = false;
     box_manager = std::make_unique<BoxManager>(global_data.entry_join_pending);

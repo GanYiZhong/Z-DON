@@ -202,7 +202,8 @@ Screens check_args(int argc, char* argv[]) {
             std::cout << "  --auto      : Enable auto mode\n";
             std::cout << "  --practice  : Start in practice mode\n";
             std::cout << "  --2p        : (test) both players play the song on auto, then the 2P result\n";
-            std::cout << "  --ai        : play the song against the AI (zdon_ai_level); --auto puts 1P on auto\n";
+            std::cout
+                << "  --ai        : play the song against the AI (tuned by the course level); --auto puts 1P on auto\n";
             std::cout << "  --dan <path>: (test) load the library, then play that dan course on auto\n";
             std::cout << "  --record <out.mp4>    : render the play to a video, faster than real time (no hits\n";
             std::cout << "                          unless --auto); --record-fps <n> (60), --record-result <s> (6)\n";

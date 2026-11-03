@@ -278,19 +278,25 @@ struct GlobalData {
     // Z-DON AI battle (objects/game/zdon_ai.h): the 2P lane is played by an AI; the song is cut into sections,
     // each won by the higher section score (good 2, ok 1), the match by the most sections
     struct ZdonAiBattle {
-        bool requested = false; // the next GAME_2P starts as an AI battle (song select / --ai)
-        bool active = false;    // GAME_2P / RESULT_2P of an AI battle; cleared by the song select
-        int level = 5;
-        int state = 0;              // 0 even, 1 the AI leads the section (looser), 2 it trails (tighter)
+        bool requested = false;     // the next GAME_2P starts as an AI battle (song select / --ai)
+        bool active = false;        // GAME_2P / RESULT_2P of an AI battle; cleared by the song select
+        int level = 5;              // tuning level 1..11 (the course's star level)
+        int condition = 3;          // 1 worst .. 5 best (the session's, zdon_ai_condition)
+        int state = 0;              // 0 neutral, 1 "superior" (the player leads), 2 "inferior" (the player trails)
+        int tug = 9;                // clamp(player - AI + 9, 1, 17) of the open section
         std::vector<double> bounds; // each section's end, chart ms
-        std::vector<int> points_p, points_ai, winners; // per section; winners: -1 open, 0 player, 1 AI, 2 draw
+        std::vector<int> points_p, points_ai, winners; // per section; winners: -1 open, 0 player, 1 AI
+        std::vector<int> crowns;                       // per section: the player's crown 0 none .. 3 donderful
         int section = 0;
         int base_p = 0, base_ai = 0;              // the score totals at the current section's start
+        std::array<int, 3> base_judge{};          // the player's good / ok / bad at the current section's start
         int live_p = 0, live_ai = 0;              // the current section's points so far
         std::array<int, 4> judge_p{}, judge_ai{}; // good, ok, bad, drumroll hits so far (score boards)
         bool finished = false;
-        std::vector<float> player_offsets; // the player's recent hit offsets (the AI copies their timing)
+        bool won = false;                  // finished: the player won the match
+        std::vector<float> player_offsets; // the player's recent hit offsets (the AI's "trace")
     } zdon_ai;
+    int zdon_ai_condition = 0; // the session's AI condition 1..5; 0 = roll it at the next AI song select
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;

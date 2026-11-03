@@ -7,6 +7,7 @@
 #include "../objects/entry/zdon_outfit_menu.h"
 #include "../objects/enums.h"
 #include "../objects/game/player.h"
+#include "../objects/game/zdon_ai.h"
 #include "file/scores.h"
 #include "file/script.h"
 #include "global_data.h"
@@ -113,11 +114,11 @@ void register_zdon_lua_bindings(sol::table& tex) {
     });
 
     // tex.ai_battle() -> nil outside an AI battle (objects/game/zdon_ai.h), else a table:
-    //   level, state (0 even, 1 AI leads the section, 2 AI trails), section (1-based, count+1 when done), count,
-    //   live_p, live_ai (the open section's points), wins_p, wins_ai, finished, result (finished: "win" / "lose" /
-    //   "draw"; a tie in sections goes to the higher total), total_p, total_ai,
-    //   judge_p, judge_ai = { good, ok, bad, drumroll }
-    //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI / 2 draw, end_ms=}, ... }
+    //   level (tuning level 1..11), condition (1..5), state (0 neutral, 1 the player leads, 2 the player trails),
+    //   tug (clamp(player - AI + 9, 1, 17) of the open section), section (1-based, count+1 when done), count,
+    //   live_p, live_ai (the open section's points), wins_p, wins_ai, finished, result (finished: "win" / "lose"),
+    //   total_p, total_ai, judge_p, judge_ai = { good, ok, bad, drumroll }
+    //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI, crown= 0..3, end_ms=}, ... }
     tex.set_function("ai_battle", [](sol::this_state s) -> sol::object {
         const auto& b = global_data.zdon_ai;
         if (!b.active || b.bounds.empty()) {
@@ -135,10 +136,13 @@ void register_zdon_lua_bindings(sol::table& tex) {
             wins_ai += b.winners[i] == 1;
             total_p += p;
             total_ai += a;
-            secs[i + 1] = lua.create_table_with("p", p, "ai", a, "winner", b.winners[i], "end_ms", b.bounds[i]);
+            secs[i + 1] = lua.create_table_with("p", p, "ai", a, "winner", b.winners[i], "crown",
+                                                i < b.crowns.size() ? b.crowns[i] : 0, "end_ms", b.bounds[i]);
         }
         t["level"] = b.level;
+        t["condition"] = b.condition;
         t["state"] = b.state;
+        t["tug"] = b.tug;
         t["section"] = b.section + 1;
         t["count"] = (int)b.bounds.size();
         t["live_p"] = b.live_p;
@@ -151,8 +155,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
         t["total_ai"] = total_ai;
         t["finished"] = b.finished;
         if (b.finished) {
-            const int d = wins_p != wins_ai ? wins_p - wins_ai : total_p - total_ai;
-            t["result"] = d > 0 ? "win" : (d < 0 ? "lose" : "draw");
+            t["result"] = b.won ? "win" : "lose";
         }
         t["sections"] = secs;
         return t;
@@ -162,8 +165,14 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
     tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
 
-    // tex.ai_level() -> the next AI battle's level (1..10; [general] zdon_ai_level, moved by each match's result)
-    tex.set_function("ai_level", []() -> int { return global_data.config->general.zdon_ai_level; });
+    // tex.ai_level() / tex.ai_condition() -> the AI's condition this session, 1 worst .. 5 best (its tension; the
+    // arcade's aiCondition, rolled once per session). ai_level is the old name.
+    tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });
+    tex.set_function("ai_condition", []() -> int { return zdon_ai_condition(); });
+
+    // tex.ai_next_reward() -> wins still needed for the next AI battle reward (0: past the last one)
+    tex.set_function("ai_next_reward",
+                     []() -> int { return zdon_ai_next_reward(global_data.config->general.zdon_ai_wins); });
 
     // tex.outfit(player_num) -> the player's 2D outfit in this skin (0 = plain; skin_config "zdon_outfits",
     // objects/entry/zdon_outfit_menu.h)

@@ -1,14 +1,20 @@
 #pragma once
-// Z-DON AI battle: the 2P lane is played by an AI opponent; the song is split into sections and each
-// section goes to whoever scores more in it (good 2, ok 1). State lives in global_data.zdon_ai.
-//
-// The opponent's model (its own numbers, after the arcade AI battle's design):
-//   - every note gets a hit time drawn from a normal distribution around the note; a draw outside the bad
-//     window, or a per-note slip, is a miss
-//   - the spread starts from the level (1: 34 ms .. 10: 16 ms) and moves toward the player's own recent
-//     timing as the player hits notes (the AI plays "like you", up to 70% of the way)
-//   - inside a section the AI loosens up while it leads and tightens while it trails, so sections stay close
-//   - rolls and balloons are hit at a steady 11..20 hits/s by level
+// Z-DON AI battle: the 2P lane is played by an AI opponent; the song is split into sections and each section goes
+// to whoever scores more in it. State lives in global_data.zdon_ai. The rules follow the arcade's AI battle
+// (CHN05 AiEnsoGameManager / AiEnsoInput and its ai_tuninginfo table):
+//   - the AI's strength comes from the course's star level (tuning levels 1..10, 11 above 10) and its condition
+//     (1 worst .. 5 best, rolled once per session and shown as its tension): each note's hit time is drawn from a
+//     normal distribution whose variance goes from the level's "worst" to its "best" with the condition; a draw
+//     outside the bad window is a miss
+//   - a state machine on the open section's point difference (AI - player) moves the AI between neutral,
+//     "superior" (the player leads: the AI tightens) and "inferior" (the player trails: the AI loosens); each state
+//     scales the variance, and at some levels the AI copies the player's own recent timing ("trace")
+//   - section points: good / ok / bad score the level's ryo / ka / fuka (5/3/0 .. 2/1/0); rolls score nothing
+//   - the tug value clamp(player - AI + 9, 1, 17) decides a section when it closes: below 9 the AI wins it, else
+//     the player (a tie goes to the player); the player wins the match with at least as many sections as the AI
+//   - each section also gets a crown from the player's judges in it (donderful / full combo / clear at > 70%)
+//   - rolls and balloons are hit at a steady 11..21 hits/s by level
+#include <array>
 #include <random>
 #include <vector>
 
@@ -16,7 +22,7 @@ class Player;
 struct PlayerData;
 
 struct ZdonAiDriver {
-    int level = 5;
+    int level = 5; // tuning level 1..11
     std::mt19937 rng;
     int planned_index[2] = {-1, -1};   // the note (don, ka lane front) whose hit time is drawn
     double planned_offset[2] = {0, 0}; // ms from the note; NaN = this note is missed
@@ -26,7 +32,26 @@ struct ZdonAiDriver {
     double draw_offset(double bad_window_ms); // NaN = miss
 };
 
-// the AI's nameplate / character ("AI", "Lv.N", a metal Don's colors); its nameplate is built with
+// the arcade's AI tuning row (ai_tuninginfo) for a tuning level 1..11
+struct ZdonAiTuning {
+    int variance_worst, variance_best;            // ms^2 of the hit spread at condition 1 / 5
+    std::array<int, 3> trace_prob, variance_coef; // per state (neutral, superior, inferior): %, % of the variance
+    int state_n_s, state_n_i, state_s_n, state_i_n;
+    int samples;       // the player's recent offsets kept for tracing
+    int ryo, ka, fuka; // section points of good / ok / bad
+};
+const ZdonAiTuning& zdon_ai_tuning(int level);
+// the tuning level of a course's star level (1..10; 11 above 10)
+int zdon_ai_tuning_level(double star_level);
+
+// the AI's condition for this session (1..5), rolled on the first call after zdon_ai_new_session()
+int zdon_ai_condition();
+void zdon_ai_new_session();
+
+// wins still needed for the next AI battle reward (the arcade's win-count rewards); 0 past the last one
+int zdon_ai_next_reward(int wins);
+
+// the AI's nameplate / character ("AI" and a metal Don's colors); its nameplate is built with
 // PlayerNum::AI (skins draw their AI plate: global/nameplate/ai)
 PlayerData zdon_ai_player_data(int level);
 
@@ -36,8 +61,8 @@ PlayerData zdon_ai_player_data(int level);
 bool zdon_ai_skin_arena();
 bool zdon_ai_arena_game();
 
-// a new battle (the player's learned timing is kept)
+// a new battle at a tuning level (the player's recent timing is kept)
 void zdon_ai_battle_begin(int level);
-// per frame, after the players updated: on the song's first frame cuts the sections (equal note counts;
-// 3 sections, 5 from 200 notes), then closes sections and updates the lead state
+// per frame, after the players updated: on the song's first frame cuts the sections (3, 5 from 200 notes; the cuts
+// fall on bar lines), then closes sections, keeps the tug and the AI's state, and at the end records the result
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai);

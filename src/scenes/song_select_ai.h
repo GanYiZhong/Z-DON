@@ -37,6 +37,7 @@ public:
 
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();
+        zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
         const PlayerData pd = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
         ai_plate = Nameplate(pd.username, pd.title, PlayerNum::AI, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
         ai_chara = make_chara_from_player_data(&pd, true);

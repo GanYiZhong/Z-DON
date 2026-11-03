@@ -1611,7 +1611,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
         // Z-DON AI battle: the AI learns the player's timing
         auto& ai = global_data.zdon_ai;
         if (ai.active && !zdon_ai && player_num == PlayerNum::P1) {
-            if (ai.player_offsets.size() >= 64) {
+            if ((int)ai.player_offsets.size() >= zdon_ai_tuning(ai.level).samples) {
                 ai.player_offsets.erase(ai.player_offsets.begin());
             }
             ai.player_offsets.push_back(static_cast<float>(offset_ms));

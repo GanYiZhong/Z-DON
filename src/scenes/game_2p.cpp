@@ -51,7 +51,11 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     players.push_back(std::make_unique<Player>(parser_2p, PlayerNum::P2,
                                                global_data.session_data[p2_index].selected_difficulty, true, mods_2p));
     if (ai_battle) {
-        const int level = global_data.config->general.zdon_ai_level;
+        // the arcade tunes its AI by the course's star level (ai_tuninginfo levels 1..11)
+        const int diff = global_data.session_data[p1_index].selected_difficulty;
+        const auto course = parser->metadata.course_data.find(diff);
+        const int level =
+            zdon_ai_tuning_level(course != parser->metadata.course_data.end() ? course->second.level : 5.0);
         players[1]->enable_zdon_ai(level);
         players[1]->apply_replay_appearance(zdon_ai_player_data(level));
         zdon_ai_battle_begin(level);

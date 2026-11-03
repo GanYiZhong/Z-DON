@@ -138,6 +138,7 @@ public:
     void enable_zdon_ai(int level);
     bool is_zdon_ai() const { return zdon_ai != nullptr; }
     std::vector<double> zdon_note_times() const; // the don/ka notes' hit times, sorted
+    std::vector<double> zdon_bar_times() const;  // the bar lines' times, sorted
 
     void reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int new_difficulty);
 
