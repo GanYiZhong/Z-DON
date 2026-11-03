@@ -63,6 +63,19 @@ void SongSelectScreen::on_screen_start() {
     join_request_ms = -1.0;
 }
 
+bool SongSelectScreen::pick_course_on_timeout(SongSelectPlayer& p) {
+    // time ran out on back / options / neiro (not a course): play the lowest course instead of starting the game on
+    // difficulty -3..-1 (the result screen threw on it)
+    if (p.selected_difficulty < Difficulty::EASY) {
+        for (Difficulty d : p.curr_diffs) {
+            if (d >= Difficulty::EASY && (p.selected_difficulty < Difficulty::EASY || d < p.selected_difficulty)) {
+                p.selected_difficulty = d;
+            }
+        }
+    }
+    return p.selected_difficulty >= Difficulty::EASY;
+}
+
 void SongSelectScreen::select_song(SongBox* song) {
     // Z-DON: the game reads the options from scores.db, which got them only once the option panel was confirmed to
     // its last row: a song started before that (the select timer, a panel taller than the screen) ran on the old ones
@@ -412,17 +425,7 @@ std::optional<Screens> SongSelectScreen::update() {
         if (state == SongSelectState::SONG_SELECTED) {
             diff_select_timer = std::make_unique<Timer>(60, current_time, [this] {
                 if (auto* item = dynamic_cast<SongBox*>(navigator.get_current_item())) {
-                    // Z-DON: time ran out on back / options / neiro (not a course): play the song's lowest
-                    // course instead of starting the game on difficulty -3..-1 (the result screen threw on it)
-                    if (player->selected_difficulty < Difficulty::EASY) {
-                        for (Difficulty d : player->curr_diffs) {
-                            if (d >= Difficulty::EASY &&
-                                (player->selected_difficulty < Difficulty::EASY || d < player->selected_difficulty)) {
-                                player->selected_difficulty = d;
-                            }
-                        }
-                    }
-                    if (player->selected_difficulty >= Difficulty::EASY) {
+                    if (pick_course_on_timeout(*player)) {
                         select_song(item);
                     }
                 }

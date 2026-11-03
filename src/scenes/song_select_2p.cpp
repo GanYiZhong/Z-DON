@@ -9,6 +9,9 @@ void SongSelect2PScreen::on_screen_start() {
     SongSelectScreen::on_screen_start();
     player_2 = std::make_unique<SongSelectPlayer>(PlayerNum::P2);
     player_2->script = script.get();
+    // Z-DON: the song timer opens the difficulty select for both players (1P's timer only opened it for player 1,
+    // which left the screen browsing with no difficulty timer)
+    select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { on_select_timeout(); });
 }
 
 static void init_player_diffs(SongSelectPlayer* p, SongBox* song) {
@@ -17,6 +20,35 @@ static void init_player_diffs(SongSelectPlayer* p, SongBox* song) {
     p->init_diff_cursor();
     p->selected_diff_bounce->start();
     p->selected_diff_fadein->start();
+}
+
+void SongSelect2PScreen::on_select_timeout() {
+    if (state != SongSelectState::BROWSING) {
+        return;
+    }
+    SongSelectState s = player->select_song();
+    if (s == SongSelectState::TUTORIAL_SELECTED) {
+        return; // the tutorial is single-player
+    }
+    if (s == SongSelectState::SONG_SELECTED) {
+        auto* song = dynamic_cast<SongBox*>(navigator.get_current_item());
+        if (song == nullptr) {
+            return;
+        }
+        init_player_diffs(player_2.get(), song);
+    }
+    state = s;
+}
+
+void SongSelect2PScreen::on_diff_timeout() {
+    // Z-DON: time ran out in the difficulty select: whoever is not on a course gets the lowest one, then both play
+    auto* item = dynamic_cast<SongBox*>(navigator.get_current_item());
+    if (item == nullptr || game_transition.has_value()) {
+        return;
+    }
+    if (pick_course_on_timeout(*player) && pick_course_on_timeout(*player_2)) {
+        select_song(item);
+    }
 }
 
 void SongSelect2PScreen::handle_input_browsing(double current_ms) {
@@ -140,7 +172,9 @@ std::optional<Screens> SongSelect2PScreen::update() {
 
     if (state != prev_state) {
         script->restart_text_fade();
-        if (state == SongSelectState::SEARCHING) {
+        if (state == SongSelectState::SONG_SELECTED) {
+            diff_select_timer = std::make_unique<Timer>(60, current_time, [this] { on_diff_timeout(); });
+        } else if (state == SongSelectState::SEARCHING) {
             start_search();
         }
     }

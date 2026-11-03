@@ -72,6 +72,9 @@ protected:
     void zdon_draw_search();
 
     virtual void select_song(SongBox* song);
+    // Z-DON: when the difficulty timer runs out on back / options / neiro, the player gets the song's lowest course;
+    // false if the song has none
+    static bool pick_course_on_timeout(SongSelectPlayer& p);
 
     virtual void handle_input(double current_ms);
 
