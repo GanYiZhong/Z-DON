@@ -86,6 +86,17 @@ namespace {
     bool end_cue_pending = false;
     bool end_cue_won = false;
     double end_cue_at_ms = 0.0;
+    // the last section's own cue (SE + voice) comes 1.6 s after the last note, before the emblem's cue (footage
+    // Tl7g8XXXvAM: the last note 260.5 s, the section SE 262.1 s, the song cue 265.3 s)
+    constexpr double kLastSectionCueDelayMs = 1600.0;
+    bool last_cue_pending = false;
+    // Green: the start voice comes 3.3 s before the song, the ready SE 1.65 s before it (footage Tl7g8XXXvAM: voice
+    // 136.7 s, SE 138.4 s, song 140.1 s); the game gives the lead (Game2PScreen start_delay 3 s)
+    constexpr double kReadySeDelayMs = 1350.0;
+    bool ready_se_pending = false;
+    double ready_se_at_ms = 0.0;
+    bool last_cue_won = false;
+    double last_cue_at_ms = 0.0;
 
     int section_points(const Player& p, const ZdonAiTuning& t) {
         return p.get_good() * t.ryo + p.get_ok() * t.ka + p.get_bad() * t.fuka;
@@ -371,6 +382,8 @@ void zdon_ai_battle_begin(int level) {
     std::vector<float> traced = std::move(b.player_offsets); // the player's timing carries over between songs
     b = {};
     end_cue_pending = false;
+    last_cue_pending = false;
+    ready_se_pending = false;
     b.active = true;
     b.level = std::clamp(level, 1, 11);
     b.condition = zdon_ai_condition();
@@ -418,6 +431,14 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
 
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai) {
     auto& b = global_data.zdon_ai;
+    if (ready_se_pending && get_current_ms() >= ready_se_at_ms) {
+        ready_se_pending = false;
+        cue("ready", "", 1);
+    }
+    if (last_cue_pending && get_current_ms() >= last_cue_at_ms) {
+        last_cue_pending = false;
+        cue(last_cue_won ? "section_win" : "section_lose", last_cue_won ? "section_win" : "section_lose", 2);
+    }
     if (end_cue_pending && get_current_ms() >= end_cue_at_ms) {
         end_cue_pending = false;
         cue(end_cue_won ? "song_win" : "song_lose", end_cue_won ? "song_win" : "song_lose", 1);
@@ -428,7 +449,13 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             return; // the song has not started
         }
         make_sections(times, ai.zdon_bar_times());
-        cue("ready", "ready", 3);
+        if (zdon_ai_end_delay_on()) {
+            cue("", "ready", 3);
+            ready_se_pending = true;
+            ready_se_at_ms = get_current_ms() + kReadySeDelayMs;
+        } else {
+            cue("ready", "ready", 3);
+        }
     }
     if (!b.active || b.finished || b.bounds.empty()) {
         return;
@@ -499,6 +526,9 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             end_cue_pending = true;
             end_cue_won = b.won;
             end_cue_at_ms = get_current_ms() + kEndCueDelayMs;
+            last_cue_pending = !b.winners.empty();
+            last_cue_won = !b.winners.empty() && b.winners.back() == 0;
+            last_cue_at_ms = get_current_ms() + kLastSectionCueDelayMs;
         } else {
             cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
         }
@@ -521,7 +551,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             }
             b.new_best = scores_manager.set_zdon_ai_section_best(get_player_id(PlayerNum::P1), sd.song_hash,
                                                                  sd.selected_difficulty, player.get_score(), rec);
-            // the Green ghost rank (ghostsetting.xml: a win 1 point, high level +1, first win +1)
+            // the Green ghost rank (ghostsetting.xml: a win 1 point, high level +1, first win +1; EBOOT sub_B05D4)
             auto [points, rank] = scores_manager.get_zdon_ai_rank(get_player_id(PlayerNum::P1));
             b.points_before = b.points = points;
             b.rank_before = b.rank = rank;
@@ -540,8 +570,15 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                     last_first_win = first;
                     b.rank_gain = 1 + (last_bonus_high ? 1 : 0) + (first ? 1 : 0);
                 }
+                // the points count within the current rank: reaching the next row's `acquired` ranks up and the
+                // counter restarts at 0 (footage Tl7g8XXXvAM 4:56-5:06: a first win right after rank 0 -> rank 1
+                // shows "8 points" to rank 2 = ghostinfo row 2's acquired, not 8 minus this win's points)
                 b.points = points + b.rank_gain;
-                b.rank = zdon_ai_rank_of(b.points);
+                b.rank = rank;
+                if (rank + 1 < kZdonAiRanks && b.points >= zdon_ai_rank_info(rank + 1).acquired) {
+                    b.rank = rank + 1;
+                    b.points = 0;
+                }
                 scores_manager.set_zdon_ai_rank(get_player_id(PlayerNum::P1), b.points, b.rank);
             }
         }

@@ -17,9 +17,13 @@ void Game2PScreen::release_chart_resources() {
 
 void Game2PScreen::initialize_chart(const fs::path& song) {
     start_delay = (song.extension() == ".osu") ? 0 : start_delay;
-    int delay = static_cast<int>(start_delay);
     // Z-DON AI battle (also on a restart): 2P plays 1P's chart
     const bool ai_battle = global_data.zdon_ai.requested || global_data.zdon_ai.active;
+    // skin_config zdon_ai_end_delay (Green): the cabinet's song starts 3 s after the battle screen appears
+    if (ai_battle && start_delay > 0 && zdon_ai_end_delay_on()) {
+        start_delay = 3000.0;
+    }
+    int delay = static_cast<int>(start_delay);
     global_data.zdon_ai.requested = false;
     ai_music_cut = false;
     ai_ending_pending = false;

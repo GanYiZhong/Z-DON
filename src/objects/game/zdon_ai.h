@@ -77,7 +77,8 @@ bool zdon_ai_last_bonus_high();
 // wins still needed for the next AI battle reward (the arcade's win-count rewards); 0 past the last one
 int zdon_ai_next_reward(int wins);
 
-// the Green (System 357) ghost rank, ghostinfo.xml: rank k needs `acquired` points; at rank k a win on course c
+// the Green (System 357) ghost rank, ghostinfo.xml: reaching rank k needs `acquired` points counted within rank k-1
+// (the counter restarts at 0 on a rank-up); at rank k a win on course c
 // (easy, normal, hard, oni, ura) counts when its star level is at least row k+1's least[c] (0: the course no
 // longer counts; ai_rankup_todo shows that row), +1 point (winpoint_bonus_highlevel) from its bonus[c] stars,
 // +1 on a chart's first win

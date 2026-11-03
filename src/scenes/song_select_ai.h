@@ -46,6 +46,7 @@ protected:
 
     // a time-up on the song list: the song under the cursor, else the cabinet's TimeUpSequence (open the genre,
     // take a song): step through the list to a song; a list without one opens the next genre folder
+    bool music_cut = false;
     int seek_steps = 0;
     int seek_moved = 0;
     double seek_next_ms = 0;
@@ -61,6 +62,23 @@ protected:
         seek_next_ms = 0;
     }
     void after_select_timers(double now) override {
+        // the cabinet cuts the select music the moment the course is decided (footage Tl7g8XXXvAM 2:12 and
+        // 0wD5kkcN5WA 1:44: silence until the loading card's cues); the decide voice goes on alone
+        if (player && player->difficulty_decided()) {
+            if (!music_cut) {
+                music_cut = true;
+                if (audio.is_music_stream_valid("preview")) {
+                    audio.stop_music_stream("preview");
+                }
+                for (const char* bgm : {"bgm", "ai_bgm"}) {
+                    if (audio.has_sound(bgm)) {
+                        audio.stop_sound(bgm);
+                    }
+                }
+            }
+        } else {
+            music_cut = false;
+        }
         if (board_jump && state == SongSelectState::BROWSING && !navigator.is_processing &&
             !navigator.inline_streaming) {
             BaseBox* item = navigator.get_current_item();
