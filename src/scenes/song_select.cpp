@@ -64,6 +64,9 @@ void SongSelectScreen::on_screen_start() {
 }
 
 void SongSelectScreen::select_song(SongBox* song) {
+    // Z-DON: the game reads the options from scores.db, which got them only once the option panel was confirmed to
+    // its last row: a song started before that (the select timer, a panel taller than the screen) ran on the old ones
+    scores_manager.save_player_data(player->player_data);
     navigator.add_to_recent(song);
     const auto player_index = static_cast<int>(global_data.player_num);
     SessionData& session_data = global_data.session_data[player_index];
@@ -409,7 +412,19 @@ std::optional<Screens> SongSelectScreen::update() {
         if (state == SongSelectState::SONG_SELECTED) {
             diff_select_timer = std::make_unique<Timer>(60, current_time, [this] {
                 if (auto* item = dynamic_cast<SongBox*>(navigator.get_current_item())) {
-                    select_song(item);
+                    // Z-DON: time ran out on back / options / neiro (not a course): play the song's lowest
+                    // course instead of starting the game on difficulty -3..-1 (the result screen threw on it)
+                    if (player->selected_difficulty < Difficulty::EASY) {
+                        for (Difficulty d : player->curr_diffs) {
+                            if (d >= Difficulty::EASY &&
+                                (player->selected_difficulty < Difficulty::EASY || d < player->selected_difficulty)) {
+                                player->selected_difficulty = d;
+                            }
+                        }
+                    }
+                    if (player->selected_difficulty >= Difficulty::EASY) {
+                        select_song(item);
+                    }
                 }
             });
         } else if (state == SongSelectState::SEARCHING) {

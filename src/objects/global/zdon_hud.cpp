@@ -175,7 +175,7 @@ namespace zhud {
                 {"course_1", {{"ja", "ふつう"}, {"en", "Normal"}, {"zh", "普通"}, {"ko", "보통"}}},
                 {"course_2", {{"ja", "むずかしい"}, {"en", "Hard"}, {"zh", "困難"}, {"ko", "어려움"}}},
                 {"course_3", {{"ja", "おに"}, {"en", "Extreme"}, {"zh", "魔王"}, {"ko", "오니"}}},
-                {"course_4", {{"ja", "おに(裏)"}, {"en", "Extreme (Ura)"}, {"zh", "魔王(裡)"}, {"ko", "오니(뒷면)"}}},
+                {"course_4", {{"ja", "おに(裏)"}, {"en", "Extreme (Ura)"}, {"zh", "魔王(裏)"}, {"ko", "오니(뒷면)"}}},
             };
             return t;
         }

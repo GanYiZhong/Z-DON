@@ -64,6 +64,9 @@ void SongSelect2PScreen::handle_input_selecting() {
 }
 
 void SongSelect2PScreen::select_song(SongBox* song) {
+    // Z-DON: both players' options, as in SongSelectScreen::select_song
+    scores_manager.save_player_data(player->player_data);
+    scores_manager.save_player_data(player_2->player_data);
     navigator.add_to_recent(song);
 
     const auto p1_index = static_cast<int>(PlayerNum::P1);
