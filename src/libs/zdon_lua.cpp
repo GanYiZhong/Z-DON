@@ -163,6 +163,8 @@ void register_zdon_lua_bindings(sol::table& tex) {
             secs[i + 1] = sec;
         }
         t["level"] = b.level;
+        t["emotion_low"] = zdon_ai_tuning(b.level).emotion_low;
+        t["emotion_high"] = zdon_ai_tuning(b.level).emotion_high;
         t["condition"] = b.condition;
         t["state"] = b.state;
         t["tug"] = b.tug;

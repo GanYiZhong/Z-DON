@@ -37,8 +37,9 @@ struct ZdonAiTuning {
     int variance_worst, variance_best;            // ms^2 of the hit spread at condition 1 / 5
     std::array<int, 3> trace_prob, variance_coef; // per state (neutral, superior, inferior): %, % of the variance
     int state_n_s, state_n_i, state_s_n, state_i_n;
-    int samples;       // the player's recent offsets kept for tracing
-    int ryo, ka, fuka; // section points of good / ok / bad
+    int samples;                           // the player's recent offsets kept for tracing
+    int ryo, ka, fuka;                     // section points of good / ok / bad
+    int emotion_low = 2, emotion_high = 6; // the AI calms down / gets angry at this lead of the player's (Green)
 };
 const ZdonAiTuning& zdon_ai_tuning(int level);
 // the tuning level of a course's star level (1..10; 11 above 10)

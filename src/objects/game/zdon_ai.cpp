@@ -29,6 +29,24 @@ namespace {
         {100, 25, {0, 50, 0}, {5, -20, 60}, -6, 6, 0, 0, 540, 3, 1, 0},
     };
 
+    // Green (System 357) ghosttuning.xml tuning_lv1..lv11, the same fields (patterns neutral / superior /
+    // inferior; patternnode 0 inferior / superior = n->s / n->i, node 1 inferior = s->n, node 2 superior = i->n),
+    // its emotion thresholds emotionofs_threslow / threshigh; tuning_lv0 (variance 1024 / 512, sample 100,
+    // 4 / 2 / 0, emotion 2 / 6, 120-note sections) is not a star level
+    constexpr ZdonAiTuning kTuningGreen[11] = {
+        {1024, 256, {0, 0, 0}, {5, -50, 40}, -7, 5, -1, -1, 45, 5, 3, 0, 5, 6},
+        {1024, 256, {0, 0, 0}, {5, -50, 40}, -7, 5, -1, -1, 80, 5, 3, 0, 5, 6},
+        {1024, 256, {0, 0, 0}, {5, -50, 40}, -7, 5, -1, -1, 120, 5, 3, 0, 5, 6},
+        {1024, 256, {0, 0, 0}, {5, -40, 40}, -7, 5, -1, -1, 150, 5, 3, 0, 5, 6},
+        {576, 144, {0, 0, 0}, {5, -40, 40}, -7, 5, -1, -1, 170, 5, 3, 0, 5, 6},
+        {576, 144, {0, 0, 0}, {5, -40, 40}, -7, 5, -1, -1, 230, 3, 2, 0, 5, 6},
+        {400, 100, {0, 0, 0}, {5, -40, 40}, -7, 5, -1, -1, 290, 3, 2, 0, 5, 6},
+        {256, 64, {0, 0, 0}, {5, -30, 50}, -7, 5, -1, -1, 350, 3, 2, 0, 5, 6},
+        {144, 36, {0, 0, 0}, {5, -30, 50}, -6, 6, 0, 0, 430, 3, 2, 0, 5, 6},
+        {144, 36, {0, 50, 0}, {5, -20, 50}, -6, 6, 0, 0, 900, 3, 1, 0, 5, 6},
+        {100, 25, {0, 50, 0}, {5, -20, 60}, -6, 6, 0, 0, 540, 3, 1, 0, 5, 6},
+    };
+
     // the arcade's AI battle win-count rewards (reward.bin, releaseType 42)
     constexpr int kRewardWins[] = {1,   2,   10,  25,  50,  75,  100,  125,  150,  175,  200,  250,  300,
                                    350, 400, 500, 600, 765, 876, 1000, 2000, 3000, 4000, 5000, 10000};
@@ -67,7 +85,9 @@ namespace {
 } // namespace
 
 const ZdonAiTuning& zdon_ai_tuning(int level) {
-    return kTuning[std::clamp(level, 1, 11) - 1];
+    // skin_config "zdon_ai_tuning" (PyTaikoGreen): Green's ghosttuning instead of the CHN05 table
+    const auto* table = tex.skin_config_by_name.contains("zdon_ai_tuning") ? kTuningGreen : kTuning;
+    return table[std::clamp(level, 1, 11) - 1];
 }
 
 int zdon_ai_tuning_level(double star_level) {
