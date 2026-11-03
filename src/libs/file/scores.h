@@ -1,5 +1,5 @@
 #pragma once
-
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <mutex>
@@ -181,6 +181,12 @@ public:
     // Z-DON AI battle section crowns (table zdon_ai_sections): the best crown per section of a chart, 0 none ..
     // 3 donderful; set keeps the better of the stored and the new one
     std::vector<int> get_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty);
+    // the best AI battle play of a chart, per section (table zdon_ai_section_best): score, good, ok, bad,
+    // drumroll; total is that play's score. set_ replaces the record when total beats it (returns true then)
+    std::vector<std::array<int, 5>> get_zdon_ai_section_best(const std::string& player_id, const std::string& hash,
+                                                             int difficulty, int* total = nullptr);
+    bool set_zdon_ai_section_best(const std::string& player_id, const std::string& hash, int difficulty, int total,
+                                  const std::vector<std::array<int, 5>>& sections);
     void set_zdon_ai_section_crowns(const std::string& player_id, const std::string& hash, int difficulty,
                                     const std::vector<int>& crowns);
     // Z-DON PB pace (table zdon_ghost): the best play's score over the song, as (chart ms, score) points

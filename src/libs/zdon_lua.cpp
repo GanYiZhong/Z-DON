@@ -118,7 +118,11 @@ void register_zdon_lua_bindings(sol::table& tex) {
     //   tug (clamp(player - AI + 9, 1, 17) of the open section), section (1-based, count+1 when done), count,
     //   live_p, live_ai (the open section's points), wins_p, wins_ai, finished, result (finished: "win" / "lose"),
     //   total_p, total_ai, judge_p, judge_ai = { good, ok, bad, drumroll }
-    //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI, crown= 0..3, end_ms=}, ... }
+    //   sections = { {p=, ai=, winner= -1 open / 0 player / 1 AI, crown= 0..3, end_ms=,
+    //                 good=, ok=, bad=, roll= (the player's judges in it), score= (the player's score in it),
+    //                 best = {score=, good=, ok=, bad=, roll=} (the best play's, recorded before this play) or nil},
+    //                 ...}
+    //   new_best (finished: this play is the chart's new best AI battle play), detail (the result's detail view)
     tex.set_function("ai_battle", [](sol::this_state s) -> sol::object {
         const auto& b = global_data.zdon_ai;
         if (!b.active || b.bounds.empty()) {
@@ -136,8 +140,27 @@ void register_zdon_lua_bindings(sol::table& tex) {
             wins_ai += b.winners[i] == 1;
             total_p += p;
             total_ai += a;
-            secs[i + 1] = lua.create_table_with("p", p, "ai", a, "winner", b.winners[i], "crown",
-                                                i < b.crowns.size() ? b.crowns[i] : 0, "end_ms", b.bounds[i]);
+            std::array<int, 4> j{};
+            if (i < b.section_judge.size()) {
+                j = b.section_judge[i];
+            }
+            if (open) {
+                for (int k = 0; k < 4; ++k) {
+                    j[k] = b.judge_p[k] - b.base_judge[k];
+                }
+            }
+            sol::table sec = lua.create_table_with("p", p, "ai", a, "winner", b.winners[i], "crown",
+                                                   i < b.crowns.size() ? b.crowns[i] : 0, "end_ms", b.bounds[i]);
+            sec["good"] = j[0];
+            sec["ok"] = j[1];
+            sec["bad"] = j[2];
+            sec["roll"] = j[3];
+            sec["score"] = open ? 0 : (i < b.section_score.size() ? b.section_score[i] : 0);
+            if (i < b.section_best.size()) {
+                const auto& r = b.section_best[i];
+                sec["best"] = lua.create_table_with("score", r[0], "good", r[1], "ok", r[2], "bad", r[3], "roll", r[4]);
+            }
+            secs[i + 1] = sec;
         }
         t["level"] = b.level;
         t["condition"] = b.condition;
@@ -156,9 +179,38 @@ void register_zdon_lua_bindings(sol::table& tex) {
         t["finished"] = b.finished;
         if (b.finished) {
             t["result"] = b.won ? "win" : "lose";
+            t["new_best"] = b.new_best;
+            t["detail"] = b.detail;
+            t["play_all"] = b.play_all;
         }
         t["sections"] = secs;
         return t;
+    });
+
+    // tex.ai_credit() -> the credit's AI battles so far (the play-all summary), oldest first:
+    //   { {title=, score=, good=, ok=, bad=, cleared=, won=, sections = { {score=, crown=}, ... }}, ... }
+    tex.set_function("ai_credit", [](sol::this_state s) {
+        sol::state_view lua(s);
+        sol::table list = lua.create_table();
+        int i = 1;
+        for (const auto& song : global_data.zdon_ai_credit) {
+            sol::table t = lua.create_table();
+            t["title"] = song.title;
+            t["score"] = song.score;
+            t["good"] = song.good;
+            t["ok"] = song.ok;
+            t["bad"] = song.bad;
+            t["cleared"] = song.cleared;
+            t["won"] = song.won;
+            sol::table secs = lua.create_table();
+            for (size_t k = 0; k < song.section_score.size(); ++k) {
+                secs[k + 1] = lua.create_table_with("score", song.section_score[k], "crown",
+                                                    k < song.section_crown.size() ? song.section_crown[k] : 0);
+            }
+            t["sections"] = secs;
+            list[i++] = t;
+        }
+        return list;
     });
 
     // tex.ai_active() -> true in an AI battle's GAME_2P / RESULT_2P from the first frame (tex.ai_battle() stays

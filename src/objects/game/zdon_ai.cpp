@@ -33,6 +33,24 @@ namespace {
     constexpr int kRewardWins[] = {1,   2,   10,  25,  50,  75,  100,  125,  150,  175,  200,  250,  300,
                                    350, 400, 500, 600, 765, 876, 1000, 2000, 3000, 4000, 5000, 10000};
 
+    // the arcade's cues (se_aienso_v12g, voice_aienso_v12g) when the skin has them: Sounds/game/ai/<name>,
+    // Sounds/game/aivoice/<name>[_<n>] (a random one of the numbered takes)
+    void cue(const std::string& se, const std::string& voice, int takes) {
+        if (!se.empty() && audio.has_sound("ai_" + se)) {
+            audio.play_sound("ai_" + se, VolumePreset::SOUND);
+        }
+        if (voice.empty()) {
+            return;
+        }
+        static std::mt19937 rng{std::random_device{}()};
+        const std::string name =
+            "aivoice_" + voice +
+            (takes > 1 ? "_" + std::to_string(std::uniform_int_distribution<int>(1, takes)(rng)) : "");
+        if (audio.has_sound(name)) {
+            audio.play_sound(name, VolumePreset::VOICE);
+        }
+    }
+
     int section_points(const Player& p, const ZdonAiTuning& t) {
         return p.get_good() * t.ryo + p.get_ok() * t.ka + p.get_bad() * t.fuka;
     }
@@ -68,6 +86,7 @@ int zdon_ai_condition() {
 
 void zdon_ai_new_session() {
     global_data.zdon_ai_condition = 0;
+    global_data.zdon_ai_credit.clear();
 }
 
 int zdon_ai_next_reward(int wins) {
@@ -214,15 +233,17 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
     auto& b = global_data.zdon_ai;
     const size_t n = note_times.size();
     const size_t count = n >= 200 ? 5 : 3;
-    // AiEnsoGameManager: the cuts are the bar lines that start a new measure after equal parts of the song, the
-    // last section ends 500 ms after the last note
+    // AiEnsoGameManager (disassembly of its section setup): step = (LastOnpuDurationTime + 500) / count from the
+    // chart's start; section i ends at SyusetsuJustTime(NumberOfSyousetsuByTime((i + 1) * step) + 1), the bar line
+    // that starts the measure after the one holding that time; the last one ends 500 ms after the last note
     const double first = note_times.front();
     const double last = note_times.back();
+    const double step = (last + 500.0) / (double)count;
     for (size_t s = 1; s < count; ++s) {
-        const double at = first + (last - first) * (double)s / (double)count;
+        const double at = step * (double)s;
         double cut = at;
         for (double bar : bar_times) {
-            if (bar >= at) {
+            if (bar > at) {
                 cut = bar;
                 break;
             }
@@ -236,6 +257,8 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
     b.points_ai.assign(b.bounds.size(), 0);
     b.winners.assign(b.bounds.size(), -1);
     b.crowns.assign(b.bounds.size(), 0);
+    b.section_judge.assign(b.bounds.size(), {0, 0, 0, 0});
+    b.section_score.assign(b.bounds.size(), 0);
     spdlog::info("[zdon_ai] tuning level {}, condition {}: {} notes, {} sections", b.level, b.condition, n,
                  b.bounds.size());
 }
@@ -248,6 +271,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             return; // the song has not started
         }
         make_sections(times, ai.zdon_bar_times());
+        cue("ready", "ready", 3);
     }
     if (!b.active || b.finished || b.bounds.empty()) {
         return;
@@ -284,16 +308,36 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                                     b.judge_p[2] - b.base_judge[2]);
         b.base_p = tp;
         b.base_ai = ta;
-        b.base_judge = {b.judge_p[0], b.judge_p[1], b.judge_p[2]};
+        for (int k = 0; k < 4; ++k) {
+            b.section_judge[s][k] = b.judge_p[k] - b.base_judge[k];
+        }
+        b.base_judge = b.judge_p;
+        b.section_score[s] = player.get_score() - b.base_score;
+        b.base_score = player.get_score();
         b.live_p = b.live_ai = 0;
         b.tug = 9;
         b.state = 0;
         b.section++;
+        const int n = (int)b.winners.size();
+        if (b.section < n) {
+            cue(b.winners[s] == 0 ? "section_win" : "section_lose", b.winners[s] == 0 ? "section_win" : "section_lose",
+                2);
+            // the next section decides the match / gives the AI the match (voice_aienso section_match / ai_reach)
+            const int wins_p = (int)std::ranges::count(b.winners, 0);
+            const int wins_ai = (int)std::ranges::count(b.winners, 1);
+            const int left = n - b.section;
+            if (wins_ai + 1 > n / 2 && wins_ai <= n / 2 && wins_p + left > wins_ai) {
+                cue("", "section_ai_reach", 1);
+            } else if (left == 1 && wins_p == wins_ai) {
+                cue("", "section_match", 1);
+            }
+        }
     }
     if (!b.finished && b.section >= (int)b.bounds.size()) {
         b.finished = true;
         const int wins_p = (int)std::ranges::count(b.winners, 0);
         b.won = wins_p >= (int)b.winners.size() - wins_p;
+        cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
         // the arcade only records a played match: never auto play (ZDON_AI_RECORD_AUTO=1: tests record anyway)
         const bool record =
             (!global_data.force_auto_play && !player.is_auto_play()) || std::getenv("ZDON_AI_RECORD_AUTO");
@@ -303,6 +347,16 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             const auto& sd = global_data.session_data[(int)PlayerNum::P1];
             scores_manager.set_zdon_ai_section_crowns(get_player_id(PlayerNum::P1), sd.song_hash,
                                                       sd.selected_difficulty, b.crowns);
+            // AiResultSectionMain: the detail view compares each section with the best play's
+            b.section_best = scores_manager.get_zdon_ai_section_best(get_player_id(PlayerNum::P1), sd.song_hash,
+                                                                     sd.selected_difficulty);
+            std::vector<std::array<int, 5>> rec(b.bounds.size());
+            for (size_t i = 0; i < rec.size(); ++i) {
+                rec[i] = {b.section_score[i], b.section_judge[i][0], b.section_judge[i][1], b.section_judge[i][2],
+                          b.section_judge[i][3]};
+            }
+            b.new_best = scores_manager.set_zdon_ai_section_best(get_player_id(PlayerNum::P1), sd.song_hash,
+                                                                 sd.selected_difficulty, player.get_score(), rec);
         }
     }
 }

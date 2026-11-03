@@ -287,9 +287,18 @@ struct GlobalData {
         std::vector<double> bounds; // each section's end, chart ms
         std::vector<int> points_p, points_ai, winners; // per section; winners: -1 open, 0 player, 1 AI
         std::vector<int> crowns;                       // per section: the player's crown 0 none .. 3 donderful
+        std::vector<std::array<int, 4>> section_judge; // per section: the player's good, ok, bad, drumroll
+        std::vector<int> section_score;                // per section: the player's score in it
+        // the best play's record per section (score, good, ok, bad, drumroll) from before this play, empty: none;
+        // new_best: this play beat that play's score (it is the record now)
+        std::vector<std::array<int, 5>> section_best;
+        bool new_best = false;
+        bool detail = false;   // the result shows the per-section detail view (kat toggles it)
+        bool play_all = false; // the credit's last result shows the play-all summary (AiResultPlayAllMain)
+        int base_score = 0;    // the player's score at the section's start
         int section = 0;
         int base_p = 0, base_ai = 0;              // the score totals at the current section's start
-        std::array<int, 3> base_judge{};          // the player's good / ok / bad at the current section's start
+        std::array<int, 4> base_judge{};          // the player's good / ok / bad / drumroll at the section's start
         int live_p = 0, live_ai = 0;              // the current section's points so far
         std::array<int, 4> judge_p{}, judge_ai{}; // good, ok, bad, drumroll hits so far (score boards)
         bool finished = false;
@@ -297,6 +306,15 @@ struct GlobalData {
         std::vector<float> player_offsets; // the player's recent hit offsets (the AI's "trace")
     } zdon_ai;
     int zdon_ai_condition = 0; // the session's AI condition 1..5; 0 = roll it at the next AI song select
+    // the AI battles of this credit (the play-all summary): title, the player's score / judges / cleared, won,
+    // per section score and crown
+    struct ZdonAiSong {
+        std::string title;
+        int score = 0, good = 0, ok = 0, bad = 0;
+        bool cleared = false, won = false;
+        std::vector<int> section_score, section_crown;
+    };
+    std::vector<ZdonAiSong> zdon_ai_credit;
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;

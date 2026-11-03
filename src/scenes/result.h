@@ -48,6 +48,8 @@ protected:
     void draw_overlay();
     void draw_unsaved_note() const; // Z-DON
     bool zdon_hist_open[3] = {};    // Z-DON: the hit timing panel, by player
+    double zdon_play_all_ms = 0;    // Z-DON AI battle: when the play-all summary came up (0 = not yet)
+    bool zdon_play_all_pending() const;
     void zdon_hist_input();
     void zdon_draw_hist() const;
     virtual bool zdon_two_boards() const { return false; } // Z-DON: Result2PScreen

@@ -13,6 +13,22 @@ void Result2PScreen::on_screen_start() {
     fade_in.emplace(PlayerNum::TWO_PLAYER);
     player_1.emplace(PlayerNum::P1, true, false);
     player_2.emplace(PlayerNum::P2, true, true);
+    // Z-DON AI battle: this song joins the credit's (the play-all summary)
+    if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+        const auto& b = global_data.zdon_ai;
+        const auto& r = global_data.session_data[(int)PlayerNum::P1].result_data;
+        GlobalData::ZdonAiSong song;
+        song.title = global_data.session_data[(int)PlayerNum::P1].song_title;
+        song.score = r.score;
+        song.good = r.good;
+        song.ok = r.ok;
+        song.bad = r.bad;
+        song.cleared = r.cleared;
+        song.won = b.won;
+        song.section_score = b.section_score;
+        song.section_crown = b.crowns;
+        global_data.zdon_ai_credit.push_back(std::move(song));
+    }
     // Z-DON AI battle (AiResultMain.lua): bgm_airesult and the announce, when the skin has them
     if (global_data.zdon_ai.active && audio.has_sound("ai_bgm")) {
         audio.stop_sound("bgm");
@@ -51,6 +67,13 @@ std::optional<Screens> Result2PScreen::update() {
     if (fade_out) {
         fade_out->update(current_time);
         if (fade_out->is_finished) {
+            // Z-DON AI battle: the credit's last song (limits.song_limit) ends the credit after play-all
+            if (global_data.zdon_ai.play_all) {
+                global_data.zdon_ai.play_all = false;
+                global_data.zdon_ai.active = false;
+                global_data.songs_played = 0;
+                return on_screen_end(Screens::GAME_OVER);
+            }
             global_data.returned_from_result = true;
             // Z-DON AI battle: back to the AI song select
             return on_screen_end(global_data.zdon_ai.active ? Screens::AI_SELECT : Screens::SONG_SELECT_2P);

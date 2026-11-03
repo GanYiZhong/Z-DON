@@ -65,7 +65,22 @@ bool ResultScreen::exiting() const {
     return retrying || (fade_out && fade_out->is_started);
 }
 
+// Z-DON AI battle: the credit's last song (limits.song_limit reached) shows the credit's AI songs before it ends
+bool ResultScreen::zdon_play_all_pending() const {
+    const auto& b = global_data.zdon_ai;
+    return b.active && !b.play_all && global_data.config->limits.song_limit > 0 &&
+           global_data.songs_played >= global_data.config->limits.song_limit && !global_data.zdon_ai_credit.empty();
+}
+
 void ResultScreen::begin_exit() {
+    if (zdon_play_all_pending()) {
+        global_data.zdon_ai.play_all = true;
+        zdon_play_all_ms = get_current_ms();
+        return;
+    }
+    if (global_data.zdon_ai.play_all && get_current_ms() - zdon_play_all_ms < 1000) {
+        return; // the press that opened it
+    }
     retrying = retry_pending() && fade_in.has_value();
     if (retrying) {
         audio.play_sound("retry_transition", VolumePreset::SOUND);
@@ -116,7 +131,8 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
 
     double reveal_end = reveal_end_ms();
     const bool hist_open = zdon_hist_open[1] || zdon_hist_open[2]; // Z-DON: no timeout while it is read
-    if (reveal_end > 0 && !exiting() && !hist_open && current_ms >= reveal_end + kWaitEffectEndMs + kAutoNextSceneMs) {
+    const double idle_from = std::max(reveal_end + kWaitEffectEndMs, zdon_play_all_ms); // Z-DON: play-all restarts it
+    if (reveal_end > 0 && !exiting() && !hist_open && current_ms >= idle_from + kAutoNextSceneMs) {
         begin_exit();
     }
 }
@@ -190,6 +206,14 @@ void ResultScreen::draw_unsaved_note() const {
 
 // Z-DON: a kat opens / closes the player's hit timing panel (only with recorded hits)
 void ResultScreen::zdon_hist_input() {
+    // AI battle (AiResultSectionMain SwitchSection): kat switches the VS panel's simple / detail view
+    if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+        if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
+            global_data.zdon_ai.detail = !global_data.zdon_ai.detail;
+            audio.play_sound("kat", VolumePreset::SOUND);
+        }
+        return;
+    }
     for (int pn = 1; pn <= 2; ++pn) {
         if (global_data.session_data[pn].result_data.hit_offsets.empty()) {
             continue;
@@ -207,6 +231,9 @@ void ResultScreen::zdon_hist_input() {
 
 // the hits' offsets in bins across the OK window (gold inside GOOD), mean, SD, early / late; or a small hint
 void ResultScreen::zdon_draw_hist() const {
+    if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
+        return; // AI battle: kat switches the VS panel's view instead (zdon_hist_input)
+    }
     const bool two = zdon_two_boards();
     const float s = tex.screen_scale;
     bool hint = false;

@@ -951,6 +951,93 @@ void ScoresManager::set_zdon_ai_section_crowns(const std::string& player_id, con
     sqlite3_finalize(stmt);
 }
 
+static void ensure_ai_section_best_table(sqlite3* db) {
+    sqlite3_exec(db,
+                 "CREATE TABLE IF NOT EXISTS zdon_ai_section_best (player_id TEXT NOT NULL, hash TEXT NOT NULL, "
+                 "difficulty INTEGER NOT NULL, section INTEGER NOT NULL, total INTEGER NOT NULL, score INTEGER NOT "
+                 "NULL, good INTEGER NOT NULL, ok INTEGER NOT NULL, bad INTEGER NOT NULL, drumroll INTEGER NOT NULL, "
+                 "PRIMARY KEY (player_id, hash, difficulty, section));",
+                 nullptr, nullptr, nullptr);
+}
+
+std::vector<std::array<int, 5>> ScoresManager::get_zdon_ai_section_best(const std::string& player_id,
+                                                                        const std::string& hash, int difficulty,
+                                                                        int* total) {
+    std::vector<std::array<int, 5>> best;
+    if (total) {
+        *total = 0;
+    }
+    ensure_ai_section_best_table(db_fsd);
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "SELECT section, total, score, good, ok, bad, drumroll FROM zdon_ai_section_best WHERE "
+                           "player_id = ? AND hash = ? AND difficulty = ? ORDER BY section;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return best;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, difficulty);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const int section = sqlite3_column_int(stmt, 0);
+        if (section >= 0 && section < 16) {
+            best.resize(std::max<size_t>(best.size(), (size_t)section + 1), {0, 0, 0, 0, 0});
+            for (int k = 0; k < 5; ++k) {
+                best[section][k] = sqlite3_column_int(stmt, 2 + k);
+            }
+            if (total) {
+                *total = sqlite3_column_int(stmt, 1);
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    return best;
+}
+
+bool ScoresManager::set_zdon_ai_section_best(const std::string& player_id, const std::string& hash, int difficulty,
+                                             int total, const std::vector<std::array<int, 5>>& sections) {
+    if (player_id.empty() || hash.empty()) {
+        return false;
+    }
+    int old_total = 0;
+    const auto old = get_zdon_ai_section_best(player_id, hash, difficulty, &old_total);
+    if (!old.empty() && total <= old_total) {
+        return false;
+    }
+    sqlite3_stmt* del;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "DELETE FROM zdon_ai_section_best WHERE player_id = ? AND hash = ? AND difficulty = ?;", -1,
+                           &del, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(del, 1, player_id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(del, 2, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(del, 3, difficulty);
+        sqlite3_step(del);
+        sqlite3_finalize(del);
+    }
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd,
+                           "INSERT INTO zdon_ai_section_best (player_id, hash, difficulty, section, total, score, "
+                           "good, ok, bad, drumroll) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("set_zdon_ai_section_best: failed to prepare statement: {}", sqlite3_errmsg(db_fsd));
+        return false;
+    }
+    for (size_t i = 0; i < sections.size(); ++i) {
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, difficulty);
+        sqlite3_bind_int(stmt, 4, (int)i);
+        sqlite3_bind_int(stmt, 5, total);
+        for (int k = 0; k < 5; ++k) {
+            sqlite3_bind_int(stmt, 6 + k, sections[i][k]);
+        }
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
+    return true;
+}
+
 void ScoresManager::set_zdon_option(const std::string& player_id, const std::string& key, int value) {
     if (player_id.empty()) {
         return;
