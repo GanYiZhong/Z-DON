@@ -227,7 +227,9 @@ void ResultPlayer::update(double current_ms, bool fade_in_finished, bool is_skip
             miss_loop_started = true;
             // Z-DON: skin_config "zdon_result_fail_color" {x = r, y = g, width = b} paints the whole Don in that
             // colour in the miss pose (Nijiiro: the dark blue Don of a failed song, direct feed 2EWGAtPd0MM)
-            if (auto it = tex.skin_config_by_name.find("zdon_result_fail_color"); it != tex.skin_config_by_name.end()) {
+            // (normal play only: the AI battle's lost result keeps the costume colours, direct feed 0wD5kkcN5WA)
+            if (auto it = tex.skin_config_by_name.find("zdon_result_fail_color");
+                !global_data.zdon_ai.active && it != tex.skin_config_by_name.end()) {
                 const Color c{static_cast<unsigned char>(it->second.x), static_cast<unsigned char>(it->second.y),
                               static_cast<unsigned char>(it->second.width), 255};
                 chara->set_don_colors(c, c, c);
