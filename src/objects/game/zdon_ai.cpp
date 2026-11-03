@@ -79,6 +79,13 @@ namespace {
         }
     }
 
+    // skin_config zdon_ai_end_delay (Green): the cabinet's song-end cue (SE + voice) comes after the emblem, ~5.1 s
+    // after the last note (footage Tl7g8XXXvAM 4:21-4:26: the emblem at +4.5 s, the voice 0.6 s later)
+    constexpr double kEndCueDelayMs = 5100.0;
+    bool end_cue_pending = false;
+    bool end_cue_won = false;
+    double end_cue_at_ms = 0.0;
+
     int section_points(const Player& p, const ZdonAiTuning& t) {
         return p.get_good() * t.ryo + p.get_ok() * t.ka + p.get_bad() * t.fuka;
     }
@@ -357,6 +364,7 @@ void zdon_ai_battle_begin(int level) {
     auto& b = global_data.zdon_ai;
     std::vector<float> traced = std::move(b.player_offsets); // the player's timing carries over between songs
     b = {};
+    end_cue_pending = false;
     b.active = true;
     b.level = std::clamp(level, 1, 11);
     b.condition = zdon_ai_condition();
@@ -404,6 +412,10 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
 
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai) {
     auto& b = global_data.zdon_ai;
+    if (end_cue_pending && get_current_ms() >= end_cue_at_ms) {
+        end_cue_pending = false;
+        cue(end_cue_won ? "song_win" : "song_lose", end_cue_won ? "song_win" : "song_lose", 1);
+    }
     if (b.active && b.bounds.empty()) {
         const std::vector<double> times = ai.zdon_note_times();
         if (times.empty()) {
@@ -474,9 +486,16 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
     }
     if (!b.finished && b.section >= (int)b.bounds.size()) {
         b.finished = true;
+        b.finished_at_ms = get_current_ms();
         const int wins_p = (int)std::ranges::count(b.winners, 0);
         b.won = wins_p >= (int)b.winners.size() - wins_p;
-        cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
+        if (tex.skin_config_by_name.contains("zdon_ai_end_delay")) {
+            end_cue_pending = true;
+            end_cue_won = b.won;
+            end_cue_at_ms = get_current_ms() + kEndCueDelayMs;
+        } else {
+            cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
+        }
         // the arcade only records a played match: never auto play (ZDON_AI_RECORD_AUTO=1: tests record anyway)
         const bool record =
             (!global_data.force_auto_play && !player.is_auto_play()) || std::getenv("ZDON_AI_RECORD_AUTO");
@@ -491,7 +510,6 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
                                                                      sd.selected_difficulty);
             std::vector<std::array<int, 5>> rec(b.bounds.size());
             for (size_t i = 0; i < rec.size(); ++i) {
-        b.finished_at_ms = get_current_ms();
                 rec[i] = {b.section_score[i], b.section_judge[i][0], b.section_judge[i][1], b.section_judge[i][2],
                           b.section_judge[i][3]};
             }
