@@ -18,9 +18,16 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
                    int song_num, int song_total, const std::string& genre_label)
     : song_name(song_name), genre(genre >= 0 && genre < 9 ? genre : 0) {
 
-    song_title =
-        std::make_unique<OutlinedText>(song_name, tex.get_skin_config(SC::GAME_SONG_INFO)->font_size, Color::WHITE,
-                                       Color::BLACK, false, skin_outline(*tex.get_skin_config(SC::GAME_SONG_INFO)));
+    // Z-DON: the skin's AI stage may set its own title size (zdon_ai_song_info.font_size)
+    int title_font = tex.get_skin_config(SC::GAME_SONG_INFO)->font_size;
+    if (zdon_ai_arena_game()) {
+        if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info");
+            it != tex.skin_config_by_name.end() && it->second.font_size > 0) {
+            title_font = it->second.font_size;
+        }
+    }
+    song_title = std::make_unique<OutlinedText>(song_name, title_font, Color::WHITE, Color::BLACK, false,
+                                                skin_outline(*tex.get_skin_config(SC::GAME_SONG_INFO)));
     if (show_subtitle && !subtitle.empty()) {
         song_subtitle =
             std::make_unique<OutlinedText>(subtitle, tex.get_skin_config(SC::GAME_SONG_INFO_SUBTITLE)->font_size,

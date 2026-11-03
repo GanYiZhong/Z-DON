@@ -2219,8 +2219,10 @@ void Player::draw_overlays(float y) {
     for (NoteArc& anim : draw_arc_list) {
         anim.draw(y);
     }
-    for (GaugeHitEffect& anim : gauge_hit_effect) {
-        anim.draw(y);
+    if (!zdon_ai_arena_game()) { // Z-DON: the AI stage has no soul flower at the lanes' right end (cabinet footage)
+        for (GaugeHitEffect& anim : gauge_hit_effect) {
+            anim.draw(y);
+        }
     }
     score_counter.draw(y);
 
@@ -2247,7 +2249,8 @@ void Player::draw_overlays(float y) {
         judge_counter->draw();
     }
 
-    if (show_lane_name && modifiers.auto_play) {
+    // Z-DON: the auto marker is an extra for normal play; in an AI battle the cabinet's plate (title + name) shows
+    if (show_lane_name && modifiers.auto_play && !zdon_ai_arena_game()) {
         tex.draw_texture(t_auto_icon, {.y = y, .index = is_2p});
     } else if (show_lane_name && !arena_ai) {
         auto [nx, ny] = tex.nameplate_xy(is_2p ? "game_p2" : "game_p1");
