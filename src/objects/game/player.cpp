@@ -672,7 +672,17 @@ void Player::draw(double ms_from_start, float x, float y) {
             bg_hook->draw_gauge(player_num);
         }
     }
-    tex.draw_texture(t_lane_hit_circle, {.x = judge_x, .y = y + judge_y});
+    // Z-DON: skin_config "zdon_ai_judge_offset" {x, y} moves the hit circle and the hit flashes in the skin's AI battle
+    // only (the cabinet's AI stage sets them a few px off the lane art's own spot); normal play is unchanged
+    float cdx = 0.0f;
+    float cdy = 0.0f;
+    if (zdon_ai_arena_game()) {
+        if (const auto it = tex.skin_config_by_name.find("zdon_ai_judge_offset"); it != tex.skin_config_by_name.end()) {
+            cdx = it->second.x;
+            cdy = it->second.y;
+        }
+    }
+    tex.draw_texture(t_lane_hit_circle, {.x = judge_x + cdx, .y = y + judge_y + cdy});
 
     if (gogo_time.has_value()) {
         gogo_time->draw(judge_x, y + judge_y);
@@ -686,7 +696,7 @@ void Player::draw(double ms_from_start, float x, float y) {
     draw_lane_cover(y);
 
     for (Judgment& anim : draw_judge_list) {
-        anim.draw_effect(judge_x, y + judge_y);
+        anim.draw_effect(judge_x + cdx, y + judge_y + cdy);
     }
     {
         int scissor_x = virtual_to_screen_x(lane_cover_tex_id->scissor_right());
@@ -697,8 +707,8 @@ void Player::draw(double ms_from_start, float x, float y) {
     }
 
     for (Judgment& anim : draw_judge_list) {
-        anim.draw_outer_effect(judge_x, y + judge_y);
-        anim.draw_ray_effect(judge_x, y + judge_y);
+        anim.draw_outer_effect(judge_x + cdx, y + judge_y + cdy);
+        anim.draw_ray_effect(judge_x + cdx, y + judge_y + cdy);
     }
     for (Judgment& anim : draw_judge_list) {
         anim.draw_text(judge_x, y + judge_y);

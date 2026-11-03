@@ -1,6 +1,7 @@
 #include "song_info.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 #include "../../libs/global_data.h"
@@ -92,6 +93,8 @@ SongInfo& SongInfo::operator=(SongInfo&& other) noexcept {
         song_name = std::move(other.song_name);
         genre = other.genre;
         fade = other.fade;
+        start_ms = other.start_ms;
+        now_ms = other.now_ms;
         song_title = std::move(other.song_title);
         song_subtitle = std::move(other.song_subtitle);
         genre_text = std::move(other.genre_text);
@@ -113,6 +116,10 @@ SongInfo::~SongInfo() {
 }
 
 void SongInfo::update(double current_ms) {
+    if (start_ms < 0.0) {
+        start_ms = current_ms;
+    }
+    now_ms = current_ms;
     if (fade) {
         fade->update(current_ms);
     }
@@ -139,7 +146,36 @@ void SongInfo::draw() {
             skin_pill = it->second.width > 0.0f;
         }
     }
-    const auto f = static_cast<float>(fade->attribute);
+    // Z-DON: skin_config "zdon_ai_song_plate" {x, y} moves the genre / song number plate on the AI stage on its own
+    // (the cabinet's plate sits lower under the title than the title's own block offset gives)
+    float pdx = dx;
+    float pdy = dy;
+    if (on_stage) {
+        if (auto it = tex.skin_config_by_name.find("zdon_ai_song_plate"); it != tex.skin_config_by_name.end()) {
+            pdx += it->second.x;
+            pdy += it->second.y;
+        }
+    }
+    auto f = static_cast<float>(fade->attribute);
+    // skin_config zdon_green_strict (Green): the cabinet's AI battle swaps the title and the song number every 2 s
+    // from the start of the song (direct feed Tl7g8XXXvAM: title 0-2 s, counter 2-4 s, 0.37 s cross-fade), instead
+    // of the normal game's 3.3 s hold
+    if (const auto strict = tex.skin_config_by_name.find("zdon_green_strict");
+        on_stage && skin_pill && strict != tex.skin_config_by_name.end() && strict->second.x != 0.0f) {
+        const double p = std::fmod(now_ms - start_ms, 4000.0);
+        const double h = 183.0; // half of the cross-fade
+        if (now_ms - start_ms < h) {
+            f = 0.0f;
+        } else if (p < 2000.0 - h) {
+            f = p < h ? 1.0f - static_cast<float>((p + h) / (2 * h)) : 0.0f;
+        } else if (p < 2000.0 + h) {
+            f = static_cast<float>((p - (2000.0 - h)) / (2 * h));
+        } else if (p < 4000.0 - h) {
+            f = 1.0f;
+        } else {
+            f = 1.0f - static_cast<float>((p - (4000.0 - h)) / (2 * h));
+        }
+    }
     float a_num = f;
     float a_title = 1 - f;
     float a_genre = 1 - f;
@@ -174,12 +210,12 @@ void SongInfo::draw() {
         if (genre_shader_loaded) {
             begin_shader_mode(genre_shader);
         }
-        tex.draw_texture(t_genre, {.x = dx, .y = y_offset + dy, .fade = a_genre});
+        tex.draw_texture(t_genre, {.x = pdx, .y = y_offset + pdy, .fade = a_genre});
         if (genre_shader_loaded) {
             end_shader_mode();
         }
-        genre_text->draw({.x = t_genre->x[0] + dx + t_genre->width / 2.0f - genre_text->width / 2.0f,
-                          .y = t_genre->y[0] + y_offset + dy + t_genre->height / 2.0f - genre_text->height / 2.0f,
+        genre_text->draw({.x = t_genre->x[0] + pdx + t_genre->width / 2.0f - genre_text->width / 2.0f,
+                          .y = t_genre->y[0] + y_offset + pdy + t_genre->height / 2.0f - genre_text->height / 2.0f,
                           .fade = a_genre});
     };
 
@@ -187,11 +223,11 @@ void SongInfo::draw() {
         song_title->draw({.x = title_x, .y = text_y, .x2 = title_x2, .fade = a_title});
         draw_genre(0.0f);
         if (t_song_num_plate) {
-            tex.draw_texture(t_song_num_plate, {.x = dx, .y = dy, .fade = a_num});
+            tex.draw_texture(t_song_num_plate, {.x = pdx, .y = pdy, .fade = a_num});
         }
-        song_num->draw(plate->x + dx - song_num->width / 2.0f, plate->y + dy - song_num->height / 2.0f, a_num);
+        song_num->draw(plate->x + pdx - song_num->width / 2.0f, plate->y + pdy - song_num->height / 2.0f, a_num);
         if (const SkinInfo* m = tex.get_skin_config(SC::SONG_NUM_MAX_GAME); song_max && m) {
-            song_max->draw(m->x + dx - song_max->width / 2.0f, m->y + dy - song_max->height / 2.0f, a_num);
+            song_max->draw(m->x + pdx - song_max->width / 2.0f, m->y + pdy - song_max->height / 2.0f, a_num);
         }
         return;
     }

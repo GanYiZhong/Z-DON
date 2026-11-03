@@ -22,6 +22,8 @@ private:
     std::string song_name;
     int genre = 0;
     FadeAnimation* fade = nullptr;
+    double start_ms = -1.0; // Z-DON: the first update's clock (the AI stage's own title / counter cycle)
+    double now_ms = 0.0;
     std::unique_ptr<OutlinedText> song_title;
     std::unique_ptr<OutlinedText> song_subtitle;
     std::unique_ptr<OutlinedText> genre_text;
