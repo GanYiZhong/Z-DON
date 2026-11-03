@@ -84,6 +84,15 @@ protected:
             !navigator.inline_streaming) {
             BaseBox* item = navigator.get_current_item();
             if (navigator.is_song(item) && now >= board_jump_since + 300) {
+                if (p23) {
+                    if (board_land < 0) {
+                        board_land = now;
+                    }
+                    zdon_ai_board_jump_set(now - board_land);
+                    if (now < board_land + P23_HOLD_MS) {
+                        return;
+                    }
+                }
                 board_jump = false;
                 close_board();
                 state = player->select_song();
@@ -141,6 +150,11 @@ protected:
     // to the song's course board; the first strip is "back"
     bool board_stage = false, board_jump = false;
     double board_jump_since = 0;
+    // skin_config zdon_ai_p23 (Green): the chosen card is held for the skin page 2 -> 3 transition (lanes, band into
+    // the arena, card widening; footage Tl7g8XXXvAM t=124.4-127) before the course board opens
+    bool p23 = false;
+    double board_land = -1;
+    static constexpr double P23_HOLD_MS = 2300;
     int board_cursor = 0;
     AiBoardCourse board_course;
     std::vector<fs::path> board_songs;
@@ -149,6 +163,8 @@ protected:
     void close_board() {
         if (board_stage) {
             board_stage = false;
+            board_land = -1;
+            zdon_ai_board_jump_set(-1);
             zdon_ai_board_set(false, board_course, {}, 0);
         }
     }
@@ -301,6 +317,8 @@ public:
         board_stage = board_jump = false;
         col_known.fill(false);
         board_enabled = tex.skin_config_by_name.contains("zdon_ai_song_board");
+        p23 = tex.skin_config_by_name.contains("zdon_ai_p23");
+        board_land = -1;
         page0_enabled =
             tex.skin_config_by_name.contains("zdon_ai_page0") && tex.skin_config_by_name.contains("zdon_ai_diff_first");
         page0 = page0_enabled;

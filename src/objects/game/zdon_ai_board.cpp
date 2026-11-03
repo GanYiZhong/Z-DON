@@ -1,17 +1,22 @@
 #include "zdon_ai_board.h"
 
 #include <algorithm>
+#include <array>
 #include <map>
 
 #include "../../libs/file/scores.h"
 #include "../../libs/global_data.h"
+#include "../song_select/file_navigator/color_utils.h"
 #include "../song_select/file_navigator/navigator.h"
 
 namespace {
     struct Entry {
         std::string title, sub;
         int crown = 0;
+        std::array<int, 5> levels = {-1, -1, -1, -1, -1};
+        int outline[3] = {101, 0, 82}; // the genre title outline (the shelf colours)
     };
+    double jump_ms = -1.0; // >= 0: the chosen card is held (zdon_ai_p23), ms since the cursor landed on it
     bool board_on = false, info_on = false;
     AiBoardCourse board_course, info_course;
     std::vector<Entry> entries;
@@ -100,6 +105,14 @@ void zdon_ai_board_set(bool on, const AiBoardCourse& c, const std::vector<fs::pa
                 e.sub = pick(meta->subtitles, meta->subtitle);
             }
             e.crown = crown_of(p, c.course);
+            e.levels = navigator.zdon_levels_of(p);
+            const auto genre = static_cast<GenreIndex>(navigator.zdon_genre_of(p).first);
+            const auto col = DEFAULT_COLORS.find(genre);
+            if (col != DEFAULT_COLORS.end() && col->second[1].has_value()) {
+                e.outline[0] = col->second[1]->r;
+                e.outline[1] = col->second[1]->g;
+                e.outline[2] = col->second[1]->b;
+            }
             entries.push_back(std::move(e));
         }
     } else if (!on) {
@@ -109,6 +122,10 @@ void zdon_ai_board_set(bool on, const AiBoardCourse& c, const std::vector<fs::pa
     board_on = on;
     board_course = c;
     board_cursor = cursor;
+}
+
+void zdon_ai_board_jump_set(double ms) {
+    jump_ms = ms;
 }
 
 bool zdon_ai_board_on() {
@@ -140,10 +157,21 @@ void zdon_ai_board_bind(sol::table& tex) {
                 items[d] = lua.create_table_with("back", true, "title", "", "sub", "", "crown", 0);
                 continue;
             }
-            items[d] =
+            sol::table it =
                 lua.create_table_with("title", entries[i].title, "sub", entries[i].sub, "crown", entries[i].crown);
+            it["outline"] =
+                lua.create_table_with(1, entries[i].outline[0], 2, entries[i].outline[1], 3, entries[i].outline[2]);
+            sol::table lv = lua.create_table();
+            for (int c = 0; c < 5; ++c) {
+                lv[c + 1] = entries[i].levels[c];
+            }
+            it["levels"] = lv; // per course (1 easy .. 5 ura), -1 = none
+            items[d] = it;
         }
         t["items"] = items;
+        if (jump_ms >= 0.0) {
+            t["jump"] = jump_ms;
+        }
         return sol::make_object(ts, t);
     });
     tex.set_function("ai_diff_info", [](sol::this_state ts) -> sol::object {

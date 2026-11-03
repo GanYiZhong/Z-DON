@@ -24,9 +24,11 @@ std::vector<std::filesystem::path> zdon_ai_board_songs(const AiBoardCourse& c);
 
 void zdon_ai_board_set(bool on, const AiBoardCourse& c, const std::vector<std::filesystem::path>& songs, int cursor);
 bool zdon_ai_board_on();
+// zdon_ai_p23: the chosen card is held for the skin transition; ms since it landed, < 0 = off
+void zdon_ai_board_jump_set(double ms);
 void zdon_ai_board_info_set(bool on, int column, const AiBoardCourse& c);
 
 // tex.ai_board() -> nil | { course, level, count, clear, fc, cursor (1-based), total, items = { [-7..7] = {title, sub,
-// crown} } }
+// crown, outline = {r, g, b} of the song genre, levels = {easy .. ura}} }, jump = ms (only while held) }
 // tex.ai_diff_info() -> nil | { course, level, count, clear, fc } (the highlighted course column)
 void zdon_ai_board_bind(sol::table& tex);
