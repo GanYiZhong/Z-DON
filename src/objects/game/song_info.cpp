@@ -1,5 +1,6 @@
 #include "song_info.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "../../libs/global_data.h"
@@ -115,6 +116,16 @@ void SongInfo::draw() {
             dy = it->second.y;
         }
     }
+    // the title and the song number swap with a cross-fade; on the skin's AI stage (one spot for both, the
+    // cabinet's bottom right) the one fades out before the other fades in, so they never show on top of each other
+    const auto f = static_cast<float>(fade->attribute);
+    float a_num = f;
+    float a_title = 1 - f;
+    if (dx != 0.0f || dy != 0.0f) {
+        a_title = std::clamp(1.0f - 2.0f * f, 0.0f, 1.0f);
+        a_num = std::clamp(2.0f * f - 1.0f, 0.0f, 1.0f);
+    }
+    zdon_ai_set_title_alpha(a_title);
     float text_x = tex.get_skin_config(SC::GAME_SONG_INFO)->x + dx;
     float text_y = tex.get_skin_config(SC::GAME_SONG_INFO)->y + dy - song_title->height / 2.0f;
 
@@ -133,42 +144,41 @@ void SongInfo::draw() {
     }
 
     auto draw_genre = [&](float y_offset) {
-        if (!(genre_text && t_genre)) {
+        if (!(genre_text && t_genre) || dx != 0.0f || dy != 0.0f) { // the skin's AI stage draws its own pill
             return;
         }
         if (genre_shader_loaded) {
             begin_shader_mode(genre_shader);
         }
-        tex.draw_texture(t_genre, {.x = dx, .y = y_offset + dy, .fade = 1 - fade->attribute});
+        tex.draw_texture(t_genre, {.x = dx, .y = y_offset + dy, .fade = a_title});
         if (genre_shader_loaded) {
             end_shader_mode();
         }
         genre_text->draw({.x = t_genre->x[0] + dx + t_genre->width / 2.0f - genre_text->width / 2.0f,
                           .y = t_genre->y[0] + y_offset + dy + t_genre->height / 2.0f - genre_text->height / 2.0f,
-                          .fade = 1 - fade->attribute});
+                          .fade = a_title});
     };
 
     if (const SkinInfo* plate = tex.get_skin_config(SC::SONG_NUM_GAME)) {
-        song_title->draw({.x = title_x, .y = text_y, .x2 = title_x2, .fade = 1 - fade->attribute});
+        song_title->draw({.x = title_x, .y = text_y, .x2 = title_x2, .fade = a_title});
         draw_genre(0.0f);
         if (t_song_num_plate) {
-            tex.draw_texture(t_song_num_plate, {.x = dx, .y = dy, .fade = fade->attribute});
+            tex.draw_texture(t_song_num_plate, {.x = dx, .y = dy, .fade = a_num});
         }
-        song_num->draw(plate->x + dx - song_num->width / 2.0f, plate->y + dy - song_num->height / 2.0f,
-                       fade->attribute);
+        song_num->draw(plate->x + dx - song_num->width / 2.0f, plate->y + dy - song_num->height / 2.0f, a_num);
         if (const SkinInfo* m = tex.get_skin_config(SC::SONG_NUM_MAX_GAME); song_max && m) {
-            song_max->draw(m->x + dx - song_max->width / 2.0f, m->y + dy - song_max->height / 2.0f, fade->attribute);
+            song_max->draw(m->x + dx - song_max->width / 2.0f, m->y + dy - song_max->height / 2.0f, a_num);
         }
         return;
     }
 
-    song_num->draw(text_x - song_num->width, text_y, fade->attribute);
+    song_num->draw(text_x - song_num->width, text_y, a_num);
 
-    song_title->draw({.x = title_x, .y = text_y, .x2 = title_x2, .fade = 1 - fade->attribute});
+    song_title->draw({.x = title_x, .y = text_y, .x2 = title_x2, .fade = a_title});
 
     if (song_subtitle) {
         float sub_y = tex.get_skin_config(SC::GAME_SONG_INFO_SUBTITLE)->y - song_subtitle->height / 2.0f;
-        song_subtitle->draw({.x = text_x - song_subtitle->width, .y = sub_y, .fade = 1 - fade->attribute});
+        song_subtitle->draw({.x = text_x - song_subtitle->width, .y = sub_y, .fade = a_title});
     }
 
     draw_genre(song_subtitle ? song_subtitle->height : 0.0f);

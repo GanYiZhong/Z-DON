@@ -54,6 +54,8 @@ namespace {
     bool pages_open = false;
     int page_steps = 0;
     bool pages_finished = false;
+    bool result_revealed = false;
+    float title_alpha = 1.0f;
 
     // the arcade's AI battle win-count rewards (reward.bin, releaseType 42)
     constexpr int kRewardWins[] = {1,   2,   10,  25,  50,  75,  100,  125,  150,  175,  200,  250,  300,
@@ -140,6 +142,22 @@ int zdon_ai_rank_of(int points) {
         }
     }
     return r;
+}
+
+void zdon_ai_set_revealed(bool revealed) {
+    result_revealed = revealed;
+}
+
+bool zdon_ai_revealed() {
+    return result_revealed;
+}
+
+void zdon_ai_set_title_alpha(float a) {
+    title_alpha = a;
+}
+
+float zdon_ai_title_alpha() {
+    return title_alpha;
 }
 
 bool zdon_ai_pages_open() {

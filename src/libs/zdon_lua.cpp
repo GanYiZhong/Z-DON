@@ -163,6 +163,11 @@ void register_zdon_lua_bindings(sol::table& tex) {
             secs[i + 1] = sec;
         }
         t["level"] = b.level;
+        // the song's genre (session genre_index: 0 J-POP .. 7 namco original, 8 none) and the title's visibility
+        const SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
+        t["genre"] = sd.genre_index;
+        t["title_alpha"] = zdon_ai_title_alpha();
+        t["revealed"] = zdon_ai_revealed();
         t["emotion_low"] = zdon_ai_tuning(b.level).emotion_low;
         t["emotion_high"] = zdon_ai_tuning(b.level).emotion_high;
         t["condition"] = b.condition;

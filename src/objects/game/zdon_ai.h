@@ -55,6 +55,13 @@ void zdon_ai_new_session();
 bool zdon_ai_last_first_win();
 // a skin's result cut-in pages: tex.ai_pages(open) holds them open each frame; the result screen turns a kat into
 // the next page and a don into the end (and holds its own input / timeout meanwhile)
+// the result's players have counted up (Result*Screen::reveal_end_ms passed); the AI cut-ins wait for it
+void zdon_ai_set_revealed(bool revealed);
+bool zdon_ai_revealed();
+// the game's song title visibility this frame (SongInfo: the title / song number swap), for skins that draw next
+// to the title (Green's genre pill)
+void zdon_ai_set_title_alpha(float a);
+float zdon_ai_title_alpha();
 bool zdon_ai_pages_open();
 void zdon_ai_pages_set(bool open);
 int zdon_ai_page_steps();

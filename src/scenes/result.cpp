@@ -119,6 +119,10 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     if (!fade_out || exiting()) {
         return;
     }
+    {
+        const double r = reveal_end_ms();
+        zdon_ai_set_revealed(r > 0 && current_ms >= r);
+    }
     if (zdon_hist_input()) {
         return; // the skin's AI battle cut-in pages take the input and hold the timeout
     }
