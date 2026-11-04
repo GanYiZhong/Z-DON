@@ -858,6 +858,22 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
     if ((clock.position() >= end_time + transition_delay || ai_banner_done) && !result_transition.is_started) {
         result_transition.start();
         audio.play_sound("result_transition", VolumePreset::VOICE);
+        // skin_config zdon_ai_announce_at_fade (Green): the AI result announce sounds as the screen fades out, 4.7 s
+        // before the result BGM (footage Tl7g8XXXvAM 273.94 / 492.73: announce at the fade, BGM +4.70)
+        global_data.zdon_ai.announce_ms = -1.0;
+        const auto at_fade = tex.skin_config_by_name.find("zdon_ai_announce_at_fade");
+        if (global_data.zdon_ai.active && at_fade != tex.skin_config_by_name.end() && at_fade->second.x != 0.0f) {
+            // the announce belongs to the result screen's sounds: load it here (the result screen reloads it)
+            const fs::path announce = audio.sounds_path / "result" / "aivoice" / "announce.ogg";
+            if (!audio.has_sound("aivoice_announce") && fs::exists(announce)) {
+                audio.load_sound(announce, "aivoice_announce");
+            }
+        }
+        if (global_data.zdon_ai.active && at_fade != tex.skin_config_by_name.end() && at_fade->second.x != 0.0f &&
+            audio.has_sound("aivoice_announce")) {
+            audio.play_sound("aivoice_announce", VolumePreset::VOICE);
+            global_data.zdon_ai.announce_ms = get_current_ms();
+        }
         spdlog::info("Result transition started and voice played");
     }
 }

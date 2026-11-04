@@ -363,6 +363,9 @@ public:
 
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();
+        if (player) {
+            player->silent_start_voice = true; // the AI battle's decide has no start voice
+        }
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
         select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { list_time_up(); });
         seek_steps = 0;

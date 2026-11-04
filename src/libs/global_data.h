@@ -280,6 +280,7 @@ struct GlobalData {
     struct ZdonAiBattle {
         bool requested = false;     // the next GAME_2P starts as an AI battle (song select / --ai)
         bool active = false;        // GAME_2P / RESULT_2P of an AI battle; cleared by the song select
+        double announce_ms = -1.0;  // skin_config zdon_ai_announce_at_fade: when the result announce already played
         int level = 5;              // tuning level 1..11 (the course's star level)
         int condition = 3;          // 1 worst .. 5 best (the session's, zdon_ai_condition)
         int state = 0;              // 0 neutral, 1 "superior" (the player leads), 2 "inferior" (the player trails)

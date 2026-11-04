@@ -30,12 +30,30 @@ void Result2PScreen::on_screen_start() {
         global_data.zdon_ai_credit.push_back(std::move(song));
     }
     // Z-DON AI battle (AiResultMain.lua): bgm_airesult and the announce, when the skin has them
+    // skin_config zdon_ai_bgm_after_announce x: the result BGM starts x ms after the announce (footage 0vjiSUv61i4
+    // 4 battles and 0wD5kkcN5WA: Nijiiro 1810 ms with the announce at the screen start; Tl7g8XXXvAM: Green 4700 ms
+    // with the announce at the fade, see zdon_ai_announce_at_fade)
+    zdon_bgm_pending = false;
+    zdon_total_cue = 0;
     if (global_data.zdon_ai.active && audio.has_sound("ai_bgm")) {
         audio.stop_sound("bgm");
         audio.set_sound_loop("ai_bgm", true);
-        audio.play_sound("ai_bgm", VolumePreset::MUSIC);
-        if (audio.has_sound("aivoice_announce")) {
+        double after = 0.0;
+        if (const auto it = tex.skin_config_by_name.find("zdon_ai_bgm_after_announce");
+            it != tex.skin_config_by_name.end()) {
+            after = it->second.x;
+        }
+        double announced = global_data.zdon_ai.announce_ms;
+        global_data.zdon_ai.announce_ms = -1.0;
+        if (announced < 0.0 && audio.has_sound("aivoice_announce")) {
             audio.play_sound("aivoice_announce", VolumePreset::VOICE);
+            announced = get_current_ms();
+        }
+        if (after > 0.0 && announced >= 0.0 && get_current_ms() < announced + after) {
+            zdon_bgm_pending = true;
+            zdon_bgm_at_ms = announced + after;
+        } else {
+            audio.play_sound("ai_bgm", VolumePreset::MUSIC);
         }
     }
 }
@@ -52,6 +70,25 @@ double Result2PScreen::reveal_end_ms() {
 std::optional<Screens> Result2PScreen::update() {
     Screen::update();
     double current_time = get_current_ms();
+    if (zdon_bgm_pending && current_time >= zdon_bgm_at_ms) {
+        zdon_bgm_pending = false;
+        audio.play_sound("ai_bgm", VolumePreset::MUSIC);
+    }
+    // the credit's play-all page: announce_total, then window_total 1.85 s later (footage 7ziYe-6YQ3U: 0.982 / 2.836)
+    if (global_data.zdon_ai.play_all && zdon_play_all_ms > 0) {
+        if (zdon_total_cue == 0) {
+            zdon_total_cue = 1;
+            if (audio.has_sound("aivoice_announce_total")) {
+                audio.play_sound("aivoice_announce_total", VolumePreset::VOICE);
+            }
+        }
+        if (zdon_total_cue == 1 && current_time >= zdon_play_all_ms + 1854.0) {
+            zdon_total_cue = 2;
+            if (audio.has_sound("ai_window_total")) {
+                audio.play_sound("ai_window_total", VolumePreset::SOUND);
+            }
+        }
+    }
     if (fade_in.has_value()) {
         fade_in->update(current_time);
     }

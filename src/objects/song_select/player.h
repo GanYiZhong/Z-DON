@@ -51,6 +51,7 @@ public:
     SongSelectScript* script = nullptr;
 
     bool option_panel_by_lua = false;
+    bool silent_start_voice = false; // the AI select: the decide plays no start voice (the wait stays)
 
     SongSelectPlayer(PlayerNum player_num);
 
@@ -74,6 +75,7 @@ public:
 
 private:
     bool voice_played;
+    double voice_silent_until_ms = 0.0; // the AI battle's decide: no voice, the same wait
     void navigate_difficulty_left();
     void navigate_difficulty_right();
     bool has_course(Difficulty d) const;

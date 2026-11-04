@@ -96,7 +96,8 @@ void SongSelectPlayer::update(double current_time) {
 }
 
 bool SongSelectPlayer::is_voice_playing() {
-    return audio.is_sound_playing("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p");
+    return get_current_ms() < voice_silent_until_ms ||
+           audio.is_sound_playing("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p");
 }
 
 bool SongSelectPlayer::has_course(Difficulty d) const {
@@ -217,6 +218,11 @@ SongSelectState SongSelectPlayer::select_song() {
         }
         navigator.enter_diff_select();
         selected_song = true;
+        // the course board opens with voice_select_diff (footage YKjsle7VBCI 61.73 s, 0vjiSUv61i4 45.13 s,
+        // Tl7g8XXXvAM 126.80 / 332.89 / 520.11 s)
+        if (audio.has_sound("voice_select_diff")) {
+            audio.play_sound("voice_select_diff", VolumePreset::VOICE);
+        }
         init_diff_cursor();
         selected_diff_bounce->start();
         selected_diff_fadein->start();
@@ -492,8 +498,14 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
             } else if (selected_difficulty >= Difficulty::EASY) {
                 voice_played = true;
                 start_background_diffs();
-                audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p",
-                                        player_num, VolumePreset::VOICE);
+                if (silent_start_voice) {
+                    // the AI battle's decide has no start voice (0vjiSUv61i4, 0wD5kkcN5WA, Tl7g8XXXvAM: none of the
+                    // battles has it, the normal play footage does); the transition still waits the voice's 2 s
+                    voice_silent_until_ms = get_current_ms() + 2000.0;
+                } else {
+                    audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p",
+                                            player_num, VolumePreset::VOICE);
+                }
             } else if (selected_difficulty == Difficulty::BACK) {
                 is_ready = true;
             }

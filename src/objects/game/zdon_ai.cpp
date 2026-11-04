@@ -90,6 +90,12 @@ namespace {
     // Tl7g8XXXvAM: the last note 260.5 s, the section SE 262.1 s, the song cue 265.3 s)
     constexpr double kLastSectionCueDelayMs = 1600.0;
     bool last_cue_pending = false;
+    // the match / AI-reach voice follows the section's own voice by 1.5 s (footage 0vjiSUv61i4 396.59 section_lose_2
+    // -> 398.08 section_match; n44 UoUjVSZw34U 27.75 section_lose_2 -> 29.24 section_ai_reach)
+    constexpr double kMatchVoiceDelayMs = 1500.0;
+    bool match_cue_pending = false;
+    double match_cue_at_ms = 0.0;
+    const char* match_cue_voice = "";
     // Green: the start voice comes 3.3 s before the song, the ready SE 1.65 s before it (footage Tl7g8XXXvAM: voice
     // 136.7 s, SE 138.4 s, song 140.1 s); the game gives the lead (Game2PScreen start_delay 3 s)
     constexpr double kReadySeDelayMs = 1350.0;
@@ -395,6 +401,7 @@ void zdon_ai_battle_begin(int level) {
     b = {};
     end_cue_pending = false;
     last_cue_pending = false;
+    match_cue_pending = false;
     ready_se_pending = false;
     b.active = true;
     b.level = std::clamp(level, 1, 11);
@@ -446,6 +453,10 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
     if (ready_se_pending && get_current_ms() >= ready_se_at_ms) {
         ready_se_pending = false;
         cue("ready", "", 1);
+    }
+    if (match_cue_pending && get_current_ms() >= match_cue_at_ms) {
+        match_cue_pending = false;
+        cue("", match_cue_voice, 1);
     }
     if (last_cue_pending && get_current_ms() >= last_cue_at_ms) {
         last_cue_pending = false;
@@ -527,9 +538,13 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             const int wins_ai = (int)std::ranges::count(b.winners, 1);
             const int left = n - b.section;
             if (wins_ai + 1 > n / 2 && wins_ai <= n / 2 && wins_p + left > wins_ai) {
-                cue("", "section_ai_reach", 1);
+                match_cue_pending = true;
+                match_cue_voice = "section_ai_reach";
+                match_cue_at_ms = get_current_ms() + kMatchVoiceDelayMs;
             } else if (left == 1 && wins_p == wins_ai) {
-                cue("", "section_match", 1);
+                match_cue_pending = true;
+                match_cue_voice = "section_match";
+                match_cue_at_ms = get_current_ms() + kMatchVoiceDelayMs;
             }
         }
     }
