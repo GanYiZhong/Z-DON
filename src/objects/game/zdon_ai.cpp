@@ -133,7 +133,9 @@ namespace {
 
 const ZdonAiTuning& zdon_ai_tuning(int level) {
     // skin_config "zdon_ai_tuning" (PyTaikoGreen): Green's ghosttuning instead of the CHN05 table
-    const auto* table = tex.skin_config_by_name.contains("zdon_ai_tuning") ? kTuningGreen : kTuning;
+    // read by value: a child skin that inherits it switches it off with x = 0
+    const auto tune = tex.skin_config_by_name.find("zdon_ai_tuning");
+    const auto* table = tune != tex.skin_config_by_name.end() && tune->second.x != 0.0f ? kTuningGreen : kTuning;
     return table[std::clamp(level, 1, 11) - 1];
 }
 
@@ -289,8 +291,14 @@ bool zdon_ai_skin_arena() {
     return tex.skin_config_by_name.contains("zdon_ai_arena");
 }
 
+// "zdon_ai_lane" is on by presence (Green sets x = 0); a child skin that inherits it switches it off with x < 0
+static bool zdon_ai_lane_on() {
+    const auto it = tex.skin_config_by_name.find("zdon_ai_lane");
+    return it != tex.skin_config_by_name.end() && it->second.x >= 0.0f;
+}
+
 bool zdon_ai_lane_game() {
-    return zdon_ai_arena_game() && tex.skin_config_by_name.contains("zdon_ai_lane");
+    return zdon_ai_arena_game() && zdon_ai_lane_on();
 }
 
 bool zdon_ai_arena_game() {
@@ -314,8 +322,7 @@ void Player::enable_zdon_ai(int level) {
     zdon_ai = std::make_shared<ZdonAiDriver>(std::clamp(level, 1, 11), seed);
     // skin_config "zdon_ai_lane": the AI's lane is the AI's own (Green ghost: lane/ai_lane_cover, the circuit obi,
     // lane/ai_lane_background, no lane badges)
-    if (zdon_ai_skin_arena() && tex.skin_config_by_name.contains("zdon_ai_lane") &&
-        tex.has_texture("lane/ai_lane_cover")) {
+    if (zdon_ai_skin_arena() && zdon_ai_lane_on() && tex.has_texture("lane/ai_lane_cover")) {
         lane_cover_tex_id = tex.get_texture("lane/ai_lane_cover");
     }
 }
