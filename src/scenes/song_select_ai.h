@@ -26,6 +26,10 @@ protected:
     // the game transition (VS window, loading card) is an AI one: the skin asks tex.ai_transition()
     void select_song(SongBox* song) override {
         global_data.zdon_ai.requested = true;
+        if (player && player->in_level_step()) { // a time-up on the level panel
+            player->level_select = false;
+            zdon_ai_level_panel_close();
+        }
         SongSelectScreen::select_song(song);
     }
 
@@ -152,7 +156,6 @@ protected:
             }
         } else {
             zdon_ai_board_info_set(false, 0, {});
-            zdon_ai_level_panel_close(); // the window is gone (list opened, or left): the panel slides out
         }
         if (zdon_ai_sort_view_on()) {
             if (navigator.in_inline()) {
@@ -366,6 +369,7 @@ public:
         if (player) {
             player->silent_start_voice = true; // the AI battle's decide has no start voice
         }
+        zdon_ai_level_panel_reset();
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
         select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { list_time_up(); });
         seek_steps = 0;
@@ -419,6 +423,9 @@ public:
             diff_leave = false;
             set_diff_stage(false);
             return on_screen_end(Screens::ENTRY);
+        }
+        if (next) {
+            return next; // the screen already ended (textures, animations unloaded): no Lua update on freed animations
         }
         focus_sort_tick();
         arcade_tick();
