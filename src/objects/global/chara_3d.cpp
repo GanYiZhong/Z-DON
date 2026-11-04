@@ -1178,7 +1178,9 @@ void Chara3D::draw(float x, float y, float scale_mul) {
         render_dirty = true;
     }
     draw_body(x, y);
-    draw_puchi(x, y);
+    if (!puchi_hidden) {
+        draw_puchi(x, y);
+    }
     scale = base_scale;
 }
 

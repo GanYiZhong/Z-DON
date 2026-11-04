@@ -167,6 +167,7 @@ private:
     Color tint_color;
     float tint_amount = 0.0f;
     int puchi_index = 0;
+    bool puchi_hidden = false;
     float puchi_adj_x = 0.0f, puchi_adj_y = 0.0f, puchi_mul = 1.0f; // a skin's chara_pos: puchi offset (1280 px) / size
     double puchi_ms = 0;
 
@@ -186,6 +187,9 @@ public:
         puchi_adj_y = dy;
         puchi_mul = mul;
     }
+
+    // Z-DON: the AI stage's top band shows the Don alone, without its puchi (skin_config zdon_ai_no_puchi)
+    void set_puchi_hidden(bool hidden) { puchi_hidden = hidden; }
 
     void set_don_colors(Color body, Color face, Color rim);
 

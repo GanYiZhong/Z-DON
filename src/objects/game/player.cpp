@@ -2211,7 +2211,12 @@ void Player::draw_lane_cover(float y) {
         const Chara3DConfig& cfg = tex.chara_3d_config;
         chara->set_rotation(cfg.rot_x, b.don_rot, cfg.rot_z);
         chara->set_draw_scale(b.don_scale);
+        // skin_config zdon_ai_no_puchi (Green; direct feed Tl7g8XXXvAM: the top band shows the drum Don and its costume
+        // only, no puchi / avatar beside it; Nijiiro sets x 0)
+        const auto np = tex.skin_config_by_name.find("zdon_ai_no_puchi");
+        chara->set_puchi_hidden(np != tex.skin_config_by_name.end() && np->second.x != 0.0f);
         chara->draw(b.don_x, b.don_y);
+        chara->set_puchi_hidden(false);
         b.don_show = false;
     }
     tex.draw_texture(lane_cover_tex_id, {.y = y});
