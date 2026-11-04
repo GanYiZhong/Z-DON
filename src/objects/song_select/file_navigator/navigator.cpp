@@ -11,6 +11,7 @@
 #include "../../../libs/library_index.h"
 #include "../../../libs/zdon_lang.h"
 #include "../../dan_select/dan_navigator.h"
+#include "../../game/zdon_ai_board.h"
 #include "../song_select_script.h"
 #include "box_back.h"
 #include "box_song_osu.h"
@@ -3082,6 +3083,10 @@ void Navigator::set_positions(bool init, float duration) {
             items[i]->vertical = false;
             if (init || std::abs(position - items[i]->position) >= tex.screen_width) {
                 items[i]->set_position(position);
+            } else if (zdon_ai_sort_view_on()) {
+                // the arcade AI select's list (zdon_ai_arcade_flow): the strips slide 8 frames at 60 fps, quadratic
+                // ease-out
+                items[i]->move_box(position, 8000.0f / 60.0f, 0.0f, EaseType::Quadratic);
             } else {
                 items[i]->move_box(position, duration);
             }
