@@ -9,6 +9,7 @@
 #include "../../libs/gfx/text.h"
 #include "../../libs/input/input.h"
 #include "../../libs/time.h"
+#include "../game/zdon_ai_board.h"
 #include "song_select_script.h"
 
 void SongSelectPlayer::try_lua_selector(bool is_half, float fade_in, int pass) {
@@ -617,7 +618,21 @@ void SongSelectPlayer::draw(SongSelectState state, bool is_half, float diff_fade
     auto [nx, ny] = tex.nameplate_xy(slot);
     nameplate.draw(nx, ny);
     auto [cx, cy] = tex.chara_xy(slot);
-    chara->draw(cx, cy + (offset * 0.6f), 1.0f);
+    // the AI select (Green, skin_config zdon_ai_don {dx, dy} + zdon_ai_don_scale {percent}): the arcade draws the Don
+    // larger and a little to the right; keys absent or 0 (Nijiiro, normal modes) leave the Don where it is
+    float chara_mul = 1.0f;
+    if (zdon_ai_arcade_sort()) { // Green AI select only (zdon_ai_arcade_flow)
+        const auto sc = tex.skin_config_by_name.find("zdon_ai_don_scale");
+        if (sc != tex.skin_config_by_name.end() && sc->second.x > 0.0f) {
+            chara_mul = sc->second.x / 100.0f;
+            const auto po = tex.skin_config_by_name.find("zdon_ai_don");
+            if (po != tex.skin_config_by_name.end()) {
+                cx += po->second.x;
+                cy += po->second.y;
+            }
+        }
+    }
+    chara->draw(cx, cy + (offset * 0.6f), chara_mul);
 
     bool panel_by_lua = false;
     if (neiro_selector.has_value() && script) {
