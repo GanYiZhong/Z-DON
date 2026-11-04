@@ -345,7 +345,11 @@ public:
             tex.skin_config_by_name.contains("zdon_ai_page0") && tex.skin_config_by_name.contains("zdon_ai_diff_first");
         page0 = page0_enabled;
         page0_off = 0;
-        focus_sort = tex.skin_config_by_name.contains("zdon_ai_native_sort");
+        {
+            const auto ns =
+                tex.skin_config_by_name.find("zdon_ai_native_sort"); // a child skin switches it off with x = 0
+            focus_sort = ns != tex.skin_config_by_name.end() && ns->second.x != 0.0f;
+        }
         focus_sort_steps = 0;
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
