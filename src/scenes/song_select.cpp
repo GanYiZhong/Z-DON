@@ -489,11 +489,17 @@ void SongSelectScreen::draw_overlays() {
     script->draw_overlays(state);
 
     if (!uses_session_timer()) {
-        if (!zdon_ai_arcade_sort()) { // the cabinet's AI select counter has no pill (footage Tl7g8XXXvAM t=111): the
-                                      // skin draws it
-            tex.draw_texture(t_song_num_bg,
-                             {.x = -(song_num->width - 127), .x2 = (song_num->width - 127), .fade = 0.75});
+        // the cabinet's AI select keeps the translucent pill behind the counter text (footage Tl7g8XXXvAM f012 / f028,
+        // round 16: round 14 had removed it); in the arcade flow the skin may size it (zdon_ai_counter_pill)
+        float pill_w = song_num->width;
+        if (zdon_ai_arcade_sort()) {
+            if (auto it = tex.skin_config_by_name.find("zdon_ai_counter_pill"); it != tex.skin_config_by_name.end()) {
+                if (it->second.width > 0) {
+                    pill_w = it->second.width;
+                }
+            }
         }
+        tex.draw_texture(t_song_num_bg, {.x = -(pill_w - 127), .x2 = (pill_w - 127), .fade = 0.75});
         if (!script->draw_song_num()) {
             song_num->draw(font_manager.get_text_info("song_num")->x - song_num->width,
                            font_manager.get_text_info("song_num")->y, 1.0);
