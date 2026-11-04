@@ -165,7 +165,7 @@ bool zdon_ai_sort_view_on() {
 
 namespace {
     struct LevelPanel {
-        bool on = false, closing = false;
+        bool on = false, closing = false, lit = true;
         int course = 3, level = 1, top = 4;
         double t0 = 0.0, out0 = 0.0;
     } level_panel;
@@ -205,11 +205,21 @@ int zdon_ai_board_top(int course) {
 }
 
 void zdon_ai_level_panel_open(int course, int level, int top) {
-    level_panel = {true, false, course, level, top, get_current_ms(), 0.0};
+    level_panel = {true, false, true, course, level, top, get_current_ms(), 0.0};
+}
+
+void zdon_ai_level_panel_phase(bool lit) {
+    level_panel.lit = lit;
 }
 
 void zdon_ai_level_panel_set(int level) {
     level_panel.level = level;
+}
+
+void zdon_ai_level_panel_course(int course, int level, int top) {
+    level_panel.course = course;
+    level_panel.level = level;
+    level_panel.top = top;
 }
 
 void zdon_ai_level_panel_close() {
@@ -232,6 +242,7 @@ void zdon_ai_board_bind(sol::table& tex) {
         const double now = get_current_ms();
         sol::table t = lua.create_table_with("course", level_panel.course, "level", level_panel.level, "top",
                                              level_panel.top, "ms", now - level_panel.t0);
+        t["lit"] = level_panel.lit;
         if (level_panel.closing) {
             t["out"] = now - level_panel.out0;
         }

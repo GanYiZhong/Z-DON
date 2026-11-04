@@ -45,7 +45,10 @@ AiBoardCourse zdon_ai_board_level(int course, int level); // songs / crowns of t
 int zdon_ai_board_top(int course);
 void zdon_ai_level_panel_open(int course, int level, int top);
 void zdon_ai_level_panel_set(int level);
+void zdon_ai_level_panel_course(int course, int level, int top); // the highlighted course changed
 void zdon_ai_level_panel_close();
+// the panel's state: lit = decide_course (the board stays lit), else select_lv (the board is dimmed)
+void zdon_ai_level_panel_phase(bool lit);
 void zdon_ai_level_panel_reset();
 void zdon_ai_arcade_sort_enable(bool on);
 bool zdon_ai_arcade_sort();

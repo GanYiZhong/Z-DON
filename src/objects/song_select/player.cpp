@@ -93,6 +93,7 @@ void SongSelectPlayer::update(double current_time) {
     if (voice_played && (global_data.config->general.fast_transitions || !is_voice_playing())) {
         is_ready = true;
     }
+    sync_level_panel();
 }
 
 bool SongSelectPlayer::is_voice_playing() {
@@ -171,6 +172,13 @@ void SongSelectPlayer::reset_selection() {
     is_ready = false;
     selected_song = false;
     voice_played = false;
+    level_select = false;
+    level_done = false;
+    if (level_panel_on) {
+        level_panel_on = false;
+        zdon_ai_level_panel_close();
+    }
+    level_course = -1;
 }
 
 void SongSelectPlayer::start_background_diffs() {
@@ -441,6 +449,89 @@ static bool neiro_in_options() {
     return tex.options[SCO::OPTION_NEIRO_ROW];
 }
 
+void SongSelectPlayer::decide_course() {
+    voice_played = true;
+    start_background_diffs();
+    if (silent_start_voice) {
+        // the AI battle's decide has no start voice (0vjiSUv61i4, 0wD5kkcN5WA, Tl7g8XXXvAM: none of the
+        // battles has it, the normal play footage does); the transition still waits the voice's 2 s
+        voice_silent_until_ms = get_current_ms() + 2000.0;
+    } else {
+        audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p", player_num,
+                                VolumePreset::VOICE);
+    }
+}
+
+// zdon_ai_arcade_flow: the level panel of the cabinet's course board. It lists the levels of the highlighted course
+// (the window ends at the course's top level); the cursor starts on the song's own level, the other pillars are levels
+// the song does not have (a don there refuses)
+void SongSelectPlayer::sync_level_panel() {
+    if (!zdon_ai_arcade_sort()) {
+        return;
+    }
+    auto* song = dynamic_cast<SongBox*>(navigator.get_current_item());
+    const bool want = selected_song && !voice_played && !neiro_selector.has_value() && !modifier_selector.has_value() &&
+                      selected_difficulty >= Difficulty::EASY && song != nullptr &&
+                      song->course_info(static_cast<int>(selected_difficulty)).level > 0;
+    if (!want) {
+        if (level_panel_on) {
+            level_panel_on = false;
+            level_select = false;
+            level_course = -1;
+            zdon_ai_level_panel_close();
+        }
+        return;
+    }
+    const int course = static_cast<int>(selected_difficulty);
+    if (!level_panel_on || course != level_course) {
+        level_song = song->course_info(course).level;
+        level_top = std::max(zdon_ai_board_top(course), level_song);
+        level_sel = level_song;
+        level_course = course;
+        if (!level_panel_on) {
+            zdon_ai_level_panel_open(course, level_sel, level_top);
+        } else {
+            zdon_ai_level_panel_course(course, level_sel, level_top);
+        }
+        level_panel_on = true;
+    }
+    zdon_ai_level_panel_phase(!level_select);
+}
+
+bool SongSelectPlayer::begin_level_select() {
+    sync_level_panel();
+    if (!level_panel_on) {
+        return false;
+    }
+    level_select = true;
+    zdon_ai_level_panel_phase(false);
+    return true;
+}
+
+void SongSelectPlayer::handle_level_select(bool l_kat, bool r_kat, bool l_don, bool r_don) {
+    if (l_kat || r_kat) {
+        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        if (l_kat && level_sel <= 1) { // past the lowest level: back to the course board
+            level_select = false;
+            zdon_ai_level_panel_phase(true);
+            return;
+        }
+        level_sel = l_kat ? level_sel - 1 : std::min(level_top, level_sel + 1);
+        zdon_ai_level_panel_set(level_sel);
+    } else if (l_don || r_don) {
+        if (level_sel != level_song) {
+            audio.play_player_sound("cancel", player_num, VolumePreset::SOUND);
+            return;
+        }
+        audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+        level_select = false;
+        level_done = true;
+        level_panel_on = false;
+        zdon_ai_level_panel_close();
+        decide_course();
+    }
+}
+
 SongSelectState SongSelectPlayer::handle_input_selecting() {
     bool l_kat = is_l_kat_pressed(player_num);
     bool r_kat = is_r_kat_pressed(player_num);
@@ -448,6 +539,11 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
     bool r_don = is_r_don_pressed(player_num);
 
     if (voice_played) {
+        return SongSelectState::SONG_SELECTED;
+    }
+    sync_level_panel();
+    if (level_select) {
+        handle_level_select(l_kat, r_kat, l_don, r_don);
         return SongSelectState::SONG_SELECTED;
     }
 
@@ -496,15 +592,8 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
                 neiro_selector = NeiroSelector(player_num, &player_data);
                 chara->set_anim(AnimIndex::DON_SELECT_PANELUP);
             } else if (selected_difficulty >= Difficulty::EASY) {
-                voice_played = true;
-                start_background_diffs();
-                if (silent_start_voice) {
-                    // the AI battle's decide has no start voice (0vjiSUv61i4, 0wD5kkcN5WA, Tl7g8XXXvAM: none of the
-                    // battles has it, the normal play footage does); the transition still waits the voice's 2 s
-                    voice_silent_until_ms = get_current_ms() + 2000.0;
-                } else {
-                    audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p",
-                                            player_num, VolumePreset::VOICE);
+                if (!(zdon_ai_arcade_sort() && !level_done && begin_level_select())) {
+                    decide_course();
                 }
             } else if (selected_difficulty == Difficulty::BACK) {
                 is_ready = true;

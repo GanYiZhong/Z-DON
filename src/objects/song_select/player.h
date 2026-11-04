@@ -58,6 +58,13 @@ public:
     void update(double current_time);
     bool is_voice_playing();
 
+    // zdon_ai_arcade_flow (Green AI select): the course board carries the cabinet's level panel (footage Tl7g8XXXvAM
+    // t=127-131): it slides in with the board and follows the highlighted course on the lit board (decide_course); a
+    // don on a course dims the board and moves to select_lv, where kats choose the level and a don decides
+    bool level_select = false;
+    bool in_level_step() const { return level_select; }
+    void sync_level_panel();
+
     bool difficulty_decided() const { return selected_difficulty >= Difficulty::EASY && (voice_played || is_ready); }
 
     SongSelectState select_song();
@@ -81,4 +88,9 @@ private:
     bool has_course(Difficulty d) const;
     void toggle_ura_mode();
     void start_background_diffs();
+    void decide_course();
+    bool begin_level_select();
+    void handle_level_select(bool l_kat, bool r_kat, bool l_don, bool r_don);
+    bool level_done = false, level_panel_on = false;
+    int level_sel = 1, level_top = 4, level_song = 0, level_course = -1;
 };
