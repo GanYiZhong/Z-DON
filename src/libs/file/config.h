@@ -36,7 +36,11 @@ struct GeneralConfig {
     bool zdon_sort_filter = true;
     bool zdon_practice_loop = true; // Z-DON: practice resumed at a jump mark loops to the next mark
     int zdon_ai_level = 5;          // Z-DON AI battle (zdon_ai.h): the AI's skill 1..10, +1 per match won, -1 per loss
-    int zdon_ai_wins = 0;           // Z-DON AI battle: matches won so far
+    // Z-DON coin mode (default off): the skin shows the cabinet's credit text (COIN(S) n) instead of the free-play
+    // text. There is no coin input: zdon_coin_credits is a plain counter the player edits in config.toml.
+    bool zdon_coin_mode = false;
+    int zdon_coin_credits = 0;
+    int zdon_ai_wins = 0; // Z-DON AI battle: matches won so far
     std::string log_level;
     int practice_mode_bar_delay = 0;
     std::string score_method;

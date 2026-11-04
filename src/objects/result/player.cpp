@@ -273,6 +273,10 @@ void ResultPlayer::draw() {
         cx = (*pos)[1].get_or((float)cx);
         cy = (*pos)[2].get_or((float)cy);
         cs = (*pos)[3].get_or(cs);
+        // optional [4], [5], [6]: the puchi's offset (1280x720 px) and size multiplier
+        chara->set_puchi_adjust((*pos)[4].get_or(0.0f), (*pos)[5].get_or(0.0f), (*pos)[6].get_or(1.0f));
+    } else {
+        chara->set_puchi_adjust(0.0f, 0.0f, 1.0f);
     }
     chara->draw(cx, cy, cs);
     call(fn_draw_front, "ResultPlayer:draw_front");

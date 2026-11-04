@@ -332,6 +332,8 @@ Config get_config() {
     config.general.zdon_hit_timing_show = config_file["general"]["zdon_hit_timing_show"].value_or("half");
     config.general.zdon_sort_filter = config_file["general"]["zdon_sort_filter"].value_or(true);
     config.general.zdon_practice_loop = config_file["general"]["zdon_practice_loop"].value_or(true);
+    config.general.zdon_coin_mode = config_file["general"]["zdon_coin_mode"].value_or(false);
+    config.general.zdon_coin_credits = std::clamp(config_file["general"]["zdon_coin_credits"].value_or(0), 0, 99);
     config.general.zdon_ai_level = std::clamp(config_file["general"]["zdon_ai_level"].value_or(5), 1, 10);
     config.general.zdon_ai_wins = std::max(0, config_file["general"]["zdon_ai_wins"].value_or(0));
     config.general.log_level = config_file["general"]["log_level"].value_or("info");
@@ -536,6 +538,8 @@ void save_config(const Config& config) {
                                                {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
                                                {"zdon_sort_filter", config.general.zdon_sort_filter},
                                                {"zdon_practice_loop", config.general.zdon_practice_loop},
+                                               {"zdon_coin_mode", config.general.zdon_coin_mode},
+                                               {"zdon_coin_credits", config.general.zdon_coin_credits},
                                                {"zdon_ai_level", config.general.zdon_ai_level},
                                                {"zdon_ai_wins", config.general.zdon_ai_wins},
                                                {"log_level", config.general.log_level},

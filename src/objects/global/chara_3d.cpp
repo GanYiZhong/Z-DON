@@ -1198,9 +1198,9 @@ void Chara3D::draw_puchi(float x, float y) {
     const int frame = static_cast<int>(puchi_ms / FRAME_MS) % 2;
     const float bob =
         std::sin(static_cast<float>(puchi_ms / (FRAME_MS * 2.0) * 2.0 * std::numbers::pi)) * PUCHI_BOB * s;
-    const float size = PUCHI_SIZE * s;
-    const float px = x + (mirror ? PUCHI_X : -PUCHI_X) * s - size / 2.0f;
-    const float py = y + PUCHI_Y * s - size / 2.0f + bob;
+    const float size = PUCHI_SIZE * puchi_mul * s;
+    const float px = x + (mirror ? PUCHI_X - puchi_adj_x : -PUCHI_X + puchi_adj_x) * s - size / 2.0f;
+    const float py = y + (PUCHI_Y + puchi_adj_y) * s - size / 2.0f + bob;
     const Rect src{0, frame * fh, mirror ? -fw : fw, fh};
     draw_texture_pro(puchi_tex, src, {px, py, size, size}, {0, 0}, 0.0f, Color::WHITE);
     if (tint_amount > 0.0f) {

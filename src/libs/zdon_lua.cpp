@@ -286,6 +286,12 @@ void register_zdon_lua_bindings(sol::table& tex) {
     tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });
     tex.set_function("ai_condition", []() -> int { return zdon_ai_condition(); });
 
+    // tex.coin_mode() -> [general] zdon_coin_mode (default off): the skin shows the cabinet credit text instead of
+    // the free-play text; tex.coin_credits() -> [general] zdon_coin_credits (0..99), a plain counter, no coin input
+    tex.set_function("coin_mode", []() -> bool { return global_data.config->general.zdon_coin_mode; });
+    tex.set_function("coin_credits",
+                     []() -> int { return std::clamp(global_data.config->general.zdon_coin_credits, 0, 99); });
+
     // tex.ai_skill() -> the AI's skill level 1..10 ([general] zdon_ai_level, +1 per match won, -1 per loss); the
     // course board's "pick the difficulty level" pillars show it
     tex.set_function("ai_skill", []() -> int { return std::clamp(global_data.config->general.zdon_ai_level, 1, 10); });

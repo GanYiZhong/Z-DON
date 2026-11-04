@@ -167,6 +167,7 @@ private:
     Color tint_color;
     float tint_amount = 0.0f;
     int puchi_index = 0;
+    float puchi_adj_x = 0.0f, puchi_adj_y = 0.0f, puchi_mul = 1.0f; // a skin's chara_pos: puchi offset (1280 px) / size
     double puchi_ms = 0;
 
 public:
@@ -179,6 +180,12 @@ public:
     void set_body_texture(fs::path& texture_path);
     void set_face_rim_texture(fs::path& texture_path);
     void set_puchi(int index);
+    // Z-DON: the puchi's place relative to the default (dx, dy in 1280x720 px, towards the facing side; mul = size)
+    void set_puchi_adjust(float dx, float dy, float mul) {
+        puchi_adj_x = dx;
+        puchi_adj_y = dy;
+        puchi_mul = mul;
+    }
 
     void set_don_colors(Color body, Color face, Color rim);
 

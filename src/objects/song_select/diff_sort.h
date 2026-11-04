@@ -30,7 +30,10 @@ private:
     MoveAnimation* blue_arrow_move;
 
     bool one_menu_sort = false;
-    bool arcade = false; // zdon_ai_arcade_flow: course column -> list, no star / confirm steps
+    // zdon_ai_arcade_flow: course column -> level step (pillars panel, levels 1..arcade_top) -> list; no star / confirm
+    // steps of the classic window
+    bool arcade = false;
+    int arcade_course = 3, arcade_top = 4;
     SongSelectScript* script = nullptr;
     int session = 0;
     int sort_param[3] = {1, 1, 1};

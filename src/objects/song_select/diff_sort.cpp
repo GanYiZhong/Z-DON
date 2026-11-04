@@ -60,6 +60,9 @@ DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int 
     if (arcade) {
         zdon_ai_sort_view_set(false, {});
     }
+    if (arcade) {
+        zdon_ai_level_panel_reset();
+    }
     audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
 }
 
@@ -178,6 +181,34 @@ std::optional<std::pair<int, int>> DiffSortSelect::input_select() {
         }
         return std::nullopt;
     }
+    if (arcade && selected_box >= 0) {
+        // zdon_ai_arcade_flow: a don on a course column opens the level step (the cabinet's pillars panel); a don on a
+        // level with songs opens the filtered list; a level without songs refuses
+        const int column = selected_box <= 3 ? selected_box + 1 : (selected_box == 4 ? 5 : 6);
+        if (!in_level_select) {
+            AiBoardCourse c = zdon_ai_board_course(column, prev_diff, prev_level);
+            if (c.level == 0) {
+                audio.play_sound("cancel", VolumePreset::SOUND);
+                return std::nullopt;
+            }
+            arcade_course = c.course;
+            arcade_top = zdon_ai_board_top(c.course);
+            selected_level = std::min(c.level, arcade_top);
+            in_level_select = true;
+            zdon_ai_level_panel_open(arcade_course, selected_level, arcade_top);
+            return std::nullopt;
+        }
+        AiBoardCourse c = zdon_ai_board_level(arcade_course, selected_level);
+        if (c.count == 0) {
+            audio.play_sound("cancel", VolumePreset::SOUND);
+            return std::nullopt;
+        }
+        in_level_select = false;
+        zdon_ai_level_panel_close();
+        zdon_ai_sort_view_set(true, c);
+        global_data.last_difficulty[0] = c.course;
+        return {{c.course, c.level}};
+    }
     if (confirmation) {
         if (confirm_index == 0) {
             confirmation = false;
@@ -203,19 +234,6 @@ std::optional<std::pair<int, int>> DiffSortSelect::input_select() {
     if (selected_box == -1) {
         return {{-1, -1}};
     }
-    if (arcade) {
-        // the cabinet goes from the course column straight to the list: boxes 0..3 = easy..oni, 4 = the recommended
-        // course, 5 = the last one (the star level is the one most songs have, as the cabinet header shows)
-        const int column = selected_box <= 3 ? selected_box + 1 : (selected_box == 4 ? 5 : 6);
-        AiBoardCourse c = zdon_ai_board_course(column, prev_diff, prev_level);
-        if (c.level == 0) {
-            audio.play_sound("cancel", VolumePreset::SOUND);
-            return std::nullopt;
-        }
-        zdon_ai_sort_view_set(true, c);
-        global_data.last_difficulty[0] = c.course;
-        return {{c.course, c.level}};
-    }
     if (selected_box == 5) {
         return {{prev_diff, prev_level}};
     }
@@ -233,6 +251,15 @@ void DiffSortSelect::input_left() {
         one_menu_sort_change_param(-1);
         return;
     }
+    if (arcade && in_level_select) {
+        if (selected_level <= 1) { // past the lowest level: back to the course columns
+            in_level_select = false;
+            zdon_ai_level_panel_close();
+        } else {
+            zdon_ai_level_panel_set(--selected_level);
+        }
+        return;
+    }
     if (confirmation) {
         confirm_index = std::max(confirm_index - 1, 0);
     } else if (in_level_select) {
@@ -245,6 +272,11 @@ void DiffSortSelect::input_left() {
 void DiffSortSelect::input_right() {
     if (one_menu_sort) {
         one_menu_sort_change_param(1);
+        return;
+    }
+    if (arcade && in_level_select) {
+        selected_level = std::min(selected_level + 1, arcade_top);
+        zdon_ai_level_panel_set(selected_level);
         return;
     }
     if (confirmation) {

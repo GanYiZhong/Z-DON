@@ -152,6 +152,7 @@ protected:
             }
         } else {
             zdon_ai_board_info_set(false, 0, {});
+            zdon_ai_level_panel_close(); // the window is gone (list opened, or left): the panel slides out
         }
         if (zdon_ai_sort_view_on()) {
             if (navigator.in_inline()) {

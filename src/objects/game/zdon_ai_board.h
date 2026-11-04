@@ -37,6 +37,16 @@ void zdon_ai_board_bind(sol::table& tex);
 // confirm steps (a don on a course column goes straight to the filtered list, the star level being the one most
 // songs have) and the skin draws the arcade's columns / red band; tex.ai_sort_view() -> nil | { course, level } while
 // that filtered list is open
+// The level step (the cabinet's pillars panel, sprite 361 / 362): after a course column the star level is chosen among
+// 1..top (top = the highest level the course has songs at, at least 4; oni / ura always 13 like the cabinet's 10-13
+// pillars). zdon_ai_level_panel_* keeps the panel's state for the skin, tex.ai_level_panel() -> nil | { course, level,
+// top, count, ms = since it opened, out = ms since it closed (nil while open) }
+AiBoardCourse zdon_ai_board_level(int course, int level); // songs / crowns of that course at that level
+int zdon_ai_board_top(int course);
+void zdon_ai_level_panel_open(int course, int level, int top);
+void zdon_ai_level_panel_set(int level);
+void zdon_ai_level_panel_close();
+void zdon_ai_level_panel_reset();
 void zdon_ai_arcade_sort_enable(bool on);
 bool zdon_ai_arcade_sort();
 void zdon_ai_sort_view_set(bool on, const AiBoardCourse& c);

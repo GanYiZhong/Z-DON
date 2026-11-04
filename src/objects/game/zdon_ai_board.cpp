@@ -6,6 +6,7 @@
 
 #include "../../libs/file/scores.h"
 #include "../../libs/global_data.h"
+#include "../../libs/time.h"
 #include "../song_select/file_navigator/color_utils.h"
 #include "../song_select/file_navigator/navigator.h"
 
@@ -162,7 +163,80 @@ bool zdon_ai_sort_view_on() {
     return sort_view_on;
 }
 
+namespace {
+    struct LevelPanel {
+        bool on = false, closing = false;
+        int course = 3, level = 1, top = 4;
+        double t0 = 0.0, out0 = 0.0;
+    } level_panel;
+} // namespace
+
+AiBoardCourse zdon_ai_board_level(int course, int level) {
+    AiBoardCourse c;
+    c.course = course;
+    c.level = level;
+    auto it = cache.find({course, level});
+    if (it != cache.end()) {
+        return it->second;
+    }
+    for (const auto& p : zdon_ai_board_songs(c)) {
+        ++c.count;
+        const int cr = crown_of(p, c.course);
+        c.clear += cr >= static_cast<int>(Crown::CLEAR);
+        c.fc += cr >= static_cast<int>(Crown::FC);
+    }
+    cache[{course, level}] = c;
+    return c;
+}
+
+int zdon_ai_board_top(int course) {
+    if (course >= 3) {
+        return 13;
+    }
+    int top = 4;
+    for (int lv = 1; lv <= 13; ++lv) {
+        size_t total = 0;
+        navigator.zdon_search("", "", course, lv, 0, total);
+        if (total > 0) {
+            top = std::max(top, lv);
+        }
+    }
+    return top;
+}
+
+void zdon_ai_level_panel_open(int course, int level, int top) {
+    level_panel = {true, false, course, level, top, get_current_ms(), 0.0};
+}
+
+void zdon_ai_level_panel_set(int level) {
+    level_panel.level = level;
+}
+
+void zdon_ai_level_panel_close() {
+    if (level_panel.on && !level_panel.closing) {
+        level_panel.closing = true;
+        level_panel.out0 = get_current_ms();
+    }
+}
+
+void zdon_ai_level_panel_reset() {
+    level_panel = {};
+}
+
 void zdon_ai_board_bind(sol::table& tex) {
+    tex.set_function("ai_level_panel", [](sol::this_state ts) -> sol::object {
+        if (!level_panel.on) {
+            return sol::make_object(ts, sol::lua_nil);
+        }
+        sol::state_view lua(ts);
+        const double now = get_current_ms();
+        sol::table t = lua.create_table_with("course", level_panel.course, "level", level_panel.level, "top",
+                                             level_panel.top, "ms", now - level_panel.t0);
+        if (level_panel.closing) {
+            t["out"] = now - level_panel.out0;
+        }
+        return t;
+    });
     tex.set_function("ai_sort_view", [](sol::this_state ts) -> sol::object {
         if (!sort_view_on) {
             return sol::make_object(ts, sol::lua_nil);
