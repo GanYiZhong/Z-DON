@@ -234,6 +234,7 @@ void zdon_ai_level_panel_reset() {
 }
 
 void zdon_ai_board_bind(sol::table& tex) {
+    tex.set_function("song_number", [] { return global_data.songs_played + 1; }); // the select's "N-th song" counter
     tex.set_function("ai_level_panel", [](sol::this_state ts) -> sol::object {
         if (!level_panel.on) {
             return sol::make_object(ts, sol::lua_nil);

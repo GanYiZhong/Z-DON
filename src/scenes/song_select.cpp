@@ -5,6 +5,7 @@
 #include "../libs/fixed_step.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/practice_timer.h"
 
 void SongSelectScreen::on_screen_start() {
@@ -488,7 +489,11 @@ void SongSelectScreen::draw_overlays() {
     script->draw_overlays(state);
 
     if (!uses_session_timer()) {
-        tex.draw_texture(t_song_num_bg, {.x = -(song_num->width - 127), .x2 = (song_num->width - 127), .fade = 0.75});
+        if (!zdon_ai_arcade_sort()) { // the cabinet's AI select counter has no pill (footage Tl7g8XXXvAM t=111): the
+                                      // skin draws it
+            tex.draw_texture(t_song_num_bg,
+                             {.x = -(song_num->width - 127), .x2 = (song_num->width - 127), .fade = 0.75});
+        }
         if (!script->draw_song_num()) {
             song_num->draw(font_manager.get_text_info("song_num")->x - song_num->width,
                            font_manager.get_text_info("song_num")->y, 1.0);

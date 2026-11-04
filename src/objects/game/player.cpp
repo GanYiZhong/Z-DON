@@ -2276,6 +2276,13 @@ void Player::draw_overlays(float y) {
         tex.draw_texture(t_auto_icon, {.y = y, .index = is_2p});
     } else if (show_lane_name && !arena_ai) {
         auto [nx, ny] = tex.nameplate_xy(is_2p ? "game_p2" : "game_p1");
+        if (zdon_ai_arena_game()) { // skin_config zdon_ai_game_plate (Green, strict audit: the AI game's 1P plate
+                                    // offset)
+            if (auto it = tex.skin_config_by_name.find("zdon_ai_game_plate"); it != tex.skin_config_by_name.end()) {
+                nx += it->second.x;
+                ny += it->second.y;
+            }
+        }
         nameplate.draw(nx, y + ny);
         if (keep_plate && modifiers.auto_play && !zdon_ai_arena_game()) {
             const SkinInfo& b = badge_it->second; // outline: the badge's scale (unset = full size)
