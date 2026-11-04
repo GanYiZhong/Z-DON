@@ -128,6 +128,28 @@ protected:
     }
     bool allows_second_player_join() override { return false; }
 
+    // skin_config zdon_ai_native_sort (Green): the AI select uses the normal song select's own Diff Sort box instead of
+    // the skin-built course columns / song board: the cursor starts on the "Difficulty Sort" box of the genre shelf
+    // (the cabinet's page 0 has the box in the first slot) and a don opens the engine's sort window
+    bool focus_sort = false;
+    int focus_sort_steps = 0;
+    void focus_sort_tick() {
+        if (!focus_sort || state != SongSelectState::BROWSING || navigator.is_processing ||
+            navigator.inline_streaming) {
+            return;
+        }
+        BaseBox* item = navigator.get_current_item();
+        if (item == nullptr) {
+            return;
+        }
+        if ((navigator.is_directory(item) && item->genre_index == GenreIndex::DIFFICULTY) || focus_sort_steps >= 60) {
+            focus_sort = false;
+            return;
+        }
+        navigator.move_right();
+        ++focus_sort_steps;
+    }
+
     // skin_config zdon_ai_diff_first (Green): the cabinet asks for the course first (columns: back, easy .. oni, the
     // recommended one, the last one; footage Tl7g8XXXvAM 1:50), then the song list; the chosen course is the one
     // the course board opens on
@@ -323,6 +345,8 @@ public:
             tex.skin_config_by_name.contains("zdon_ai_page0") && tex.skin_config_by_name.contains("zdon_ai_diff_first");
         page0 = page0_enabled;
         page0_off = 0;
+        focus_sort = tex.skin_config_by_name.contains("zdon_ai_native_sort");
+        focus_sort_steps = 0;
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
@@ -345,6 +369,7 @@ public:
             set_diff_stage(false);
             return on_screen_end(Screens::ENTRY);
         }
+        focus_sort_tick();
         const double now = get_frame_ms();
         ai_plate.update(now);
         if (ai_chara) {
