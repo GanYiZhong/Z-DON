@@ -137,7 +137,40 @@ void zdon_ai_board_info_set(bool on, int /*column*/, const AiBoardCourse& c) {
     info_course = c;
 }
 
+namespace {
+    bool arcade_sort_on = false, sort_view_on = false;
+    AiBoardCourse sort_view_course;
+} // namespace
+
+void zdon_ai_arcade_sort_enable(bool on) {
+    arcade_sort_on = on;
+    if (!on) {
+        sort_view_on = false;
+    }
+}
+
+bool zdon_ai_arcade_sort() {
+    return arcade_sort_on;
+}
+
+void zdon_ai_sort_view_set(bool on, const AiBoardCourse& c) {
+    sort_view_on = on;
+    sort_view_course = c;
+}
+
+bool zdon_ai_sort_view_on() {
+    return sort_view_on;
+}
+
 void zdon_ai_board_bind(sol::table& tex) {
+    tex.set_function("ai_sort_view", [](sol::this_state ts) -> sol::object {
+        if (!sort_view_on) {
+            return sol::make_object(ts, sol::lua_nil);
+        }
+        sol::state_view lua(ts);
+        return sol::make_object(ts, lua.create_table_with("course", sort_view_course.course, "level",
+                                                          sort_view_course.level, "count", sort_view_course.count));
+    });
     tex.set_function("ai_board", [](sol::this_state ts) -> sol::object {
         if (!board_on) {
             return sol::make_object(ts, sol::lua_nil);

@@ -131,6 +131,37 @@ protected:
     // skin_config zdon_ai_native_sort (Green): the AI select uses the normal song select's own Diff Sort box instead of
     // the skin-built course columns / song board: the cursor starts on the "Difficulty Sort" box of the genre shelf
     // (the cabinet's page 0 has the box in the first slot) and a don opens the engine's sort window
+    bool arcade_flow = false, arcade_seen = false;
+    // zdon_ai_arcade_flow: the sort window's column info plate (tex.ai_diff_info) and the end of the filtered list
+    void arcade_tick() {
+        if (!arcade_flow) {
+            return;
+        }
+        if (diff_sort_selector) {
+            const int b = diff_sort_selector->lua_box();
+            const int column = b < 0 ? 0 : (b <= 3 ? b + 1 : (b == 4 ? 5 : 6));
+            if (column >= 1) {
+                if (!col_known[column]) {
+                    const int last = global_data.last_difficulty[0];
+                    col_info[column] = zdon_ai_board_course(column, last >= 0 ? last : -1, last_diff_sort.second);
+                    col_known[column] = true;
+                }
+                zdon_ai_board_info_set(true, column, col_info[column]);
+            } else {
+                zdon_ai_board_info_set(false, 0, {});
+            }
+        } else {
+            zdon_ai_board_info_set(false, 0, {});
+        }
+        if (zdon_ai_sort_view_on()) {
+            if (navigator.in_inline()) {
+                arcade_seen = true;
+            } else if (arcade_seen) {
+                arcade_seen = false;
+                zdon_ai_sort_view_set(false, {});
+            }
+        }
+    }
     bool focus_sort = false;
     int focus_sort_steps = 0;
     void focus_sort_tick() {
@@ -351,6 +382,12 @@ public:
             focus_sort = ns != tex.skin_config_by_name.end() && ns->second.x != 0.0f;
         }
         focus_sort_steps = 0;
+        {
+            const auto af = tex.skin_config_by_name.find("zdon_ai_arcade_flow"); // Green only (a child skin sets x = 0)
+            arcade_flow = af != tex.skin_config_by_name.end() && af->second.x != 0.0f;
+            zdon_ai_arcade_sort_enable(arcade_flow);
+            arcade_seen = false;
+        }
         set_diff_stage(tex.skin_config_by_name.contains("zdon_ai_diff_first"));
         // the AI select's own bgm (bgm_aisenkyoku) when the skin has it (Sounds/song_select/ai/bgm)
         if (audio.has_sound("ai_bgm")) {
@@ -366,6 +403,12 @@ public:
         ai_chara->set_anim(AnimIndex::DON_SELECT_LOOP);
     }
 
+    Screens on_screen_end(Screens next_screen) override {
+        zdon_ai_arcade_sort_enable(false);
+        zdon_ai_board_info_set(false, 0, {});
+        return SongSelectScreen::on_screen_end(next_screen);
+    }
+
     std::optional<Screens> update() override {
         auto next = SongSelectScreen::update();
         if (diff_leave && !next) {
@@ -374,6 +417,7 @@ public:
             return on_screen_end(Screens::ENTRY);
         }
         focus_sort_tick();
+        arcade_tick();
         const double now = get_frame_ms();
         ai_plate.update(now);
         if (ai_chara) {

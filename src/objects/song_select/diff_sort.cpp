@@ -1,6 +1,8 @@
 #include "diff_sort.h"
 
 #include "../../libs/audio/audio.h"
+#include "../../libs/global_data.h"
+#include "../game/zdon_ai_board.h"
 #include "song_select_script.h"
 
 static constexpr double SORT_IN_MS = 1000.0 / 60.0 * 10.0;
@@ -54,6 +56,10 @@ DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int 
         one_menu_sort_refresh_song_num();
     }
 
+    arcade = zdon_ai_arcade_sort() && !one_menu_sort;
+    if (arcade) {
+        zdon_ai_sort_view_set(false, {});
+    }
     audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
 }
 
@@ -196,6 +202,19 @@ std::optional<std::pair<int, int>> DiffSortSelect::input_select() {
     }
     if (selected_box == -1) {
         return {{-1, -1}};
+    }
+    if (arcade) {
+        // the cabinet goes from the course column straight to the list: boxes 0..3 = easy..oni, 4 = the recommended
+        // course, 5 = the last one (the star level is the one most songs have, as the cabinet header shows)
+        const int column = selected_box <= 3 ? selected_box + 1 : (selected_box == 4 ? 5 : 6);
+        AiBoardCourse c = zdon_ai_board_course(column, prev_diff, prev_level);
+        if (c.level == 0) {
+            audio.play_sound("cancel", VolumePreset::SOUND);
+            return std::nullopt;
+        }
+        zdon_ai_sort_view_set(true, c);
+        global_data.last_difficulty[0] = c.course;
+        return {{c.course, c.level}};
     }
     if (selected_box == 5) {
         return {{prev_diff, prev_level}};

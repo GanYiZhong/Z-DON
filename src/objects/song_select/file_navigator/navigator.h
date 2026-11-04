@@ -192,6 +192,7 @@ public:
     static BoxDef parse_box_def_uncached(const fs::path& path);
     std::atomic<bool> song_files_ready{true};
     bool diff_sort_ready() { return awaiting_diff_sort; }
+    bool in_inline() const { return is_inline; }
     void apply_diff_sort(int course, int level, int order = 1);
     void cancel_diff_sort();
     void load_current_directory(const fs::path path);

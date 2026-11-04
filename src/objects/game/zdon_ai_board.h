@@ -32,3 +32,12 @@ void zdon_ai_board_info_set(bool on, int column, const AiBoardCourse& c);
 // crown, outline = {r, g, b} of the song genre, levels = {easy .. ura}} }, jump = ms (only while held) }
 // tex.ai_diff_info() -> nil | { course, level, count, clear, fc } (the highlighted course column)
 void zdon_ai_board_bind(sol::table& tex);
+
+// skin_config zdon_ai_arcade_flow (Green AI select only): the engine's own Diff Sort window skips the star and the
+// confirm steps (a don on a course column goes straight to the filtered list, the star level being the one most
+// songs have) and the skin draws the arcade's columns / red band; tex.ai_sort_view() -> nil | { course, level } while
+// that filtered list is open
+void zdon_ai_arcade_sort_enable(bool on);
+bool zdon_ai_arcade_sort();
+void zdon_ai_sort_view_set(bool on, const AiBoardCourse& c);
+bool zdon_ai_sort_view_on();
