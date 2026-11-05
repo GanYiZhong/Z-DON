@@ -60,6 +60,10 @@ SongSelectPlayer::SongSelectPlayer(PlayerNum player_num) : player_num(player_num
 
 void SongSelectPlayer::update(double current_time) {
     PlayerSoundScope audio_owner(player_num);
+    if (board_voice_at_ms >= 0.0 && get_current_ms() >= board_voice_at_ms) {
+        board_voice_at_ms = -1.0;
+        audio.play_sound("voice_select_diff", VolumePreset::VOICE);
+    }
     selected_diff_bounce->update(current_time);
     selected_diff_fadein->update(current_time);
     selected_diff_highlight_fade->update(current_time);
@@ -228,8 +232,16 @@ SongSelectState SongSelectPlayer::select_song() {
         selected_song = true;
         // the course board opens with voice_select_diff (footage YKjsle7VBCI 61.73 s, 0vjiSUv61i4 45.13 s,
         // Tl7g8XXXvAM 126.80 / 332.89 / 520.11 s)
+        // Green AI select (skin_config zdon_ai_board_voice_ms): the voice sounds when the board shows, 0.99 s after the
+        // don on the card (Tl7g8XXXvAM don 125.81, voice 126.80); keys absent / 0 keep the voice at the don
+        board_voice_at_ms = -1.0;
         if (audio.has_sound("voice_select_diff")) {
-            audio.play_sound("voice_select_diff", VolumePreset::VOICE);
+            const auto bv = tex.skin_config_by_name.find("zdon_ai_board_voice_ms");
+            if (zdon_ai_arcade_sort() && bv != tex.skin_config_by_name.end() && bv->second.x > 0.0f) {
+                board_voice_at_ms = get_current_ms() + bv->second.x;
+            } else {
+                audio.play_sound("voice_select_diff", VolumePreset::VOICE);
+            }
         }
         init_diff_cursor();
         selected_diff_bounce->start();

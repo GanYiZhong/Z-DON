@@ -16,7 +16,7 @@ void SongSelectScreen::on_screen_start() {
     SongBox::reset_bgm_slot();
     SongBox::bgm_sound = "bgm";
     audio.play_sound("bgm", VolumePreset::MUSIC);
-    audio.play_sound("voice_enter", VolumePreset::VOICE);
+    audio.play_sound("voice_enter", VolumePreset::VOICE, mutes_enter_voice() ? 0.0f : 1.0f);
 
     diff_fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(2));
     if (!diff_fade_out) {

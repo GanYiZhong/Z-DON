@@ -60,7 +60,9 @@ DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int 
     if (arcade) {
         zdon_ai_sort_view_set(false, {});
     }
-    audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
+    if (!arcade) { // the cabinet's AI select has no voice at the box decide (Tl7g8XXXvAM 112.45, 3 battles)
+        audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
+    }
 }
 
 void DiffSortSelect::one_menu_sort_refresh_song_num() {

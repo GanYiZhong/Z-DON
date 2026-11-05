@@ -23,6 +23,13 @@ protected:
         return Screens::GAME_2P;
     }
     bool hides_dan() override { return true; }
+    // skin_config zdon_ai_no_enter_voice (Green): the cabinet's AI select has no entry voice (Tl7g8XXXvAM: no
+    // voice_enter near the select start of any of the 3 battles; voice_select_diff shows up at corr 0.5). The sound
+    // still runs at gain 0 because the genre voice waits for it to end.
+    bool mutes_enter_voice() override {
+        const auto ne = tex.skin_config_by_name.find("zdon_ai_no_enter_voice");
+        return ne != tex.skin_config_by_name.end() && ne->second.x != 0.0f;
+    }
     // the game transition (VS window, loading card) is an AI one: the skin asks tex.ai_transition()
     void select_song(SongBox* song) override {
         global_data.zdon_ai.requested = true;

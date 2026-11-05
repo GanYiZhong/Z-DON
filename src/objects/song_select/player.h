@@ -82,6 +82,8 @@ public:
 
 private:
     bool voice_played;
+    double board_voice_at_ms =
+        -1.0; // skin_config zdon_ai_board_voice_ms: voice_select_diff when the board shows (Green AI)
     double voice_silent_until_ms = 0.0; // the AI battle's decide: no voice, the same wait
     void navigate_difficulty_left();
     void navigate_difficulty_right();

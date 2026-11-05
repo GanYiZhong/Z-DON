@@ -100,6 +100,20 @@ namespace {
     // 136.7 s, SE 138.4 s, song 140.1 s); the game gives the lead (Game2PScreen start_delay 3 s)
     constexpr double kReadySeDelayMs = 1350.0;
     bool ready_se_pending = false;
+    // skin_config zdon_ai_ready_voice_ms (Green): the start voice waits for the arena reveal (footage Tl7g8XXXvAM: the
+    // voice 136.70 s while the loading wipe ends, the wipe starts 136.3 s; ours starts the wipe 0.4 s after the chart
+    // loads)
+    bool ready_voice_pending = false;
+    double ready_voice_at_ms = 0.0;
+    void ready_voice_cue() {
+        const auto rv = tex.skin_config_by_name.find("zdon_ai_ready_voice_ms");
+        if (rv != tex.skin_config_by_name.end() && rv->second.x > 0.0f) {
+            ready_voice_pending = true;
+            ready_voice_at_ms = get_current_ms() + rv->second.x;
+        } else {
+            cue("", "ready", 3);
+        }
+    }
     double ready_se_at_ms = 0.0;
     bool last_cue_won = false;
     double last_cue_at_ms = 0.0;
@@ -410,6 +424,7 @@ void zdon_ai_battle_begin(int level) {
     last_cue_pending = false;
     match_cue_pending = false;
     ready_se_pending = false;
+    ready_voice_pending = false;
     b.active = true;
     b.level = std::clamp(level, 1, 11);
     b.condition = zdon_ai_condition();
@@ -457,6 +472,10 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
 
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai) {
     auto& b = global_data.zdon_ai;
+    if (ready_voice_pending && get_current_ms() >= ready_voice_at_ms) {
+        ready_voice_pending = false;
+        cue("", "ready", 3);
+    }
     if (ready_se_pending && get_current_ms() >= ready_se_at_ms) {
         ready_se_pending = false;
         cue("ready", "", 1);
@@ -480,11 +499,11 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         }
         make_sections(times, ai.zdon_bar_times());
         if (zdon_ai_end_delay_on()) {
-            cue("", "ready", 3);
+            ready_voice_cue();
             ready_se_pending = true;
             ready_se_at_ms = get_current_ms() + kReadySeDelayMs;
         } else if (end_hold_ms() > 0) {
-            cue("", "ready", 3);
+            ready_voice_cue();
             ready_se_pending = true;
             ready_se_at_ms = get_current_ms() + kReadySeLagMs;
         } else {
