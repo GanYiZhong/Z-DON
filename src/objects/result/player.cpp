@@ -90,8 +90,15 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     sol::optional<bool> cpar = lua_object["count_up_parallel"];
     count_up_parallel = cpar.value_or(false);
     if (count_up_parallel) {
+        sol::optional<sol::table> row_delays = lua_object["count_up_row_delay_ms"];
         for (auto& [field_name, value] : update_list) {
             parallel_animators.emplace_back(value);
+            double delay = 0;
+            if (row_delays) {
+                sol::optional<double> d = (*row_delays)[field_name];
+                delay = d.value_or(0.0);
+            }
+            parallel_row_delay_ms.push_back(delay);
         }
     }
     count_up_row_ms = crm.value_or(count_up_row_ms);
@@ -138,9 +145,16 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
     } else if (count_up_parallel) {
         if (score_delay.has_value() && rows_done_ms == 0 && current_ms > score_delay.value()) {
             bool changed = false, all_done = true;
+            if (parallel_start_ms < 0) {
+                parallel_start_ms = current_ms;
+            }
             for (size_t i = 0; i < parallel_animators.size(); i++) {
                 auto& an = parallel_animators[i];
                 if (an.is_finished) {
+                    continue;
+                }
+                if (current_ms - parallel_start_ms < parallel_row_delay_ms[i]) {
+                    all_done = false;
                     continue;
                 }
                 auto& [field_name, value] = update_list[i];
