@@ -22,6 +22,12 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     // skin_config zdon_ai_end_delay (Green): the cabinet's song starts 3 s after the battle screen appears
     if (ai_battle && start_delay > 0 && zdon_ai_end_delay_on()) {
         start_delay = 3000.0;
+        // skin_config zdon_ai_start_delay_ms (Green): the song starts 3.37 s after the arena reveal (footage
+        // Tl7g8XXXvAM: reveal 136.63 s, song 140.0 s)
+        if (const auto it = tex.skin_config_by_name.find("zdon_ai_start_delay_ms");
+            it != tex.skin_config_by_name.end() && it->second.x > 0.0f) {
+            start_delay = it->second.x;
+        }
     }
     int delay = static_cast<int>(start_delay);
     global_data.zdon_ai.requested = false;
@@ -90,8 +96,7 @@ std::optional<Screens> Game2PScreen::update() {
     if (global_data.zdon_ai.active && players.size() == 2) {
         zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
         if (global_data.zdon_ai.finished && get_current_ms() >= global_data.zdon_ai.finished_at_ms && !ai_music_cut &&
-            song_music &&
-            (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
+            song_music && (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
             audio.stop_sound(
                 *song_music); // the cabinet cuts the song when the battle ends (the emblem and voice follow)
             ai_music_cut = true;
@@ -101,7 +106,15 @@ std::optional<Screens> Game2PScreen::update() {
 
     const double end_time = std::max(players[0]->end_time, players[1]->end_time);
 
-    if (result_transition.is_finished && !audio.is_sound_playing("result_transition")) {
+    // skin_config zdon_ai_result_hold (Green AI): the black cover stays until this long after it started (direct feed
+    // Tl7g8XXXvAM: the fade starts 274.1 s, the result comes up out of black 277.3 s)
+    bool ai_cover_held = false;
+    if (global_data.zdon_ai.active && ai_cover_start_ms >= 0.0) {
+        if (const auto it = tex.skin_config_by_name.find("zdon_ai_result_hold"); it != tex.skin_config_by_name.end()) {
+            ai_cover_held = get_current_ms() < ai_cover_start_ms + it->second.x;
+        }
+    }
+    if (result_transition.is_finished && !audio.is_sound_playing("result_transition") && !ai_cover_held) {
         return on_screen_end(Screens::RESULT_2P);
     }
 
@@ -112,6 +125,12 @@ std::optional<Screens> Game2PScreen::update() {
         // the result comes 5.25 s later than a normal play's
         if (global_data.zdon_ai.active && !global_data.config->general.fast_transitions && zdon_ai_end_delay_on()) {
             transition_delay += 5250.0;
+            // skin_config zdon_ai_result_delay x (Green): ms the cover waits after the song end, replacing the above
+            // (the laurel holds 9.1 s before the black fade: direct feed Tl7g8XXXvAM 265.0 -> 274.1)
+            if (const auto it = tex.skin_config_by_name.find("zdon_ai_result_delay");
+                it != tex.skin_config_by_name.end()) {
+                transition_delay = it->second.x;
+            }
         }
 
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);

@@ -52,6 +52,7 @@ void GameScreen::on_screen_start() {
     song_info = SongInfo(session_data.song_title, session_data.song_subtitle, parser->metadata.subtitle_full_display,
                          session_data.genre_index, global_data.songs_played + 1, 0, session_data.genre_label);
     result_transition = ResultTransition(global_data.player_num);
+    ai_cover_start_ms = -1.0;
     bpm = parser->metadata.bpm;
     scene_preset = parser->metadata.scene_preset;
     if (!has_movie()) {
@@ -389,6 +390,7 @@ void GameScreen::restart_song() {
     }
 
     result_transition = ResultTransition(scene_player_num());
+    ai_cover_start_ms = -1.0;
     audio.play_sound("restart", VolumePreset::SOUND);
     init_skip();
     reset_song_clock();
@@ -857,6 +859,7 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
                                 get_current_ms() >= global_data.zdon_ai.finished_at_ms + ai_banner_ms;
     if ((clock.position() >= end_time + transition_delay || ai_banner_done) && !result_transition.is_started) {
         result_transition.start();
+        ai_cover_start_ms = get_current_ms();
         audio.play_sound("result_transition", VolumePreset::VOICE);
         // skin_config zdon_ai_announce_at_fade (Green): the AI result announce sounds as the screen fades out, 4.7 s
         // before the result BGM (footage Tl7g8XXXvAM 273.94 / 492.73: announce at the fade, BGM +4.70)

@@ -62,8 +62,9 @@ public:
     double start_delay = 1000.0;
     bool song_started = false;
     bool score_saved = false;
-    bool ai_music_cut = false;      // Z-DON AI battle: the song audio was cut when the battle ended
-    bool ai_ending_pending = false; // Z-DON AI battle: the ending anim waits for the skin's battle cut-in
+    bool ai_music_cut = false;       // Z-DON AI battle: the song audio was cut when the battle ended
+    double ai_cover_start_ms = -1.0; // Z-DON Green AI: when the result cover started (skin key zdon_ai_result_hold)
+    bool ai_ending_pending = false;  // Z-DON AI battle: the ending anim waits for the skin's battle cut-in
     float bpm = 0.0f;
 
     std::unique_ptr<VideoPlayer> movie;

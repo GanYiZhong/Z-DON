@@ -501,7 +501,14 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         if (zdon_ai_end_delay_on()) {
             ready_voice_cue();
             ready_se_pending = true;
-            ready_se_at_ms = get_current_ms() + kReadySeDelayMs;
+            // skin_config zdon_ai_ready_se_ms (Green): the ready SE 1.62 s before the song (footage Tl7g8XXXvAM: SE
+            // 138.385 s, song 140.0 s); default kReadySeDelayMs
+            double se_ms = kReadySeDelayMs;
+            if (const auto it = tex.skin_config_by_name.find("zdon_ai_ready_se_ms");
+                it != tex.skin_config_by_name.end() && it->second.x > 0.0f) {
+                se_ms = it->second.x;
+            }
+            ready_se_at_ms = get_current_ms() + se_ms;
         } else if (end_hold_ms() > 0) {
             ready_voice_cue();
             ready_se_pending = true;
