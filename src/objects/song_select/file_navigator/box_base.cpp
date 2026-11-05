@@ -117,6 +117,9 @@ void BaseBox::update(double current_time) {
     if (!fade->settled(current_time)) {
         fade->update(current_time);
     }
+    if (snap_open_pending) {
+        move->fast_forward();
+    }
     float prev_position = move->attribute;
     if (!move->settled(current_time)) {
         move->update(current_time);
@@ -139,6 +142,10 @@ void BaseBox::update(double current_time) {
         if (yellow_box_active && !yellow_box_opened) {
             yellow_box_opened = true;
             open_fade->start();
+            if (snap_open_pending) {
+                open_fade->fast_forward();
+                snap_open_pending = false;
+            }
         }
     }
     if (yellow_box_active) {

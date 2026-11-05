@@ -174,6 +174,7 @@ protected:
         }
     }
     bool focus_sort = false;
+    bool instant_page0 = false; // skin key zdon_ai_instant_page0 (Green only)
     int focus_sort_steps = 0;
     void focus_sort_tick() {
         if (!focus_sort || state != SongSelectState::BROWSING || navigator.is_processing ||
@@ -187,6 +188,13 @@ protected:
         if ((navigator.is_directory(item) && item->genre_index == GenreIndex::DIFFICULTY) || focus_sort_steps >= 60) {
             focus_sort = false;
             return;
+        }
+        if (instant_page0) { // the cabinet opens on the box: no shelf scroll (feed Tl7g8XXXvAM 110.37 s)
+            focus_sort = false;
+            if (navigator.snap_to_genre(GenreIndex::DIFFICULTY)) {
+                return;
+            }
+            focus_sort = true;
         }
         navigator.move_right();
         ++focus_sort_steps;
@@ -397,6 +405,10 @@ public:
             focus_sort = ns != tex.skin_config_by_name.end() && ns->second.x != 0.0f;
         }
         focus_sort_steps = 0;
+        {
+            const auto ip = tex.skin_config_by_name.find("zdon_ai_instant_page0");
+            instant_page0 = focus_sort && ip != tex.skin_config_by_name.end() && ip->second.x != 0.0f;
+        }
         {
             const auto af = tex.skin_config_by_name.find("zdon_ai_arcade_flow"); // Green only (a child skin sets x = 0)
             arcade_flow = af != tex.skin_config_by_name.end() && af->second.x != 0.0f;

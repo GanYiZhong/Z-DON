@@ -31,6 +31,8 @@ inline size_t utf8_char_count(const std::string& s) {
 
 class BaseBox {
 public:
+    // Z-DON (Navigator::snap_to_genre): the next box opening skips its fade-in
+    bool snap_open_pending = false;
     bool text_loaded = false;
     GenreIndex genre_index;
     std::string genre_label;

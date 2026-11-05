@@ -558,19 +558,19 @@ void ScriptManager::register_lua_bindings() {
     sol::state& lua = *this->lua;
     // Calling an animation returns it: box:fade() and box.fade (a property) are the same object,
     // for skins written against either binding of the box animations.
-    lua.new_usertype<BaseAnimation>("BaseAnimation", sol::meta_function::call, anim_call<BaseAnimation>(), "update",
-                                    anim_update<BaseAnimation>(), "restart", &BaseAnimation::restart, "start",
-                                    &BaseAnimation::start, "reset", &BaseAnimation::reset, "attribute",
-                                    &BaseAnimation::attribute, "duration", &BaseAnimation::duration, "is_finished",
-                                    &BaseAnimation::is_finished, "is_started", &BaseAnimation::is_started,
-                                    // tex.get_animation() returns BaseAnimation*, so a MoveAnimation's start_position
-                                    // must be reachable here (the C++ YellowBox does the same C-style cast).
-                                    "start_position", sol::property([](BaseAnimation& self) -> int {
-                                        if (auto* move = dynamic_cast<MoveAnimation*>(&self)) {
-                                            return move->start_position;
-                                        }
-                                        return 0;
-                                    }));
+    lua.new_usertype<BaseAnimation>(
+        "BaseAnimation", sol::meta_function::call, anim_call<BaseAnimation>(), "update", anim_update<BaseAnimation>(),
+        "restart", &BaseAnimation::restart, "start", &BaseAnimation::start, "reset", &BaseAnimation::reset,
+        "fast_forward", &BaseAnimation::fast_forward, "attribute", &BaseAnimation::attribute, "duration",
+        &BaseAnimation::duration, "is_finished", &BaseAnimation::is_finished, "is_started", &BaseAnimation::is_started,
+        // tex.get_animation() returns BaseAnimation*, so a MoveAnimation's start_position
+        // must be reachable here (the C++ YellowBox does the same C-style cast).
+        "start_position", sol::property([](BaseAnimation& self) -> int {
+            if (auto* move = dynamic_cast<MoveAnimation*>(&self)) {
+                return move->start_position;
+            }
+            return 0;
+        }));
 
     // Fade animation bindings
     lua.new_usertype<FadeAnimation>("FadeAnimation", sol::base_classes, sol::bases<BaseAnimation>(),

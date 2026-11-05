@@ -198,7 +198,10 @@ public:
     void load_current_directory(const fs::path path);
     bool jump_to_song(const std::string& hash);
     bool jump_to_song_path(const fs::path& song_path);
-    void enter_diff_select();
+    // defer_box (Green AI select, skin key zdon_ai_card_hold_ms): the other boxes leave now, the card widens later
+    // through enter_current_box()
+    void enter_diff_select(bool defer_box = false);
+    void enter_current_box();
     void exit_diff_select();
     float get_diff_fade_in();
     bool is_directory(BaseBox* item);
@@ -216,6 +219,9 @@ public:
     std::array<int, 5> zdon_levels_of(const fs::path& song_path) const;
     size_t song_file_count() const { return song_files.size(); }
 
+    // Z-DON AI select (skin key zdon_ai_instant_page0): the cursor goes to the first folder of `genre` at once, the
+    // shelf and the box opening animation at rest (the cabinet page 0 has no scroll to the box)
+    bool snap_to_genre(GenreIndex genre);
     void move_left();
     void move_right();
     void skip_left();

@@ -53,6 +53,12 @@ public:
     virtual void restart();
 
     void start();
+    // Z-DON: make a started animation look as if it began long ago, so the next update() lands on its final value
+    void fast_forward() {
+        if (is_started) {
+            start_ms -= delay + duration + 1.0;
+        }
+    }
     void unlock_input();
 
     void pause();

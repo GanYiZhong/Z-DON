@@ -85,6 +85,10 @@ private:
     double board_voice_at_ms =
         -1.0; // skin_config zdon_ai_board_voice_ms: voice_select_diff when the board shows (Green AI)
     double voice_silent_until_ms = 0.0; // the AI battle's decide: no voice, the same wait
+    // Green AI select (skin keys zdon_ai_card_hold_ms / zdon_ai_level_panel_ms): the cabinet holds the card 29 frames
+    // after the don before it widens and 64 frames before the level panel rises (Tl7g8XXXvAM 125.81 s)
+    double card_enter_at_ms = -1.0;
+    double level_panel_at_ms = 0.0;
     void navigate_difficulty_left();
     void navigate_difficulty_right();
     bool has_course(Difficulty d) const;

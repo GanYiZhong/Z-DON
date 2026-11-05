@@ -3109,6 +3109,35 @@ void Navigator::navigate(int delta, bool snap) {
     background_fade_change->start();
 }
 
+bool Navigator::snap_to_genre(GenreIndex genre) {
+    if (items.empty() || inline_streaming) {
+        return false;
+    }
+    int target = -1;
+    for (int i = 0; i < static_cast<int>(items.size()); i++) {
+        if (is_directory(items[i].get()) && items[i]->genre_index == genre) {
+            target = i;
+            break;
+        }
+    }
+    if (target < 0) {
+        return false;
+    }
+    if (target != open_index) {
+        navigate(target - open_index, true);
+    }
+    last_bg_genre_index = bg_genre_index;
+    for (auto& box : items) {
+        box->fade->fast_forward();
+        box->open_fade->fast_forward();
+        box->open_anim->fast_forward();
+    }
+    items[open_index]->snap_open_pending = true;
+    zdon_ai_instant_open_arm();
+    background_fade_change->fast_forward();
+    return true;
+}
+
 void Navigator::move_left() {
     navigate(-1, false);
 }
@@ -3122,8 +3151,16 @@ void Navigator::skip_right() {
     navigate(+10, true);
 }
 
-void Navigator::enter_diff_select() {
-    items[open_index]->enter_box();
+void Navigator::enter_current_box() {
+    if (!items.empty()) {
+        items[open_index]->enter_box();
+    }
+}
+
+void Navigator::enter_diff_select(bool defer_box) {
+    if (!defer_box) {
+        items[open_index]->enter_box();
+    }
     const float duration = 800;
     const float distance = (150 * tex.screen_scale);
     // the list runs down the screen in the vertical gallery, across it otherwise

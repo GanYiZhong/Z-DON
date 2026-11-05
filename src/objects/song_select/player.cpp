@@ -64,6 +64,10 @@ void SongSelectPlayer::update(double current_time) {
         board_voice_at_ms = -1.0;
         audio.play_sound("voice_select_diff", VolumePreset::VOICE);
     }
+    if (card_enter_at_ms >= 0.0 && get_current_ms() >= card_enter_at_ms) {
+        card_enter_at_ms = -1.0;
+        navigator.enter_current_box();
+    }
     selected_diff_bounce->update(current_time);
     selected_diff_fadein->update(current_time);
     selected_diff_highlight_fade->update(current_time);
@@ -228,7 +232,19 @@ SongSelectState SongSelectPlayer::select_song() {
         if (curr_diffs.empty()) {
             return SongSelectState::BROWSING;
         }
-        navigator.enter_diff_select();
+        card_enter_at_ms = -1.0;
+        level_panel_at_ms = 0.0;
+        if (zdon_ai_arcade_sort()) {
+            const auto hold = tex.skin_config_by_name.find("zdon_ai_card_hold_ms");
+            const auto lp = tex.skin_config_by_name.find("zdon_ai_level_panel_ms");
+            if (hold != tex.skin_config_by_name.end() && hold->second.x > 0.0f) {
+                card_enter_at_ms = get_current_ms() + hold->second.x;
+            }
+            if (lp != tex.skin_config_by_name.end() && lp->second.x > 0.0f) {
+                level_panel_at_ms = get_current_ms() + lp->second.x;
+            }
+        }
+        navigator.enter_diff_select(card_enter_at_ms >= 0.0);
         selected_song = true;
         // the course board opens with voice_select_diff (footage YKjsle7VBCI 61.73 s, 0vjiSUv61i4 45.13 s,
         // Tl7g8XXXvAM 126.80 / 332.89 / 520.11 s)
@@ -482,7 +498,8 @@ void SongSelectPlayer::sync_level_panel() {
         return;
     }
     auto* song = dynamic_cast<SongBox*>(navigator.get_current_item());
-    const bool want = selected_song && !voice_played && !neiro_selector.has_value() && !modifier_selector.has_value() &&
+    const bool want = selected_song && get_current_ms() >= level_panel_at_ms && !voice_played &&
+                      !neiro_selector.has_value() && !modifier_selector.has_value() &&
                       selected_difficulty >= Difficulty::EASY && song != nullptr &&
                       song->course_info(static_cast<int>(selected_difficulty)).level > 0;
     if (!want) {

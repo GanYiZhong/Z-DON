@@ -154,6 +154,11 @@ bool zdon_ai_arcade_sort() {
     return arcade_sort_on;
 }
 
+static bool g_instant_open = false;
+void zdon_ai_instant_open_arm() {
+    g_instant_open = true;
+}
+
 void zdon_ai_sort_view_set(bool on, const AiBoardCourse& c) {
     sort_view_on = on;
     sort_view_course = c;
@@ -292,6 +297,11 @@ void zdon_ai_board_bind(sol::table& tex) {
             t["jump"] = jump_ms;
         }
         return sol::make_object(ts, t);
+    });
+    tex.set_function("ai_instant_open", []() {
+        const bool was = g_instant_open;
+        g_instant_open = false;
+        return was;
     });
     tex.set_function("ai_diff_info", [](sol::this_state ts) -> sol::object {
         if (!info_on || info_course.level == 0) {

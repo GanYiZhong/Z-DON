@@ -33,6 +33,10 @@ void zdon_ai_board_info_set(bool on, int column, const AiBoardCourse& c);
 // tex.ai_diff_info() -> nil | { course, level, count, clear, fc } (the highlighted course column)
 void zdon_ai_board_bind(sol::table& tex);
 
+// tex.ai_instant_open() -> true once after Navigator::snap_to_genre (skin key zdon_ai_instant_page0): the skin then
+// fast-forwards the yellow box open animations of that first open
+void zdon_ai_instant_open_arm();
+
 // skin_config zdon_ai_arcade_flow (Green AI select only): the engine's own Diff Sort window skips the star and the
 // confirm steps (a don on a course column goes straight to the filtered list, the star level being the one most
 // songs have) and the skin draws the arcade's columns / red band; tex.ai_sort_view() -> nil | { course, level } while
