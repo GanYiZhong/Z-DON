@@ -107,6 +107,12 @@ bool zdon_ai_lane_game();
 // AI battle (AISongSelectScreen -> AI_GAME -> AI_RESULT). Otherwise Z-DON's (ZdonAiSongSelectScreen -> GAME_2P), also
 // for a child skin that only inherits the script (Green has it; Nijiiro, YataiDON14 and SimpleStyle keep Z-DON's)
 bool zdon_ai_upstream();
+// upstream's AI_GAME in a skin with "zdon_upai_arena" (Green): the song title / counter at the bottom as on Z-DON's AI
+// stage (zdon_ai_song_info) and the AI lane in Z-DON's look (Player::use_upai_lane). Only an upstream-AI skin reaches
+// AI_GAME, so the children that inherit the key are unaffected
+bool zdon_upai_arena();
+// zdon_ai_arena_game() or zdon_upai_arena(): the song info's AI stage layout
+bool zdon_ai_stage();
 
 // a new battle at a tuning level (the player's recent timing is kept)
 void zdon_ai_battle_begin(int level);

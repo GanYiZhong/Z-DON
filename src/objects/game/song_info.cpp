@@ -21,7 +21,7 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
 
     // Z-DON: the skin's AI stage may set its own title size (zdon_ai_song_info.font_size)
     int title_font = tex.get_skin_config(SC::GAME_SONG_INFO)->font_size;
-    if (zdon_ai_arena_game()) {
+    if (zdon_ai_stage()) {
         if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info");
             it != tex.skin_config_by_name.end() && it->second.font_size > 0) {
             title_font = it->second.font_size;
@@ -57,7 +57,7 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
                                                                                          : Color{101, 0, 82, 255};
     // Z-DON: zdon_ai_song_info "height": 1 = the AI stage's genre pill takes the genre's bright colour (the cabinet's
     // orange Namco Original pill) instead of the dark one
-    if (zdon_ai_arena_game()) {
+    if (zdon_ai_stage()) {
         if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info");
             it != tex.skin_config_by_name.end() && it->second.height > 0.0f && color_it != DEFAULT_COLORS.end() &&
             color_it->second[0].has_value()) {
@@ -138,7 +138,7 @@ void SongInfo::draw() {
     float dy = 0.0f;
     bool on_stage = false;
     bool skin_pill = false;
-    if (zdon_ai_arena_game()) {
+    if (zdon_ai_stage()) {
         if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info"); it != tex.skin_config_by_name.end()) {
             dx = it->second.x;
             dy = it->second.y;

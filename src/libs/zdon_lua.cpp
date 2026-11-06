@@ -251,6 +251,17 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     zdon_ai_board_bind(tex); // tex.ai_board(), tex.ai_diff_info()
 
+    // tex.upai_song() -> genre, title_alpha on upstream's AI game in a "zdon_upai_arena" skin (else nil): the session's
+    // genre_index (0 J-POP .. 7 namco original, 8 none) and the song title's visibility (SongInfo), for the skin's
+    // genre pill under the title (Green draws it, zdon_ai_song_info width 1)
+    tex.set_function("upai_song", [](sol::this_state ts) -> std::tuple<sol::object, sol::object> {
+        if (!zdon_upai_arena()) {
+            return {sol::make_object(ts, sol::lua_nil), sol::make_object(ts, sol::lua_nil)};
+        }
+        const SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
+        return {sol::make_object(ts, sd.genre_index), sol::make_object(ts, zdon_ai_title_alpha())};
+    });
+
     // tex.ai_transition() -> true while an AI battle is being started: from the song select's decide (the VS window and
     // loading card of its game transition) until the battle ends. Unlike ai_active it is already true there
     tex.set_function("ai_transition",

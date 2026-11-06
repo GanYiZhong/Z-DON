@@ -106,6 +106,9 @@ public:
     const std::unordered_map<int, int>& get_roll_hits() const { return roll_hits; }
     void hide_puchi();
     void hide_lane_badges() { show_lane_badges = false; }
+    // Z-DON (zdon_upai_arena): the AI's lane in upstream's AI game takes Z-DON's AI lane (circuit cover / background,
+    // no course mark, no plate or auto marker: the skin draws "AIどん")
+    void use_upai_lane();
 
     void place_chara_on_stage(float x, float y);
     void move_stage_chara(float x, float y) { stage_chara = {x, y}; }
@@ -213,6 +216,7 @@ protected:
     bool show_lane_name = true;         // auto icon / nameplate
     bool show_drumroll_count = true;    // the "N hits" counter during a drumroll
     bool show_lane_badges = true;       // the player icon (1P/2P) and the modifier badges
+    bool upai_ai = false;               // Z-DON: use_upai_lane
 
 private:
     bool is_2p;

@@ -6,6 +6,7 @@
 
 #include "../libs/file/scores.h"
 #include "../libs/input/input.h"
+#include "../objects/game/zdon_ai.h"
 
 static constexpr int LEVEL_SELECT_SECONDS = 10;
 
@@ -271,6 +272,9 @@ void AIGameScreen::apply_overlay_layout() {
     ai()->hide_gauge = true;
     ai()->hide_score_counter = true;
     ai()->hide_lane_badges();
+    if (zdon_upai_arena()) {
+        ai()->use_upai_lane();
+    }
 }
 
 void AIGameScreen::on_screen_start() {

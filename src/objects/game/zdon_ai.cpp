@@ -341,6 +341,22 @@ bool zdon_ai_upstream() {
     return cached;
 }
 
+bool zdon_upai_arena() {
+    return global_data.current_screen == "AI_GAME" && tex.skin_config_by_name.contains("zdon_upai_arena") &&
+           zdon_ai_upstream();
+}
+
+bool zdon_ai_stage() {
+    return zdon_ai_arena_game() || zdon_upai_arena();
+}
+
+void Player::use_upai_lane() {
+    upai_ai = true;
+    if (tex.has_texture("lane/ai_lane_cover")) {
+        lane_cover_tex_id = tex.get_texture("lane/ai_lane_cover");
+    }
+}
+
 PlayerData zdon_ai_player_data(int level) {
     PlayerData pd;
     pd.username = "AI";
