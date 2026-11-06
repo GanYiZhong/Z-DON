@@ -103,6 +103,10 @@ bool zdon_ai_arena_game();
 bool zdon_ai_end_delay_on();
 // GAME_2P of an AI battle in a skin with "zdon_ai_lane" (the AI lane's own cover / background, no badges)
 bool zdon_ai_lane_game();
+// the skin's own Scripts folder (not a parent's) has upstream's ai_support_menu.lua: Screens::AI_SELECT is upstream's
+// AI battle (AISongSelectScreen -> AI_GAME -> AI_RESULT). Otherwise Z-DON's (ZdonAiSongSelectScreen -> GAME_2P), also
+// for a child skin that only inherits the script (Green has it; Nijiiro, YataiDON14 and SimpleStyle keep Z-DON's)
+bool zdon_ai_upstream();
 
 // a new battle at a tuning level (the player's recent timing is kept)
 void zdon_ai_battle_begin(int level);

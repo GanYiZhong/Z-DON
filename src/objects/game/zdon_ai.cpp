@@ -8,6 +8,8 @@
 
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
+#include "../../libs/file/script.h"
+#include "../../libs/gfx/texture.h"
 #include "../../libs/global_data.h"
 #include "player.h"
 
@@ -317,6 +319,26 @@ bool zdon_ai_lane_game() {
 
 bool zdon_ai_arena_game() {
     return global_data.zdon_ai.active && zdon_ai_skin_arena();
+}
+
+bool zdon_ai_upstream() {
+    if (!script_manager.has_lua_script("ai_support_menu")) {
+        return false;
+    }
+    // the script index keeps the nearest skin's file, so its path tells whose it is; cached per (script, skin)
+    static std::string cached_script, cached_root;
+    static bool cached = false;
+    const std::string script = script_manager.get_lua_script_path("ai_support_menu");
+    const std::string root = tex.skin_root().string();
+    if (script != cached_script || root != cached_root) {
+        const fs::path own = fs::absolute(tex.skin_root() / "Scripts").lexically_normal();
+        const fs::path file = fs::absolute(fs::path(script)).lexically_normal();
+        const auto [o, f] = std::ranges::mismatch(own, file);
+        cached = o == own.end() && f != file.end();
+        cached_script = script;
+        cached_root = root;
+    }
+    return cached;
 }
 
 PlayerData zdon_ai_player_data(int level) {

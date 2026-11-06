@@ -420,11 +420,12 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<WaiwaiResultScreen>(screens, except, Screens::WAIWAI_RESULT);
     put_screen<WaiwaiTutorialScreen>(screens, except, Screens::WAIWAI_TUTORIAL);
     put_screen<WaiwaiRetryGameScreen>(screens, except, Screens::WAIWAI_RETRY_GAME);
-    // merge 0ed42ec: two AI battles share Screens::AI_SELECT. A skin with upstream's ai_support_menu Lua script
-    // gets upstream's (Lua, server-backed) AISongSelectScreen -> AI_GAME -> AI_RESULT; any other skin gets Z-DON's
+    // merge 0ed42ec: two AI battles share Screens::AI_SELECT. A skin whose own Scripts folder has upstream's
+    // ai_support_menu Lua script gets upstream's (Lua, server-backed) AISongSelectScreen -> AI_GAME -> AI_RESULT;
+    // any other skin, also a child that only inherits the script (Nijiiro, YataiDON14 from Green), gets Z-DON's
     // cabinet AI battle (ZdonAiSongSelectScreen -> GAME_2P / RESULT_2P with global_data.zdon_ai). The skin's
     // scripts are loaded before this runs, and a skin change repopulates the screens (reload_skin_screens).
-    if (script_manager.has_lua_script("ai_support_menu")) {
+    if (zdon_ai_upstream()) {
         put_screen<AISongSelectScreen>(screens, except, Screens::AI_SELECT);
     } else {
         put_screen<ZdonAiSongSelectScreen>(screens, except, Screens::AI_SELECT);

@@ -233,6 +233,12 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
     tex.set_function("ai_active", [] -> bool { return global_data.zdon_ai.active; });
 
+    // tex.zdon_ai_select() -> true on Z-DON's AI select only: Screens::AI_SELECT while the skin does not use
+    // upstream's AI battle (zdon_ai_upstream). Green's Z-DON AI hooks test this instead of current_screen() ==
+    // "AI_SELECT", so upstream's AI select in Green draws without them; Nijiiro / YataiDON14 inherit the hooks
+    tex.set_function("zdon_ai_select",
+                     [] -> bool { return global_data.current_screen == "AI_SELECT" && !zdon_ai_upstream(); });
+
     // tex.ai_diff_stage() -> nil, or the cursor (0 back, 1..4 easy..oni, 5 recommended, 6 last) while the AI select
     // shows its course columns (skin_config zdon_ai_diff_first)
     tex.set_function("ai_diff_stage", [](sol::this_state ts) -> sol::object {

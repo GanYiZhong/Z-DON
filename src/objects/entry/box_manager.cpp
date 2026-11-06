@@ -2,6 +2,7 @@
 
 #include "../../libs/gfx/text.h"
 #include "../../libs/global_data.h"
+#include "../game/zdon_ai.h"
 #include "zdon_outfit_menu.h"
 
 static constexpr int ENTRY_FADE_OUT_ANIM_ID = 9;
@@ -66,8 +67,9 @@ void BoxManager::build_board_list() {
             continue;
         }
         // merge 0ed42ec: upstream shows the AI board only when the skin has its ai_support_menu script. Without it
-        // the board opens Z-DON's AI battle (the screen factory in YataiDON.cpp picks ZdonAiSongSelectScreen), so
-        // for those skins the label alone decides, as before. Z-DON keeps its own board order (practice first).
+        // (or with an inherited one, zdon_ai_upstream) the board opens Z-DON's AI battle (the screen factory in
+        // YataiDON.cpp picks ZdonAiSongSelectScreen), so the label alone decides, as before.
+        // Z-DON keeps its own board order (practice first).
         // like the dan board: a skin that blanks the board's text leaves the board out
         std::string label = font_manager.get_text_label(sc);
         if (label.empty()) {
@@ -156,7 +158,9 @@ void BoxManager::select_box() {
     }
     if (location == Screens::SONG_SELECT) {
         audio.play_sound("mode_game", VolumePreset::VOICE);
-    } else if (location == Screens::AI_SELECT) {
+    } else if (location == Screens::AI_SELECT && zdon_ai_upstream()) {
+        // upstream's mode voice (Green's Sounds/entry/mode_ai.ogg); a child skin inherits the file, but Z-DON's AI
+        // battle has its own voice timing, so it stays silent there as before
         audio.play_sound("mode_ai", VolumePreset::VOICE);
     }
     fade_out->start();
