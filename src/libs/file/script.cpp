@@ -314,16 +314,16 @@ static DrawTextureParams parse_draw_params(lua_State* L, int index) {
                     params.origin.y = lua_index_or(L, v, 2, params.origin.y);
                 }
             } else if (key == "blend") {
-                if (lua_type(L, v) == LUA_TSTRING && std::string_view(lua_tostring(L, v)) == "add") {
-                    params.blend = blend_mode::ADDITIVE; // Z-DON: opt-in additive draw
+                // Z-DON's opt-in "add" and upstream's "additive" (Green's AI battle) are the same additive draw
+                if (lua_type(L, v) == LUA_TSTRING) {
+                    const std::string_view mode = lua_tostring(L, v);
+                    if (mode == "add" || mode == "additive") {
+                        params.blend = blend_mode::ADDITIVE;
+                    }
                 }
             } else if (key == "mirror") {
                 if (lua_type(L, v) == LUA_TSTRING) {
                     params.mirror = mirror_from_string(lua_tostring(L, v));
-                }
-            } else if (key == "blend") {
-                if (lua_type(L, v) == LUA_TSTRING && std::string_view(lua_tostring(L, v)) == "additive") {
-                    params.blend = blend_mode::ADDITIVE;
                 }
             }
         }
