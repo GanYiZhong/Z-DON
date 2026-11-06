@@ -139,6 +139,16 @@
 - 補搬過 dbc9e69（skin 更新器在 checksums 清單過期時照樣寫入完整下載，8ac153d）；合併上游 ef867fb 時改用上游的 skin 更新器，這項跟著拿掉（上游版遇到下載內容和清單不符時保留本機檔）。不搬：YATAIDON_SYNC_LOG（開發用）。
 - 完整分類表在 scratchpad arch/impl_wip_port.md。
 
+## 合併上游 0ed42ec（2026-11-06：AI 對戰、わいわい、商店、總結算、活動、Switch、clang-tidy 修正）
+- 45 個衝突檔，全在 src/；決定處在程式裡標 `merge 0ed42ec`，完整紀錄在 scratchpad zdon_merge_result_20261106.md。
+- AI 對戰兩套並存：Z-DON 的改名 `ZdonAiSongSelectScreen`；YataiDON.cpp 的畫面工廠在 skin 有 `ai_support_menu` Lua 時建上游的 `AISongSelectScreen`（→ AI_GAME → AI_RESULT，要連線後端），否則建 Z-DON 的（→ GAME_2P / RESULT_2P）。Z-DON 的 skin 沒有那個腳本，走 Z-DON 的；上游 Green 98bf4532 實測會進上游的 AI 開場。`Game2PScreen::select_screen()` 的預設是 Z-DON 的規則。
+- 選曲掃描：保留 Z-DON 的 walker、清單 stamp、LibraryIndex、原子游標；加上游的 song_list.txt／box.def 收集與掃描快照、`song_metadata_from`、`platform_file_stamp`、SongLibrary 填充。照上游寫法放在 worker 裡會讓 3008 首（全快取）的掃描慢約 500 ms（每首 `is_library_song_file` 在 scores_mutex 裡 stat 一次），改成用清單判斷＋背景 job 填 library／排序快照；之後 LTO 版 Song scan 中位數 306 ms（合併前 281 ms，暖機、6 次）。
+- 上游的わいわい、AI rank 10 指定曲資料夾要上游的 navigation loader，Z-DON 的 navigator 沒建這兩種資料夾（Z-DON skin 也沒有這些腳本）。
+- text.cpp 以 Z-DON 的字型快取為底，加上游的 generation 計數與描邊文字貼圖快取（key 含 texture density）。
+- 特訓：小節跳轉改成到頭／尾停住（上游的跳轉鈕會變灰），保留 Z-DON 的連按步數。
+- clang-tidy：只套在 Z-DON 的行；redundant-nested-if（括號壞掉）、redundant-member-init（`{}` 被拿掉＝未初始化）、use-string-view（回傳拼接字串）三種修正不收。
+- 畫面比對（固定步長、同按鍵）：SimpleStyle 標題→結算 115/115 相同；Green 101/115，差異只在鏡像貼圖（右側煙火、結算右下花）＝上游 texture.cpp 拿掉鏡像時的 -0.5 裁切偏移；Nijiiro 差異同理（背景舞者鏡像，每幀 ≤0.14%）。特訓 3 組、錄影（8001 幀、長度相同）與合併前相同；AI 對戰 Green／Nijiiro 選曲→對戰→勝利→結算→段位頁都走完（AI 調子每次執行隨機，無法逐幀比）。
+
 ## 合併上游 bde4201 後的已知畫面差異（都是上游自己的改動）
 - 練習模式：f2e1174 起會播前奏（以前第一幀就跳過約 1 s 前奏）。純上游 f2e1174 前/後與 Z-DON 合併前/後各自 19/19 相同。
 - 練習模式按空白鍵不會暫停（上游就沒有 pause_key 處理，只有 2P 咚/咔），未改。
