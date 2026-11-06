@@ -1880,7 +1880,11 @@ namespace {
             const int divisions = GAP_DIVISIONS[static_cast<size_t>(group.gap)];
             std::optional<int> slot;
             if (group.gap >= Gap::QUARTER) {
-                const double pos = std::fmod(bar_pos[first], whole);
+                // within its whole note (a TJA bar can be longer than 4/4); just under a whole note is the next one
+                double pos = std::fmod(bar_pos[first], whole);
+                if (pos >= whole - whole / 64.0) {
+                    pos -= whole;
+                }
                 for (int s = 0; s < divisions && !slot; ++s) {
                     const double off = s * whole / divisions - pos;
                     if (off >= -whole / 64.0 && off < whole / 64.0) {
