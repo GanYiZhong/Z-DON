@@ -1107,22 +1107,25 @@ std::optional<Note> Player::get_first_note() {
 
 // #BMSCROLL / #HBSCROLL: distance = beats to the note, so the field speeds up and slows down
 // with the tempo and stops during a #DELAY. Otherwise: time to the note at the note's own BPM.
+static constexpr float HS_PX_OFFSET = 82;
+
 float Player::get_position_x(const Note& note, double current_ms) {
+    float real_width = tex.screen_width + (HS_PX_OFFSET * tex.screen_scale);
     if (scroll_type != ScrollType::NMSCROLL) {
         double beats = tempo_map.beat_at(note.hit_ms) - beat_at_now(current_ms);
-        return JudgePos::X + beats / 4 * note.scroll_x * (tex.screen_width - JudgePos::X);
+        return JudgePos::X + beats / 4 * note.scroll_x * (real_width - JudgePos::X);
     }
-    float speedx = note.bpm / 240000 * note.scroll_x * (tex.screen_width - JudgePos::X);
+    float speedx = note.bpm / 240000 * note.scroll_x * (real_width - JudgePos::X);
     return JudgePos::X + (note.hit_ms - current_ms) * speedx;
 }
 
 float Player::get_position_y(const Note& note, double current_ms) {
+    float real_width = tex.screen_width + (HS_PX_OFFSET * tex.screen_scale);
     if (scroll_type != ScrollType::NMSCROLL) {
         double beats = tempo_map.beat_at(note.hit_ms) - beat_at_now(current_ms);
-        return beats / 4 * note.scroll_y * (tex.screen_width - JudgePos::X);
+        return beats / 4 * note.scroll_y * (real_width - JudgePos::X);
     }
-    float speedy =
-        note.bpm / 240000 * note.scroll_y * ((tex.screen_width - JudgePos::X) / tex.screen_width) * tex.screen_width;
+    float speedy = note.bpm / 240000 * note.scroll_y * (real_width - JudgePos::X);
     return (note.hit_ms - current_ms) * speedy;
 }
 
