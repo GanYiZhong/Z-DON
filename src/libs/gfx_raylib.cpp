@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "gfx.h"
+#include "gfx/mesh_bounds.h"
 #include "gfx/sdl_compat.h" // before raylib.h: raylib.h must not be the first to pull in <stdarg.h>
 
 namespace ray {
@@ -113,12 +114,12 @@ void draw_model(Model model, Vec3 pos, float scale, Color tint) {
     ray::DrawModel(to<ray::Model>(model), pos, scale, {tint.r, tint.g, tint.b, tint.a});
 }
 
-void draw_text_ex(Font font, const char* text, Vec2 pos, float font_size, float spacing, Color color) {
-    ray::DrawTextEx(to<ray::Font>(font), text, pos, font_size, spacing, {color.r, color.g, color.b, color.a});
+void draw_text_ex(Font font, const char* text, Vec2 pos, float font_size, float spacing, Color tint) {
+    ray::DrawTextEx(to<ray::Font>(font), text, pos, font_size, spacing, {tint.r, tint.g, tint.b, tint.a});
 }
 
-void draw_texture_pro(Texture tex, Rect source, Rect dest, Vec2 origin, float rotation, Color tint) {
-    ray::DrawTexturePro(tex, source, dest, origin, rotation, {tint.r, tint.g, tint.b, tint.a});
+void draw_texture_pro(Texture tex, Rect src, Rect dst, Vec2 origin, float rotation, Color tint) {
+    ray::DrawTexturePro(tex, src, dst, origin, rotation, {tint.r, tint.g, tint.b, tint.a});
 }
 
 void draw_text(const char* text, int x, int y, int font_size, Color color) {
@@ -371,6 +372,10 @@ void unload_model_animations(ModelAnimation* anims, int count) {
 
 void update_model_animation(Model model, ModelAnimation anim, float frame) {
     ray::UpdateModelAnimation(to<ray::Model>(model), to<ray::ModelAnimation>(anim), frame);
+}
+
+bool get_mesh_bounds(const Mesh& mesh, Vec3& lower, Vec3& upper) {
+    return cpu_mesh_bounds(mesh, lower, upper);
 }
 
 void draw_mesh(Mesh mesh, Material material, Mat4 transform) {

@@ -18,6 +18,7 @@
 #include "../file/scores.h"
 #include "../fixed_step.h"
 #include "../gfx/color_utils.h"
+#include "../gfx/texture.h"
 #include "../global_data.h"
 #include "../math/sha256.h"
 #include "../parsers/tja.h"
@@ -55,6 +56,10 @@ std::string modifiers_to_json(const Modifiers& m) {
     doc.Accept(writer);
 
     return buffer.GetString();
+}
+
+std::vector<std::string> NetworkClient::active_campaigns() const {
+    return online && !tex.options[SCO::DISABLE_CAMPAIGNS] ? campaigns : std::vector<std::string>{};
 }
 
 #if defined(NETWORK_ENABLED)
@@ -288,9 +293,9 @@ std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_co
 #if defined(__ANDROID__)
 namespace {
     constexpr char kUpdateChecksumUrl[] =
-        "https://github.com/yonokid/YataiDON/releases/latest/download/checksums-android.sha256";
+        "https://github.com/yonokid/YataiDON/releases/download/updater/checksums-android.sha256";
     constexpr char kUpdateApkUrl[] =
-        "https://github.com/yonokid/YataiDON/releases/latest/download/YataiDON-Android-Update.apk";
+        "https://github.com/yonokid/YataiDON/releases/download/updater/YataiDON-Android-Update.apk";
     constexpr char kUpdateMarkerPath[] = "update_apk.sha256";
     constexpr char kUpdateApkPath[] = "/sdcard/YataiDON/update.apk";
     constexpr char kUpdateApkTmpPath[] = "/sdcard/YataiDON/update.apk.part";
@@ -472,6 +477,29 @@ static ReplayData parse_replay_response(const cpr::Response& response) {
     return result;
 }
 
+void NetworkClient::start_leaderboard_fetch(const std::string& hash) {
+    pending_leaderboard_hash = hash;
+    pending_leaderboard =
+        cpr::GetAsync(cpr::Url{network_url("/song_ranking")},
+                      signed_headers("GET", "/song_ranking", {{"hash", hash}, {"limit", "3"}}),
+                      cpr::Parameters{{"hash", hash}, {"limit", "3"}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+}
+
+std::optional<std::vector<RankingEntry>> NetworkClient::song_leaderboard(const std::string& hash) {
+    if (!network_enabled() || !online || hash.empty()) {
+        return std::nullopt;
+    }
+    if (auto it = leaderboard_cache.find(hash); it != leaderboard_cache.end()) {
+        return it->second;
+    }
+    if (!pending_leaderboard.has_value()) {
+        start_leaderboard_fetch(hash);
+    } else if (pending_leaderboard_hash != hash) {
+        next_leaderboard_hash = hash;
+    }
+    return std::nullopt;
+}
+
 void NetworkClient::request_replay(int score_id) {
     if (!network_enabled()) {
         return;
@@ -550,6 +578,7 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
     if (!network_enabled()) {
         return;
     }
+    leaderboard_cache.erase(hash);
     std::map<std::string, std::string> params{
         {"access_code", access_code},
         {"hash", hash},
@@ -616,6 +645,172 @@ void NetworkClient::spin_gacha(const std::string& access_code) {
 
 std::optional<GachaResult> NetworkClient::take_gacha_result() {
     return std::exchange(gacha_result, std::nullopt);
+}
+
+void NetworkClient::submit_kinotake(int seat, const std::string& access_code, int team, int score, bool duet,
+                                    bool costume) {
+    if (!network_enabled() || !online || seat < 0 || seat > 1 || team < 0) {
+        return;
+    }
+    std::map<std::string, std::string> params{
+        {"access_code", access_code},      {"team", std::to_string(team)},          {"score", std::to_string(score)},
+        {"duet", duet ? "true" : "false"}, {"costume", costume ? "true" : "false"},
+    };
+    pending_kinotake.emplace_back(seat, cpr::PostAsync(cpr::Url{network_url("/kinotake")},
+                                                       signed_headers("POST", "/kinotake", params),
+                                                       cpr::Parameters{{"access_code", params["access_code"]},
+                                                                       {"team", params["team"]},
+                                                                       {"score", params["score"]},
+                                                                       {"duet", params["duet"]},
+                                                                       {"costume", params["costume"]}},
+                                                       cpr::Timeout{5000} NETWORK_CA_OPT));
+    kinotake_pending_count_ = static_cast<int>(pending_kinotake.size());
+    kinotake_tally_.seat[seat].team = team;
+    kinotake_tally_.seat[seat].duet = kinotake_tally_.seat[seat].duet || duet;
+}
+
+void NetworkClient::submit_don_points(int seat, const std::string& access_code, const std::vector<int>& gauges) {
+    if (!network_enabled() || !online || seat < 0 || seat > 1 || gauges.empty()) {
+        return;
+    }
+    std::string list;
+    for (int gauge : gauges) {
+        list += (list.empty() ? "" : ",") + std::to_string(gauge);
+    }
+    std::map<std::string, std::string> params{{"access_code", access_code}, {"gauges", list}};
+    pending_don_points.emplace_back(
+        seat, cpr::PostAsync(cpr::Url{network_url("/don_points")}, signed_headers("POST", "/don_points", params),
+                             cpr::Parameters{{"access_code", access_code}, {"gauges", list}},
+                             cpr::Timeout{5000} NETWORK_CA_OPT));
+}
+
+void NetworkClient::submit_medals(int seat, const std::string& access_code) {
+    if (!network_enabled() || !online || seat < 0 || seat > 1) {
+        return;
+    }
+    pending_medals.emplace_back(seat, cpr::PostAsync(cpr::Url{network_url("/medals")},
+                                                     signed_headers("POST", "/medals", {{"access_code", access_code}}),
+                                                     cpr::Parameters{{"access_code", access_code}},
+                                                     cpr::Timeout{5000} NETWORK_CA_OPT));
+    reward_shop_pending_count_++;
+}
+
+void NetworkClient::submit_ai_battle(const std::string& access_code, const std::string& song_hash, int difficulty,
+                                     int stars, bool won, bool assigned, const std::string& sections) {
+    if (!network_enabled() || !online) {
+        return;
+    }
+    const std::string won_text = won ? "true" : "false";
+    const std::string assigned_text = assigned ? "true" : "false";
+    std::map<std::string, std::string> params{{"access_code", access_code},
+                                              {"song_hash", song_hash},
+                                              {"difficulty", std::to_string(difficulty)},
+                                              {"stars", std::to_string(stars)},
+                                              {"won", won_text},
+                                              {"assigned", assigned_text},
+                                              {"sections", sections}};
+    pending_ai_battle.push_back(cpr::PostAsync(cpr::Url{network_url("/ai_battle")},
+                                               signed_headers("POST", "/ai_battle", params),
+                                               cpr::Parameters{{"access_code", access_code},
+                                                               {"song_hash", song_hash},
+                                                               {"difficulty", std::to_string(difficulty)},
+                                                               {"stars", std::to_string(stars)},
+                                                               {"won", won_text},
+                                                               {"assigned", assigned_text},
+                                                               {"sections", sections}},
+                                               cpr::Timeout{5000} NETWORK_CA_OPT));
+}
+
+void NetworkClient::request_reward_shop(int seat, const std::string& access_code) {
+    shop_seats[seat] = {};
+    if (!network_enabled() || !online || seat < 0 || seat > 1) {
+        return;
+    }
+    pending_shop.emplace_back(seat, cpr::GetAsync(cpr::Url{network_url("/reward_shop")},
+                                                  cpr::Parameters{{"access_code", access_code}},
+                                                  cpr::Timeout{5000} NETWORK_CA_OPT));
+    reward_shop_pending_count_++;
+}
+
+void NetworkClient::buy_shop_good(int seat, const std::string& access_code, int type, int id) {
+    if (!network_enabled() || !online) {
+        shop_buy_result = ShopBuyResult{.seat = seat, .status = "error"};
+        return;
+    }
+    const std::string type_str = std::to_string(type), id_str = std::to_string(id);
+    std::map<std::string, std::string> params{{"access_code", access_code}, {"type", type_str}, {"item_id", id_str}};
+    pending_shop_buy.emplace_back(
+        seat,
+        cpr::PostAsync(cpr::Url{network_url("/reward_shop/buy")}, signed_headers("POST", "/reward_shop/buy", params),
+                       cpr::Parameters{{"access_code", access_code}, {"type", type_str}, {"item_id", id_str}},
+                       cpr::Timeout{5000} NETWORK_CA_OPT));
+}
+
+std::optional<ShopBuyResult> NetworkClient::take_shop_buy_result() {
+    return std::exchange(shop_buy_result, std::nullopt);
+}
+
+void NetworkClient::unlock_campaign_costume(const std::string& access_code, int cos_index) {
+    if (!network_enabled() || !online) {
+        return;
+    }
+    const std::string cos = std::to_string(cos_index);
+    cpr::Response response =
+        cpr::Post(cpr::Url{network_url("/campaign_costume")},
+                  signed_headers("POST", "/campaign_costume", {{"access_code", access_code}, {"cos", cos}}),
+                  cpr::Parameters{{"access_code", access_code}, {"cos", cos}}, cpr::Timeout{3000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        spdlog::warn("unlock_campaign_costume: status {}", response.status_code);
+    }
+}
+
+AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string& access_code) {
+    AIBattleStatus status;
+    if (!network_enabled() || !online) {
+        return status;
+    }
+    cpr::Response response = cpr::Get(cpr::Url{network_url("/ai_battle")},
+                                      cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{3000} NETWORK_CA_OPT);
+    rapidjson::Document doc;
+    if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+        const auto read = [&doc](const char* key, int fallback) {
+            return doc.HasMember(key) && doc[key].IsInt() ? doc[key].GetInt() : fallback; // null = no next step
+        };
+        status.answered = true;
+        status.rank = read("rank", 0);
+        status.tokens = read("tokens", 0);
+        status.next_rank_tokens = read("next_rank_tokens", -1);
+        status.wins = read("wins", 0);
+        status.next_reward_wins = read("next_reward_wins", -1);
+    }
+    return status;
+}
+
+OwnedCosmetics NetworkClient::fetch_owned_cosmetics(const std::string& access_code) {
+    OwnedCosmetics owned;
+    if (!network_enabled() || !online) {
+        return owned;
+    }
+    cpr::Response response = cpr::Get(cpr::Url{network_url("/rewards")}, cpr::Parameters{{"access_code", access_code}},
+                                      cpr::Timeout{3000} NETWORK_CA_OPT);
+    rapidjson::Document doc;
+    if (response.status_code != 200 || doc.Parse(response.text.c_str()).HasParseError() || !doc.IsObject() ||
+        !doc.HasMember("force_unlock") || !doc["force_unlock"].IsBool() || doc["force_unlock"].GetBool()) {
+        return owned;
+    }
+    owned.all = false;
+    const std::pair<const char*, std::set<int>*> lists[] = {
+        {"costume", &owned.costume}, {"head", &owned.head}, {"body", &owned.body}};
+    for (auto& [key, ids] : lists) {
+        if (doc.HasMember(key) && doc[key].IsArray()) {
+            for (const auto& id : doc[key].GetArray()) {
+                if (id.IsInt()) {
+                    ids->insert(id.GetInt());
+                }
+            }
+        }
+    }
+    return owned;
 }
 
 std::optional<std::string> NetworkClient::take_song_jump_result() {
@@ -742,6 +937,212 @@ void NetworkClient::update(double current_ms) {
             }
             tournament = !doc.HasParseError() && doc.IsObject() && doc.HasMember("tournament") &&
                          doc["tournament"].IsBool() && doc["tournament"].GetBool();
+            campaigns.clear();
+            if (!doc.HasParseError() && doc.IsObject() && doc.HasMember("campaigns") && doc["campaigns"].IsArray()) {
+                for (const auto& campaign : doc["campaigns"].GetArray()) {
+                    if (campaign.IsString()) {
+                        campaigns.emplace_back(campaign.GetString());
+                    }
+                }
+            }
+            kinotake_leader_ = -1;
+            if (!doc.HasParseError() && doc.IsObject() && doc.HasMember("kinotake") && doc["kinotake"].IsObject()) {
+                const auto& k = doc["kinotake"];
+                const auto get = [&k](const char* key) -> int64_t {
+                    return k.HasMember(key) && k[key].IsInt64() ? k[key].GetInt64() : 0;
+                };
+                const int64_t kinoko = get("kinoko");
+                const int64_t takenoko = get("takenoko");
+                kinotake_leader_ = kinoko > takenoko ? 0 : takenoko > kinoko ? 1 : -1;
+            }
+        }
+    }
+
+    for (auto it = pending_kinotake.begin(); it != pending_kinotake.end();) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->second.get();
+        rapidjson::Document doc;
+        const auto num = [&doc](const char* key) -> int64_t {
+            return doc.HasMember(key) && doc[key].IsInt64() ? doc[key].GetInt64() : 0;
+        };
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            KinotakeSeat& s = kinotake_tally_.seat[it->first];
+            s.plays++;
+            s.base += num("base");
+            s.total += num("total");
+            s.mine = num("mine");
+            s.assist = std::max(s.assist, static_cast<int>(num("assist_rate")));
+            kinotake_tally_.kinoko = num("kinoko");
+            kinotake_tally_.takenoko = num("takenoko");
+        } else {
+            spdlog::warn("Kinotake submit failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_kinotake.erase(it);
+    }
+    kinotake_pending_count_ = static_cast<int>(pending_kinotake.size());
+
+    for (auto it = pending_don_points.begin(); it != pending_don_points.end();) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->second.get();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            const auto integer = [](const rapidjson::Value& v, const char* key, int fallback) {
+                return v.HasMember(key) && v[key].IsInt() ? v[key].GetInt() : fallback;
+            };
+            DonSeat seat;
+            seat.answered = true;
+            seat.current = integer(doc, "current", 0);
+            seat.aim = integer(doc, "aim", -1);
+            if (doc.HasMember("songs") && doc["songs"].IsArray()) {
+                for (const auto& v : doc["songs"].GetArray()) {
+                    seat.songs.push_back(v.IsInt() ? v.GetInt() : 0);
+                }
+            }
+            if (doc.HasMember("titles") && doc["titles"].IsArray()) {
+                for (const auto& v : doc["titles"].GetArray()) {
+                    if (v.IsObject() && v.HasMember("name") && v["name"].IsString()) {
+                        seat.titles.push_back({v["name"].GetString(), integer(v, "points", 0)});
+                    }
+                }
+            }
+            if (doc.HasMember("presents") && doc["presents"].IsArray()) {
+                for (const auto& v : doc["presents"].GetArray()) {
+                    if (v.IsObject()) {
+                        seat.presents.push_back(
+                            {integer(v, "type", -1), integer(v, "id", -1), integer(v, "next_aim", -1)});
+                    }
+                }
+            }
+            don_seats[it->first] = std::move(seat);
+        } else {
+            spdlog::warn("Don point tally failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_don_points.erase(it);
+    }
+
+    const auto json_int = [](const rapidjson::Value& v, const char* key, int fallback) {
+        return v.HasMember(key) && v[key].IsInt() ? v[key].GetInt() : fallback;
+    };
+    const auto json_bool = [](const rapidjson::Value& v, const char* key) {
+        return v.HasMember(key) && v[key].IsBool() && v[key].GetBool();
+    };
+    for (auto it = pending_ai_battle.begin(); it != pending_ai_battle.end();) {
+        if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->get();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            AIBattleProgress progress;
+            progress.answered = true;
+            progress.rank_before = json_int(doc, "rank_before", 0);
+            progress.rank_after = json_int(doc, "rank_after", 0);
+            progress.tokens_before = json_int(doc, "tokens_before", 0);
+            progress.tokens_after = json_int(doc, "tokens_after", 0);
+            progress.next_rank_tokens = json_int(doc, "next_rank_tokens", -1);
+            progress.next_rank_after_tokens = json_int(doc, "next_rank_after_tokens", -1);
+            progress.wins_before = json_int(doc, "wins_before", 0);
+            progress.wins_after = json_int(doc, "wins_after", 0);
+            progress.fulfilled = json_bool(doc, "fulfilled");
+            progress.first = json_bool(doc, "first");
+            progress.challenge = json_bool(doc, "challenge");
+            progress.next_reward_wins = json_int(doc, "next_reward_wins", -1);
+            progress.all_rewards = json_bool(doc, "all_rewards");
+            auto text_of = [](const rapidjson::Value& v, const char* key) -> std::string {
+                return v.HasMember(key) && v[key].IsString() ? v[key].GetString() : "";
+            };
+            progress.next_reward_name = text_of(doc, "next_reward_name");
+            if (doc.HasMember("reward") && doc["reward"].IsObject()) {
+                progress.reward_kind = text_of(doc["reward"], "kind");
+                progress.reward_name = text_of(doc["reward"], "name");
+            }
+            if (doc.HasMember("bests") && doc["bests"].IsArray()) {
+                for (const auto& best : doc["bests"].GetArray()) {
+                    progress.bests.push_back({json_int(best, "good", 0), json_int(best, "ok", 0),
+                                              json_int(best, "bad", 0), json_int(best, "drumroll", 0)});
+                }
+            }
+            ai_battle_progress_ = std::move(progress);
+        } else {
+            spdlog::warn("AI battle submit failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_ai_battle.erase(it);
+    }
+    for (auto it = pending_medals.begin(); it != pending_medals.end();) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->second.get();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            medal_seats[it->first] = {true,
+                                      json_int(doc, "now", 0),
+                                      json_int(doc, "add", 0),
+                                      json_int(doc, "max", 0),
+                                      json_bool(doc, "daily"),
+                                      json_bool(doc, "weekly"),
+                                      json_bool(doc, "monthly")};
+        } else {
+            spdlog::warn("Medal claim failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_medals.erase(it);
+        reward_shop_pending_count_--;
+    }
+    for (auto it = pending_shop.begin(); it != pending_shop.end();) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->second.get();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            ShopSeat seat;
+            seat.answered = true;
+            seat.medals = json_int(doc, "medals", 0);
+            seat.max = json_int(doc, "max", 0);
+            if (doc.HasMember("goods") && doc["goods"].IsArray()) {
+                for (const auto& v : doc["goods"].GetArray()) {
+                    if (v.IsObject()) {
+                        seat.goods.push_back({json_int(v, "type", -1), json_int(v, "id", -1), json_int(v, "cost", 0),
+                                              json_bool(v, "owned")});
+                    }
+                }
+            }
+            shop_seats[it->first] = std::move(seat);
+        } else {
+            spdlog::warn("Reward shop fetch failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_shop.erase(it);
+        reward_shop_pending_count_--;
+    }
+    if (!shop_buy_result) {
+        for (auto it = pending_shop_buy.begin(); it != pending_shop_buy.end(); ++it) {
+            if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                continue;
+            }
+            cpr::Response response = it->second.get();
+            rapidjson::Document doc;
+            const bool parsed = !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject();
+            ShopBuyResult result{.seat = it->first, .status = "error"};
+            if (response.status_code == 200 && parsed) {
+                result.status = "ok";
+                result.medals = json_int(doc, "medals", 0);
+            } else if (response.status_code == 409 && parsed && doc.HasMember("detail") && doc["detail"].IsString()) {
+                result.status = doc["detail"].GetString();
+            } else {
+                spdlog::warn("Reward shop buy failed: HTTP {} - {}", response.status_code, response.text);
+            }
+            shop_buy_result = std::move(result);
+            pending_shop_buy.erase(it);
+            break;
         }
     }
 
@@ -798,6 +1199,33 @@ void NetworkClient::update(double current_ms) {
         replay_fetch_result = parse_replay_response(response);
     }
 
+    if (pending_leaderboard.has_value() &&
+        pending_leaderboard->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_leaderboard->get();
+        pending_leaderboard.reset();
+        // 404 = song not on the server: cache it empty so it is not asked again; transport errors are retried
+        if (response.status_code == 200 || response.status_code == 404) {
+            std::vector<RankingEntry> entries;
+            rapidjson::Document doc;
+            if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() &&
+                doc.HasMember("ranking") && doc["ranking"].IsArray()) {
+                for (const auto& row : doc["ranking"].GetArray()) {
+                    if (row.IsObject() && row.HasMember("username") && row["username"].IsString() &&
+                        row.HasMember("score") && row["score"].IsInt()) {
+                        entries.push_back({row["username"].GetString(), row["score"].GetInt()});
+                    }
+                }
+            }
+            leaderboard_cache[pending_leaderboard_hash] = std::move(entries);
+        } else {
+            spdlog::warn("song_leaderboard: HTTP {} - {}", response.status_code, response.text);
+        }
+        std::string next = std::exchange(next_leaderboard_hash, "");
+        if (!next.empty() && !leaderboard_cache.contains(next)) {
+            start_leaderboard_fetch(next);
+        }
+    }
+
     if (pending_score_submit.has_value() &&
         pending_score_submit->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         cpr::Response response = pending_score_submit->get();
@@ -828,6 +1256,10 @@ void NetworkClient::shutdown() {
     if (pending_replay_fetch.has_value()) {
         pending_replay_fetch->wait();
         pending_replay_fetch.reset();
+    }
+    if (pending_leaderboard.has_value()) {
+        pending_leaderboard->wait();
+        pending_leaderboard.reset();
     }
 #if defined(__ANDROID__)
     if (pending_update_checksum.has_value()) {
@@ -870,6 +1302,27 @@ void NetworkClient::poll_song_jump(const std::string&) {}
 std::optional<std::string> NetworkClient::take_song_jump_result() {
     return std::nullopt;
 }
+void NetworkClient::submit_kinotake(int, const std::string&, int, int, bool, bool) {}
+void NetworkClient::submit_don_points(int, const std::string&, const std::vector<int>&) {}
+void NetworkClient::submit_medals(int, const std::string&) {}
+void NetworkClient::submit_ai_battle(const std::string&, const std::string&, int, int, bool, bool, const std::string&) {
+}
+AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string&) {
+    return {};
+}
+void NetworkClient::request_reward_shop(int seat, const std::string&) {
+    shop_seats[seat] = {};
+}
+void NetworkClient::buy_shop_good(int seat, const std::string&, int, int) {
+    shop_buy_result = ShopBuyResult{.seat = seat, .status = "error"};
+}
+std::optional<ShopBuyResult> NetworkClient::take_shop_buy_result() {
+    return std::exchange(shop_buy_result, std::nullopt);
+}
+void NetworkClient::unlock_campaign_costume(const std::string&, int) {}
+OwnedCosmetics NetworkClient::fetch_owned_cosmetics(const std::string&) {
+    return {};
+}
 void NetworkClient::spin_gacha(const std::string&) {
     gacha_result = GachaResult{.error = "offline_gacha"};
 }
@@ -881,6 +1334,9 @@ std::optional<int> NetworkClient::take_replay_jump_result() {
     return std::nullopt;
 }
 void NetworkClient::request_replay(int) {}
+std::optional<std::vector<RankingEntry>> NetworkClient::song_leaderboard(const std::string&) {
+    return std::nullopt;
+}
 std::optional<ReplayData> NetworkClient::take_replay_result() {
     return std::nullopt;
 }

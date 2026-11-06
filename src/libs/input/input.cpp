@@ -16,6 +16,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "../../platform/platform.h"
 #include "../density.h"
@@ -127,6 +128,7 @@ static const int TOUCH_L_DON = 40003;
 static const int TOUCH_R_DON = 40004;
 
 static std::unordered_map<SDL_FingerID, int> touch_id_to_vkey;
+static std::optional<Vec2> last_touch_tap;
 
 std::atomic<bool> touch_drum_pressed{false};
 
@@ -151,6 +153,26 @@ static std::atomic<bool> screen_keyboard_started{false};
 static constexpr int PAD_SLOT_VKEY_BASE = 50000;
 static constexpr int pad_slot_key(int slot, int button) {
     return PAD_SLOT_VKEY_BASE + slot * 100 + button;
+}
+
+// A shared key and its per-slot key report one press: consuming either consumes both.
+static void consume_pad_alias(int key) {
+    if (key > GAMEPAD_VKEY_BASE && key <= GAMEPAD_VKEY_BASE + 18) {
+        for (int slot = 0; slot < 4; ++slot) {
+            if (auto alias = pressed_keys.find(pad_slot_key(slot, key - GAMEPAD_VKEY_BASE));
+                alias != pressed_keys.end()) {
+                pressed_keys.erase(alias);
+                return;
+            }
+        }
+    } else if (key >= PAD_SLOT_VKEY_BASE && key < pad_slot_key(4, 0)) {
+        const int button = (key - PAD_SLOT_VKEY_BASE) % 100;
+        if (button >= 1 && button <= 18) {
+            if (auto alias = pressed_keys.find(GAMEPAD_VKEY_BASE + button); alias != pressed_keys.end()) {
+                pressed_keys.erase(alias);
+            }
+        }
+    }
 }
 
 // Pads keep the slot they were first seen in, so P1/P2 don't swap when another reconnects.
@@ -187,14 +209,16 @@ static ControllerSlots controller_slots;     // input thread only
 static std::atomic<int> slotted_gamepads{0}; // controller_slots.count(), for the game thread
 
 static bool is_gameplay_screen(std::string_view screen) {
-    return screen == "GAME" || screen == "GAME_2P" || screen == "GAME_DAN" || screen == "GAME_PRACTICE" ||
-           screen == "AI_GAME" || screen == "INPUT_TEST" || screen == "INPUT_CALI" || screen == "TUTORIAL";
+    return screen == "GAME" || screen == "GAME_2P" || screen == "WAIWAI_GAME" || screen == "GAME_DAN" ||
+           screen == "GAME_PRACTICE" || screen == "AI_GAME" || screen == "INPUT_TEST" || screen == "INPUT_CALI" ||
+           screen == "TUTORIAL";
 }
 
 // With two pads in 2P, pad 1 plays P1 and pad 2 plays P2 even when their bindings overlap.
 // One pad keeps the shared behaviour, so a single controller can still be split between players.
 static bool separate_players() {
-    return global_data.current_screen == "GAME_2P" && slotted_gamepads.load(std::memory_order_relaxed) >= 2;
+    return (global_data.current_screen == "GAME_2P" || global_data.current_screen == "WAIWAI_GAME") &&
+           slotted_gamepads.load(std::memory_order_relaxed) >= 2;
 }
 
 // Optional fixed gamepad layout for menus (keys.gamepad_menu_layout): D-pad/shoulders move,
@@ -238,9 +262,6 @@ static bool menu_layout_pressed(MenuAction action, PlayerNum player, float* stre
     for (int slot = first_slot; slot < end_slot; ++slot) {
         for (int button = 1; button <= 18; ++button) {
             if (menu_action(button) == action && check_key_pressed(pad_slot_key(slot, button), strength)) {
-                // Consume the shared alias too, so a join press cannot also
-                // confirm another menu action in the same frame.
-                check_key_pressed(GAMEPAD_VKEY_BASE + button);
                 return true;
             }
         }
@@ -476,6 +497,10 @@ static YD_EventFilterRet SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event
     }
 
     if (event->type == SDL_EVENT_FINGER_DOWN) {
+        {
+            std::scoped_lock lock(input_mutex);
+            last_touch_tap = Vec2{event->tfinger.x, event->tfinger.y};
+        }
         if (!global_data.config || !global_data.config->general.touch_input) {
             return true;
         }
@@ -507,6 +532,11 @@ static YD_EventFilterRet SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event
         touch_drum_pressed.store(!touch_id_to_vkey.empty(), std::memory_order_relaxed);
     }
     return true;
+}
+
+std::optional<Vec2> take_touch_tap() {
+    std::scoped_lock lock(input_mutex);
+    return std::exchange(last_touch_tap, std::nullopt);
 }
 
 bool draw_touch_drum() {
@@ -643,7 +673,7 @@ void poll_keyboard_once() {
         int num_buttons = SDL_GetNumJoystickButtons(joy);
         for (int btn = 0; btn < num_buttons && btn < 32; btn++) {
             bool cur = SDL_GetJoystickButton(joy, btn);
-            bool& prev = sdl_prev_button[(int64_t)joy_id * 256 + btn];
+            bool& prev = sdl_prev_button[static_cast<int64_t>(joy_id) * 256 + btn];
             // Use 1-indexed encoding to match raylib gamepad button convention
             if (cur && !prev) {
                 local_pressed.push_back(GAMEPAD_VKEY_BASE + btn + 1);
@@ -654,7 +684,7 @@ void poll_keyboard_once() {
         int num_axes = SDL_GetNumJoystickAxes(joy);
         for (int axis = 0; axis < num_axes && axis < 8; axis++) {
             float value = SDL_GetJoystickAxis(joy, axis) / 32767.0f;
-            float& prev = sdl_prev_axis[(int64_t)joy_id * 256 + axis];
+            float& prev = sdl_prev_axis[static_cast<int64_t>(joy_id) * 256 + axis];
             int key_pos = AXIS_VKEY_BASE + axis * 2;
             int key_neg = key_pos + 1;
             const bool cur_pos = value > JOYSTICK_AXIS_THRESHOLD;
@@ -1054,6 +1084,7 @@ bool check_key_pressed(int key, float* strength) {
             *strength = it->second;
         }
         pressed_keys.erase(it);
+        consume_pad_alias(key);
         return true;
     }
     return false;
@@ -1281,7 +1312,7 @@ void dev_inject_mouse(float x, float y, int button, float wheel) {
     std::scoped_lock lock(frame_mutex);
     dev_mouse_set = true;
     dev_mouse_pos = {x, y};
-    if (button > 0 && button < (int)pending.mouse_pressed.size()) {
+    if (button > 0 && button < static_cast<int>(pending.mouse_pressed.size())) {
         pending.mouse_pressed.set(button);
     }
     pending.wheel += wheel;

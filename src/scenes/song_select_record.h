@@ -61,7 +61,7 @@ class RecordSongSelectScreen : public SongSelectScreen {
     void draw_background_panel();
 
 protected:
-    void select_song(SongBox* song) override;
+    void select_song(SongBox* box) override;
     bool hides_dan() override { return true; }
     bool allows_second_player_join() override { return false; }
 

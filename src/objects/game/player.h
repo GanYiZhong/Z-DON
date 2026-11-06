@@ -1,7 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../../libs/gfx/text.h"
 #include "../../libs/network/network.h"
@@ -26,6 +28,7 @@
 #include "kusudama_counter.h"
 #include "lane_hit_effect.h"
 #include "note_arc.h"
+#include "papamama.h"
 #include "score_counter.h"
 
 namespace JudgePos {
@@ -47,14 +50,18 @@ public:
     double end_time;
     float bpm;
     PlayerNum player_num;
+    PlayerNum input_player; // whose drums play this lane: ALL for a solo #PAPAMAMA course
     double last_note_hit;
     std::map<double, InputLogType> input_log;
 
     std::vector<BranchDifficulty> branch_history;
 
+    void allow_papamama();
+
+    // merge 0ed42ec: Z-DON's shared_ptr parser (upstream's new scenes only use parser->)
     Player(const std::shared_ptr<SongParser>& parser_ref, PlayerNum player_num_param, int difficulty_param,
            bool is_2p_param, const Modifiers& modifiers_param,
-           const std::string& score_method_param = global_data.config->general.score_method);
+           std::string score_method_param = global_data.config->general.score_method);
 
     virtual ~Player() = default;
 
@@ -69,6 +76,41 @@ public:
     // hit notes fly to this player's soul gauge: the bottom one only when two play (2P alone plays
     // on the top lane)
     PlayerNum arc_player() const { return (is_2p && kusudama_partner) ? PlayerNum::P2 : PlayerNum::P1; }
+    std::unordered_set<long long> partner_times;
+    bool linked(const Note& note) const {
+        return note.partner && kusudama_partner && kusudama_partner->partner_times.contains(std::llround(note.hit_ms));
+    }
+
+    struct SynchroArt {
+        TextureObject* glow;
+        TextureObject* arm[3];
+        TextureObject* face[2];
+    };
+    std::optional<std::array<SynchroArt, 2>> synchro_art;
+    std::unordered_set<long long> big_times;
+    static long long big_key(const Note& note) {
+        return std::llround(note.hit_ms) * 2 + (note.type == NoteType::KAT_L);
+    }
+    bool synchro(const Note& note) const {
+        return synchro_art && kusudama_partner && (note.type == NoteType::DON_L || note.type == NoteType::KAT_L) &&
+               kusudama_partner->big_times.contains(big_key(note));
+    }
+    bool hide_gauge = false;
+    bool hide_gogo_flame = false;
+    bool hide_score_counter = false;
+    bool hide_ending_anim = false;
+    bool rainbow_arc = false;
+    // decides how autoplay lands each note; unset means every note is a Good
+    std::function<Judgments(const Note&)> autoplay_judge;
+    const std::unordered_map<int, Judgments>& get_note_judgments() const { return note_judgments; }
+    const std::unordered_map<int, int>& get_roll_hits() const { return roll_hits; }
+    void hide_puchi();
+    void hide_lane_badges() { show_lane_badges = false; }
+
+    void place_chara_on_stage(float x, float y);
+    void move_stage_chara(float x, float y) { stage_chara = {x, y}; }
+    void draw_stage_chara(float scale = 1.0f);
+    void draw_arcs();
 
     std::optional<Note> get_first_note();
 
@@ -86,6 +128,10 @@ public:
         auto it = note_offsets.find(note_index);
         return it != note_offsets.end() ? std::optional<float>(it->second) : std::nullopt;
     }
+    std::optional<int> get_roll_hits(int head_index) const {
+        auto it = roll_hits.find(head_index);
+        return it != roll_hits.end() ? std::optional<int>(it->second) : std::nullopt;
+    }
     bool is_auto_play() const { return modifiers.auto_play; }
     // Z-DON: auto play was on at some point of this run (the score is not saved; GameScreen::save_score)
     bool zdon_auto_used() const { return auto_used || modifiers.auto_play; }
@@ -98,6 +144,7 @@ public:
         replay_active = true;
     }
     void apply_replay_appearance(const PlayerData& pd);
+    void use_costume(int cos_index);
     bool is_skip_enabled() const { return modifiers.skip; }
     void cut_to_end(double now, int prev_good = 0, int prev_ok = 0, int prev_bad = 0);
     bool was_skipped() const { return skipped_run; }
@@ -119,6 +166,7 @@ public:
         miss_streak = 0;
         note_judgments.clear();
         note_offsets.clear();
+        roll_hits.clear();
         last_reported_score = -1;
         last_reported_gogo = -1;
         if (judge_counter) {
@@ -198,6 +246,7 @@ private:
     std::unordered_map<int, Judgments> note_judgments;
     std::unordered_map<int, float> note_offsets; // Z-DON: get_note_offset
     bool auto_used = false;                      // Z-DON: zdon_auto_used
+    std::unordered_map<int, int> roll_hits;
 
     float judge_x{0};
     float judge_y{0};
@@ -291,6 +340,9 @@ private:
     TextureObject* t_notes_9 = nullptr;
     TextureObject* t_notes_10 = nullptr;
     TextureObject* t_moji = nullptr;
+    TextureObject* t_tetunagi[2] = {};
+    TextureObject* t_tetunagi_arm = nullptr;
+    TextureObject* t_kusudama_star = nullptr;
     TextureObject* t_moji_drumroll_mid = nullptr;
     TextureObject* t_drumroll_big_tail = nullptr;
     TextureObject* t_drumroll_tail = nullptr;
@@ -298,6 +350,8 @@ private:
     std::vector<Judgment> draw_judge_list;
     std::vector<GaugeHitEffect> gauge_hit_effect;
     std::vector<NoteArc> draw_arc_list;
+    float arc_y = 0;
+    std::optional<std::pair<float, float>> stage_chara;
     Combo combo_display;
     std::optional<DrumrollCounter> drumroll_counter;
     std::optional<BalloonCounter> balloon_counter;
@@ -321,6 +375,7 @@ private:
     std::vector<std::optional<std::pair<float, float>>> note_positions;
     std::optional<double> audio_end_ms;
     std::optional<ComboAnnounce> combo_announce;
+    std::optional<PapamamaPopup> papamama_popup;
     std::optional<BranchIndicator> branch_indicator;
     std::optional<EndingAnimation> ending_anim;
 
@@ -394,6 +449,10 @@ private:
     void draw_balloon(double current_ms, float y, const Note& head, int current_eighth, bool moji_pass);
 
     void draw_notes(double current_ms, float y);
+    void draw_kusudama_stars(double current_ms, float cx, float cy);
+    void draw_tetunagi(double current_ms, const Note& note, float x, float y, int current_eighth);
+    void draw_synchro(double current_ms, const Note& note, float cx, float cy, int current_eighth);
+    int miss_arm_frame(double current_ms, const Note& note) const;
 
     void draw_song_timer(double current_ms, float y);
 

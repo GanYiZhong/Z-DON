@@ -51,7 +51,7 @@ void GameScreen::on_screen_start() {
     load_hitsounds();
     song_info = SongInfo(session_data.song_title, session_data.song_subtitle, parser->metadata.subtitle_full_display,
                          session_data.genre_index, global_data.songs_played + 1, 0, session_data.genre_label);
-    result_transition = ResultTransition(global_data.player_num);
+    result_transition = ResultTransition(scene_player_num());
     ai_cover_start_ms = -1.0;
     bpm = parser->metadata.bpm;
     scene_preset = parser->metadata.scene_preset;
@@ -172,7 +172,8 @@ void GameScreen::initialize_chart(const fs::path& song) {
 }
 
 void GameScreen::initialize_song_movie() {
-    if (fs::exists(parser->metadata.bgmovie)) {
+    // merge 0ed42ec: upstream's empty / not-a-file guard, Z-DON's async open_movie
+    if (!parser->metadata.bgmovie.empty() && fs::is_regular_file(parser->metadata.bgmovie)) {
         open_movie(parser->metadata.bgmovie);
     }
 }
@@ -192,6 +193,7 @@ void GameScreen::create_players() {
     players.push_back(std::make_unique<Player>(parser, global_data.player_num,
                                                global_data.session_data[player_index].selected_difficulty, false,
                                                get_player_modifiers(global_data.player_num)));
+    players.back()->allow_papamama();
 
     SessionData& replay_session_data = global_data.session_data[player_index];
     if (replay_session_data.replay_input_log.has_value()) {
@@ -526,14 +528,19 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
     if (!target) {
         return;
     }
-    std::vector<std::string>& unsaved = global_data.session_data[(int)player_num].zdon_unsaved;
+    std::vector<std::string>& unsaved = global_data.session_data[static_cast<int>(player_num)].zdon_unsaved;
     unsaved = zdon_unsaved_reasons(*target);
     if (!unsaved.empty()) {
         std::string why;
         for (const std::string& r : unsaved) {
             why += (why.empty() ? "" : ", ") + r;
         }
-        spdlog::info("Score of player {} not saved: {}", (int)player_num, why);
+        spdlog::info("Score of player {} not saved: {}", static_cast<int>(player_num), why);
+        return;
+    }
+    if (target->get_modifiers().subdiff != 0) {
+        ResultData& result = global_data.session_data[static_cast<int>(player_num)].result_data;
+        result.prev_score = result.score;
         return;
     }
 
@@ -572,7 +579,7 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         std::string modifiers_json = modifiers_to_json(target->get_modifiers());
         scores_manager.save_score(hash, session_data.selected_difficulty, player_id, score, played_at, modifiers_json);
         // Z-DON PB pace: a new best keeps its score curve
-        if (auto& g = zdon_ghost[std::clamp((int)player_num, 0, 3)];
+        if (auto& g = zdon_ghost[std::clamp(static_cast<int>(player_num), 0, 3)];
             !run_skipped && !g.rec.empty() && (!prev_score || score.score > prev_score->score)) {
             g.rec.emplace_back(static_cast<float>(std::max<double>(clock.position(), g.rec.back().first)), score.score);
             scores_manager.set_zdon_ghost(hash, session_data.selected_difficulty, player_id, g.rec);
@@ -588,6 +595,22 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
             if (!access_code.empty()) {
                 network.submit_score(hash, session_data.selected_difficulty, access_code, score, target->input_log,
                                      played_at, modifiers_json, pd.chara_is_costume, pd.chara_cos_index);
+                session_data.result_data.submitted = true;
+                const int seat = static_cast<int>(player_num) - 1;
+                if (!run_skipped && (seat == 0 || seat == 1)) {
+                    global_data.credit_gauges[seat].push_back(static_cast<int>(target->gauge->get_length()));
+                    global_data.credit_titles[seat].push_back(session_data.song_title);
+                }
+                if (!run_skipped && (seat == 0 || seat == 1) && global_data.kinotake_team[seat] >= 0) {
+                    const bool duet = std::ranges::count_if(players, [](const auto& p) {
+                                          return p && !p->is_auto_play() && !p->is_replay();
+                                      }) == 2;
+                    const bool kinotake_costume =
+                        pd.chara_is_costume && (pd.chara_cos_index == KINOTAKE_COSTUME_KINOKO ||
+                                                pd.chara_cos_index == KINOTAKE_COSTUME_TAKENOKO);
+                    network.submit_kinotake(seat, access_code, global_data.kinotake_team[seat], score.score, duet,
+                                            kinotake_costume);
+                }
             }
         }
     } catch (const std::exception& e) {
@@ -806,8 +829,8 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
         for (const auto& player : players) {
             if (player->is_zdon_ai()) {
                 // Z-DON AI battle: the AI's play is never saved to the 2P profile (and is no "new best")
-                global_data.session_data[(int)player->player_num].zdon_unsaved.clear();
-                auto& rd = global_data.session_data[(int)player->player_num].result_data;
+                global_data.session_data[static_cast<int>(player->player_num)].zdon_unsaved.clear();
+                auto& rd = global_data.session_data[static_cast<int>(player->player_num)].result_data;
                 rd.prev_score = rd.score;
                 continue;
             }
@@ -1015,11 +1038,11 @@ void GameScreen::zdon_ghost_update() {
         if (!player || player->is_zdon_ai()) {
             continue;
         }
-        ZdonGhost& g = zdon_ghost[std::clamp((int)player->player_num, 0, 3)];
+        ZdonGhost& g = zdon_ghost[std::clamp(static_cast<int>(player->player_num), 0, 3)];
         if (!g.loaded) {
             g.loaded = true;
             if (player->get_modifiers().zdon_ghost && !player->get_modifiers().auto_play) {
-                const SessionData& sd = global_data.session_data[(int)player->player_num];
+                const SessionData& sd = global_data.session_data[static_cast<int>(player->player_num)];
                 g.best = scores_manager.get_zdon_ghost(sd.song_hash, sd.selected_difficulty,
                                                        get_player_id(player->player_num));
             }
@@ -1038,8 +1061,8 @@ void GameScreen::zdon_ghost_update() {
 
 static std::string zdon_signed_thousands(int v) {
     std::string d = std::to_string(std::abs(v));
-    for (int i = (int)d.size() - 3; i > 0; i -= 3) {
-        d.insert((size_t)i, ",");
+    for (int i = static_cast<int>(d.size()) - 3; i > 0; i -= 3) {
+        d.insert(static_cast<size_t>(i), ",");
     }
     return (v > 0 ? "+" : v < 0 ? "-" : "±") + d;
 }
@@ -1052,7 +1075,7 @@ void GameScreen::zdon_draw_ghost() const {
         if (!player) {
             continue;
         }
-        const ZdonGhost& g = zdon_ghost[std::clamp((int)player->player_num, 0, 3)];
+        const ZdonGhost& g = zdon_ghost[std::clamp(static_cast<int>(player->player_num), 0, 3)];
         if (g.best.empty()) {
             continue;
         }

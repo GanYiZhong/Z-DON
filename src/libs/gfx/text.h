@@ -31,6 +31,7 @@ struct GlyphSubset {
 class FontManager {
 private:
     fs::path font_path;
+    uint64_t generation;
 
     struct SizedFont {
         std::unordered_set<int> codepoints;    // only what was asked for AT THIS SIZE
@@ -81,6 +82,7 @@ public:
     // uses, backed by `storage` and valid as long as it is.
     Font copy_font(const std::string& text, int font_size, GlyphSubset& storage);
     void register_text(const std::string& text, int font_size);
+    uint64_t cache_generation() const;
 
     void load_text_config(const fs::path& skin_root);
 
@@ -120,6 +122,8 @@ inline std::string localized_text(const std::map<std::string, std::string>& valu
     return "";
 }
 
+struct CachedOutlinedText;
+
 class OutlinedText {
 private:
     std::string text;
@@ -136,6 +140,8 @@ private:
     mutable std::mutex pending_mutex;
 
     std::optional<Texture> texture;
+    std::shared_ptr<CachedOutlinedText> cached_texture;
+    std::string cache_key;
 
     jobs::Handle build_future; // Z-DON: a job on the shared pool (was a std::async thread per text)
 

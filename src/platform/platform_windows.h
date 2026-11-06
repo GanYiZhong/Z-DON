@@ -38,7 +38,7 @@ bool win32_process_usage(double& cpu_ms, double& working_set_mb, double& private
 // true while a window of this process is in the foreground
 bool win32_app_has_focus();
 // win32_is_key_down_native without its foreground check (the caller checked win32_app_has_focus)
-bool win32_key_down_unchecked(int raylib_key);
+bool win32_key_down_unchecked(int scancode);
 
 // Checks if a key is currently down using GetAsyncKeyState.
 // scancode: SDL_Scancode (SDL_SCANCODE_A, SDL_SCANCODE_SPACE, etc.)

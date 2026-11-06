@@ -1,9 +1,11 @@
 #include "player.h"
 
+#include <algorithm>
 #include <iterator>
 
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
+#include "../../libs/network/network.h"
 #include "../game/zdon_ai.h"
 
 ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
@@ -29,6 +31,8 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     if (!sd.result_data.cleared) {
         chara->set_anim(AnimIndex::DON_MISS_NORMAL);
     }
+    ranking_name = pd ? pd->username : "";
+    ranking_pending = sd.result_data.submitted && !ranking_name.empty();
     const bool ai_plate = global_data.zdon_ai.active && player_num == PlayerNum::P2; // Z-DON AI battle
     nameplate = Nameplate(pd ? pd->username : "", pd ? pd->title : "", ai_plate ? PlayerNum::AI : player_num,
                           pd ? pd->dan : -1, pd ? pd->gold : false, pd ? pd->rainbow : false, pd ? pd->title_bg : 0);
@@ -74,6 +78,7 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
         preload("ResultCrown", "result_crown");
         preload("ResultCrownMessage", "result_crown_message");
         preload("ResultBasin", "result_basin");
+        preload("ResultRanking", "result_ranking");
         preload("HighScoreIndicator", "high_score_indicator");
     }
 
@@ -234,6 +239,7 @@ void ResultPlayer::update(double current_ms, bool fade_in_finished, bool is_skip
         }
     }
     update_score_animation(current_ms, is_skipped);
+    update_ranking();
     if (!miss_loop_started && lua_object.valid()) {
         sol::optional<bool> miss_loop = lua_object["chara_miss_loop"];
         if (miss_loop && miss_loop.value()) {
@@ -254,6 +260,38 @@ void ResultPlayer::update(double current_ms, bool fade_in_finished, bool is_skip
          total_drumroll, is_skipped);
     nameplate.update(current_ms);
     chara->update(current_ms);
+}
+
+void ResultPlayer::update_ranking() {
+    if (!ranking_pending || !lua_object.valid()) {
+        return;
+    }
+    const SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
+    auto board = network.song_leaderboard(sd.song_hash);
+    if (!board) {
+        return;
+    }
+    ranking_pending = false;
+    const int own = sd.result_data.score;
+    auto it = std::ranges::find(*board, ranking_name, &RankingEntry::username);
+    if (it == board->end()) {
+        board->push_back({ranking_name, own});
+    } else {
+        it->score = std::max(it->score, own);
+    }
+    std::ranges::stable_sort(*board, std::greater{}, &RankingEntry::score);
+
+    sol::state& lua = *script_manager.lua;
+    sol::table entries = lua.create_table();
+    int rank_in = -1;
+    for (int i = 0; i < std::min<int>(3, std::ssize(*board)); i++) {
+        const RankingEntry& r = (*board)[i];
+        entries[i + 1] = lua.create_table_with("name", r.username, "score", r.score);
+        if (r.username == ranking_name && r.score == own) {
+            rank_in = i;
+        }
+    }
+    lua_object["ranking"] = lua.create_table_with("entries", entries, "rank_in", rank_in);
 }
 
 double ResultPlayer::reveal_end_ms() {
@@ -277,6 +315,12 @@ void ResultPlayer::draw_song_info(const std::string& title, const std::string& s
     call(fn_draw_song_info, "ResultPlayer:draw_song_info", info);
 }
 
+void ResultPlayer::hide_stage() {
+    if (lua_object.valid()) {
+        lua_object["hide_stage"] = true;
+    }
+}
+
 void ResultPlayer::draw() {
     PlayerSoundScope audio_owner(player_num);
     call(fn_draw, "ResultPlayer:draw");
@@ -284,8 +328,8 @@ void ResultPlayer::draw() {
     cy += static_cast<int>(is_2p) * tex.screen_height / 2;
     float cs = 1.0f;
     if (auto pos = call_r<sol::table>(fn_chara_pos, "ResultPlayer:chara_pos")) {
-        cx = (*pos)[1].get_or((float)cx);
-        cy = (*pos)[2].get_or((float)cy);
+        cx = (*pos)[1].get_or(static_cast<float>(cx));
+        cy = (*pos)[2].get_or(static_cast<float>(cy));
         cs = (*pos)[3].get_or(cs);
         // optional [4], [5], [6]: the puchi's offset (1280x720 px) and size multiplier
         chara->set_puchi_adjust((*pos)[4].get_or(0.0f), (*pos)[5].get_or(0.0f), (*pos)[6].get_or(1.0f));
@@ -298,8 +342,8 @@ void ResultPlayer::draw() {
     auto [nx, ny] = tex.nameplate_xy(is_2p ? "result_2p" : "result", "result");
     float nf = 1.0f;
     if (auto pos = call_r<sol::table>(fn_nameplate_pos, "ResultPlayer:nameplate_pos")) {
-        nx = (*pos)[1].get_or((float)nx);
-        ny = (*pos)[2].get_or((float)ny);
+        nx = (*pos)[1].get_or(static_cast<float>(nx));
+        ny = (*pos)[2].get_or(static_cast<float>(ny));
         nf = (*pos)[3].get_or(nf);
     }
     nameplate.draw(nx, ny, nf);

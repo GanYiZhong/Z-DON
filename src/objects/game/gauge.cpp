@@ -63,7 +63,7 @@ Gauge Gauge::dan(const std::vector<DanSongEntry>& songs, int total_notes, Player
 }
 
 void Gauge::set_points_from_row(int total_notes, const GaugeTable& row) {
-    const double denom = std::max(1, total_notes) * (double)row.soul_percent;
+    const double denom = std::max(1, total_notes) * row.soul_percent;
     good_points = (denom > 0.0) ? 1'000'000.0 / denom : 0;
     ok_points = good_points * row.ok_multiplier;
     bad_points = good_points * row.bad_multiplier;
@@ -131,10 +131,10 @@ void Gauge::update(double current_ms) {
 void Gauge::draw(float y) {
     if (!lua_tried) {
         lua_tried = true;
-        if (load("Gauge", "gauge", player_num == PlayerNum::P2, dan_mode, string_diff)) {
+        if (load(script_class, script_file, player_num == PlayerNum::P2, dan_mode, string_diff)) {
             fn_draw = lua_object["draw"];
         } else {
-            spdlog::error("Gauge: game/gauge.lua failed to load, gauge will not be drawn");
+            spdlog::error("Gauge: {}.lua failed to load, gauge will not be drawn", script_file);
         }
     }
     const bool anim_active = gauge_update_anim && gauge_update_anim->is_started && !gauge_update_anim->is_finished;

@@ -19,7 +19,7 @@ namespace {
     sol::table modifier_rows_table(ModifierSelector& m) {
         sol::table out = script_manager.lua->create_table();
         auto rows = m.lua_rows();
-        for (int i = 0; i < (int)rows.size(); i++) {
+        for (int i = 0; i < static_cast<int>(rows.size()); i++) {
             sol::table r = script_manager.lua->create_table();
             r["name"] = rows[i].name;
             r["value"] = rows[i].value;
@@ -50,7 +50,7 @@ namespace {
 
     sol::table string_list(const std::vector<std::string>& names) {
         sol::table out = script_manager.lua->create_table();
-        for (int i = 0; i < (int)names.size(); i++) {
+        for (int i = 0; i < static_cast<int>(names.size()); i++) {
             out[i + 1] = names[i];
         }
         return out;
@@ -60,28 +60,32 @@ namespace {
 // the player, its option panels, the navigator, the genre background, text helpers
 void register_player_lua_bindings(sol::state& lua) {
     lua.new_usertype<SongSelectPlayer>(
-        "SongSelectPlayer", "selected_difficulty", [](SongSelectPlayer& self) { return (int)self.selected_difficulty; },
-        "player_num", [](SongSelectPlayer& self) { return (int)self.player_num; }, "difficulty_decided",
+        "SongSelectPlayer", "selected_difficulty",
+        [](SongSelectPlayer& self) { return static_cast<int>(self.selected_difficulty); }, "player_num",
+        [](SongSelectPlayer& self) { return static_cast<int>(self.player_num); }, "difficulty_decided",
         [](SongSelectPlayer& self) { return self.difficulty_decided(); },
         // state for the cursor drawn under the wheel
         "selector_state",
         [](SongSelectPlayer& self) {
             sol::table t = script_manager.lua->create_table();
-            t["selected"] = (int)self.selected_difficulty;
-            t["prev"] = (int)self.prev_diff;
+            t["selected"] = static_cast<int>(self.selected_difficulty);
+            t["prev"] = static_cast<int>(self.prev_diff);
             t["move_right"] = self.diff_select_move_right;
             t["move1"] = self.diff_selector_move_1->attribute;
             t["move1_done"] = self.diff_selector_move_1->is_finished;
             t["move2"] = self.diff_selector_move_2->attribute;
             t["move2_done"] = self.diff_selector_move_2->is_finished;
             t["panel"] = self.neiro_selector.has_value() || self.modifier_selector.has_value();
+            auto* song = dynamic_cast<SongBox*>(navigator.get_current_item());
+            t["papamama"] = self.solo && song && self.selected_difficulty >= Difficulty::EASY &&
+                            song->course_info(static_cast<int>(self.selected_difficulty)).is_papamama;
             return t;
         },
         // state for the difficulty banner behind the wheel
         "bg_diff_state",
         [](SongSelectPlayer& self) {
             sol::table t = script_manager.lua->create_table();
-            t["selected"] = (int)self.selected_difficulty;
+            t["selected"] = static_cast<int>(self.selected_difficulty);
             t["bounce"] = self.selected_diff_bounce->attribute;
             t["fade_in"] = self.selected_diff_fadein->attribute;
             t["highlight_fade"] = self.selected_diff_highlight_fade->attribute;
@@ -89,6 +93,7 @@ void register_player_lua_bindings(sol::state& lua) {
                 self.selected_diff_highlight_fade->is_reversing || self.selected_diff_highlight_fade->is_finished;
             t["text_resize"] = self.selected_diff_text_resize->attribute;
             t["text_fade_in"] = self.selected_diff_text_fadein->attribute;
+            t["oni_open_ms"] = self.oni_open_ms; // when this player opened a hidden oni, -1 = never
             return t;
         },
         "neiro_active", [](SongSelectPlayer& self) { return self.neiro_selector.has_value(); }, "modifier_active",
@@ -168,7 +173,7 @@ void register_player_lua_bindings(sol::state& lua) {
         });
 
     lua.new_usertype<ModifierSelector>(
-        "ModifierPanel", "player_num", [](ModifierSelector& m) { return (int)m.lua_player(); }, "offset",
+        "ModifierPanel", "player_num", [](ModifierSelector& m) { return static_cast<int>(m.lua_player()); }, "offset",
         [](ModifierSelector& m) { return option_panel_offset(m.move, m.is_confirmed); }, "rows",
         [](ModifierSelector& m) { return modifier_rows_table(m); }, "index",
         [](ModifierSelector& m) { return m.lua_index() + 1; }, "confirmed",
@@ -176,7 +181,7 @@ void register_player_lua_bindings(sol::state& lua) {
         [](ModifierSelector& m) { return change_table(m); });
 
     lua.new_usertype<NeiroSelector>(
-        "NeiroPanel", "player_num", [](NeiroSelector& n) { return (int)n.lua_player(); }, "offset",
+        "NeiroPanel", "player_num", [](NeiroSelector& n) { return static_cast<int>(n.lua_player()); }, "offset",
         [](NeiroSelector& n) { return option_panel_offset(n.move, n.is_confirmed); }, "names",
         [](NeiroSelector& n) { return string_list(n.lua_names()); }, "index",
         [](NeiroSelector& n) { return n.lua_index() + 1; }, "change", [](NeiroSelector& n) { return change_table(n); });

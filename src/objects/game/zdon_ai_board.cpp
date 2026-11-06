@@ -298,7 +298,7 @@ void zdon_ai_board_bind(sol::table& tex) {
         }
         return sol::make_object(ts, t);
     });
-    tex.set_function("ai_instant_open", []() {
+    tex.set_function("ai_instant_open", [] {
         const bool was = g_instant_open;
         g_instant_open = false;
         return was;

@@ -121,7 +121,7 @@ namespace {
 
         auto add_song_list = [&](const fs::path& song_list) {
             auto entries = read_song_list(song_list);
-            tja_count += (int)entries.size();
+            tja_count += static_cast<int>(entries.size());
             for (const auto& e : entries) {
                 if (auto found = scores_manager.get_path_by_hash(e.hash)) {
                     update_both(*found);
@@ -138,7 +138,7 @@ namespace {
                     for (const fs::path& song_list : song_lists) {
                         add_song_list(song_list);
                     }
-                    tja_count += (int)charts.size();
+                    tja_count += static_cast<int>(charts.size());
                     for (const fs::path& chart : charts) {
                         update_both(chart);
                     }
@@ -187,11 +187,11 @@ void FolderBox::dump_scans(std::ostream& out, const std::vector<fs::path>& scan_
     auto write = [&out](const fs::path& path, const FolderScan& scan) {
         out << path.string() << " tja_count=" << scan.tja_count << " crown=";
         for (const auto& [diff, c] : scan.crown) {
-            out << diff << ':' << (int)c << ',';
+            out << diff << ':' << static_cast<int>(c) << ',';
         }
         out << " crown_p2=";
         for (const auto& [diff, c] : scan.crown_p2) {
-            out << diff << ':' << (int)c << ',';
+            out << diff << ':' << static_cast<int>(c) << ',';
         }
         out << '\n';
     };
@@ -319,6 +319,16 @@ void FolderBox::load_text() {
     text_loaded = true;
 }
 
+std::string FolderBox::hover_voice() const {
+    if (collection == WAIWAI_MODE_COLLECTION) {
+        return "voice_waiwai_open";
+    }
+    if (collection == WAIWAI_NORMAL_COLLECTION) {
+        return "voice_waiwai_exit";
+    }
+    return "genre_voice_" + std::to_string(static_cast<int>(genre_index));
+}
+
 void FolderBox::update(double current_time) {
     if (scan_pending) {
         std::scoped_lock lock(scan_cache_mutex);
@@ -339,11 +349,11 @@ void FolderBox::update(double current_time) {
 
     if (!is_open_prev && yellow_box_opened) {
         if (!audio.is_sound_playing("voice_enter")) {
-            audio.play_sound("genre_voice_" + std::to_string((int)genre_index), VolumePreset::VOICE);
+            audio.play_sound(hover_voice(), VolumePreset::VOICE);
             genre_voice_started = true;
         }
     } else if (!yellow_box_opened && genre_voice_started) {
-        audio.stop_sound("genre_voice_" + std::to_string((int)genre_index));
+        audio.stop_sound(hover_voice());
         genre_voice_started = false;
     }
 }
@@ -352,7 +362,7 @@ void FolderBox::enter_box() {
     entered = true;
     enter_fade->start();
     if (genre_voice_started) {
-        audio.stop_sound("genre_voice_" + std::to_string((int)genre_index));
+        audio.stop_sound(hover_voice());
     }
 }
 

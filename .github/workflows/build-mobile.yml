@@ -54,48 +54,76 @@ jobs:
           path: .cmake-deps
           key: android-cmake-deps-ndk30-${{ hashFiles('cmake/deps.cmake') }}
 
+      - name: Cache host shaderc
+        id: cache-shaderc
+        uses: actions/cache@v4
+        with:
+          path: .host-shaderc
+          key: host-shaderc-${{ runner.os }}-${{ hashFiles('cmake/deps.cmake') }}
+
+      - name: Build host shaderc
+        if: steps.cache-shaderc.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libgl1-mesa-dev
+          BGFX_TAG=$(grep -A1 'bgfx.cmake.git' cmake/deps.cmake | sed -n 's/.*GIT_TAG *//p')
+          git clone --depth 1 --branch "$BGFX_TAG" --recurse-submodules --shallow-submodules \
+            https://github.com/bkaradzic/bgfx.cmake.git "$RUNNER_TEMP/bgfx"
+          cmake -S "$RUNNER_TEMP/bgfx" -B "$RUNNER_TEMP/bgfx-build" -DCMAKE_BUILD_TYPE=Release \
+            -DBGFX_BUILD_EXAMPLES=OFF -DBGFX_BUILD_TESTS=OFF -DBGFX_BUILD_TOOLS=ON -DBGFX_BUILD_TOOLS_SHADER=ON \
+            -DBGFX_BUILD_TOOLS_TEXTURE=OFF -DBGFX_BUILD_TOOLS_GEOMETRY=OFF -DBGFX_BUILD_TOOLS_BIN2C=OFF \
+            -DBGFX_INSTALL=OFF -DBGFX_CUSTOM_TARGETS=OFF
+          cmake --build "$RUNNER_TEMP/bgfx-build" --target shaderc --parallel "$(nproc)"
+          mkdir -p .host-shaderc
+          cp "$RUNNER_TEMP/bgfx-build/cmake/bgfx/shaderc" .host-shaderc/
+
+      - name: Install host shaderc
+        run: |
+          mkdir -p .cmake-deps/bgfx-build/cmake/bgfx
+          cp .host-shaderc/shaderc .cmake-deps/bgfx-build/cmake/bgfx/shaderc
+
       - name: Write local.properties
         run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-          echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.31.6" >> android/local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > platform/android/local.properties
+          echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.31.6" >> platform/android/local.properties
 
       - name: Decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/yataidon-release.jks
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > platform/android/yataidon-release.jks
           printf 'storeFile=yataidon-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
             "${{ secrets.ANDROID_KEY_ALIAS }}" \
             "${{ secrets.ANDROID_KEY_PASSWORD }}" \
-            > android/keystore.properties
+            > platform/android/keystore.properties
 
       - name: Build Release APK
-        working-directory: android
+        working-directory: platform/android
         env:
           NETWORK_URL: ${{ secrets.NETWORK_URL }}
           NETWORK_AUTH_KEY: ${{ secrets.NETWORK_AUTH_KEY }}
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon -PgfxBackend=bgfx
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: YataiDON-Android
           include-hidden-files: true
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: platform/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Build Release APK (update, no bundled assets)
-        working-directory: android
+        working-directory: platform/android
         env:
           NETWORK_URL: ${{ secrets.NETWORK_URL }}
           NETWORK_AUTH_KEY: ${{ secrets.NETWORK_AUTH_KEY }}
-        run: ./gradlew assembleRelease --no-daemon -PbundleGameData=false
+        run: ./gradlew assembleRelease --no-daemon -PbundleGameData=false -PgfxBackend=bgfx
 
       - name: Upload update APK
         uses: actions/upload-artifact@v4
         with:
           name: YataiDON-Android-Update
           include-hidden-files: true
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: platform/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
   build-ios:
@@ -227,11 +255,22 @@ jobs:
         with:
           files: |
             YataiDON-Android.apk
-            YataiDON-Android-Update.apk
             YataiDON-iOS-unsigned.ipa
-            checksums-ios.sha256
-            checksums-android.sha256
           name: "YataiDON [Latest Release]"
           tag_name: "latest"
           make_latest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Separate channel so updater files don't clutter the main release.
+      - name: Upload updater files
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            YataiDON-Android-Update.apk
+            checksums-android.sha256
+            checksums-ios.sha256
+          name: "Updater channel"
+          tag_name: "updater"
+          prerelease: true
+          make_latest: false
           token: ${{ secrets.GITHUB_TOKEN }}

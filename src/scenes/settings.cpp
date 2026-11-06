@@ -42,7 +42,11 @@ void SettingsScreen::on_screen_start() {
     indicator = Indicator(Indicator::State::SELECT);
     coin_overlay = CoinOverlay();
     allnet_indicator = AllNetIcon();
-    username_on_entry = scores_manager.player_1_data.username;
+    accounts_on_entry = {
+        AccountOnEntry{global_data.config->network.access_code_1, scores_manager.player_1_data.username},
+        AccountOnEntry{global_data.config->network.access_code_2, scores_manager.player_2_data.username}};
+    show_cursor(); // the access code boxes reveal on mouse hover
+    assets_on_entry.emplace(*global_data.config);
 
     t_background = tex.get_texture("background/background");
     t_footer = tex.get_texture("background/footer");
@@ -58,15 +62,18 @@ Screens SettingsScreen::on_screen_end(Screens next_screen) {
     scores_manager.save_player_data(scores_manager.player_2_data);
     spdlog::info("Settings saved");
 
-    if (!global_data.config->network.access_code_1.empty() &&
-        scores_manager.player_1_data.username != username_on_entry) {
-        network.update_username(global_data.config->network.access_code_1, scores_manager.player_1_data.username);
+    hide_cursor();
+
+    // A switched account's name is not an edit; pushing it could overwrite the server's newer one.
+    const std::array<std::pair<const std::string*, const PlayerData*>, 2> accounts{
+        std::pair{&global_data.config->network.access_code_1, &scores_manager.player_1_data},
+        std::pair{&global_data.config->network.access_code_2, &scores_manager.player_2_data}};
+    for (size_t i = 0; i < accounts.size(); i++) {
+        const auto& [code, data] = accounts[i];
+        if (!code->empty() && *code == accounts_on_entry[i].code && data->username != accounts_on_entry[i].username) {
+            network.update_username(*code, data->username);
+        }
     }
-    if (!global_data.config->network.access_code_2.empty() &&
-        scores_manager.player_2_data.username != username_on_entry) {
-        network.update_username(global_data.config->network.access_code_2, scores_manager.player_2_data.username);
-    }
-    username_on_entry.clear();
 
     box_manager.reset();
 
@@ -75,6 +82,9 @@ Screens SettingsScreen::on_screen_end(Screens next_screen) {
     allnet_indicator.reset();
     t_background = nullptr;
     t_footer = nullptr;
+    if (assets_on_entry && !assets_on_entry->needs_reload(*global_data.config)) {
+        return Screen::on_screen_end(next_screen);
+    }
     drop_other_screens_for_skin_reload();
     // navigator is a global, not a Screen -- the rebuild above never
     // touches it, so it needs its own reset.

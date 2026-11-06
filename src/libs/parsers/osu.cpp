@@ -52,7 +52,7 @@ static void for_each_data_line(const std::vector<std::string>& lines, const std:
         if (line.empty() || line[0] == '/' || line[0] == '\r') {
             return;
         }
-        if (!std::isdigit((unsigned char)line[0]) && line[0] != '-' && line[0] != '+') {
+        if (!std::isdigit(static_cast<unsigned char>(line[0])) && line[0] != '-' && line[0] != '+') {
             return;
         }
         fn(line);

@@ -20,7 +20,7 @@ public:
     double last_moved;
     double next_repeat = 0;
     int hold_dir = 0;
-    double pending_select_ms = -1; // Z-DON: a don pressed while the wheel still scrolls, taken once it settles
+    double pending_select_ms = -1; // a don pressed while the wheel still scrolls, taken once it settles
     double last_browse_ms = 0;
     int open_frames = 0; // frames the current box has been open (drawn open by the skin)
     bool selected_song;
@@ -52,6 +52,10 @@ public:
 
     bool option_panel_by_lua = false;
     bool silent_start_voice = false; // the AI select: the decide plays no start voice (the wait stays)
+
+    bool solo = true;
+    std::string shared_start_voice;
+    double oni_open_ms = -1.0;
 
     SongSelectPlayer(PlayerNum player_num);
 
@@ -89,6 +93,10 @@ private:
     // after the don before it widens and 64 frames before the level panel rises (Tl7g8XXXvAM 125.81 s)
     double card_enter_at_ms = -1.0;
     double level_panel_at_ms = 0.0;
+    bool oni_hidden = false;
+    int oni_command = 0;
+    void hide_oni();
+    void open_oni();
     void navigate_difficulty_left();
     void navigate_difficulty_right();
     bool has_course(Difficulty d) const;

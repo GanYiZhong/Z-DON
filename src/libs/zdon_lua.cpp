@@ -16,12 +16,12 @@
 
 namespace {
     bool valid_player(int player_num) {
-        return player_num >= 0 && player_num < (int)global_data.session_data.size();
+        return player_num >= 0 && player_num < static_cast<int>(global_data.session_data.size());
     }
 
     // the good / ok windows the player's course judges with (Player::check_note)
     std::pair<float, float> judge_windows(int player_num) {
-        if (global_data.session_data[player_num].selected_difficulty <= (int)Difficulty::NORMAL) {
+        if (global_data.session_data[player_num].selected_difficulty <= static_cast<int>(Difficulty::NORMAL)) {
             return {Timing::GOOD_EASY, Timing::OK_EASY};
         }
         return {Timing::GOOD, Timing::OK};
@@ -44,10 +44,10 @@ void register_zdon_lua_bindings(sol::table& tex) {
         auto [good, ok] = judge_windows(player_num);
         r.push_back({s, sol::in_place, live.last_hit_offset_ms});
         r.push_back({s, sol::in_place, live.last_hit_at_ms});
-        r.push_back({s, sol::in_place, (double)good});
-        r.push_back({s, sol::in_place, (double)ok});
+        r.push_back({s, sol::in_place, static_cast<double>(good)});
+        r.push_back({s, sol::in_place, static_cast<double>(ok)});
         const std::string& show = global_data.config->general.zdon_hit_timing_show;
-        const double mark = show == "all" ? -1.0 : show == "ok" ? (double)good : good * 0.5;
+        const double mark = show == "all" ? -1.0 : show == "ok" ? static_cast<double>(good) : good * 0.5;
         r.push_back({s, sol::in_place, mark});
         return r;
     });
@@ -61,14 +61,14 @@ void register_zdon_lua_bindings(sol::table& tex) {
         }
         sol::state_view lua(s);
         const std::vector<float>& offsets = global_data.session_data[player_num].result_data.hit_offsets;
-        sol::table t = lua.create_table((int)offsets.size(), 0);
+        sol::table t = lua.create_table(static_cast<int>(offsets.size()), 0);
         for (size_t i = 0; i < offsets.size(); ++i) {
             t[i + 1] = offsets[i];
         }
         auto [good, ok] = judge_windows(player_num);
         r.push_back({s, sol::in_place, t});
-        r.push_back({s, sol::in_place, (double)good});
-        r.push_back({s, sol::in_place, (double)ok});
+        r.push_back({s, sol::in_place, static_cast<double>(good)});
+        r.push_back({s, sol::in_place, static_cast<double>(ok)});
         return r;
     });
 
@@ -85,7 +85,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
             return r;
         }
         sol::state_view lua(s);
-        sol::table gogo = lua.create_table((int)live.gogo_ranges.size(), 0);
+        sol::table gogo = lua.create_table(static_cast<int>(live.gogo_ranges.size()), 0);
         for (size_t i = 0; i < live.gogo_ranges.size(); ++i) {
             gogo[i + 1] = lua.create_table_with(1, live.gogo_ranges[i].first, 2, live.gogo_ranges[i].second);
         }
@@ -104,13 +104,13 @@ void register_zdon_lua_bindings(sol::table& tex) {
             return r;
         }
         r.push_back({s, sol::in_place, loop.active});
-        r.push_back({s, sol::in_place, (int)loop.a_bar});
-        r.push_back({s, sol::in_place, (int)loop.b_bar});
-        r.push_back({s, sol::in_place, (int)loop.passes});
+        r.push_back({s, sol::in_place, loop.a_bar});
+        r.push_back({s, sol::in_place, loop.b_bar});
+        r.push_back({s, sol::in_place, loop.passes});
         if (loop.has_last) {
-            r.push_back({s, sol::in_place, (int)loop.last_good});
-            r.push_back({s, sol::in_place, (int)loop.last_ok});
-            r.push_back({s, sol::in_place, (int)loop.last_bad});
+            r.push_back({s, sol::in_place, loop.last_good});
+            r.push_back({s, sol::in_place, loop.last_ok});
+            r.push_back({s, sol::in_place, loop.last_bad});
         }
         return r;
     });
@@ -133,9 +133,9 @@ void register_zdon_lua_bindings(sol::table& tex) {
         sol::state_view lua(s);
         sol::table t = lua.create_table();
         int wins_p = 0, wins_ai = 0, total_p = 0, total_ai = 0;
-        sol::table secs = lua.create_table((int)b.bounds.size(), 0);
+        sol::table secs = lua.create_table(static_cast<int>(b.bounds.size()), 0);
         for (size_t i = 0; i < b.bounds.size(); ++i) {
-            const bool open = (int)i == b.section;
+            const bool open = static_cast<int>(i) == b.section;
             const int p = open ? b.live_p : b.points_p[i];
             const int a = open ? b.live_ai : b.points_ai[i];
             wins_p += b.winners[i] == 0;
@@ -176,7 +176,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
         t["state"] = b.state;
         t["tug"] = b.tug;
         t["section"] = b.section + 1;
-        t["count"] = (int)b.bounds.size();
+        t["count"] = static_cast<int>(b.bounds.size());
         t["live_p"] = b.live_p;
         t["live_ai"] = b.live_ai;
         t["judge_p"] = lua.create_table_with(1, b.judge_p[0], 2, b.judge_p[1], 3, b.judge_p[2], 4, b.judge_p[3]);
@@ -231,7 +231,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.ai_active() -> true in an AI battle's GAME_2P / RESULT_2P from the first frame (tex.ai_battle() stays
     // nil until the song's first frame cuts the sections): skins swap the 2P character for the AI's
-    tex.set_function("ai_active", []() -> bool { return global_data.zdon_ai.active; });
+    tex.set_function("ai_active", [] -> bool { return global_data.zdon_ai.active; });
 
     // tex.ai_diff_stage() -> nil, or the cursor (0 back, 1..4 easy..oni, 5 recommended, 6 last) while the AI select
     // shows its course columns (skin_config zdon_ai_diff_first)
@@ -248,7 +248,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // tex.ai_transition() -> true while an AI battle is being started: from the song select's decide (the VS window and
     // loading card of its game transition) until the battle ends. Unlike ai_active it is already true there
     tex.set_function("ai_transition",
-                     []() -> bool { return global_data.zdon_ai.requested || global_data.zdon_ai.active; });
+                     [] -> bool { return global_data.zdon_ai.requested || global_data.zdon_ai.active; });
 
     // tex.ai_draw_don(x, y, scale, rot_y): the arena (skin_config zdon_ai_arena) shows the player's 3D Don this frame
     // at x, y (the character's feet, 1080p px), scaled, turned rot_y degrees (the cabinet's AI battle stands it in
@@ -283,18 +283,18 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.ai_level() / tex.ai_condition() -> the AI's condition this session, 1 worst .. 5 best (its tension; the
     // arcade's aiCondition, rolled once per session). ai_level is the old name.
-    tex.set_function("ai_level", []() -> int { return zdon_ai_condition(); });
-    tex.set_function("ai_condition", []() -> int { return zdon_ai_condition(); });
+    tex.set_function("ai_level", [] -> int { return zdon_ai_condition(); });
+    tex.set_function("ai_condition", [] -> int { return zdon_ai_condition(); });
 
     // tex.coin_mode() -> [general] zdon_coin_mode (default off): the skin shows the cabinet credit text instead of
     // the free-play text; tex.coin_credits() -> [general] zdon_coin_credits (0..99), a plain counter, no coin input
-    tex.set_function("coin_mode", []() -> bool { return global_data.config->general.zdon_coin_mode; });
+    tex.set_function("coin_mode", [] -> bool { return global_data.config->general.zdon_coin_mode; });
     tex.set_function("coin_credits",
-                     []() -> int { return std::clamp(global_data.config->general.zdon_coin_credits, 0, 99); });
+                     [] -> int { return std::clamp(global_data.config->general.zdon_coin_credits, 0, 99); });
 
     // tex.ai_skill() -> the AI's skill level 1..10 ([general] zdon_ai_level, +1 per match won, -1 per loss); the
     // course board's "pick the difficulty level" pillars show it
-    tex.set_function("ai_skill", []() -> int { return std::clamp(global_data.config->general.zdon_ai_level, 1, 10); });
+    tex.set_function("ai_skill", [] -> int { return std::clamp(global_data.config->general.zdon_ai_level, 1, 10); });
 
     // tex.ai_rank() -> the player's AI battle rank (the Green ghost rank, objects/game/zdon_ai.h):
     //   {rank = 0..11, points =, next = points still needed for the next rank (0 at the top),
@@ -315,7 +315,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.ai_next_reward() -> wins still needed for the next AI battle reward (0: past the last one)
     tex.set_function("ai_next_reward",
-                     []() -> int { return zdon_ai_next_reward(global_data.config->general.zdon_ai_wins); });
+                     [] -> int { return zdon_ai_next_reward(global_data.config->general.zdon_ai_wins); });
 
     // tex.outfit(player_num) -> the player's 2D outfit in this skin (0 = plain; skin_config "zdon_outfits",
     // objects/entry/zdon_outfit_menu.h)
@@ -327,7 +327,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
     });
 
     // tex.ai_wins() -> AI battles won so far ([general] zdon_ai_wins)
-    tex.set_function("ai_wins", []() -> int { return global_data.config->general.zdon_ai_wins; });
+    tex.set_function("ai_wins", [] -> int { return global_data.config->general.zdon_ai_wins; });
 
     // tex.best_score(player_num) -> the saved best score of this song and course before this play (0 = none);
     // set when the result is saved, so it is meant for the result screen

@@ -61,7 +61,7 @@ namespace {
         S str() {
             const uint32_t n = num<uint32_t>();
             S s;
-            const size_t bytes = size_t(n) * sizeof(typename S::value_type);
+            const size_t bytes = static_cast<size_t>(n) * sizeof(typename S::value_type);
             if (!ok || in.size() < bytes) {
                 ok = false;
                 return s;

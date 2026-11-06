@@ -6,6 +6,7 @@
 #include <ctime>
 #include <format>
 #include <iostream>
+#include <print>
 #include <thread>
 
 #include "libs/asset_cache.h"
@@ -49,6 +50,8 @@
 
 #include "objects/global/debug_menu.h"
 #include "objects/global/fps_counter.h"
+#include "scenes/ai_battle.h"
+#include "scenes/campaign.h"
 #include "scenes/dan_result.h"
 #include "scenes/dan_select.h"
 #include "scenes/entry.h"
@@ -59,11 +62,13 @@
 #include "scenes/game_practice.h"
 #include "scenes/input_cali.h"
 #include "scenes/input_test.h"
+#include "scenes/kinotake_result.h"
 #include "scenes/loading.h"
 #include "scenes/onboarding.h"
 #include "scenes/result.h"
 #include "scenes/result_2p.h"
 #include "scenes/retry_game.h"
+#include "scenes/reward_shop.h"
 #include "scenes/settings.h"
 #include "scenes/song_select.h"
 #include "scenes/song_select_2p.h"
@@ -71,7 +76,9 @@
 #include "scenes/song_select_practice.h"
 #include "scenes/song_select_record.h"
 #include "scenes/title.h"
+#include "scenes/total_result.h"
 #include "scenes/tutorial.h"
+#include "scenes/waiwai.h"
 
 void draw_outer_border(int screen_width, int screen_height, Color last_color) {
     for (int dy = -1; dy <= 1; dy++) {
@@ -181,7 +188,8 @@ Screens check_args(int argc, char* argv[]) {
 
         if (zdon_record::consume_arg(arg, i, argc)) {
             continue; // read by zdon_record::prepare
-        } else if (arg == "--auto") {
+        }
+        if (arg == "--auto") {
             auto_play = true;
         } else if (arg == "--practice") {
             practice = true;
@@ -329,21 +337,21 @@ Screens check_args(int argc, char* argv[]) {
     Screens current_screen = practice ? Screens::GAME_PRACTICE : Screens::GAME;
     if (two_player) {
         current_screen = Screens::GAME_2P;
-        global_data.session_data[(int)PlayerNum::P2].selected_song = path;
-        global_data.session_data[(int)PlayerNum::P2].selected_difficulty = selected_difficulty;
+        global_data.session_data[static_cast<int>(PlayerNum::P2)].selected_song = path;
+        global_data.session_data[static_cast<int>(PlayerNum::P2)].selected_difficulty = selected_difficulty;
         auto_play = true;
     }
     if (record_tracks.size() == 2) { // 1P and 2P, without the --2p auto play
         current_screen = Screens::GAME_2P;
-        global_data.session_data[(int)PlayerNum::P2].selected_song = path;
-        global_data.session_data[(int)PlayerNum::P2].selected_difficulty = record_tracks[1];
+        global_data.session_data[static_cast<int>(PlayerNum::P2)].selected_song = path;
+        global_data.session_data[static_cast<int>(PlayerNum::P2)].selected_difficulty = record_tracks[1];
     }
     if (ai_battle) {
         current_screen = Screens::GAME_2P; // Game2PScreen copies 1P's song to the AI's lane
         global_data.zdon_ai.requested = true;
     }
-    global_data.session_data[(int)PlayerNum::P1].selected_song = std::move(path);
-    global_data.session_data[(int)PlayerNum::P1].selected_difficulty = selected_difficulty;
+    global_data.session_data[static_cast<int>(PlayerNum::P1)].selected_song = std::move(path);
+    global_data.session_data[static_cast<int>(PlayerNum::P1)].selected_difficulty = selected_difficulty;
     if (auto_play) {
         global_data.force_auto_play = true;
     }
@@ -371,8 +379,11 @@ static bool screen_fade_applies(Screens from, Screens to) {
     case Screens::TUTORIAL:
     case Screens::GAME_PRACTICE:
     case Screens::AI_GAME:
+    case Screens::AI_RESULT:
     case Screens::RESULT:
     case Screens::RESULT_2P:
+    case Screens::WAIWAI_GAME:
+    case Screens::WAIWAI_RESULT:
     case Screens::DAN_RESULT:
         return false;
     default:
@@ -404,12 +415,27 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<TitleScreen>(screens, except, Screens::TITLE);
     put_screen<SongSelectScreen>(screens, except, Screens::SONG_SELECT);
     put_screen<SongSelect2PScreen>(screens, except, Screens::SONG_SELECT_2P);
+    put_screen<WaiwaiSongSelectScreen>(screens, except, Screens::WAIWAI_SONG_SELECT);
+    put_screen<WaiwaiGameScreen>(screens, except, Screens::WAIWAI_GAME);
+    put_screen<WaiwaiResultScreen>(screens, except, Screens::WAIWAI_RESULT);
+    put_screen<WaiwaiTutorialScreen>(screens, except, Screens::WAIWAI_TUTORIAL);
+    put_screen<WaiwaiRetryGameScreen>(screens, except, Screens::WAIWAI_RETRY_GAME);
+    // merge 0ed42ec: two AI battles share Screens::AI_SELECT. A skin with upstream's ai_support_menu Lua script
+    // gets upstream's (Lua, server-backed) AISongSelectScreen -> AI_GAME -> AI_RESULT; any other skin gets Z-DON's
+    // cabinet AI battle (ZdonAiSongSelectScreen -> GAME_2P / RESULT_2P with global_data.zdon_ai). The skin's
+    // scripts are loaded before this runs, and a skin change repopulates the screens (reload_skin_screens).
+    if (script_manager.has_lua_script("ai_support_menu")) {
+        put_screen<AISongSelectScreen>(screens, except, Screens::AI_SELECT);
+    } else {
+        put_screen<ZdonAiSongSelectScreen>(screens, except, Screens::AI_SELECT);
+    }
+    put_screen<AIGameScreen>(screens, except, Screens::AI_GAME);
+    put_screen<AIResultScreen>(screens, except, Screens::AI_RESULT);
     put_screen<LoadingScreen>(screens, except, Screens::LOADING);
     put_screen<GameScreen>(screens, except, Screens::GAME);
     put_screen<Game2PScreen>(screens, except, Screens::GAME_2P);
     put_screen<PracticeGameScreen>(screens, except, Screens::GAME_PRACTICE);
     put_screen<PracticeSongSelectScreen>(screens, except, Screens::PRACTICE_SELECT);
-    put_screen<AiSongSelectScreen>(screens, except, Screens::AI_SELECT);         // Z-DON AI battle
     put_screen<RecordSongSelectScreen>(screens, except, Screens::RECORD_SELECT); // Z-DON recording mode
     put_screen<ResultScreen>(screens, except, Screens::RESULT);
     put_screen<Result2PScreen>(screens, except, Screens::RESULT_2P);
@@ -423,6 +449,10 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<RetryGameScreen>(screens, except, Screens::RETRY_GAME);
     put_screen<OnboardingScreen>(screens, except, Screens::ONBOARDING);
     put_screen<TutorialScreen>(screens, except, Screens::TUTORIAL);
+    put_screen<CampaignScreen>(screens, except, Screens::CAMPAIGN);
+    put_screen<KinotakeResultScreen>(screens, except, Screens::KINOTAKE_RESULT);
+    put_screen<TotalResultScreen>(screens, except, Screens::TOTAL_RESULT);
+    put_screen<RewardShopScreen>(screens, except, Screens::REWARD_SHOP);
 }
 
 void drop_other_screens_for_skin_reload() {
@@ -459,7 +489,7 @@ static void dev_frame_begin() {
 static double dev_hook_clock() {
     static const auto start = std::chrono::steady_clock::now();
     if (fixed_step::on()) {
-        return (double)g_frame_index;
+        return static_cast<double>(g_frame_index);
     }
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
@@ -658,7 +688,9 @@ static void run_frame() {
     }
 
     g_frame_ms = vblank_pacing::frame_ms(get_current_ms());
+    L.fps_counter.update();
 
+    platform_poll_input();
     poll_input_events();
     if (platform_is_suspended()) {
         return;
@@ -817,7 +849,8 @@ static void run_frame() {
             if (since >= (*it)[0]) {
                 spdlog::info("[devmouse] {:.0f},{:.0f} button {} wheel {} at {:.0f}", (*it)[1], (*it)[2], (*it)[3],
                              (*it)[4], since);
-                dev_inject_mouse((float)(*it)[1], (float)(*it)[2], (int)(*it)[3], (float)(*it)[4]);
+                dev_inject_mouse(static_cast<float>((*it)[1]), static_cast<float>((*it)[2]), static_cast<int>((*it)[3]),
+                                 static_cast<float>((*it)[4]));
                 it = fake_mice.erase(it);
             } else {
                 ++it;
@@ -893,7 +926,6 @@ static void run_frame() {
         draw_touch_drum();
 
         if (global_data.config->general.fps_counter) {
-            L.fps_counter.update();
             L.fps_counter.draw();
         }
 
@@ -964,7 +996,7 @@ static void run_frame() {
 
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
     vblank_pacing::wait_next(); // no-op unless pacing is on (no target_fps; then target_duration is 0)
-    if (L.target_duration.count() > 0) {
+    if (L.target_duration.count() > 0 && !platform_present_paces_frames()) {
         L.next_frame_time += L.target_duration;
         auto now = std::chrono::steady_clock::now();
         if (L.next_frame_time < now) {
@@ -1038,9 +1070,9 @@ static void write_draw_log(const std::string& path) {
     }
     int i = 0;
     for (const DrawLogEntry& e : debug_draw_log) {
-        std::fprintf(f, "%d\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%.4f\t%d\t%.2f\t%s:%d\t%s\n", i++, e.name.c_str(),
+        std::println(f, "{}\t{}\t{:.2f}\t{:.2f}\t{:.2f}\t{:.2f}\t{}\t{:.4f}\t{}\t{:.2f}\t{}:{}\t{}", i++, e.name,
                      e.rect.x, e.rect.y, e.rect.width, e.rect.height, e.index, e.scale, e.center ? 1 : 0, e.rotation,
-                     e.lua_source.c_str(), e.lua_line, e.lua_function.c_str());
+                     e.lua_source, e.lua_line, e.lua_function);
     }
     std::fclose(f);
 }
@@ -1051,17 +1083,18 @@ static bool dump_screen_tick() {
     }
     static const auto start = std::chrono::steady_clock::now();
     const double ms = g_dump_screen.by_frame
-                          ? (double)g_frame_index
+                          ? static_cast<double>(g_frame_index)
                           : std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     // grab the frames in memory and write them after the last one: exporting a PNG takes several
     // frames and would stall the game (auto play hits once per frame)
     static std::vector<std::pair<std::string, Image>> shots;
     bool grabbed = false;
     while (g_dump_screen.next < g_dump_screen.times.size() && ms >= g_dump_screen.times[g_dump_screen.next]) {
-        const std::string name = g_dump_screen.by_frame
-                                     ? std::to_string((long long)g_dump_screen.times[g_dump_screen.next]) + ".png"
-                                     : std::to_string(g_dump_screen.next) + "_" +
-                                           std::to_string((int)g_dump_screen.times[g_dump_screen.next]) + ".png";
+        const std::string name =
+            g_dump_screen.by_frame
+                ? std::to_string(static_cast<long long>(g_dump_screen.times[g_dump_screen.next])) + ".png"
+                : std::to_string(g_dump_screen.next) + "_" +
+                      std::to_string(static_cast<int>(g_dump_screen.times[g_dump_screen.next])) + ".png";
         if (draw_log_dev_hook()) {
             write_draw_log((fs::path(g_dump_screen.outdir) / (name + ".draws.tsv")).string());
         }

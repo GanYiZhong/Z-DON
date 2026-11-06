@@ -17,6 +17,7 @@
 #include <tuple>
 #include <utility>
 
+#include "../../platform/platform.h"
 #include "../fixed_step.h"
 #include "../gfx/sdl_compat.h"
 #include "../gfx/text.h"
@@ -126,10 +127,8 @@ namespace {
     // OpenTaiko note letters that play as an existing note: the digit it plays as, else 0
     char extended_note(char c) {
         switch (c) {
-        case 'A': // big don for two players (hands): a big don in single play
-            return '3';
-        case 'B': // big ka for two players
-            return '4';
+        // A / B (big don / ka for two players) are not mapped here since merge 0ed42ec: add_note keeps them as
+        // big notes with note.partner set (upstream's partner notes)
         case 'D': // fuse roll: a balloon that would explode if not popped; it takes a BALLOON count
             return '7';
         default:
@@ -139,12 +138,12 @@ namespace {
 
     // The last note (not barline) of the list is a roll or balloon that an 8 ends
     bool ends_long_note(const std::deque<Note>& notes) {
-        for (auto it = notes.rbegin(); it != notes.rend(); ++it) {
-            if (it->type == NoteType::BARLINE) {
+        for (const auto& note : std::views::reverse(notes)) {
+            if (note.type == NoteType::BARLINE) {
                 continue;
             }
-            return it->type == NoteType::ROLL_HEAD || it->type == NoteType::ROLL_HEAD_L ||
-                   it->type == NoteType::BALLOON_HEAD || it->type == NoteType::KUSUDAMA;
+            return note.type == NoteType::ROLL_HEAD || note.type == NoteType::ROLL_HEAD_L ||
+                   note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA;
         }
         return false;
     }
@@ -229,19 +228,26 @@ inline std::filesystem::path get_proper_path(const std::string& path, const std:
 // One open per chart: on Windows the open is most of the cost of reading a chart's metadata. The
 // encoding comes from the BOM, lines are split like std::getline on '\n' (a UTF-8 BOM is skipped).
 static std::vector<std::string> read_lines_once(const std::filesystem::path& path, std::string& encoding) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        encoding = "";
-        throw std::runtime_error("Could not open file: " + path.string());
+    std::string raw;
+    std::vector<unsigned char> bytes;
+    const auto utf8_path = path.u8string();
+    if (platform_read_file(reinterpret_cast<const char*>(utf8_path.c_str()), bytes)) {
+        raw.assign(bytes.begin(), bytes.end());
+    } else {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            encoding = "";
+            throw std::runtime_error("Could not open file: " + path.string());
+        }
+        file.seekg(0, std::ios::end);
+        const std::streamoff size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        raw.resize(size > 0 ? static_cast<size_t>(size) : 0);
+        if (!raw.empty()) {
+            file.read(raw.data(), static_cast<std::streamsize>(raw.size()));
+        }
+        raw.resize(static_cast<size_t>(file.gcount() > 0 ? file.gcount() : 0));
     }
-    file.seekg(0, std::ios::end);
-    const std::streamoff size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::string raw(size > 0 ? static_cast<size_t>(size) : 0, '\0');
-    if (!raw.empty()) {
-        file.read(raw.data(), static_cast<std::streamsize>(raw.size()));
-    }
-    raw.resize(static_cast<size_t>(file.gcount() > 0 ? file.gcount() : 0));
 
     const auto byte = [&](size_t i) { return i < raw.size() ? static_cast<unsigned char>(raw[i]) : 0u; };
     if (byte(0) == 0xEF && byte(1) == 0xBB && byte(2) == 0xBF) {
@@ -346,6 +352,8 @@ void TJAParser::get_metadata() {
         }
         if (item.starts_with("#BRANCH") && current_diff != -1) {
             metadata.course_data[current_diff].is_branching = true;
+        } else if (item.starts_with("#PAPAMAMA") && current_diff != -1) {
+            metadata.course_data[current_diff].papamama = true;
         } else if (item[0] == '#' || std::isdigit(static_cast<unsigned char>(item[0]))) {
             continue;
         } else if (item.starts_with("SUBTITLE")) {
@@ -630,7 +638,7 @@ TJAParser::notes_to_position(int diff) {
 
             // Process each note character; every character takes its slot, whatever it is
             for (char item : part) {
-                // OpenTaiko's letters: A/B (partner big notes) play as big don/ka and D (fuse roll)
+                // OpenTaiko's letters: A/B (partner big notes) stay as they are for add_note, D (fuse roll) plays
                 // as a balloon; C (mine) and E-I are left out like a 0
                 const char mapped = extended_note(item);
                 if (mapped != 0) {
@@ -645,8 +653,10 @@ TJAParser::notes_to_position(int diff) {
                     continue;
                 }
                 // Skip empty notes (0) and non-digits
+                // A / B reach add_note as themselves (upstream: partner notes, note.partner)
                 const unsigned char byte = static_cast<unsigned char>(item);
-                const bool digit = (byte >= '1' && byte <= '9') || (byte >= 0x80 && std::isdigit(byte));
+                const bool digit =
+                    (byte >= '1' && byte <= '9') || (byte >= 0x80 && std::isdigit(byte)) || item == 'A' || item == 'B';
                 if (item == '0' || !digit) {
                     if (item != '0' && !state.warned_note[byte]) {
                         state.warned_note[byte] = true;
@@ -1478,7 +1488,8 @@ Note TJAParser::add_note(char item, ParserState& state) {
     Note note = Note();
     note.hit_ms = this->current_ms;
     note.display = !state.doron;
-    note.type = NoteType(item - '0');
+    note.partner = item == 'A' || item == 'B';
+    note.type = item == 'A' ? NoteType::DON_L : item == 'B' ? NoteType::KAT_L : NoteType(item - '0');
     note.index = state.index;
     note.bpm = state.bpm;
     note.scroll_x = state.scroll_x_modifier;
@@ -1562,6 +1573,7 @@ void modifier_random(NoteList& notes, int value) {
     std::mt19937 gen(fixed_step::seed());
 
     std::vector<int> indices(notes.notes.size());
+    // NOLINTNEXTLINE(modernize-use-ranges): std::ranges::iota is missing from the PS5 and iOS standard libraries
     std::iota(indices.begin(), indices.end(), 0);
     std::ranges::shuffle(indices, gen);
 
@@ -1619,6 +1631,16 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
         modifier_random(notes, modifiers.random);
     }
 
+    modifier_difficulty(notes, modifiers.subdiff);
+
+    if (modifiers.no_kusudama) {
+        for (Note& note : notes.notes) {
+            if (note.type == NoteType::KUSUDAMA) {
+                note.type = NoteType::BALLOON_HEAD;
+            }
+        }
+    }
+
     if (modifiers.equal_speed && modifiers.equal_speed_bpm > 0) {
         // Z-DON constant speed: #BPMCHANGE / #SCROLL no longer change how fast a note comes, and a #BMSCROLL /
         // #HBSCROLL chart scrolls as a normal one (the timing does not change: hit_ms stays)
@@ -1633,9 +1655,6 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
     modifier_speed(notes, modifiers.speed);
 
     modifier_moji(notes);
-
-    // play_notes = modifier_difficulty(notes, modifiers.subdiff);
-    // draw_notes = modifier_difficulty(notes, modifiers.subdiff);
 }
 
 Interval get_note_interval_type(double interval_ms, double bpm, double time_sig) {
@@ -1725,6 +1744,205 @@ std::vector<std::pair<int, int>> find_streams(const std::deque<Note>& modded_not
     }
 
     return streams;
+}
+
+static constexpr auto REMOVED_NOTE = static_cast<NoteType>(-1);
+
+static bool is_roll_or_balloon(const Note& note) {
+    return note.type == NoteType::ROLL_HEAD || note.type == NoteType::ROLL_HEAD_L ||
+           note.type == NoteType::BALLOON_HEAD || note.type == NoteType::KUSUDAMA;
+}
+
+static void make_single_color(std::deque<Note>& notes, int start, int end) {
+    int don_count = 0;
+    int kat_count = 0;
+    const int stop = std::min(end, static_cast<int>(notes.size()));
+    for (int i = start; i < stop; ++i) {
+        don_count += notes[i].type == NoteType::DON || notes[i].type == NoteType::DON_L;
+        kat_count += notes[i].type == NoteType::KAT || notes[i].type == NoteType::KAT_L;
+    }
+    const bool don = don_count >= kat_count;
+    for (int i = start; i < stop; ++i) {
+        if (notes[i].type == NoteType::DON || notes[i].type == NoteType::KAT) {
+            notes[i].type = don ? NoteType::DON : NoteType::KAT;
+        } else if (notes[i].type == NoteType::DON_L || notes[i].type == NoteType::KAT_L) {
+            notes[i].type = don ? NoteType::DON_L : NoteType::KAT_L;
+        }
+    }
+}
+
+static std::vector<int> find_sixteenth_2plus2(const std::deque<Note>& notes) {
+    std::vector<int> patterns;
+    for (int i = 0; i < static_cast<int>(notes.size()) - 3; ++i) {
+        if (is_roll_or_balloon(notes[i]) || is_roll_or_balloon(notes[i + 1]) || is_roll_or_balloon(notes[i + 2]) ||
+            is_roll_or_balloon(notes[i + 3])) {
+            continue;
+        }
+        if (get_note_interval_type(notes[i + 1].hit_ms - notes[i].hit_ms, notes[i].bpm) != Interval::SIXTEENTH ||
+            get_note_interval_type(notes[i + 3].hit_ms - notes[i + 2].hit_ms, notes[i + 2].bpm) !=
+                Interval::SIXTEENTH) {
+            continue;
+        }
+        const double sixteenth = get_ms_per_measure(notes[i].bpm, 4.0) / 4.0 / 16.0;
+        if (std::abs(notes[i + 2].hit_ms - notes[i + 1].hit_ms - sixteenth * 2) >= 20.0) {
+            continue;
+        }
+        if (i + 4 >= static_cast<int>(notes.size())) {
+            patterns.push_back(i);
+        } else if (!is_roll_or_balloon(notes[i + 4])) {
+            const double after = notes[i + 4].hit_ms - notes[i + 3].hit_ms;
+            if (after >= sixteenth * 1.5 || get_note_interval_type(after, notes[i + 3].bpm) != Interval::SIXTEENTH) {
+                patterns.push_back(i);
+            }
+        }
+    }
+    return patterns;
+}
+
+// Every other note of 1/32 streams; two of every three notes of 1/24 streams (levels 10-12).
+static void thin_fastest_streams(std::deque<Note>& notes) {
+    for (const auto& [start, length] : find_streams(notes, Interval::THIRTYSECOND)) {
+        for (int i = start + 1; i < start + length; i += 2) {
+            notes[i].type = REMOVED_NOTE;
+        }
+    }
+    for (const auto& [start, length] : find_streams(notes, Interval::TWENTYFOURTH)) {
+        for (int i = start + 1; i < start + length - 1; i += 3) {
+            notes[i].type = REMOVED_NOTE;
+            notes[i + 1].type = REMOVED_NOTE;
+        }
+    }
+}
+
+// Long 1/16 streams become repeating single-color triplets with the next two notes dropped (levels 11-12).
+static void sixteenths_to_triplets(std::deque<Note>& notes, int start, int length) {
+    const int end = start + length;
+    int i = start;
+    while (i < end) {
+        const int triplet_end = std::min(i + 3, end);
+        if (triplet_end - i >= 2) {
+            make_single_color(notes, i, triplet_end);
+        }
+        i += 3;
+        if (i < end) {
+            notes[i].type = REMOVED_NOTE;
+            i += 2;
+        }
+        if (i < end) {
+            notes[i].type = REMOVED_NOTE;
+            i += 1;
+        }
+    }
+}
+
+static void simplify_notes(std::deque<Note>& notes, int level) {
+    if (level == 6) {
+        for (const auto& [start, length] : find_streams(notes, Interval::EIGHTH)) {
+            if (length == 3) {
+                notes[start + 1].type = REMOVED_NOTE;
+            } else if (length > 3) {
+                make_single_color(notes, start, start + length);
+            }
+        }
+    } else if (level == 7) {
+        for (const auto& [start, length] : find_streams(notes, Interval::EIGHTH)) {
+            if (length == 5) {
+                notes[start + 3].type = REMOVED_NOTE;
+            } else if (length >= 7) {
+                for (int i = start + 3; i < start + length; i += 4) {
+                    notes[i].type = REMOVED_NOTE;
+                }
+            }
+        }
+    } else if (level == 8) {
+        for (const auto& [start, length] : find_streams(notes, Interval::SIXTEENTH)) {
+            if (length == 3) {
+                notes[start + 1].type = REMOVED_NOTE;
+            } else if (length == 5) {
+                // 3+1 when it starts on don, 2+2 when it starts on kat
+                const bool don = notes[start].type == NoteType::DON || notes[start].type == NoteType::DON_L;
+                notes[start + (don ? 3 : 2)].type = REMOVED_NOTE;
+            }
+        }
+    } else if (level == 10) {
+        thin_fastest_streams(notes);
+        for (const auto& [start, length] : find_streams(notes, Interval::SIXTEENTH)) {
+            if (length == 2 && notes[start].type != NoteType::TAIL) {
+                notes[start].type = notes[start + 1].type;
+            } else if (length == 3) {
+                notes[start + 1].type = REMOVED_NOTE;
+            } else if (length == 4 || length == 5) {
+                notes[start + 3].type = REMOVED_NOTE;
+                make_single_color(notes, start, start + length);
+            } else if (length > 5) {
+                notes[start + 3].type = REMOVED_NOTE;
+                for (int i = start + 5; i < start + length; i += 2) {
+                    notes[i].type = REMOVED_NOTE;
+                }
+            }
+        }
+        for (const int start : find_sixteenth_2plus2(notes)) {
+            notes[start + 2].type = REMOVED_NOTE;
+        }
+    } else if (level == 11) {
+        thin_fastest_streams(notes);
+        for (const auto& [start, length] : find_streams(notes, Interval::TWELFTH)) {
+            for (int i = start + 1; i < start + length - 1; i += 3) {
+                notes[i].type = REMOVED_NOTE;
+            }
+        }
+        for (const auto& [start, length] : find_streams(notes, Interval::SIXTEENTH)) {
+            if (length == 2 && notes[start].type != NoteType::TAIL) {
+                notes[start].type = notes[start + 1].type;
+            } else if (length == 3) {
+                notes[start + 1].type = REMOVED_NOTE;
+            } else if (length == 4 || length == 5) {
+                notes[start + 3].type = REMOVED_NOTE;
+                make_single_color(notes, start, start + length);
+            } else if (length > 5) {
+                sixteenths_to_triplets(notes, start, length);
+            }
+        }
+    } else if (level == 12) {
+        thin_fastest_streams(notes);
+        for (const auto& [start, length] : find_streams(notes, Interval::TWELFTH)) {
+            if (length <= 4) {
+                make_single_color(notes, start, start + length);
+            } else {
+                for (int i = start + 1; i < start + length - 1; i += 3) {
+                    notes[i].type = REMOVED_NOTE;
+                }
+            }
+        }
+        for (const auto& [start, length] : find_streams(notes, Interval::SIXTEENTH)) {
+            if (length == 3) {
+                make_single_color(notes, start, start + length);
+            } else if (length == 4 || length == 5) {
+                notes[start + 3].type = REMOVED_NOTE;
+                make_single_color(notes, start, start + length);
+            } else if (length > 5) {
+                sixteenths_to_triplets(notes, start, length);
+            }
+        }
+    }
+}
+
+void modifier_difficulty(NoteList& notes, int level) {
+    if (level < 6 || level == 9 || level > 12) {
+        return;
+    }
+    std::deque<Note> chart;
+    std::ranges::copy_if(notes.notes, std::back_inserter(chart),
+                         [](const Note& note) { return note.type != NoteType::BARLINE; });
+    simplify_notes(chart, level);
+
+    auto simplified = chart.begin();
+    for (Note& note : notes.notes) {
+        if (note.type != NoteType::BARLINE) {
+            note.type = (simplified++)->type;
+        }
+    }
+    std::erase_if(notes.notes, [](const Note& note) { return note.type == REMOVED_NOTE; });
 }
 
 std::string hash_notes(const std::deque<Note>& notes) {

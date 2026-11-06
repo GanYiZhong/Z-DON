@@ -1,5 +1,7 @@
 #include "diff_sort.h"
 
+#include <utility>
+
 #include "../../libs/audio/audio.h"
 #include "../../libs/global_data.h"
 #include "../game/zdon_ai_board.h"
@@ -12,9 +14,9 @@ static constexpr double SORT_END_WAIT_MS = 2000.0;
 static constexpr double SORT_ARROW_MS = 1000.0 / 60.0 * 10.0;
 static constexpr float SORT_ARROW_PUSH = 12.5f;
 
-DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int prev_level, SongSelectScript* script,
-                               int prev_order)
-    : prev_diff(prev_diff), prev_level(prev_level), statistics(statistics), script(script) {
+DiffSortSelect::DiffSortSelect(Statistics statistics, int prev_diff, int prev_level, SongSelectScript* script,
+                               int prev_order, bool two_players)
+    : prev_diff(prev_diff), prev_level(prev_level), statistics(std::move(statistics)), script(script) {
     one_menu_sort = tex.options[SCO::ONE_MENU_SORT] && script && script->has_sort_window();
     selected_box = -1;
     selected_level = 1;
@@ -37,15 +39,7 @@ DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int 
         box_flicker->start();
     }
 
-    for (const auto& [course, levels] : statistics) {
-        std::array<int, 3> sums = {0, 0, 0};
-        for (const auto& [level, stats] : levels) {
-            sums[0] += stats.total;
-            sums[1] += stats.clears;
-            sums[2] += stats.full_combos;
-        }
-        diff_sort_sum_stat[course] = sums;
-    }
+    compute_sums();
 
     if (one_menu_sort) {
         sort_param[0] = (prev_diff >= 0 && prev_diff < diff_count) ? prev_diff + 1 : 1;
@@ -60,8 +54,22 @@ DiffSortSelect::DiffSortSelect(const Statistics& statistics, int prev_diff, int 
     if (arcade) {
         zdon_ai_sort_view_set(false, {});
     }
+    // merge 0ed42ec: upstream's 2-player "which" dialog never opens on the Z-DON AI board (1P only)
+    which_dialog = two_players && !one_menu_sort && !arcade;
     if (!arcade) { // the cabinet's AI select has no voice at the box decide (Tl7g8XXXvAM 112.45, 3 battles)
-        audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
+        audio.play_sound(which_dialog ? "voice_diff_sort_which" : "voice_diff_sort_enter", VolumePreset::VOICE);
+    }
+}
+
+void DiffSortSelect::compute_sums() {
+    for (const auto& [course, levels] : statistics) {
+        std::array<int, 3> sums = {0, 0, 0};
+        for (const auto& [level, stats] : levels) {
+            sums[0] += stats.total;
+            sums[1] += stats_player == 1 ? stats.clears_2p : stats.clears;
+            sums[2] += stats_player == 1 ? stats.full_combos_2p : stats.full_combos;
+        }
+        diff_sort_sum_stat[course] = sums;
     }
 }
 
@@ -196,6 +204,19 @@ std::optional<std::pair<int, int>> DiffSortSelect::input_select() {
         global_data.last_difficulty[static_cast<int>(PlayerNum::P1)] = static_cast<int>(Difficulty::EASY);
         return {{c.course, c.level}};
     }
+    if (which_dialog) {
+        if (which_index == 1) {
+            return {{-1, -1}};
+        }
+        which_dialog = false;
+        stats_player = which_index / 2;
+        compute_sums();
+        bg_resize->start();
+        diff_fade_in->start();
+        box_flicker->start();
+        audio.play_sound("voice_diff_sort_enter", VolumePreset::VOICE);
+        return std::nullopt;
+    }
     if (confirmation) {
         if (confirm_index == 0) {
             confirmation = false;
@@ -212,6 +233,11 @@ std::optional<std::pair<int, int>> DiffSortSelect::input_select() {
             return std::nullopt;
         }
     } else if (in_level_select) {
+        auto course = statistics.find(selected_box);
+        if (course == statistics.end() || course->second[selected_level].total == 0) {
+            audio.play_sound("cancel", VolumePreset::SOUND);
+            return std::nullopt;
+        }
         confirmation = true;
         confirmation_bounce->start();
         confirm_index = 1;
@@ -238,7 +264,9 @@ void DiffSortSelect::input_left() {
         one_menu_sort_change_param(-1);
         return;
     }
-    if (confirmation) {
+    if (which_dialog) {
+        which_index = std::max(which_index - 1, 0);
+    } else if (confirmation) {
         confirm_index = std::max(confirm_index - 1, 0);
     } else if (in_level_select) {
         selected_level = std::max(selected_level - 1, 1);
@@ -252,7 +280,9 @@ void DiffSortSelect::input_right() {
         one_menu_sort_change_param(1);
         return;
     }
-    if (confirmation) {
+    if (which_dialog) {
+        which_index = std::min(which_index + 1, 2);
+    } else if (confirmation) {
         confirm_index = std::min(confirm_index + 1, 2);
     } else if (in_level_select) {
         selected_level = std::min(selected_level + 1, limits[selected_box]);

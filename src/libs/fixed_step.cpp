@@ -35,7 +35,7 @@ namespace fixed_step {
         }
         // position in seconds; sets `ended` when a non-looping voice ran past its length
         double position(const Voice& v, const Params& p, double length, bool& ended) {
-            double t = v.offset + (now_ms() - v.start_ms) / 1000.0 * (double)p.pitch;
+            double t = v.offset + (now_ms() - v.start_ms) / 1000.0 * static_cast<double>(p.pitch);
             ended = false;
             if (length > 0.0 && t >= length) {
                 if (p.loop) {
@@ -72,7 +72,7 @@ namespace fixed_step {
         std::scoped_lock lock(g_mutex);
         auto it = g_voices.find(key(name, music));
         if (it != g_voices.end()) {
-            it->second.offset = std::max(0.0, (double)seconds);
+            it->second.offset = std::max(0.0, static_cast<double>(seconds));
             it->second.start_ms = now_ms();
         }
     }
@@ -107,6 +107,6 @@ namespace fixed_step {
         }
         const Params p = music ? Params{} : g_params[name];
         bool ended = false;
-        return (float)position(it->second, p, length, ended);
+        return static_cast<float>(position(it->second, p, length, ended));
     }
 } // namespace fixed_step

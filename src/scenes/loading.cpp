@@ -9,11 +9,15 @@
 #include "../libs/fixed_step.h"
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
+#include "../libs/jobs.h"
 #include "../libs/library_index.h"
 #include "../libs/network/skin_updater.h"
 #include "../libs/parsers/song_parser.h"
+#include "../libs/song_library.h"
+#include "../libs/song_library_loader.h"
 #include "../objects/song_select/file_navigator/navigator.h"
 #include "../objects/song_select/song_select_script.h"
+#include "../platform/platform.h"
 
 namespace {
     struct LibraryWalk {
@@ -92,6 +96,9 @@ void LoadingScreen::init_visuals() {
 }
 
 void LoadingScreen::load_song_hashes() {
+    // merge 0ed42ec: upstream fills the shared SongLibrary here (title index for its navigation_load / dan
+    // navigator); false when it is already loaded or loading (a later loading screen)
+    const bool populate_library = get_song_library().begin_loading();
     try {
         // Listed here, not in on_screen_start: the screen keeps drawing while a large library is walked
         std::shared_ptr<const LibraryIndex> index;
@@ -115,7 +122,8 @@ void LoadingScreen::load_song_hashes() {
         // workers only read `cache`, new or changed entries are written after they finish.
         const std::unordered_map<std::string, SongCacheEntry> cache = scores_manager.load_song_cache();
         std::vector<std::pair<std::string, SongCacheEntry>> fresh;
-        std::vector<std::pair<std::string, int64_t>> ft_backfill; // rows that only had mtime
+        std::vector<std::pair<fs::path, SongMetadata>> library_entries; // added in the background, see below
+        std::vector<std::pair<std::string, int64_t>> ft_backfill;       // rows that only had mtime
         // bound to their paths once the workers are done (see below)
         std::vector<std::optional<std::array<std::string, 5>>> bindings(songs.size());
         std::atomic<int> cache_hits = 0;
@@ -124,7 +132,7 @@ void LoadingScreen::load_song_hashes() {
         // one worker parsed all of it); `ranges` below only orders the path bindings
         std::atomic<int> cursor{0};
         auto worker = [&] {
-            for (int i; (i = cursor.fetch_add(1)) < (int)songs.size();) {
+            for (int i; (i = cursor.fetch_add(1)) < static_cast<int>(songs.size());) {
                 auto u8 = songs[i].u8string();
                 const std::string path(u8.begin(), u8.end());
 
@@ -142,15 +150,18 @@ void LoadingScreen::load_song_hashes() {
                     stamp.size = cached->second.size;
                 }
                 if (!from_cache) {
-                    std::error_code ec;
-                    const auto mtime = std::filesystem::last_write_time(songs[i], ec);
-                    if (ec) {
-                        spdlog::error("Could not stat {}: {}", path, ec.message());
-                        continue;
+                    // upstream: a platform's own stamp first (Switch); Windows / Linux stat the file
+                    if (!platform_file_stamp(songs[i], stamp.mtime, stamp.size)) {
+                        std::error_code ec;
+                        const auto mtime = std::filesystem::last_write_time(songs[i], ec);
+                        if (ec) {
+                            spdlog::error("Could not stat {}: {}", path, ec.message());
+                            continue;
+                        }
+                        const auto size = std::filesystem::file_size(songs[i], ec);
+                        stamp.mtime = static_cast<int64_t>(mtime.time_since_epoch().count());
+                        stamp.size = ec ? -1 : static_cast<int64_t>(size);
                     }
-                    const auto size = std::filesystem::file_size(songs[i], ec);
-                    stamp.mtime = static_cast<int64_t>(mtime.time_since_epoch().count());
-                    stamp.size = ec ? -1 : static_cast<int64_t>(size);
                     if (cached != cache.end() && cached->second.ft_write == 0) {
                         from_cache = cached->second.mtime == stamp.mtime && cached->second.size == stamp.size;
                         if (from_cache && listing_usable) {
@@ -186,22 +197,15 @@ void LoadingScreen::load_song_hashes() {
                                 hashes[course] = parser.get_diff_hash(course);
                             }
                         }
-                        title = parser.metadata.title.contains("en") ? parser.metadata.title.at("en") : "";
-                        subtitle = parser.metadata.subtitle.contains("en") ? parser.metadata.subtitle.at("en") : "";
+                        auto metadata = song_metadata_from(parser.metadata); // upstream's shared helper
+                        title = metadata.title;
+                        subtitle = metadata.subtitle;
                         stamp.hashes = hashes;
                         stamp.title = title;
                         stamp.subtitle = subtitle;
-                        for (const auto& [lang, t] : parser.metadata.title) {
-                            stamp.titles.emplace_back(lang, t);
-                        }
-                        for (const auto& [lang, t] : parser.metadata.subtitle) {
-                            stamp.subtitles.emplace_back(lang, t);
-                        }
-                        for (const auto& [course, data] : parser.metadata.course_data) {
-                            if (course >= 0 && course <= 4) {
-                                stamp.levels[course] = (int)data.level;
-                            }
-                        }
+                        stamp.titles = std::move(metadata.titles);
+                        stamp.subtitles = std::move(metadata.subtitles);
+                        stamp.levels = metadata.levels;
                         meta = stamp;
                         std::scoped_lock lock(scores_mutex);
                         fresh.emplace_back(path, std::move(stamp));
@@ -211,6 +215,11 @@ void LoadingScreen::load_song_hashes() {
                     }
                 }
 
+                // upstream's is_library_song_file stats the file; the listing already says it is a file (a stat per
+                // chart under scores_mutex cost ~450 ms on 3008 cached charts), so only a link / unlisted one stats
+                const fs::path ext = songs[i].extension();
+                const bool library_file = populate_library && (listing_usable ? (ext == ".tja" || ext == ".osu")
+                                                                              : is_library_song_file(songs[i]));
                 try {
                     std::scoped_lock lock(scores_mutex);
                     // a cached file's songs row was written when it was parsed
@@ -219,8 +228,12 @@ void LoadingScreen::load_song_hashes() {
                     }
                     bindings[i] = hashes;
                     scores_manager.set_song_meta(path, meta);
+                    if (library_file) {
+                        library_entries.emplace_back(songs[i], SongMetadata{meta.title, meta.subtitle, meta.titles,
+                                                                            meta.subtitles, meta.levels});
+                    }
 
-                    progress = (float)++songs_loaded / songs.size();
+                    progress = static_cast<float>(++songs_loaded) / songs.size();
                 } catch (const std::exception& e) {
                     spdlog::error("Failed to record song {}: {}", path, e.what());
                 }
@@ -295,8 +308,24 @@ void LoadingScreen::load_song_hashes() {
             fs::remove(fs::path("scores_pytaiko.db"));
         }
 
+        if (populate_library) {
+            // Z-DON: filled by a background job, not by the workers: SongLibrary::add folds every title under the
+            // library's lock, which (inside scores_mutex) serialized the workers and made the warm scan of 3008
+            // charts ~500 ms slower. Its readers (upstream's navigation loader / dan navigator) wait for it.
+            jobs::submit(jobs::Priority::Background, [entries = std::move(library_entries)] {
+                for (const auto& [path, metadata] : entries) {
+                    get_song_library().add(path, metadata);
+                }
+                get_song_library().finish_loading();
+            });
+        }
+
         load_navigator();
     } catch (const std::exception& e) {
+        if (populate_library) {
+            get_song_library().fail_loading();
+        }
+
         spdlog::error("Loading failed: {}", e.what());
     }
     loading_complete = true;

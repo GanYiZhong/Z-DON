@@ -5,6 +5,7 @@
 #include <spdlog/spdlog.h>
 #include <string_view>
 
+#include "../../platform/platform.h"
 #include "../gfx.h"
 #include "../gfx/sdl_compat.h"
 #include "../global_data.h"
@@ -203,6 +204,12 @@ static constexpr bool kDefaultTouchInput = true;
 static constexpr bool kDefaultTouchInput = false;
 #endif
 
+#ifdef PLATFORM_ANDROID
+static constexpr int kDefaultAudioBufferSize = 256;
+#else
+static constexpr int kDefaultAudioBufferSize = 128;
+#endif
+
 // iOS drives the display from UIKit's animation callback, so vsync must stay on.
 #ifdef YATAIDON_PLATFORM_IOS
 static constexpr bool kDefaultVsync = true;
@@ -286,7 +293,13 @@ Config get_config() {
 
     toml::table config_file;
     try {
-        config_file = toml::parse_file(config_path.string());
+        std::vector<unsigned char> bytes;
+        if (platform_read_file(config_path.string().c_str(), bytes)) {
+            config_file = toml::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                                      config_path.string());
+        } else {
+            config_file = toml::parse_file(config_path.string());
+        }
     } catch (const toml::parse_error& err) {
         std::error_code ec;
         if (!fs::exists(config_path, ec)) {
@@ -411,6 +424,7 @@ Config get_config() {
 
     // Parse paths
     config.paths.tja_path = parsePathArrayOrDefault(config_file, "paths", "tja_path", {fs::path("Songs")});
+    config.paths.start_path = fs::path(config_file["paths"]["start_path"].value_or(""));
     config.paths.skin = fs::path(config_file["paths"]["skin"].value_or(""));
 
     // Parse keys (converting from strings to key codes)
@@ -465,7 +479,7 @@ Config get_config() {
     config.audio.device_type = config_file["audio"]["device_type"].value_or(0);
     config.audio.device = config_file["audio"]["device"].value_or("");
     config.audio.sample_rate = config_file["audio"]["sample_rate"].value_or(44100);
-    config.audio.buffer_size = config_file["audio"]["buffer_size"].value_or(128);
+    config.audio.buffer_size = config_file["audio"]["buffer_size"].value_or(kDefaultAudioBufferSize);
     if (auto asio_channel = config_file["audio"]["asio_channel"].as_array()) {
         config.audio.asio_channel = parseIntArray(*asio_channel);
     }
@@ -574,7 +588,9 @@ void save_config(const Config& config) {
     for (const auto& path : config.paths.tja_path) {
         tja_path_array.push_back(path.string());
     }
-    config_table.insert("paths", toml::table{{"tja_path", tja_path_array}, {"skin", config.paths.skin.string()}});
+    config_table.insert("paths", toml::table{{"tja_path", tja_path_array},
+                                             {"start_path", config.paths.start_path.string()},
+                                             {"skin", config.paths.skin.string()}});
 
     // Keys
     config_table.insert("keys", toml::table{{"exit_key", getKeyStringSafe(config.keys.exit_key)},

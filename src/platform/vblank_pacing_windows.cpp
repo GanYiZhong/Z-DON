@@ -91,7 +91,7 @@ namespace vblank_pacing {
             const double period = S.period_ms;
             const double lead = std::min(S.lead_ms, period);
             const double span = period - lead; // time before the shown frame's slot
-            int extra = S.fixed_frames > 0 ? S.fixed_frames - 1 : (int)std::floor(span / kSlotTargetMs);
+            int extra = S.fixed_frames > 0 ? S.fixed_frames - 1 : static_cast<int>(std::floor(span / kSlotTargetMs));
             extra = std::max(extra, 0);
             const double step = extra > 0 ? span / extra : 0.0;
             double k = std::floor((now_ms - S.vblank_ms) / period);
@@ -178,7 +178,7 @@ namespace vblank_pacing {
         }
         LARGE_INTEGER f;
         QueryPerformanceFrequency(&f);
-        S.qpc_to_ms = 1000.0 / (double)f.QuadPart;
+        S.qpc_to_ms = 1000.0 / static_cast<double>(f.QuadPart);
         if (!S.dwm_timing || !query_grid(get_current_ms())) {
             spdlog::info("vblank pacing: off (no DWM timing)");
             return;
@@ -263,7 +263,7 @@ namespace vblank_pacing {
         // without a high-resolution timer (before Windows 10 1803) the whole wait is spun, as before
         const double sleep_ms = target - S.spin_ms - now;
         if (sleep_ms > 0.0 && S.precise_timer) {
-            S.precise_timer = win32_precise_sleep_us((long long)(sleep_ms * 1000.0));
+            S.precise_timer = win32_precise_sleep_us(static_cast<long long>(sleep_ms * 1000.0));
             const double woke = get_current_ms();
             update_spin(woke - (now + sleep_ms));
             if (S.log) {

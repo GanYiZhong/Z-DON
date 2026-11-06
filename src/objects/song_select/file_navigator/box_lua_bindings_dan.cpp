@@ -53,7 +53,7 @@ void register_dan_box_lua_bindings(sol::state& lua) {
             auto k = static_cast<size_t>(i);
             return k < self.song_masked.size() && self.song_masked[k];
         },
-        "song_count", [](DanBox& self) { return (int)self.songs.size(); }, "song_genre",
+        "song_count", [](DanBox& self) { return static_cast<int>(self.songs.size()); }, "song_genre",
         [](DanBox& self, double i) { return self.songs[static_cast<int>(i)].genre_index; }, "song_difficulty",
         [](DanBox& self, double i) { return self.songs[static_cast<int>(i)].difficulty; }, "song_level",
         [](DanBox& self, double i) { return self.songs[static_cast<int>(i)].level; }, "chip_name",
@@ -61,27 +61,30 @@ void register_dan_box_lua_bindings(sol::state& lua) {
         "song_title_text",
         [](DanBox& self, double i) {
             int idx = static_cast<int>(i);
-            return (idx >= 0 && idx < (int)self.song_texts.size()) ? self.song_texts[idx].first.get() : nullptr;
+            return (idx >= 0 && idx < static_cast<int>(self.song_texts.size())) ? self.song_texts[idx].first.get()
+                                                                                : nullptr;
         },
         "song_subtitle_text",
         [](DanBox& self, double i) {
             int idx = static_cast<int>(i);
-            return (idx >= 0 && idx < (int)self.song_texts.size()) ? self.song_texts[idx].second.get() : nullptr;
+            return (idx >= 0 && idx < static_cast<int>(self.song_texts.size())) ? self.song_texts[idx].second.get()
+                                                                                : nullptr;
         },
-        "exam_count", [](DanBox& self) { return (int)self.exams.size(); }, "exam_type",
+        "exam_count", [](DanBox& self) { return static_cast<int>(self.exams.size()); }, "exam_type",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].type; }, "exam_red",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].red; }, "exam_gold",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].gold; }, "exam_range",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].range; }, "exam_gothrough",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].gothrough; }, "exam_per_song",
         [](DanBox& self, double i) { return self.exams[static_cast<int>(i)].per_song(); }, "exam_song_count",
-        [](DanBox& self, double i) { return (int)self.exams[static_cast<int>(i)].song_red.size(); }, "exam_song_red",
+        [](DanBox& self, double i) { return static_cast<int>(self.exams[static_cast<int>(i)].song_red.size()); },
+        "exam_song_red",
         [](DanBox& self, double i, double j) { return self.exams[static_cast<int>(i)].song_red[static_cast<int>(j)]; },
         "exam_song_gold",
         [](DanBox& self, double i, double j) {
             const Exam& e = self.exams[static_cast<int>(i)];
             int idx = static_cast<int>(j);
-            return idx < (int)e.song_gold.size() ? e.song_gold[idx] : e.song_red[idx];
+            return idx < static_cast<int>(e.song_gold.size()) ? e.song_gold[idx] : e.song_red[idx];
         },
         "exam_caption",
         [](DanBox& self, double i) {
@@ -109,7 +112,10 @@ void register_dan_box_lua_bindings(sol::state& lua) {
         [](DiffSortSelect& s) { return s.lua_num_boxes(); }, "prev_diff",
         [](DiffSortSelect& s) { return s.lua_prev_diff(); }, "prev_level",
         [](DiffSortSelect& s) { return s.lua_prev_level(); }, "limit",
-        [](DiffSortSelect& s, double box) { return s.lua_limit(static_cast<int>(box)); },
+        [](DiffSortSelect& s, double box) { return s.lua_limit(static_cast<int>(box)); }, "which",
+        [](DiffSortSelect& s) { return s.lua_which(); }, "which_index",
+        [](DiffSortSelect& s) { return s.lua_which_index(); }, "stats_player",
+        [](DiffSortSelect& s) { return s.lua_stats_player(); },
         // total, clears, full combos of a course at one star level
         "stats",
         [](DiffSortSelect& s, double diff, double level) {

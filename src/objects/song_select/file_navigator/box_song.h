@@ -41,6 +41,7 @@ public:
     double box_opened_at = 0.0;
     FadeAnimation* diff_fade_in;
     bool is_ura = false;
+    bool oni_locked = false; // hidden_oni skin option: the oni slot stays hidden until opened
     GenreIndex song_genre_index = GenreIndex::DEFAULT;
     std::string song_genre_label;
 
@@ -137,6 +138,7 @@ public:
         bool is_branching;
         int crown;
         int rank;
+        bool is_papamama = false;
     };
     CourseInfo course_info(int diff) const {
         auto it = parser.metadata.course_data.find(diff);
@@ -145,6 +147,7 @@ public:
         if (has_course) {
             info.level = (int)std::round(it->second.level);
             info.is_branching = it->second.is_branching;
+            info.is_papamama = it->second.papamama;
         }
         if (diff >= 0 && diff < (int)scores.size() && scores[diff].has_value()) {
             info.crown = (int)scores[diff]->crown;

@@ -59,7 +59,7 @@ namespace audio_dev {
         void write_wav_header(FILE* f, unsigned int rate, uint64_t data_bytes) {
             auto u32 = [f](uint32_t v) { std::fwrite(&v, 4, 1, f); };
             auto u16 = [f](uint16_t v) { std::fwrite(&v, 2, 1, f); };
-            const uint32_t data = (uint32_t)std::min<uint64_t>(data_bytes, 0xFFFFFFF0u);
+            const uint32_t data = static_cast<uint32_t>(std::min<uint64_t>(data_bytes, 0xFFFFFFF0u));
             std::fseek(f, 0, SEEK_SET);
             std::fwrite("RIFF", 1, 4, f);
             u32(36 + data);
@@ -125,8 +125,9 @@ namespace audio_dev {
             }
             spdlog::info("[audio-stats] callbacks={} avg_us={:.1f} p99_us={} max_us={:.1f} max_lock_wait_us={:.1f} "
                          "underflows={} stream_underruns={} max_voices={} poly_plays={} overlapped={} stolen={}",
-                         n, n ? (double)sum / (double)n / 1000.0 : 0.0, p99, (double)mx / 1000.0, (double)wait / 1000.0,
-                         uf, su, voices, pp, po, ps);
+                         n, n ? static_cast<double>(sum) / static_cast<double>(n) / 1000.0 : 0.0, p99,
+                         static_cast<double>(mx) / 1000.0, static_cast<double>(wait) / 1000.0, uf, su, voices, pp, po,
+                         ps);
         }
     } // namespace
 
@@ -153,8 +154,8 @@ namespace audio_dev {
             return;
         }
         if (capture_enabled()) {
-            g_cap.rate = (unsigned int)sample_rate;
-            g_cap.cap = (size_t)g_cap.rate * 2 * 8; // 8 s
+            g_cap.rate = static_cast<unsigned int>(sample_rate);
+            g_cap.cap = static_cast<size_t>(g_cap.rate) * 2 * 8; // 8 s
             g_cap.ring.assign(g_cap.cap, 0.0f);
             g_cap.f = std::fopen(std::getenv("YATAIDON_AUDIO_CAPTURE"), "wb+");
             if (!g_cap.f) {
@@ -210,7 +211,7 @@ namespace audio_dev {
         const int64_t us = mix_ns / 1000;
         g_stats.hist[std::clamp<int64_t>(us, 0, kBuckets - 1)].fetch_add(1, std::memory_order_relaxed);
         g_stats.count.fetch_add(1, std::memory_order_relaxed);
-        g_stats.sum_ns.fetch_add((uint64_t)std::max<int64_t>(mix_ns, 0), std::memory_order_relaxed);
+        g_stats.sum_ns.fetch_add(static_cast<uint64_t>(std::max<int64_t>(mix_ns, 0)), std::memory_order_relaxed);
         atomic_max(g_stats.max_ns, mix_ns);
         atomic_max(g_stats.max_wait_ns, lock_wait_ns);
     }
@@ -224,7 +225,7 @@ namespace audio_dev {
     }
 
     void record_voices(size_t active) {
-        atomic_max(g_stats.max_voices, (int64_t)active);
+        atomic_max(g_stats.max_voices, static_cast<int64_t>(active));
     }
 
     void record_poly_play(bool overlapped, bool stolen) {
@@ -237,7 +238,7 @@ namespace audio_dev {
         if (g_cap.cap == 0 || !g_running.load(std::memory_order_relaxed)) {
             return;
         }
-        const size_t n = (size_t)frames * 2;
+        const size_t n = static_cast<size_t>(frames) * 2;
         size_t h = g_cap.head.load(std::memory_order_relaxed);
         const size_t t = g_cap.tail.load(std::memory_order_acquire);
         if (g_cap.cap - (h - t) < n) {

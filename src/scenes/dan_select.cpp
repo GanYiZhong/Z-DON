@@ -321,7 +321,7 @@ std::optional<Screens> DanSelectScreen::update() {
         for (size_t i = 0; i < dan_navigator.boxes.size(); i++) {
             if (!dan_navigator.boxes[i]->is_back) {
                 global_data.cli_dan.clear();
-                dan_navigator.selected_index = (int)i;
+                dan_navigator.selected_index = static_cast<int>(i);
                 return on_screen_end(Screens::GAME_DAN);
             }
         }

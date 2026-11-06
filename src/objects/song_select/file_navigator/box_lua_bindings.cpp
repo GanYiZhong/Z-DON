@@ -23,6 +23,7 @@ namespace {
         t["has_course"] = info.has_course;
         t["level"] = info.level;
         t["is_branching"] = info.is_branching;
+        t["is_papamama"] = info.is_papamama;
         t["crown"] = info.crown;
         t["rank"] = info.rank;
         t["has_score"] = has_score;
@@ -67,12 +68,13 @@ void register_box_lua_bindings(sol::state& lua) {
     lua.new_usertype<SongBox>(
         "SongBox", sol::base_classes, sol::bases<BaseBox>(), "text_subtitle", &SongBox::text_subtitle, "subtitle",
         &SongBox::horizontal_subtitle, "subtitle_large", &SongBox::horizontal_subtitle_large, "bpm_text",
-        [](SongBox& self) { return self.bpm_text.get(); }, "is_ura", &SongBox::is_ura, "is_favorite",
-        &SongBox::is_favorite, "diff_fade_in", &SongBox::diff_fade_in, "has_ura", &SongBox::has_ura, "ex_data_flag",
-        &SongBox::ex_data_flag, "course_info",
+        [](SongBox& self) { return self.bpm_text.get(); }, "is_ura", &SongBox::is_ura, "oni_locked",
+        &SongBox::oni_locked, "is_favorite", &SongBox::is_favorite, "diff_fade_in", &SongBox::diff_fade_in, "has_ura",
+        &SongBox::has_ura, "ex_data_flag", &SongBox::ex_data_flag, "course_info",
         [](SongBox& self, double diff) {
             auto info = self.course_info(static_cast<int>(diff));
-            return course_table(info, diff >= 0 && diff < (int)self.scores.size() && self.scores[diff].has_value());
+            return course_table(info, diff >= 0 && diff < static_cast<int>(self.scores.size()) &&
+                                          self.scores[diff].has_value());
         },
         "course_info_p2",
         [](SongBox& self, double diff) {
@@ -83,8 +85,8 @@ void register_box_lua_bindings(sol::state& lua) {
                 info.crown = static_cast<int>(self.scores_p2[diff]->crown);
                 info.rank = static_cast<int>(self.scores_p2[diff]->rank);
             }
-            return course_table(info,
-                                diff >= 0 && diff < (int)self.scores_p2.size() && self.scores_p2[diff].has_value());
+            return course_table(info, diff >= 0 && diff < static_cast<int>(self.scores_p2.size()) &&
+                                          self.scores_p2[diff].has_value());
         },
         // Z-DON: box:best_score(diff) -> the player's best score on that course (0 = none)
         "best_score",
@@ -100,7 +102,7 @@ void register_box_lua_bindings(sol::state& lua) {
             const int d = static_cast<int>(diff);
             const std::vector<int> crowns =
                 scores_manager.get_zdon_ai_section_crowns(get_player_id(PlayerNum::P1), self.hash_for(d), d);
-            sol::table t = lua.create_table((int)crowns.size(), 0);
+            sol::table t = lua.create_table(static_cast<int>(crowns.size()), 0);
             for (size_t i = 0; i < crowns.size(); ++i) {
                 t[i + 1] = crowns[i];
             }
@@ -119,11 +121,11 @@ void register_box_lua_bindings(sol::state& lua) {
         [](SongBox& self, double diff, sol::this_state s) {
             sol::state_view lua(s);
             const std::vector<PlayRecord>& plays = self.recent_plays(static_cast<int>(diff));
-            sol::table t = lua.create_table((int)plays.size(), 0);
+            sol::table t = lua.create_table(static_cast<int>(plays.size()), 0);
             for (size_t i = 0; i < plays.size(); i++) {
                 const PlayRecord& p = plays[i];
                 t[i + 1] = lua.create_table_with("score", p.score, "crown", p.crown, "good", p.good, "ok", p.ok, "bad",
-                                                 p.bad, "played_at", (double)p.played_at);
+                                                 p.bad, "played_at", static_cast<double>(p.played_at));
             }
             return t;
         },

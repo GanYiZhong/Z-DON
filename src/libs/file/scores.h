@@ -232,12 +232,18 @@ public:
     // Best-of view over dan_scores for one course (course_id from dan_course_id).
     std::optional<DanRecord> get_dan_record(const std::string& player_id, const std::string& course_id);
     // Appends one attempt to dan_scores; each song links to its normal scores row (DanResultSong::score_id).
+    void save_ai_section_wins(const std::string& hash, int difficulty, const std::string& player_id, int won,
+                              int total);
     // exam_bests: the course's exam bests including this attempt (stored on its row)
     void save_dan_score(const std::string& player_id, const std::string& course_id, const DanResultData& rd,
                         int arrival, const std::vector<DanExamBest>& exam_bests = {});
     std::optional<PlayerData> get_player_data(const std::string& player_id);
+    std::vector<std::string> get_player_ids();
     void save_player_data(const PlayerData& player);
     void migrate_player_id(const std::string& old_id, const std::string& new_id);
+    // true once per player and column (`practice_help_seen`, `reward_info_seen`, `ai_intro_seen`): the first call marks
+    // it as seen
+    bool first_visit(const std::string& player_id, const char* seen_column);
     bool begin_transaction();
     bool commit();
 };

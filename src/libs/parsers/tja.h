@@ -34,6 +34,7 @@ struct Modifiers {
     // Z-DON hidden / sudden (song option): 0 off, 1-3 hidden 25 / 50 / 75 % of the lane, 4-6 sudden 25 / 50 / 75 %
     int zdon_fade = 0;
     bool zdon_ghost = false; // Z-DON: the player's best play's score at the same moment, shown as +/- (game.cpp)
+    bool no_kusudama = false;
 };
 
 enum class NoteType : int {
@@ -125,6 +126,7 @@ public:
     int index{0};
     int moji{0};
     bool is_branch_start{false};
+    bool partner{false};
     // Drumroll specific
     std::optional<int> color;
     float roll_intensity = 0.0f;
@@ -249,6 +251,7 @@ struct CourseData {
     std::vector<int> scoreinit;
     double scorediff = 0;
     bool is_branching = false;
+    bool papamama = false;
 };
 
 struct TJAMetadata {
@@ -426,4 +429,5 @@ void modifier_speed(NoteList& notes, float value);
 void modifier_display(NoteList& notes);
 void modifier_inverse(NoteList& notes);
 void modifier_random(NoteList& notes, int value);
+void modifier_difficulty(NoteList& notes, int level);
 void apply_modifiers(NoteList& notes, const Modifiers& modifiers);

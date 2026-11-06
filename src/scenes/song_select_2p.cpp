@@ -12,6 +12,8 @@ void SongSelect2PScreen::on_screen_start() {
     // Z-DON: the song timer opens the difficulty select for both players (1P's timer only opened it for player 1,
     // which left the screen browsing with no difficulty timer)
     select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { on_select_timeout(); });
+    player->solo = false;
+    player_2->solo = false;
 }
 
 static void init_player_diffs(SongSelectPlayer* p, SongBox* song) {
@@ -168,6 +170,19 @@ std::optional<Screens> SongSelect2PScreen::update() {
 
     if (check_key_pressed(global_data.config->keys.back_key) && !game_transition.has_value()) {
         return on_screen_end(Screens::ENTRY);
+    }
+
+    if (state == SongSelectState::TUTORIAL_SELECTED) {
+        return on_screen_end(Screens::TUTORIAL);
+    }
+    if (state == SongSelectState::NORMAL_MODE_SELECTED) {
+        return on_screen_end(Screens::SONG_SELECT_2P);
+    }
+    if (state == SongSelectState::WAIWAI_TUTORIAL_SELECTED) {
+        return on_screen_end(Screens::WAIWAI_TUTORIAL);
+    }
+    if (state == SongSelectState::WAIWAI_MODE_SELECTED) {
+        return on_screen_end(Screens::WAIWAI_SONG_SELECT);
     }
 
     if (state != prev_state) {

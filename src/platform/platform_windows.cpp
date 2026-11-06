@@ -243,10 +243,10 @@ bool win32_process_usage(double& cpu_ms, double& working_set_mb, double& private
         !K32GetProcessMemoryInfo(self, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mem), sizeof(mem))) {
         return false;
     }
-    auto ticks = [](const FILETIME& f) { return ((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime; };
-    cpu_ms = (double)(ticks(kernel) + ticks(user)) / 1e4; // 100 ns units
-    working_set_mb = (double)mem.WorkingSetSize / (1024.0 * 1024.0);
-    private_mb = (double)mem.PrivateUsage / (1024.0 * 1024.0);
+    auto ticks = [](const FILETIME& f) { return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+    cpu_ms = static_cast<double>(ticks(kernel) + ticks(user)) / 1e4; // 100 ns units
+    working_set_mb = static_cast<double>(mem.WorkingSetSize) / (1024.0 * 1024.0);
+    private_mb = static_cast<double>(mem.PrivateUsage) / (1024.0 * 1024.0);
     return true;
 }
 
@@ -485,8 +485,9 @@ bool win32_list_dir(const std::filesystem::path& dir, std::vector<Win32DirEntry>
         e.name = n;
         e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.is_reparse = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-        e.size = (uint64_t(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
-        e.ft_write = (uint64_t(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        e.size = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+        e.ft_write =
+            (static_cast<uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
         out.push_back(std::move(e));
     } while (FindNextFileW(h, &fd));
     FindClose(h);

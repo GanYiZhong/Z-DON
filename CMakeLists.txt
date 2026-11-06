@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(YataiDON VERSION 1.0.5 LANGUAGES C CXX)
+project(YataiDON VERSION 1.0.6 LANGUAGES C CXX)
 
 cmake_policy(SET CMP0002 NEW)  # Logical target names must be globally unique
 cmake_policy(SET CMP0079 NEW)  # Allow target_link_libraries() everywhere
@@ -10,10 +10,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON CACHE INTERNAL "")
 
-# The public PS5 SDK supplies PS5 through its cross-compilation toolchain.
+# Console SDK toolchains select their platform projects.
 # Keep console dependencies out of desktop/mobile configuration.
+if(SWITCH OR CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+  add_subdirectory(platform/switch)
+  return()
+endif()
+
 if(PS5)
-  add_subdirectory(ps5)
+  add_subdirectory(platform/ps5)
   return()
 endif()
 
@@ -283,6 +288,10 @@ else()
       AS_HEADERS
       OUT_FILES_VAR _shader_headers
     )
+    foreach(_shader_header IN LISTS _shader_headers)
+      add_custom_command(OUTPUT ${_shader_header} APPEND
+        DEPENDS ${_shader_dir}/skin.sh ${_shader_dir}/color_transform.sh)
+    endforeach()
     target_sources(${PROJECT_NAME} PRIVATE ${_shader_headers})
   endforeach()
 endif()
@@ -298,7 +307,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 # Optional libraries: shared code checks these YATAIDON_HAS_* macros, never platform names.
-# (ps5/game.cmake builds without any of them.)
+# (platform/ps5/game.cmake builds without any of them.)
 if(NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
   target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_HTTP)

@@ -13,7 +13,7 @@
 // Z-DON AI battle (objects/game/zdon_ai.h): the mode board "AI battle" on the entry screen opens this song
 // select (screen name AI_SELECT, the song select's skin); the chosen song is played in GAME_2P against the AI.
 // The AI stands on the 2P side: its nameplate ("AI", "Lv.N") and character in the song_select_2p slot.
-class AiSongSelectScreen : public SongSelectScreen {
+class ZdonAiSongSelectScreen : public SongSelectScreen {
     Nameplate ai_plate;
     std::unique_ptr<Chara3D> ai_chara;
 
@@ -377,7 +377,7 @@ protected:
     }
 
 public:
-    AiSongSelectScreen() : SongSelectScreen("song_select") {}
+    ZdonAiSongSelectScreen() : SongSelectScreen("song_select") {}
 
     void on_screen_start() override {
         SongSelectScreen::on_screen_start();

@@ -600,7 +600,7 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
         }
 
         while (frames_to_process > 0 && still_playing) {
-            unsigned long src_frame = (unsigned long)frame_f;
+            unsigned long src_frame = static_cast<unsigned long>(frame_f);
             if (src_frame >= end_frame) {
                 if (decoding) {
                     break;
@@ -638,7 +638,7 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
 
         // a store_sound/unload that replaced the PCM meanwhile has reset the position already
         if (src.pcm.load(std::memory_order_relaxed) == pcm) {
-            snd.frame_frac.store((float)(frame_f - (double)frame), std::memory_order_relaxed);
+            snd.frame_frac.store(static_cast<float>(frame_f - static_cast<double>(frame)), std::memory_order_relaxed);
             snd.current_frame.store(frame, std::memory_order_relaxed);
         }
         if (!still_playing) {
@@ -674,7 +674,7 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
     for (music* mp : list->streams) {
         music& mus = *mp;
         const uint32_t gen = mus.cmd_gen.load(std::memory_order_acquire);
-        const unsigned int channels = (unsigned int)mus.file_info.channels;
+        const unsigned int channels = static_cast<unsigned int>(mus.file_info.channels);
 
         if (mus.pcm_data) {
             // fully decoded: read in place; a seek/stop/play takes effect here
@@ -688,7 +688,8 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
             const float volume =
                 base_volume(mus.category.load(std::memory_order_relaxed), mus.volume) * mus.normalization_gain;
             const float pan = mus.pan.load(std::memory_order_relaxed);
-            const unsigned long long total = (unsigned long long)std::max<sf_count_t>(mus.pcm_total_frames, 0);
+            const unsigned long long total =
+                static_cast<unsigned long long>(std::max<sf_count_t>(mus.pcm_total_frames, 0));
             unsigned long long pos = mus.current_frame.load(std::memory_order_relaxed);
             unsigned long frames_to_process = framesPerBuffer;
             unsigned long output_index = 0;
@@ -701,7 +702,8 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
                     mus.is_playing.store(false, std::memory_order_release);
                     break;
                 }
-                const unsigned long n = (unsigned long)std::min<unsigned long long>(frames_to_process, total - pos);
+                const unsigned long n =
+                    static_cast<unsigned long>(std::min<unsigned long long>(frames_to_process, total - pos));
                 for (unsigned long i = 0; i < n; i++) {
                     float left, right;
                     pan_frame(mus.pcm_data + (pos + i) * channels, channels, pan, left, right);
@@ -729,7 +731,7 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
         const float pan = mus.pan.load(std::memory_order_relaxed);
         const unsigned long long rp = mus.read_pos.load(std::memory_order_relaxed);
         const unsigned long long avail = mus.write_pos.load(std::memory_order_acquire) - rp;
-        const unsigned long n = (unsigned long)std::min<unsigned long long>(framesPerBuffer, avail);
+        const unsigned long n = static_cast<unsigned long>(std::min<unsigned long long>(framesPerBuffer, avail));
         for (unsigned long i = 0; i < n; i++) {
             const float* src = mus.ring.get() + ((rp + i) % mus.ring_frames) * channels;
             float left, right;
@@ -1244,7 +1246,7 @@ static uint32_t hit_polyphony() {
     static const uint32_t n = [] {
         const char* v = std::getenv("ZDON_HIT_POLYPHONY");
         const int want = v && *v ? std::atoi(v) : 6;
-        return (uint32_t)std::clamp(want, 1, 24);
+        return static_cast<uint32_t>(std::clamp(want, 1, 24));
     }();
     return n;
 }
@@ -1344,7 +1346,7 @@ static size_t resident_cap_bytes() {
     static const size_t cap = [] {
         const char* v = std::getenv("ZDON_RESIDENT_SOUND_MB");
         const long mb = v && *v ? std::max(0L, std::atol(v)) : 64L;
-        return (size_t)mb << 20;
+        return static_cast<size_t>(mb) << 20;
     }();
     return cap;
 }
@@ -1398,7 +1400,7 @@ std::string AudioEngine::load_resident_sound(const fs::path& file_path, const st
     if (!pcm || resident.contains(name)) {
         return loaded;
     }
-    const size_t bytes = (size_t)pcm->frame_count * pcm->channels * sizeof(float);
+    const size_t bytes = static_cast<size_t>(pcm->frame_count) * pcm->channels * sizeof(float);
     if (resident_bytes + bytes > resident_cap_bytes()) {
         spdlog::info("Resident sounds: {} not kept, the {} MB cap is reached", name, resident_cap_bytes() >> 20);
         return loaded;
@@ -1696,8 +1698,8 @@ bool AudioEngine::read_short_sound(SNDFILE* file, const SF_INFO& info, const fs:
     snd.channels = channels;
 
     if (snd.sample_rate != target_rate) {
-        double ratio = target_rate / (double)snd.sample_rate;
-        long output_frames = (long)(frames_read * ratio) + 1;
+        double ratio = target_rate / static_cast<double>(snd.sample_rate);
+        long output_frames = static_cast<long>(frames_read * ratio) + 1;
         float* resampled_data = new float[output_frames * channels];
 
         SRC_DATA src_data;
@@ -2239,8 +2241,8 @@ void AudioEngine::play_player_sound(const std::string& name, PlayerNum player, V
 
 void AudioEngine::set_volume_presets(const VolumeConfig& presets) {
     volume_presets = presets;
-    for (int c = 1; c <= (int)VolumePreset::ATTRACT_MODE; c++) {
-        category_volume[c].store(get_preset_volume(presets, (VolumePreset)c), std::memory_order_relaxed);
+    for (int c = 1; c <= static_cast<int>(VolumePreset::ATTRACT_MODE); c++) {
+        category_volume[c].store(get_preset_volume(presets, static_cast<VolumePreset>(c)), std::memory_order_relaxed);
     }
 }
 
@@ -2315,7 +2317,7 @@ void AudioEngine::activate(SoundId id) {
     for (;;) {
         ActivateCell& cell = activate_cells[pos % kActivateCap];
         const size_t seq = cell.seq.load(std::memory_order_acquire);
-        const intptr_t dif = (intptr_t)seq - (intptr_t)pos;
+        const intptr_t dif = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
         if (dif == 0) {
             if (activate_head.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
                 cell.id = id;
@@ -2459,8 +2461,8 @@ bool AudioEngine::prepare_nus3bank_pcm(const fs::path& file_path, PreparedPCM& o
         return false;
     }
 
-    unsigned int frames = (unsigned int)decoded.frame_count();
-    unsigned int rate = (unsigned int)decoded.sample_rate;
+    unsigned int frames = static_cast<unsigned int>(decoded.frame_count());
+    unsigned int rate = static_cast<unsigned int>(decoded.sample_rate);
     float* data = adopt_decoded_pcm(decoded.samples, decoded.channels, frames, rate, target_sample_rate,
                                     quick_resample ? SRC_LINEAR : SRC_SINC_FASTEST);
     if (!data) {
@@ -2499,13 +2501,15 @@ static unsigned long long stream_max_out(const music& mus, double target_rate) {
     if (!mus.resampler) {
         return mus.buffer_size;
     }
-    return (unsigned long long)(mus.buffer_size * (target_rate / (double)mus.file_info.samplerate)) + 256;
+    return static_cast<unsigned long long>(mus.buffer_size *
+                                           (target_rate / static_cast<double>(mus.file_info.samplerate))) +
+           256;
 }
 
 // Sets up the decode ring of a file-backed stream (~370 ms at 44.1 kHz).
 static void alloc_stream_ring(music& mus, double target_rate) {
     mus.ring_frames = std::max<unsigned long long>(16384, stream_max_out(mus, target_rate) * 2);
-    mus.ring = std::make_unique<float[]>(mus.ring_frames * (unsigned long long)mus.file_info.channels);
+    mus.ring = std::make_unique<float[]>(mus.ring_frames * static_cast<unsigned long long>(mus.file_info.channels));
 }
 
 std::shared_ptr<music> AudioEngine::find_music(const std::string& name) const {
@@ -2525,7 +2529,7 @@ AudioEngine::StreamList* AudioEngine::publish_streams() {
 }
 
 // Replaces any music stream stored under name with mus.
-void AudioEngine::install_music(const std::string& name, std::shared_ptr<music> mus) {
+void AudioEngine::install_music(const std::string& name, const std::shared_ptr<music>& mus) {
     unload_music_stream(name);
     StreamList* old_list = nullptr;
     std::shared_ptr<music> replaced;
@@ -2633,7 +2637,7 @@ void AudioEngine::kick_decoder() {
 
 // One read of a file-backed stream into its ring; false when there was no room or nothing more to read.
 bool AudioEngine::decode_into_ring(music& mus, double target_rate) {
-    const unsigned int channels = (unsigned int)mus.file_info.channels;
+    const unsigned int channels = static_cast<unsigned int>(mus.file_info.channels);
     const unsigned long long wp = mus.write_pos.load(std::memory_order_relaxed);
     const unsigned long long used = wp - mus.read_pos.load(std::memory_order_acquire);
     if (mus.decoder_eof || mus.ring_frames - used < stream_max_out(mus, target_rate)) {
@@ -2663,10 +2667,10 @@ bool AudioEngine::decode_into_ring(music& mus, double target_rate) {
     }
 
     const float* produced = mus.stream_buffer;
-    unsigned long long frames = (unsigned long long)frames_read;
+    unsigned long long frames = static_cast<unsigned long long>(frames_read);
     if (mus.resampler) {
-        double ratio = target_rate / (double)mus.file_info.samplerate;
-        const long output_budget = (long)(frames_read * ratio) + 256;
+        double ratio = target_rate / static_cast<double>(mus.file_info.samplerate);
+        const long output_budget = static_cast<long>(frames_read * ratio) + 256;
 
         sf_count_t input_consumed = 0;
         long output_generated = 0;
@@ -2695,7 +2699,7 @@ bool AudioEngine::decode_into_ring(music& mus, double target_rate) {
             }
         }
         produced = mus.resample_buffer;
-        frames = (unsigned long long)output_generated;
+        frames = static_cast<unsigned long long>(output_generated);
     }
 
     for (unsigned long long done = 0; done < frames;) {
@@ -2978,7 +2982,8 @@ void AudioEngine::play_music_stream(const std::string& name, VolumePreset volume
         return;
     }
     if (volume_preset != VolumePreset::NONE) {
-        mus->category.store((uint8_t)volume_preset, std::memory_order_relaxed); // the mixer applies it live
+        mus->category.store(static_cast<uint8_t>(volume_preset),
+                            std::memory_order_relaxed); // the mixer applies it live
     }
     if (mus->pcm_data) {
         // the read position of a decoded stream is its current_frame: restart via the mixer
@@ -3164,7 +3169,7 @@ void AudioEngine::dev_mix_offline(float* out, unsigned int frames) {
         }
         const SoundDecodeJob& job = *pcm->decode_job;
         const double need = snd.current_frame.load(std::memory_order_relaxed) +
-                            (double)frames * snd.pitch.load(std::memory_order_relaxed) + 1.0;
+                            static_cast<double>(frames) * snd.pitch.load(std::memory_order_relaxed) + 1.0;
         while (!job.done.load(std::memory_order_acquire) && job.frames_ready.load(std::memory_order_acquire) < need) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "../libs/file/filesystem.h"
+#include "../libs/gfx/camera_utils.h"
 #include "../libs/gfx/text.h"
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
@@ -76,6 +77,9 @@ void OnboardingScreen::on_screen_start() {
     downloading = download_started = false;
     skinless_start = global_data.skinless;
     error.clear();
+    // no skin means no drum on screen, so phones pick rows by tapping them instead
+    set_touch_drum_enabled(false);
+    take_touch_tap();
     screen_init = true;
 }
 
@@ -158,7 +162,25 @@ bool OnboardingScreen::apply() {
     return true;
 }
 
+void OnboardingScreen::handle_tap(Vec2 tap) {
+    const Vec2 pixel{tap.x * get_screen_width(), tap.y * get_screen_height()};
+    const Camera2D camera = compute_camera2d(tex.screen_width, tex.screen_height);
+    const float y = get_screen_to_world_2d(pixel, camera).y * 720.0f / tex.screen_height; // draw()'s coordinates
+
+    if (y >= 165 && y < 165 + kSkinCount * 42) {
+        row = static_cast<int>((y - 165) / 42);
+        toggle_skin(row);
+    } else if (y >= 430 && y < 490) {
+        row = online_row();
+        online = !online;
+    } else if (y >= 490 && y < 550) {
+        row = continue_row();
+        begin_download();
+    }
+}
+
 Screens OnboardingScreen::on_screen_end(Screens next_screen) {
+    set_touch_drum_enabled(true);
     return Screen::on_screen_end(next_screen);
 }
 
@@ -203,6 +225,11 @@ std::optional<Screens> OnboardingScreen::update() {
         return on_screen_end(skinless_start ? Screens::LOADING : Screens::TITLE);
     }
 
+    if (const auto tap = take_touch_tap()) {
+        handle_tap(*tap);
+        return std::nullopt;
+    }
+
     // Up/Down (arrows or D-pad) move between rows; the drum-only scheme below still works
     const int rows = kSkinCount + 2;
     if (key_pressed(SDL_SCANCODE_UP) || check_key_pressed(10000 + 1)) {
@@ -211,6 +238,22 @@ std::optional<Screens> OnboardingScreen::update() {
     }
     if (key_pressed(SDL_SCANCODE_DOWN) || check_key_pressed(10000 + 3)) {
         row = (row + 1) % rows;
+        return std::nullopt;
+    }
+    if (global_data.config->keys.gamepad_menu_layout) {
+        if (check_key_pressed(global_data.config->keys.back_key)) {
+            if (!skinless_start) {
+                return on_screen_end(Screens::TITLE);
+            }
+        } else if (menu_confirm_pressed()) {
+            if (row == continue_row()) {
+                begin_download();
+            } else if (row < kSkinCount) {
+                toggle_skin(row);
+            } else if (row == online_row()) {
+                online = !online;
+            }
+        }
         return std::nullopt;
     }
     // drum-only: don moves down (starts the download on Continue), kat toggles the current row
@@ -277,5 +320,9 @@ void OnboardingScreen::draw() {
     if (!error.empty()) {
         draw_line(error, 565 * s, static_cast<int>(22 * s), Color::RED);
     }
-    draw_line("Don: next / continue    Ka: toggle    Up/Down: move", 650 * s, static_cast<int>(20 * s), Color::GRAY);
+    const char* hint = global_data.config->general.touch_input ? "Tap a skin to select it, then tap Continue"
+                       : global_data.config->keys.gamepad_menu_layout
+                           ? "D-pad: move    Confirm: toggle / continue"
+                           : "Don: next / continue    Ka: toggle    Up/Down: move";
+    draw_line(hint, 650 * s, static_cast<int>(20 * s), Color::GRAY);
 }

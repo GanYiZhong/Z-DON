@@ -6,11 +6,11 @@
 #include <map>
 #include <utility>
 
+#include "../../libs/gfx/camera_utils.h"
 #include "../../libs/input/ime_ui.h"
 #include "../../libs/input/input.h"
 #include "../../libs/math/animation.h"
-
-std::string getKeyString(int key_code);
+#include "../song_select/file_navigator/text_layout.h"
 
 static constexpr int OPTION_FONT_SIZE_BASE = 30;
 static constexpr float DESC_X_BASE = 450.0f;
@@ -29,7 +29,9 @@ static std::unique_ptr<FadeAnimation> make_flicker() {
     return fa;
 }
 
-BaseOptionBox::BaseOptionBox(const std::string& name, std::string description, const std::string& path)
+BaseOptionBox::BaseOptionBox(const std::string& name, const std::string& description, const std::string& path)
+    // merge 0ed42ec: the text stays unwrapped; Z-DON's draw_base wraps it at the skin's settings_description
+    // width (upstream's word_wrap here would wrap it twice)
     : description_text(std::move(description)), config_ref(get_config_ref(path)),
       name_text(std::make_unique<OutlinedText>(name, option_font_size(), Color::WHITE, Color::BLACK, false, 4, -4)),
       t_overlay(tex.get_texture("background/overlay")), t_title(tex.get_texture("background/title")),
@@ -56,7 +58,7 @@ void BaseOptionBox::draw_base() const {
     float max_w = 0.0f;
     if (const SkinInfo* info = font_manager.get_text_info("settings_description")) {
         if (info->font_size > 0) {
-            desc_font_size = (float)info->font_size;
+            desc_font_size = static_cast<float>(info->font_size);
         }
         if (info->x > 0) {
             desc_x = info->x;
@@ -67,9 +69,9 @@ void BaseOptionBox::draw_base() const {
         max_w = info->width;
     }
     if (max_w <= 0) {
-        max_w = (float)tex.screen_width - desc_x * 1.1f;
+        max_w = static_cast<float>(tex.screen_width) - desc_x * 1.1f;
     }
-    Font font = font_manager.get_font(description_text, (int)desc_font_size);
+    Font font = font_manager.get_font(description_text, static_cast<int>(desc_font_size));
     if (desc_lines_for != description_text || desc_lines_size != desc_font_size || desc_lines_w != max_w) {
         desc_lines = wrap_description(font, description_text, desc_font_size, max_w);
         desc_lines_for = description_text;
@@ -78,7 +80,7 @@ void BaseOptionBox::draw_base() const {
     }
     const float line_h = std::round(desc_font_size * 1.25f);
     for (size_t i = 0; i < desc_lines.size(); i++) {
-        draw_text_ex(font, desc_lines[i].c_str(), {desc_x, desc_y + line_h * (float)i}, desc_font_size, 1,
+        draw_text_ex(font, desc_lines[i].c_str(), {desc_x, desc_y + line_h * static_cast<float>(i)}, desc_font_size, 1,
                      Color::BLACK);
     }
 }
@@ -101,7 +103,7 @@ std::vector<std::string> BaseOptionBox::wrap_description(const Font& font, const
     std::string cur;
     size_t i = 0;
     while (i < text.size()) {
-        const unsigned char c = (unsigned char)text[i];
+        const unsigned char c = static_cast<unsigned char>(text[i]);
         const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
         uint32_t cp = c;
         if (len == 2) {
@@ -276,6 +278,13 @@ void BoolOptionBox::confirm() {
     config_ref.set_bool(value);
 }
 
+// Nameplate options point at the active account, which AccountOptionBox can swap.
+void BoolOptionBox::update(double /*current_time*/) {
+    if (!is_highlighted) {
+        value = config_ref.get_bool();
+    }
+}
+
 void BoolOptionBox::move_left() {
     value = false;
 }
@@ -426,6 +435,11 @@ bool StrOptionBox::needs_text_input() const {
 
 void StrOptionBox::update(double current_time) {
     flicker_fade->update(current_time);
+    // Nameplate options point at the active account, which AccountOptionBox can swap.
+    if (!is_highlighted && value_list.empty() && config_ref.get_str() != value) {
+        value = input_string = config_ref.get_str();
+        rebuild_text();
+    }
     if (is_highlighted && value_list.empty()) {
         std::string before = input_string;
         TextEditAction action = poll_text_edit(input_string);
@@ -475,6 +489,128 @@ void StrOptionBox::draw() {
     }
 
     draw_value_box(*value_text, *flicker_fade);
+}
+
+static constexpr float ACCOUNT_CHARA_X_BASE = 520.0f;
+static constexpr float ACCOUNT_CHARA_Y_BASE = 565.0f;
+static constexpr float ACCOUNT_PLATE_X_BASE = 705.0f;
+static constexpr float ACCOUNT_PLATE_Y_BASE = 340.0f;
+static constexpr float CODE_BOX_X_OFFSET_BASE = -94.0f; // from the value button
+static constexpr float CODE_BOX_Y_OFFSET_BASE = 350.0f;
+static constexpr float CODE_BOX_EXTRA_WIDTH_BASE = 188.0f; // fits a 20 digit code
+
+AccountOptionBox::AccountOptionBox(const std::string& name, const std::string& description, const std::string& path)
+    : BaseOptionBox(name, description, path), slot(path == "network/access_code_2" ? 1 : 0),
+      value(config_ref.get_str()), accounts(scores_manager.get_player_ids()),
+      masked_text(
+          std::make_unique<OutlinedText>("********", option_font_size(), Color::WHITE, Color::BLACK, false, 4, -4)),
+      flicker_fade(make_flicker()) {
+    auto current = std::ranges::find(accounts, value);
+    if (current == accounts.end()) {
+        current = accounts.insert(accounts.end(), value);
+    }
+    account_index = static_cast<int>(std::distance(accounts.begin(), current));
+}
+
+PlayerData& AccountOptionBox::slot_data() const {
+    return slot == 0 ? scores_manager.player_1_data : scores_manager.player_2_data;
+}
+
+void AccountOptionBox::confirm() {
+    if (is_highlighted || value == config_ref.get_str()) {
+        return; // entering, or nothing picked
+    }
+    PlayerData& data = slot_data();
+    scores_manager.save_player_data(data);
+    config_ref.set_str(value);
+    (slot == 0 ? scores_manager.player_1 : scores_manager.player_2) = value;
+    data = scores_manager.get_player_data(value).value_or(PlayerData{});
+    data.player_id = value;
+    // A pick made during a card session outlives it; title and save_config would otherwise undo it.
+    global_data.card_override[slot] = false;
+}
+
+// Both slots sharing an account would overwrite each other's data, so the other slot's account is skipped.
+void AccountOptionBox::step(int direction) {
+    const auto& network = global_data.config->network;
+    const std::string& other = slot == 0 ? network.access_code_2 : network.access_code_1;
+    for (int i = account_index + direction; i >= 0 && i < std::ssize(accounts); i += direction) {
+        if (accounts[i] != other) {
+            account_index = i;
+            value = accounts[i];
+            chara.reset();
+            return;
+        }
+    }
+}
+
+void AccountOptionBox::move_left() {
+    step(-1);
+}
+
+void AccountOptionBox::move_right() {
+    step(1);
+}
+
+void AccountOptionBox::load_preview() {
+    // The active account may hold nameplate edits that aren't saved until leaving settings.
+    const PlayerData pd =
+        value == slot_data().player_id ? slot_data() : scores_manager.get_player_data(value).value_or(PlayerData{});
+    value_text =
+        std::make_unique<OutlinedText>(pd.username, option_font_size(), Color::WHITE, Color::BLACK, false, 4, -4);
+    code_text = std::make_unique<OutlinedText>(value, option_font_size(), Color::WHITE, Color::BLACK, false, 4, -4);
+    nameplate =
+        std::make_unique<Nameplate>(pd.username, pd.title, PlayerNum::ALL, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
+    chara = make_chara_from_player_data(&pd, slot == 1);
+    chara->set_don_colors(pd.chara_color_1, pd.chara_color_2, pd.chara_color_3);
+    chara->apply_face(pd.chara_face_index);
+    chara->set_anim(AnimIndex::DON_ENTRY_LOOP);
+}
+
+void AccountOptionBox::update(double current_time) {
+    flicker_fade->update(current_time);
+    if (!drawn) {
+        chara.reset();
+    }
+    drawn = false;
+    if (chara) {
+        chara->update(current_time);
+        nameplate->update(current_time);
+    }
+}
+
+void AccountOptionBox::draw() {
+    draw_base();
+    if (!chara) {
+        load_preview();
+    }
+    drawn = true;
+    const float s = tex.screen_scale;
+
+    tex.draw_texture(t_button_off, {.index = 2});
+    if (is_highlighted) {
+        tex.draw_texture(t_button_on, {.fade = flicker_fade->attribute, .index = 2});
+    }
+    const float value_width = std::min(value_text->width, t_button_on->x2[2] * 0.9f);
+    float tx = t_button_on->x[2] + (t_button_on->x2[2] / 2.0f) - (value_width / 2.0f);
+    float ty = t_button_on->y[2] + (t_button_on->y2[2] / 2.0f) - (value_text->height / 2.0f);
+    value_text->draw({.x = tx, .y = ty, .x2 = value_width - value_text->width});
+
+    chara->draw(ACCOUNT_CHARA_X_BASE * s, ACCOUNT_CHARA_Y_BASE * s);
+    nameplate->draw(ACCOUNT_PLATE_X_BASE * s, ACCOUNT_PLATE_Y_BASE * s);
+
+    const float box_x = t_button_off->x[2] + (CODE_BOX_X_OFFSET_BASE * s);
+    const float box_y = t_button_off->y[2] + (CODE_BOX_Y_OFFSET_BASE * s);
+    const float box_w = t_button_off->x2[2] + (CODE_BOX_EXTRA_WIDTH_BASE * s);
+    const float box_h = t_button_off->y2[2];
+    tex.draw_texture(t_button_off, {.x = CODE_BOX_X_OFFSET_BASE * s,
+                                    .y = CODE_BOX_Y_OFFSET_BASE * s,
+                                    .x2 = CODE_BOX_EXTRA_WIDTH_BASE * s,
+                                    .index = 2});
+    const Vec2 mouse = get_screen_to_world_2d(mouse_position(), compute_camera2d(tex.screen_width, tex.screen_height));
+    const bool hovered = mouse.x >= box_x && mouse.x < box_x + box_w && mouse.y >= box_y && mouse.y < box_y + box_h;
+    OutlinedText& code = hovered ? *code_text : *masked_text;
+    code.draw({.x = box_x + (box_w / 2.0f) - (code.width / 2.0f), .y = box_y + (box_h / 2.0f) - (code.height / 2.0f)});
 }
 
 KeybindOptionBox::KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path)

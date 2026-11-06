@@ -33,7 +33,7 @@ BaseBox::BaseBox(fs::path path, const BoxDef& box_def)
 BaseBox::~BaseBox() = default;
 
 void BaseBox::preregister_text() {
-    font_manager.register_text(text_name, (int)box_name_font_size());
+    font_manager.register_text(text_name, static_cast<int>(box_name_font_size()));
 }
 
 void BaseBox::load_text() {
@@ -106,6 +106,8 @@ void BaseBox::fade_out() {
 }
 
 void BaseBox::update(double current_time) {
+    // Z-DON (merge 0ed42ec): kept the per-animation settled() checks instead of upstream's early return; same
+    // effect for boxes at rest, and it also skips a delayed-start animation's idle frames
     // every box of the open folder comes here every frame, and almost all of them are at rest:
     // an animation is only updated when that can change it
     if (!open_anim->settled(current_time)) {

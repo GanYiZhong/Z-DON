@@ -1,5 +1,6 @@
 #include "scores.h"
 
+#include <format>
 #include <iterator>
 #include <numeric>
 
@@ -269,10 +270,21 @@ ScoresManager::ScoresManager(const fs::path& db_path) {
     }
 
     run_migration("ALTER TABLE players ADD COLUMN modifier_skip BOOL NOT NULL DEFAULT 0;");
+    run_migration("ALTER TABLE players ADD COLUMN practice_help_seen BOOL NOT NULL DEFAULT 0;");
+    run_migration("ALTER TABLE players ADD COLUMN reward_info_seen BOOL NOT NULL DEFAULT 0;");
+    run_migration("ALTER TABLE players ADD COLUMN ai_intro_seen BOOL NOT NULL DEFAULT 0;");
 
     // Migration v7: dan_results (one best-of row per course title) replaced by dan_scores (attempt history).
     if (version < 7 && run_migration("DROP TABLE IF EXISTS dan_results;")) {
         sqlite3_exec(db_fsd, "PRAGMA user_version = 7;", nullptr, nullptr, nullptr);
+    }
+
+    // Migration v8: dan costumes moved to the end of the costume list.
+    if (version < 8 && run_migration("UPDATE players SET chara_cos_index = CASE "
+                                     "WHEN chara_cos_index BETWEEN 36 AND 61 THEN chara_cos_index + 109 "
+                                     "WHEN chara_cos_index BETWEEN 62 AND 170 THEN chara_cos_index - 26 "
+                                     "ELSE chara_cos_index END;")) {
+        sqlite3_exec(db_fsd, "PRAGMA user_version = 8;", nullptr, nullptr, nullptr);
     }
 
     ensure_dan_table(db_fsd);
@@ -916,7 +928,7 @@ std::vector<int> ScoresManager::get_zdon_ai_section_crowns(const std::string& pl
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const int section = sqlite3_column_int(stmt, 0);
         if (section >= 0 && section < 16) {
-            crowns.resize(std::max<size_t>(crowns.size(), (size_t)section + 1), 0);
+            crowns.resize(std::max<size_t>(crowns.size(), static_cast<size_t>(section) + 1), 0);
             crowns[section] = sqlite3_column_int(stmt, 1);
         }
     }
@@ -943,7 +955,7 @@ void ScoresManager::set_zdon_ai_section_crowns(const std::string& player_id, con
         sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 3, difficulty);
-        sqlite3_bind_int(stmt, 4, (int)i);
+        sqlite3_bind_int(stmt, 4, static_cast<int>(i));
         sqlite3_bind_int(stmt, 5, crowns[i]);
         sqlite3_step(stmt);
         sqlite3_reset(stmt);
@@ -1044,7 +1056,7 @@ std::vector<std::array<int, 5>> ScoresManager::get_zdon_ai_section_best(const st
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const int section = sqlite3_column_int(stmt, 0);
         if (section >= 0 && section < 16) {
-            best.resize(std::max<size_t>(best.size(), (size_t)section + 1), {0, 0, 0, 0, 0});
+            best.resize(std::max<size_t>(best.size(), static_cast<size_t>(section) + 1), {0, 0, 0, 0, 0});
             for (int k = 0; k < 5; ++k) {
                 best[section][k] = sqlite3_column_int(stmt, 2 + k);
             }
@@ -1089,7 +1101,7 @@ bool ScoresManager::set_zdon_ai_section_best(const std::string& player_id, const
         sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 3, difficulty);
-        sqlite3_bind_int(stmt, 4, (int)i);
+        sqlite3_bind_int(stmt, 4, static_cast<int>(i));
         sqlite3_bind_int(stmt, 5, total);
         for (int k = 0; k < 5; ++k) {
             sqlite3_bind_int(stmt, 6 + k, sections[i][k]);
@@ -1623,6 +1635,20 @@ std::optional<PlayerData> ScoresManager::get_player_data(const std::string& play
     return p;
 }
 
+std::vector<std::string> ScoresManager::get_player_ids() {
+    std::vector<std::string> ids;
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_fsd, "SELECT player_id FROM players ORDER BY rowid;", -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("get_player_ids: failed to prepare: {}", sqlite3_errmsg(db_fsd));
+        return ids;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ids.emplace_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+    }
+    sqlite3_finalize(stmt);
+    return ids;
+}
+
 void ScoresManager::save_player_data(const PlayerData& player) {
     sqlite3_stmt* stmt;
     const char* query =
@@ -1835,6 +1861,34 @@ std::optional<DanRecord> ScoresManager::get_dan_record(const std::string& player
     return out;
 }
 
+void ScoresManager::save_ai_section_wins(const std::string& hash, int difficulty, const std::string& player_id, int won,
+                                         int total) {
+    sqlite3_exec(db_fsd,
+                 "CREATE TABLE IF NOT EXISTS ai_section_wins"
+                 "(hash TEXT NOT NULL, difficulty INTEGER NOT NULL, player_id TEXT NOT NULL,"
+                 "sections_won INTEGER NOT NULL, sections_total INTEGER NOT NULL,"
+                 "PRIMARY KEY(hash, difficulty, player_id));",
+                 nullptr, nullptr, nullptr);
+    sqlite3_stmt* stmt;
+    const char* query = "INSERT INTO ai_section_wins (hash, difficulty, player_id, sections_won, sections_total)"
+                        " VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET"
+                        " sections_won = MAX(sections_won, excluded.sections_won),"
+                        " sections_total = excluded.sections_total;";
+    if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("save_ai_section_wins: failed to prepare: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, difficulty);
+    sqlite3_bind_text(stmt, 3, player_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, won);
+    sqlite3_bind_int(stmt, 5, total);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        spdlog::error("save_ai_section_wins: failed for {}: {}", hash, sqlite3_errmsg(db_fsd));
+    }
+    sqlite3_finalize(stmt);
+}
+
 void ScoresManager::save_dan_score(const std::string& player_id, const std::string& course_id, const DanResultData& rd,
                                    int arrival, const std::vector<DanExamBest>& exam_bests) {
     sqlite3_stmt* stmt;
@@ -1885,6 +1939,18 @@ void ScoresManager::save_dan_score(const std::string& player_id, const std::stri
         sqlite3_reset(stmt);
     }
     sqlite3_finalize(stmt);
+}
+
+bool ScoresManager::first_visit(const std::string& player_id, const char* seen_column) {
+    sqlite3_stmt* stmt;
+    const std::string query = std::format("UPDATE players SET {0} = 1 WHERE player_id = ? AND {0} = 0;", seen_column);
+    if (sqlite3_prepare_v2(db_fsd, query.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_TRANSIENT);
+    const bool first = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db_fsd) == 1;
+    sqlite3_finalize(stmt);
+    return first;
 }
 
 void ScoresManager::migrate_player_id(const std::string& old_id, const std::string& new_id) {

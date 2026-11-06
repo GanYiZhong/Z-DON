@@ -6,11 +6,6 @@
 #include "../libs/math/animation.h"
 #include "../objects/game/zdon_ai.h"
 
-// Z-DON AI battle: leaving goes back to the AI song select
-static Screens zdon_song_select() {
-    return global_data.zdon_ai.active ? Screens::AI_SELECT : Screens::SONG_SELECT_2P;
-}
-
 void Game2PScreen::release_chart_resources() {
     parser_2p.reset();
 }
@@ -34,8 +29,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     ai_music_cut = false;
     ai_ending_pending = false;
     if (ai_battle) {
-        auto& s1 = global_data.session_data[(int)PlayerNum::P1];
-        auto& s2 = global_data.session_data[(int)PlayerNum::P2];
+        auto& s1 = global_data.session_data[static_cast<int>(PlayerNum::P1)];
+        auto& s2 = global_data.session_data[static_cast<int>(PlayerNum::P2)];
         s2.selected_song = s1.selected_song;
         s2.selected_difficulty = s1.selected_difficulty;
         s2.song_hash = s1.song_hash;
@@ -88,7 +83,7 @@ std::optional<Screens> Game2PScreen::update() {
 
     double current_time = get_current_ms();
     if (pause_menu.active()) {
-        return update_pause_menu(zdon_song_select()); // Z-DON: pause menu (pause_menu.h)
+        return update_pause_menu(select_screen()); // Z-DON: pause menu (pause_menu.h)
     }
     clock.update(current_time);
     transition->update(current_time);
@@ -115,7 +110,7 @@ std::optional<Screens> Game2PScreen::update() {
         }
     }
     if (result_transition.is_finished && !audio.is_sound_playing("result_transition") && !ai_cover_held) {
-        return on_screen_end(Screens::RESULT_2P);
+        return on_screen_end(result_screen());
     }
 
     if (clock.position() >= end_time) {
@@ -144,7 +139,7 @@ std::optional<Screens> Game2PScreen::update() {
             open_pause_menu();
             return std::nullopt;
         }
-        return on_screen_end(zdon_song_select());
+        return on_screen_end(select_screen());
     }
     const bool lost_focus = focus_lost();
     if (can_pause()) {

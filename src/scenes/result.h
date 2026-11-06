@@ -21,6 +21,7 @@ protected:
     bool retrying = false;
     int zdon_freeze_exit = 0; // Z-DON zdon_end_over_result: 1 = leaving for GAME_OVER with the frame held, 2 = go
     bool zdon_freeze_to_game_over() const;
+    bool quitting = false;
     bool allow_retry = true;
     AllNetIcon allnet_indicator;
     CoinOverlay coin_overlay;
@@ -38,8 +39,10 @@ protected:
     std::optional<ResultPlayer> player_1;
     std::optional<FadeIn> fade_in;
 
-    void handle_input(double current_ms);
+    virtual void handle_input(double current_ms);
 
+    virtual bool run_failed() const;
+    virtual Screens select_screen() const { return Screens::SONG_SELECT; }
     bool retry_pending() const;
     bool exiting() const;
     void begin_exit();
@@ -57,6 +60,7 @@ protected:
     virtual bool zdon_two_boards() const { return false; } // Z-DON: Result2PScreen
 
     void draw_song_info();
+    Screens credit_end_screen();
 
 public:
     ResultScreen() : Screen("result") {}

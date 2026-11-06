@@ -16,9 +16,9 @@ void Result2PScreen::on_screen_start() {
     // Z-DON AI battle: this song joins the credit's (the play-all summary)
     if (global_data.zdon_ai.active && global_data.zdon_ai.finished) {
         const auto& b = global_data.zdon_ai;
-        const auto& r = global_data.session_data[(int)PlayerNum::P1].result_data;
+        const auto& r = global_data.session_data[static_cast<int>(PlayerNum::P1)].result_data;
         GlobalData::ZdonAiSong song;
-        song.title = global_data.session_data[(int)PlayerNum::P1].song_title;
+        song.title = global_data.session_data[static_cast<int>(PlayerNum::P1)].song_title;
         song.score = r.score;
         song.good = r.good;
         song.ok = r.ok;
@@ -121,6 +121,9 @@ std::optional<Screens> Result2PScreen::update() {
                 global_data.zdon_ai.active = false;
                 global_data.songs_played = 0;
                 return on_screen_end(Screens::GAME_OVER);
+            }
+            if (quitting) {
+                return on_screen_end(credit_end_screen());
             }
             global_data.returned_from_result = true;
             // Z-DON AI battle: back to the AI song select

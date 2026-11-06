@@ -125,7 +125,7 @@ namespace {
                 spdlog::error("Invalid crop entry {} for texture {}", j, tex_name);
                 continue;
             }
-            crops.push_back(Rect{crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat()});
+            crops.emplace_back(crop[0].GetFloat(), crop[1].GetFloat(), crop[2].GetFloat(), crop[3].GetFloat());
         }
         return crops;
     }
@@ -2540,8 +2540,8 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
             source_rect = tex_obj->crop_data->at(params.frame);
             source_rect.width -= 1.0f;
             source_rect.height -= 1.0f;
-            source_rect.x += mirror_x < 0 ? -0.5f : 0.5f;
-            source_rect.y += mirror_y < 0 ? -0.5f : 0.5f;
+            source_rect.x += 0.5f;
+            source_rect.y += 0.5f;
             source_rect.width *= mirror_x;
             source_rect.height *= mirror_y;
         } catch (const std::out_of_range& e) {

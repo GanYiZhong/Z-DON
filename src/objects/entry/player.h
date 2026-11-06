@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 
+#include "../../libs/file/scores.h"
 #include "../../libs/file/script.h"
 #include "../global/chara_3d.h"
 #include "../global/indicator.h"
@@ -10,6 +11,8 @@
 #include "box_manager.h"
 #include "costume_menu.h"
 #include "zdon_outfit_menu.h"
+
+void save_player_costume(const PlayerData& pd);
 
 class EntryPlayer : public LuaScript {
 private:
@@ -22,6 +25,7 @@ private:
     int chara_index = 0;
     CostumePickStage chara_pick_stage = CostumePickStage::NONE;
     int preset_seq_applied = 0;
+    bool collabo_bonus_seen = false;
 
     sol::protected_function fn_start_animations;
     sol::protected_function fn_update;

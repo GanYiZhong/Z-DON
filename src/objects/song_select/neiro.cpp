@@ -64,7 +64,7 @@ void NeiroSelector::step(int delta) {
     if (move->is_started && !move->is_finished) {
         return;
     }
-    const int n = (int)sounds.size();
+    const int n = static_cast<int>(sounds.size());
     selected_sound = ((selected_sound + delta) % n + n) % n;
     if (!curr_sound.empty()) {
         audio.unload_sound(curr_sound);

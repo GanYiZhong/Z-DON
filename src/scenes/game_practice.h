@@ -111,7 +111,26 @@ private:
     std::vector<NoteList> branch_m_all, branch_e_all, branch_n_all;
     size_t branch_display_synced = 0;
 
+    static constexpr int MIN_SONG_SPEED = 5;
+    static constexpr int MAX_SONG_SPEED = 99;
     int song_speed = 10;
+
+    enum class Phase {
+        PRACTICE,
+        LAST_PLAY,
+        REVIEW
+    };
+    static constexpr int REVIEW_SECONDS = 30;
+    Phase phase = Phase::PRACTICE;
+    void start_last_play();
+    void start_review();
+
+    double now_ms = 0;
+    double tempo_change_ms = -1e9;
+    double seek_limit_ms = -1e9;
+    double review_start_ms = -1e9;
+    double max_progress = 0; // furthest point played, 0-1
+    bool review_panel_open() const;
 
     TextureResizeAnimation* pause_don_anim;
     TextureResizeAnimation* pause_kat_anim;
@@ -171,6 +190,25 @@ private:
     TextureObject* t_multiplier = nullptr;
     TextureObject* t_bar_label = nullptr;
     TextureObject* t_paused = nullptr;
+    TextureObject* t_tempo_rate = nullptr;
+    TextureObject* t_tempo_dot = nullptr;
+    TextureObject* t_tempo_dot_on = nullptr;
+    TextureObject* t_skip_l_kat_off = nullptr;
+    TextureObject* t_skip_r_kat_off = nullptr;
+    TextureObject* t_menu_arrow = nullptr;
+    TextureObject* t_menu_decide = nullptr;
+    TextureObject* t_menu_panel = nullptr;
+    TextureObject* t_jump_buttons[3] = {};
+    TextureObject* t_review_cards[3] = {};
+    TextureObject* t_gauge_max = nullptr;
+    TextureObject* t_jump_count = nullptr;
+    TextureObject* t_jump_count_digits = nullptr;
+    TextureObject* t_seek_limit = nullptr;
+    TextureObject* t_review_panel = nullptr;
+    TextureObject* t_renda_bubbles[3] = {};
+    TextureObject* t_renda_slash = nullptr;
+    TextureObject* t_renda_digits = nullptr;
+    TextureObject* t_renda_digits_small = nullptr;
 
     void initialize_practice_chart();
     void sync_branch_display();
@@ -191,6 +229,9 @@ private:
     int zdon_scrub_run = 0;
     void zdon_cycle_branch();
     bool zdon_don_gesture(bool l, bool r);
+    void review_jump(int card); // upstream review panel
+    bool at_first_bar() const { return scrobble_index <= 0; }
+    bool at_last_bar() const { return scrobble_index >= std::ssize(bars) - 1; }
 
     float get_scrobble_position_x(const Note& note, double current_ms) const;
     Color moji_judgment_color(int note_index) const;
@@ -215,4 +256,10 @@ private:
     void zdon_draw_info() const;
     void zdon_draw_bar_input() const;
     void zdon_draw_offset(const Note& note, float x) const;
+    const Note* find_tail(const Note& head) const;
+    void draw_renda_marker(float cx, float cy, int count, int required) const;
+    void draw_skip_buttons(int player_idx, bool clamp) const;
+    void draw_tempo_feedback(int other_idx, bool dots) const;
+    void draw_menu_arrows() const;
+    void draw_review_panel() const;
 };

@@ -109,7 +109,7 @@ if(YATAIDON_GFX_BACKEND STREQUAL "raylib")
   # three vertex buffers used in turn: a flush no longer rewrites the buffer the GPU may still be reading
   target_compile_definitions(raylib PRIVATE RL_DEFAULT_BATCH_BUFFERS=3)
   if(IOS)
-    target_include_directories(raylib PUBLIC "${CMAKE_SOURCE_DIR}/ios/compat")
+    target_include_directories(raylib PUBLIC "${CMAKE_SOURCE_DIR}/platform/ios/compat")
     target_link_libraries(raylib PUBLIC "-framework OpenGLES")
   endif()
 else()

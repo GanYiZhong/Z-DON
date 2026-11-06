@@ -46,7 +46,7 @@ namespace {
 
 const SongBox::ChartStats& SongBox::chart_stats(int difficulty) {
     static const ChartStats empty{};
-    if (difficulty < 0 || difficulty >= (int)chart_stats_cache.size()) {
+    if (difficulty < 0 || difficulty >= static_cast<int>(chart_stats_cache.size())) {
         return empty;
     }
     std::optional<ChartStats>& slot = chart_stats_cache[difficulty];
@@ -72,7 +72,7 @@ const SongBox::ChartStats& SongBox::chart_stats(int difficulty) {
 
 const std::vector<PlayRecord>& SongBox::recent_plays(int difficulty) {
     static const std::vector<PlayRecord> empty;
-    if (difficulty < 0 || difficulty >= (int)recent_plays_cache.size()) {
+    if (difficulty < 0 || difficulty >= static_cast<int>(recent_plays_cache.size())) {
         return empty;
     }
     std::optional<std::vector<PlayRecord>>& slot = recent_plays_cache[difficulty];

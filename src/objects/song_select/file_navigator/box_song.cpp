@@ -63,7 +63,7 @@ SongBox::SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser)
     this->parser = std::move(parser);
 
     is_favorite = false;
-    diff_fade_in = (FadeAnimation*)tex.get_animation(12);
+    diff_fade_in = static_cast<FadeAnimation*>(tex.get_animation(12));
     refresh_scores();
 }
 
@@ -95,7 +95,7 @@ void SongBox::refresh_scores() {
 }
 
 std::string SongBox::hash_for(int difficulty) {
-    if (difficulty < 0 || difficulty >= (int)hashes.size()) {
+    if (difficulty < 0 || difficulty >= static_cast<int>(hashes.size())) {
         return "";
     }
     if (hashes[difficulty].empty()) {
@@ -109,7 +109,7 @@ std::string SongBox::hash_for(int difficulty) {
 
 void SongBox::reset() {
     BaseBox::reset();
-    diff_fade_in = (FadeAnimation*)tex.get_animation(12);
+    diff_fade_in = static_cast<FadeAnimation*>(tex.get_animation(12));
     if (audio.is_music_stream_valid("preview")) {
         audio.unload_music_stream("preview");
     }
@@ -130,9 +130,9 @@ std::vector<Difficulty> SongBox::get_diffs() {
 
 void SongBox::preregister_text() {
     BaseBox::preregister_text();
-    float base_sub_font = (float)tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size;
+    float base_sub_font = static_cast<float>(tex.get_skin_config(SC::SONG_SELECT_BOX_SUBTITLE)->font_size);
     float sub_font = utf8_char_count(text_subtitle) >= 30 ? base_sub_font - 10.0f * tex.screen_scale : base_sub_font;
-    font_manager.register_text(text_subtitle, (int)sub_font);
+    font_manager.register_text(text_subtitle, static_cast<int>(sub_font));
     font_manager.register_text("BPM\n0123456789", tex.get_skin_config(SC::SONG_SELECT_BOX_BPM)->font_size);
 }
 
@@ -152,6 +152,8 @@ void SongBox::load_text() {
 
 void SongBox::update(double current_time) {
     BaseBox::update(current_time);
+    // Z-DON (merge 0ed42ec): no upstream early return for closed boxes; the score_history load below also runs
+    // for closed boxes here
     if (!diff_fade_in->settled(current_time)) { // one animation shared by every song box
         diff_fade_in->update(current_time);
     }
@@ -218,12 +220,10 @@ void SongBox::update(double current_time) {
     }
 
     if (!score_history) {
-        for (const auto& s : scores) {
-            if (s.has_value()) {
-                score_history = std::make_unique<ScoreHistory>(scores, current_time);
-                break;
-            }
+        for (Difficulty d : get_diffs()) {
+            hash_for(static_cast<int>(d));
         }
+        score_history = std::make_unique<ScoreHistory>(scores, hashes, current_time);
     }
 
     if (score_history) {

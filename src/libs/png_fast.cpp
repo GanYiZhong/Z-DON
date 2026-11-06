@@ -29,12 +29,15 @@ namespace png_fast {
     namespace {
 
         uint32_t be32(const uint8_t* p) {
-            return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+            return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+                   (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
         }
 
         constexpr uint32_t chunk_type(char a, char b, char c, char d) {
-            return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) |
-                   uint32_t(uint8_t(d));
+            return (static_cast<uint32_t>(static_cast<uint8_t>(a)) << 24) |
+                   (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 16) |
+                   (static_cast<uint32_t>(static_cast<uint8_t>(c)) << 8) |
+                   static_cast<uint32_t>(static_cast<uint8_t>(d));
         }
 
         inline uint8_t paeth(int a, int b, int c) {
@@ -220,11 +223,11 @@ namespace png_fast {
         while (pos + 12 <= size) {
             const uint32_t len = be32(data + pos);
             const uint32_t type = be32(data + pos + 4);
-            if (len > (1u << 30) || pos + 12 + size_t(len) > size) {
+            if (len > (1u << 30) || pos + 12 + static_cast<size_t>(len) > size) {
                 return false;
             }
             const uint8_t* c = data + pos + 8;
-            pos += 12 + size_t(len);
+            pos += 12 + static_cast<size_t>(len);
             if (first && type != chunk_type('I', 'H', 'D', 'R')) {
                 return false;
             }
@@ -267,7 +270,7 @@ namespace png_fast {
                     return false;
                 }
                 // stb_image's own size limit
-                if ((1u << 30) / w / uint32_t(color == 3 ? 4 : in_n) < h) {
+                if ((1u << 30) / w / static_cast<uint32_t>(color == 3 ? 4 : in_n) < h) {
                     return false;
                 }
                 break;
@@ -298,7 +301,7 @@ namespace png_fast {
                         palette[i * 4 + 3] = c[i];
                     }
                 } else if (color == 0 || color == 2) {
-                    if (len != uint32_t(in_n) * 2) {
+                    if (len != static_cast<uint32_t>(in_n) * 2) {
                         return false;
                     }
                     has_trans = true;
@@ -316,7 +319,7 @@ namespace png_fast {
                 }
                 if (!seen_idat) {
                     seen_idat = true;
-                    raw_len = size_t(h) * (size_t(w) * size_t(in_n) + 1);
+                    raw_len = static_cast<size_t>(h) * (static_cast<size_t>(w) * static_cast<size_t>(in_n) + 1);
                     raw = static_cast<uint8_t*>(std::malloc(raw_len));
                     if (!raw || inflateInit(&zs.z) != Z_OK) {
                         return false;
@@ -359,26 +362,27 @@ namespace png_fast {
         }
 
         // unfilter in place, then drop the filter bytes
-        const size_t stride = size_t(w) * size_t(in_n);
+        const size_t stride = static_cast<size_t>(w) * static_cast<size_t>(in_n);
         std::vector<uint8_t> zeros(stride, 0);
         const uint8_t* prev = zeros.data();
         for (uint32_t y = 0; y < h; ++y) {
-            uint8_t* row = raw + size_t(y) * (stride + 1);
+            uint8_t* row = raw + static_cast<size_t>(y) * (stride + 1);
             if (!unfilter_row(in_n, row[0], row + 1, prev, stride)) {
                 return false;
             }
             prev = row + 1;
         }
         for (uint32_t y = 0; y < h; ++y) {
-            std::memmove(raw + size_t(y) * stride, raw + size_t(y) * (stride + 1) + 1, stride);
+            std::memmove(raw + static_cast<size_t>(y) * stride, raw + static_cast<size_t>(y) * (stride + 1) + 1,
+                         stride);
         }
-        const size_t pixels = size_t(w) * size_t(h);
+        const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
 
         uint8_t* out = nullptr;
         int out_n = in_n;
         if (color == 3) {
             out_n = pal_trns ? 4 : 3;
-            out = static_cast<uint8_t*>(std::malloc(pixels * size_t(out_n)));
+            out = static_cast<uint8_t*>(std::malloc(pixels * static_cast<size_t>(out_n)));
             if (!out) {
                 return false;
             }
@@ -389,7 +393,7 @@ namespace png_fast {
                     std::free(out); // stb_image reads past the palette here: leave the file to it
                     return false;
                 }
-                const uint8_t* p = palette + size_t(idx) * 4;
+                const uint8_t* p = palette + static_cast<size_t>(idx) * 4;
                 o[0] = p[0];
                 o[1] = p[1];
                 o[2] = p[2];
@@ -400,7 +404,7 @@ namespace png_fast {
             }
         } else if (has_trans) {
             out_n = in_n + 1;
-            out = static_cast<uint8_t*>(std::malloc(pixels * size_t(out_n)));
+            out = static_cast<uint8_t*>(std::malloc(pixels * static_cast<size_t>(out_n)));
             if (!out) {
                 return false;
             }
@@ -420,7 +424,7 @@ namespace png_fast {
                 o += out_n;
             }
         } else {
-            out = static_cast<uint8_t*>(std::realloc(raw, pixels * size_t(in_n)));
+            out = static_cast<uint8_t*>(std::realloc(raw, pixels * static_cast<size_t>(in_n)));
             if (!out) {
                 return false;
             }

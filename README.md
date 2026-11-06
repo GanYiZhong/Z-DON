@@ -14,7 +14,7 @@ A TJA player and Taiko simulator written in C++ using the [raylib](https://www.r
 
 ## Features
 
-- Cross-platform compatibility (Windows, Linux, macOS, Android, iOS)
+- Cross-platform compatibility (Windows, Linux, macOS, Android, iOS, PS5, Switch 1)
 - Controller Support
 - Low latency audio via ASIO or WDM-KS
 - Recursive and Dynamic Song Select Menu
@@ -36,27 +36,13 @@ A TJA player and Taiko simulator written in C++ using the [raylib](https://www.r
 - **Dan Dojo**: Challenge mode for back to back songs.
 - **Practice Mode**: Freely scrobble through a song and practice
 
-### Two-player audio
-
-In two-player mode, player-specific sound effects and Don-chan voice lines play
-through the left channel for P1 and the right channel for P2. Each player has
-independent playback, including when both trigger the same effect. Music and
-shared screen sounds keep their normal stereo output; single-player audio is
-unchanged. This applies to all audio backends.
-
-Skin callbacks belonging to a player inherit that player's audio routing.
-A shared Lua callback can identify the owner explicitly with
-`audio.play_sound(name, preset, loop, player)`, where `player` is `1` or `2`.
-Existing player-specific sound names ending in `_1p` or `_2p` are also routed
-automatically during two-player play.
-
 ## System Requirements
 
 - **Windows**: Windows 10 or higher
 - **macOS**: Built via CI, largely untested
 - **Linux**: Ubuntu 20.04 or higher (other distributions may work but are untested)
 - **Android**: Android 10 (API 29) or higher
-- **iOS**: iOS 16.3 or higher; install via [TestFlight](https://testflight.apple.com/join/ZzrXBUsb) or build from source with Xcode (see [iOS guide](ios/README.md))
+- **iOS**: iOS 16.3 or higher; install via [TestFlight](https://testflight.apple.com/join/ZzrXBUsb) or build from source with Xcode (see [iOS guide](platform/ios/README.md))
 
 ## FAQ
 
@@ -90,8 +76,9 @@ Download the latest release for your operating system from the [releases page](h
 - [Windows (MSYS2/MinGW64)](<https://github.com/Yonokid/YataiDON/wiki/Windows-(MSYS2-MingW64)>)
 - [Windows (MSVC)](<https://github.com/Yonokid/YataiDON/wiki/Windows-(MSVC)>) *(page pending)*
 - [Android](https://github.com/Yonokid/YataiDON/wiki/Android)
-- [iOS](ios/README.md)
-- [PS5 homebrew (experimental)](ps5/README.md)
+- [iOS](platform/ios/README.md)
+- [PS5 homebrew (experimental)](platform/ps5/README.md)
+- [Switch homebrew (experimental)](platform/switch/README.md)
 
 ### Formatting
 
@@ -108,7 +95,7 @@ With `clang-tidy` and `run-clang-tidy` installed, run this from the repository r
 after configuring a build in `build/` to generate `build/compile_commands.json`:
 
 ```sh
-run-clang-tidy -quiet -p build "^$(pwd)/src/"
+run-clang-tidy -quiet -j 4 -p build "^$(pwd)/src/"
 ```
 
 ## Profiling
@@ -189,5 +176,3 @@ People (in no particular order):
 - Thonktheta (testing)
 - SomehowScarlet (nix os)
 - SunnyDeez (testing)
-
----

@@ -18,12 +18,17 @@ private:
     int dan_box_index = -1;
     bool dan_available = false;
     std::string dan_text;
+    std::string waiwai_label;
+    bool waiwai_board = false;
 
+    bool waiwai_replaces_game() const;
     void build_board_list();
     void change_board_list();
 
 public:
     bool costume_menu_open{false};
+    bool shop_request{false};
+    bool bncoin_request{false};
     PlayerNum opening_player = PlayerNum::P1;
 
     explicit BoxManager(bool two_player = false);
@@ -31,6 +36,7 @@ public:
     bool selection_allowed() const;
     bool is_disabled(int index) const; // greyed out: shown but not selectable
     void select_box();
+    void start_selected();
     bool is_box_selected() const;
     bool is_finished() const;
     bool is_costume_box() const;

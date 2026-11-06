@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <rapidjson/istreamwrapper.h>
 #include <stop_token>
 #include <string>
@@ -78,3 +79,12 @@ void set_skin_graphics_path(const fs::path& graphics_path);
 std::vector<fs::path> skin_ancestor_roots();
 
 fs::path resolve_skin_path(const fs::path& relative_path);
+
+struct ScannedFolderState {
+    bool has_definition;
+    bool has_children;
+};
+
+// Chart and navigation metadata paths from the completed scan; nullopt outside its roots.
+std::optional<std::vector<std::filesystem::path>> get_scanned_song_entries(const std::filesystem::path& directory);
+std::optional<ScannedFolderState> get_scanned_folder_state(const std::filesystem::path& directory);

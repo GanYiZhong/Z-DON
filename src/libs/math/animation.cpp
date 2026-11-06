@@ -152,6 +152,9 @@ void FadeAnimation::update(double current_time_ms) {
         return;
     }
     BaseAnimation::update(current_time_ms);
+    if (is_finished) {
+        return;
+    }
 
     double elapsed_time = current_time_ms - start_ms;
 
@@ -206,6 +209,9 @@ void MoveAnimation::update(double current_time_ms) {
         return;
     }
     BaseAnimation::update(current_time_ms);
+    if (is_finished) {
+        return;
+    }
 
     double elapsed_time = current_time_ms - start_ms;
 
@@ -283,6 +289,9 @@ void TextureChangeAnimation::update(double current_time_ms) {
         return;
     }
     BaseAnimation::update(current_time_ms);
+    if (is_finished) {
+        return;
+    }
 
     double elapsed_time = current_time_ms - start_ms;
     if (elapsed_time < delay) {
@@ -318,6 +327,9 @@ void TextStretchAnimation::update(double current_time_ms) {
         return;
     }
     BaseAnimation::update(current_time_ms);
+    if (is_finished) {
+        return;
+    }
 
     double elapsed_time = current_time_ms - start_ms;
     if (elapsed_time < delay) {
@@ -362,6 +374,9 @@ void TextureResizeAnimation::update(double current_time_ms) {
         return;
     }
     BaseAnimation::update(current_time_ms);
+    if (is_finished) {
+        return;
+    }
 
     double elapsed_time = current_time_ms - start_ms;
 

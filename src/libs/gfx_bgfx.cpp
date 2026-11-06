@@ -1,32 +1,283 @@
 #include "gfx.h"
 
+#include <algorithm>
 #include <array>
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <cmath>
+#include <condition_variable>
 #include <cstdarg>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <numbers>
+#include <optional>
+#include <span>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
+
+#include "../platform/platform.h"
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+#include "gfx/glyph_lookup.h"
+#include "gfx/mesh_bounds.h"
 #include "gfx/sdl_compat.h"
 #include "shaders/spirv/fs_2d.sc.bin.h"
 #include "shaders/spirv/fs_colortransform.sc.bin.h"
 #include "shaders/spirv/fs_cutout.sc.bin.h"
+#include "shaders/spirv/fs_face.sc.bin.h"
 #include "shaders/spirv/fs_mesh.sc.bin.h"
 #include "shaders/spirv/fs_null.sc.bin.h"
 #include "shaders/spirv/fs_outline.sc.bin.h"
 #include "shaders/spirv/fs_outline_fxaa.sc.bin.h"
+#include "shaders/spirv/fs_sprite.sc.bin.h"
 #include "shaders/spirv/vs_2d.sc.bin.h"
 #include "shaders/spirv/vs_mesh.sc.bin.h"
+#include "shaders/spirv/vs_mesh_skin.sc.bin.h"
 #include "shaders/spirv/vs_outline.sc.bin.h"
+#include "shaders/spirv/vs_outline_skin.sc.bin.h"
+#include "shaders/spirv/vs_sprite.sc.bin.h"
+
+namespace {
+
+    inline constexpr unsigned GPU_SKIN_BONES = 64;
+
+    inline std::array<std::array<float, 4>, 3> skin_matrix_rows(const Mat4& matrix) {
+        return {{{matrix.m0, matrix.m4, matrix.m8, matrix.m12},
+                 {matrix.m1, matrix.m5, matrix.m9, matrix.m13},
+                 {matrix.m2, matrix.m6, matrix.m10, matrix.m14}}};
+    }
+
+    class SkinningBounds {
+        std::vector<MeshBounds> joints;
+        float maximum_weight = 0;
+
+    public:
+        bool prepare(const Mesh& mesh) {
+            joints.clear();
+            maximum_weight = 0;
+            if (!mesh.vertices || !mesh.boneIndices || !mesh.boneWeights || mesh.boneCount <= 0 ||
+                mesh.boneCount > static_cast<int>(GPU_SKIN_BONES)) {
+                return false;
+            }
+            joints.resize(mesh.boneCount);
+            for (int vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+                const Vec3 point{mesh.vertices[vertex * 3], mesh.vertices[vertex * 3 + 1],
+                                 mesh.vertices[vertex * 3 + 2]};
+                float total = 0;
+                for (int influence = 0; influence < 4; ++influence) {
+                    const unsigned joint = mesh.boneIndices[vertex * 4 + influence];
+                    const float weight = mesh.boneWeights[vertex * 4 + influence];
+                    if (!std::isfinite(weight) || weight < 0) {
+                        return false;
+                    }
+                    if (joint < joints.size() && weight > 0) {
+                        joints[joint].include(point);
+                        total += weight;
+                    }
+                }
+                if (!std::isfinite(total)) {
+                    return false;
+                }
+                maximum_weight = std::max(maximum_weight, total);
+            }
+            return maximum_weight > 0;
+        }
+
+        MeshBounds posed(std::span<const Mat4> matrices) const {
+            MeshBounds result;
+            result.include({0, 0, 0});
+            for (size_t joint = 0; joint < joints.size() && joint < matrices.size(); ++joint) {
+                if (joints[joint].valid) {
+                    for (unsigned corner = 0; corner < 8; ++corner) {
+                        result.include(vector3_transform(joints[joint].corner(corner), matrices[joint]));
+                    }
+                }
+            }
+            // A nonnegative weighted sum lies inside this box scaled by the largest weight sum.
+            result.lower.x *= maximum_weight;
+            result.lower.y *= maximum_weight;
+            result.lower.z *= maximum_weight;
+            result.upper.x *= maximum_weight;
+            result.upper.y *= maximum_weight;
+            result.upper.z *= maximum_weight;
+            return result;
+        }
+    };
+
+    struct CachedSkinPose {
+        std::vector<Transform> pose;
+        std::vector<Mat4> matrices;
+        std::vector<std::array<float, 4>> position_rows, normal_rows;
+        std::vector<MeshBounds> bounds;
+    };
+
+    class IntegerPoseCache {
+        const void* animation = nullptr;
+        size_t frame_count = 0, bone_count = 0, mesh_count = 0;
+        std::vector<std::shared_ptr<const CachedSkinPose>> frames;
+
+    public:
+        static constexpr size_t budget = 4u << 20;
+
+        bool select(const void* source, size_t count, size_t bones, size_t meshes) {
+            const size_t bytes = bones * (sizeof(Transform) + sizeof(Mat4) + 6 * sizeof(std::array<float, 4>)) +
+                                 meshes * sizeof(MeshBounds) + sizeof(CachedSkinPose) +
+                                 sizeof(std::shared_ptr<const CachedSkinPose>) + 2 * sizeof(void*);
+            if (animation != source || frame_count != count || bone_count != bones || mesh_count != meshes) {
+                clear();
+                animation = source;
+                frame_count = count;
+                bone_count = bones;
+                mesh_count = meshes;
+                if (source && count && bytes && count <= budget / bytes) {
+                    frames.resize(count);
+                }
+            }
+            return !frames.empty();
+        }
+
+        std::shared_ptr<const CachedSkinPose> get(size_t frame) const {
+            return frame < frames.size() ? frames[frame] : nullptr;
+        }
+
+        void put(size_t frame, std::shared_ptr<const CachedSkinPose> pose) {
+            if (frame < frames.size()) {
+                frames[frame] = std::move(pose);
+            }
+        }
+
+        void clear() {
+            decltype(frames){}.swap(frames);
+            animation = nullptr;
+            frame_count = bone_count = mesh_count = 0;
+        }
+    };
+
+    inline std::array<float, 3> sprite_rgb_to_hsv(const std::array<float, 4>& color) {
+        const float r = color[0], g = color[1], b = color[2];
+        const std::array<float, 4> p =
+            g >= b ? std::array{g, b, 0.0f, -1.0f / 3.0f} : std::array{b, g, -1.0f, 2.0f / 3.0f};
+        const std::array<float, 4> q = r >= p[0] ? std::array{r, p[1], p[2], p[0]} : std::array{p[0], p[1], p[3], r};
+        const float d = q[0] - std::min(q[3], q[1]);
+        constexpr float epsilon = 1.0e-10f;
+        return {std::abs(q[2] + (q[3] - q[1]) / (6.0f * d + epsilon)), d / (q[0] + epsilon), q[0]};
+    }
+
+    inline std::array<float, 4> sprite_color_transform(const std::array<float, 4>& source,
+                                                       const std::array<float, 4>& target) {
+        const auto from = sprite_rgb_to_hsv(source), to = sprite_rgb_to_hsv(target);
+        return {to[0] - from[0], from[1] > 0 ? to[1] / from[1] : 1.0f, from[2] > 0 ? to[2] / from[2] : 1.0f, 1.0f};
+    }
+
+    struct alignas(64) SpriteInstance {
+        std::array<float, 4> rectangle;
+        std::array<float, 4> uv;
+        std::array<float, 4> origin_rotation;
+        std::array<float, 4> color_transform;
+
+        static SpriteInstance make(Rect destination, std::array<float, 4> uv, Vec2 origin, float rotation, Color tint,
+                                   uint32_t texture_index, std::array<float, 4> transform) {
+            // Integer-valued floats preserve every packed bit without relying on NaN payloads.
+            const uint32_t rg =
+                tint.r | (uint32_t{tint.g} << 8) | (texture_index << 16) | (uint32_t{transform[3] > 0.5f} << 19);
+            transform[3] = static_cast<float>(tint.b | (uint32_t{tint.a} << 8));
+            return {{destination.x, destination.y, destination.width, destination.height},
+                    uv,
+                    {origin.x, origin.y, rotation, static_cast<float>(rg)},
+                    transform};
+        }
+    };
+
+    static_assert(sizeof(SpriteInstance) == 64);
+
+    class SpriteTextures {
+        std::array<unsigned, 8> textures{};
+        unsigned used = 0;
+
+    public:
+        static constexpr unsigned capacity = 8;
+        unsigned size() const { return used; }
+        unsigned operator[](unsigned index) const { return textures[index]; }
+        bool contains(unsigned texture) const {
+            return std::find(textures.begin(), textures.begin() + used, texture) != textures.begin() + used;
+        }
+        void clear() { used = 0; }
+
+        template<class Flush>
+        unsigned add(unsigned texture, Flush flush) {
+            for (unsigned i = 0; i < used; ++i) {
+                if (textures[i] == texture) {
+                    return i;
+                }
+            }
+            if (used == capacity) {
+                flush();
+                clear();
+            }
+            textures[used] = texture;
+            return used++;
+        }
+    };
+
+    // Keep adjacent submissions in one transient page; discard every range when
+    // bgfx advances its frame and recycles the underlying storage.
+    class TransientRanges {
+        uint32_t capacity = 0;
+        uint32_t used = 0;
+
+    public:
+        void reset() { capacity = used = 0; }
+
+        template<class Reserve>
+        std::optional<uint32_t> allocate(uint32_t count, Reserve reserve) {
+            if (capacity - used < count) {
+                const uint32_t available = reserve(std::max(count, 4096u));
+                capacity = available >= count ? available : 0;
+                used = 0;
+            }
+            if (capacity < count) {
+                return std::nullopt;
+            }
+            const uint32_t first = used;
+            used += count;
+            return first;
+        }
+    };
+
+    template<class T>
+    class FrameKeepAlive {
+        // bgfx uniform references must survive up to two frame calls with threaded rendering.
+        std::array<std::vector<std::shared_ptr<const T>>, 3> frames;
+        uint64_t frame = 0;
+
+    public:
+        uint64_t current_frame() const { return frame; }
+        void keep(const std::shared_ptr<const T>& value) { frames[frame % frames.size()].push_back(value); }
+        void advance() {
+            ++frame;
+            frames[frame % frames.size()].clear();
+        }
+        void clear() {
+            for (auto& entries : frames) {
+                entries.clear();
+            }
+            ++frame;
+        }
+    };
+
+} // namespace
 
 namespace {
 
@@ -50,9 +301,13 @@ namespace {
 
     struct ProgramSlot {
         bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle skinned = BGFX_INVALID_HANDLE;
         std::vector<std::string> names; // index = shader "location"
         std::vector<bgfx::UniformHandle> uniforms;
         std::vector<std::array<float, 4>> values;
+        bool sprite_color = false;
+        bool color_dirty = true;
+        std::array<float, 4> color_transform{0, 1, 1, 0};
     };
 
     struct TargetSlot {
@@ -91,6 +346,21 @@ namespace {
     std::vector<TextureSlot> textures;
     std::vector<ProgramSlot> programs; // [0] = default 2D program
     std::vector<TargetSlot> targets;
+    ProgramSlot sprite_program;
+    bool gpu_sprites_enabled = false;
+    SpriteTextures sprite_textures;
+    std::array<bgfx::UniformHandle, SpriteTextures::capacity> sprite_samplers = [] {
+        std::array<bgfx::UniformHandle, SpriteTextures::capacity> handles;
+        for (auto& handle : handles) {
+            handle = BGFX_INVALID_HANDLE;
+        }
+        return handles;
+    }();
+    bgfx::VertexBufferHandle sprite_quad = BGFX_INVALID_HANDLE;
+    std::vector<SpriteInstance> sprite_instances;
+    bgfx::InstanceDataBuffer instance_page{};
+    TransientRanges instance_ranges;
+    FrameKeepAlive<CachedSkinPose> palette_frames;
 
     // frame / pass state
     bool frame_open = false;
@@ -104,12 +374,26 @@ namespace {
     unsigned submits_this_frame = 0;
     bool screen_drawn = false; // a screen view this frame has a clear or a draw
 
+    bgfx::TransientVertexBuffer vertex_page{};
+    TransientRanges vertex_ranges;
+    uint32_t transform_cache = UINT32_MAX;
+    std::array<float, 16> transform_value{};
+
+    uint32_t advance_frame(uint8_t flags = BGFX_FRAME_NONE) {
+        const auto frame = bgfx::frame(flags);
+        palette_frames.advance();
+        vertex_ranges.reset();
+        instance_ranges.reset();
+        transform_cache = UINT32_MAX;
+        return frame;
+    }
+
     void flush_uploads_if_idle() {
         // Screens load in update(), after begin_drawing() but before any draw. While nothing is
         // submitted yet, FLUSH runs the queued uploads (and any pending clears) without presenting,
         // so the cost stays in the loading frame, as with raylib's glTexImage2D.
         if (pending_upload_bytes >= UPLOAD_FLUSH_BYTES && submits_this_frame == 0) {
-            bgfx::frame(BGFX_FRAME_FLUSH);
+            advance_frame(BGFX_FRAME_FLUSH);
             pending_upload_bytes = 0;
         }
     }
@@ -119,12 +403,35 @@ namespace {
     unsigned cur_texture = 0;
     unsigned cur_program = 0; // index into programs
     bool cur_lines = false;
+    bool cur_sprites = false;
     uint64_t cur_blend = 0;
     uint64_t custom_separate_blend = 0;
     Scissor cur_scissor;
     std::array<float, 16> cur_model{};
+    bool in_3d = false;
 
     constexpr std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+    bool sprite_compatible(unsigned program) {
+        return program == 0 || programs[program].sprite_color;
+    }
+
+    std::array<float, 4> current_color_transform() {
+        auto& program = programs[cur_program];
+        if (program.sprite_color && program.color_dirty) {
+            std::array<float, 4> source{}, target{};
+            for (size_t i = 0; i < program.names.size(); ++i) {
+                if (program.names[i] == "sourceColor") {
+                    source = program.values[i];
+                } else if (program.names[i] == "targetColor") {
+                    target = program.values[i];
+                }
+            }
+            program.color_transform = sprite_color_transform(source, target);
+            program.color_dirty = false;
+        }
+        return program.color_transform;
+    }
 
     // Reuses the first dead slot (per `alive`) or appends; returns index + 1.
     template<class T, class Alive>
@@ -132,11 +439,11 @@ namespace {
         for (size_t i = 0; i < slots.size(); i++) {
             if (!alive(slots[i])) {
                 slots[i] = slot;
-                return (unsigned)i + 1;
+                return static_cast<unsigned>(i) + 1;
             }
         }
         slots.push_back(slot);
-        return (unsigned)slots.size();
+        return static_cast<unsigned>(slots.size());
     }
     unsigned add_slot(const TextureSlot& t) {
         return add_slot(textures, t, [](const TextureSlot& s) { return bgfx::isValid(s.handle); });
@@ -192,33 +499,76 @@ namespace {
     }
 
     void flush() {
-        if (verts.empty()) {
+        if (verts.empty() && sprite_instances.empty()) {
             return;
         }
-        const auto n = (uint32_t)verts.size();
-        if (bgfx::getAvailTransientVertexBuffer(n, layout) < n) {
-            static bool warned = false;
-            if (!warned) {
-                spdlog::warn("bgfx: transient vertex buffer full, dropping draws");
-                warned = true;
+        if (cur_sprites) {
+            const auto count = static_cast<uint32_t>(sprite_instances.size());
+            const auto first = instance_ranges.allocate(count, [&](uint32_t requested) {
+                const uint32_t capacity = std::max(count, std::min(requested, 256u));
+                const uint32_t available = bgfx::getAvailInstanceDataBuffer(capacity, sizeof(SpriteInstance));
+                if (available >= count) {
+                    bgfx::allocInstanceDataBuffer(&instance_page, available, sizeof(SpriteInstance));
+                }
+                return available;
+            });
+            if (!first) {
+                sprite_instances.clear();
+                sprite_textures.clear();
+                return;
             }
-            verts.clear();
-            return;
+            std::memcpy(instance_page.data + *first * sizeof(SpriteInstance), sprite_instances.data(),
+                        count * sizeof(SpriteInstance));
+            bgfx::setVertexBuffer(0, sprite_quad);
+            bgfx::setInstanceDataBuffer(&instance_page, *first, count);
+        } else {
+            const auto n = static_cast<uint32_t>(verts.size());
+            const auto first = vertex_ranges.allocate(n, [&](uint32_t requested) {
+                const uint32_t capacity = bgfx::getAvailTransientVertexBuffer(requested, layout);
+                if (capacity >= n) {
+                    bgfx::allocTransientVertexBuffer(&vertex_page, capacity, layout);
+                }
+                return capacity;
+            });
+            if (!first) {
+                static bool warned = false;
+                if (!warned) {
+                    spdlog::warn("bgfx: transient vertex buffer full, dropping draws");
+                    warned = true;
+                }
+                verts.clear();
+                return;
+            }
+            std::memcpy(vertex_page.data + *first * sizeof(Vertex), verts.data(), n * sizeof(Vertex));
+            bgfx::setVertexBuffer(0, &vertex_page, *first, n);
         }
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, n, layout);
-        std::memcpy(tvb.data, verts.data(), n * sizeof(Vertex));
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setTransform(cur_model.data());
-        const TextureSlot* tex = texture_slot(cur_texture);
-        if (!tex) {
-            tex = texture_slot(white_texture);
+        if (transform_cache == UINT32_MAX || transform_value != cur_model) {
+            transform_value = cur_model;
+            transform_cache = bgfx::setTransform(cur_model.data());
+        } else {
+            bgfx::setTransform(transform_cache);
         }
-        bgfx::setTexture(0, s_tex_color, tex->handle, sampler_flags(*tex));
+        if (cur_sprites) {
+            for (unsigned stage = 0; stage < SpriteTextures::capacity; ++stage) {
+                const auto id = stage < sprite_textures.size() ? sprite_textures[stage] : white_texture;
+                const TextureSlot* texture = texture_slot(id);
+                if (!texture) {
+                    texture = texture_slot(white_texture);
+                }
+                bgfx::setTexture(static_cast<uint8_t>(stage), sprite_samplers[stage], texture->handle,
+                                 sampler_flags(*texture));
+            }
+        } else {
+            const TextureSlot* tex = texture_slot(cur_texture);
+            if (!tex) {
+                tex = texture_slot(white_texture);
+            }
+            bgfx::setTexture(0, s_tex_color, tex->handle, sampler_flags(*tex));
+        }
         if (cur_scissor.on) {
             bgfx::setScissor(cur_scissor.x, cur_scissor.y, cur_scissor.w, cur_scissor.h);
         }
-        ProgramSlot& prog = programs[cur_program];
+        ProgramSlot& prog = cur_sprites ? sprite_program : programs[cur_program];
         for (size_t i = 0; i < prog.uniforms.size(); i++) {
             bgfx::setUniform(prog.uniforms[i], prog.values[i].data());
         }
@@ -228,6 +578,8 @@ namespace {
         pass.submits++;
         screen_drawn |= pass.target == 0;
         verts.clear();
+        sprite_instances.clear();
+        sprite_textures.clear();
     }
 
     // Starts a new view on `target` (0 = screen). Draws before it stay in earlier views.
@@ -263,15 +615,16 @@ namespace {
         bgfx::setViewMode(pass.view, bgfx::ViewMode::Sequential);
         bgfx::setViewFrameBuffer(pass.view,
                                  target ? targets[target - 1].fb : bgfx::FrameBufferHandle BGFX_INVALID_HANDLE);
-        bgfx::setViewRect(pass.view, 0, 0, (uint16_t)pass.width, (uint16_t)pass.height);
+        bgfx::setViewRect(pass.view, 0, 0, static_cast<uint16_t>(pass.width), static_cast<uint16_t>(pass.height));
         bgfx::setViewClear(pass.view, clear ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : BGFX_CLEAR_NONE,
-                           (uint32_t)clear_color.r << 24 | (uint32_t)clear_color.g << 16 |
-                               (uint32_t)clear_color.b << 8 | clear_color.a,
+                           static_cast<uint32_t>(clear_color.r) << 24 | static_cast<uint32_t>(clear_color.g) << 16 |
+                               static_cast<uint32_t>(clear_color.b) << 8 | clear_color.a,
                            1.0f, 0);
         float proj[16];
-        const float bottom = pass.flip ? 0.0f : (float)pass.height;
-        const float top = pass.flip ? (float)pass.height : 0.0f;
-        bx::mtxOrtho(proj, 0.0f, (float)pass.width, bottom, top, -1.0f, 1.0f, 0.0f, caps->homogeneousDepth);
+        const float bottom = pass.flip ? 0.0f : static_cast<float>(pass.height);
+        const float top = pass.flip ? static_cast<float>(pass.height) : 0.0f;
+        bx::mtxOrtho(proj, 0.0f, static_cast<float>(pass.width), bottom, top, -1.0f, 1.0f, 0.0f,
+                     caps->homogeneousDepth);
         bgfx::setViewTransform(pass.view, nullptr, proj);
         if (clear) {
             bgfx::touch(pass.view); // so the clear happens even without draws
@@ -280,16 +633,22 @@ namespace {
         cur_scissor = {};
     }
 
-    void use(unsigned texture, bool lines) {
-        if (texture != cur_texture || lines != cur_lines) {
+    void use(unsigned texture, bool lines, bool sprites = false) {
+        if ((!sprites && texture != cur_texture) || lines != cur_lines || sprites != cur_sprites) {
             flush();
             cur_texture = texture;
             cur_lines = lines;
+            cur_sprites = sprites;
         }
     }
 
+    bool batch_uses_texture(unsigned texture) {
+        return cur_sprites ? sprite_textures.contains(texture) : cur_texture == texture;
+    }
+
     uint32_t pack(Color c) {
-        return (uint32_t)c.r | (uint32_t)c.g << 8 | (uint32_t)c.b << 16 | (uint32_t)c.a << 24;
+        return static_cast<uint32_t>(c.r) | static_cast<uint32_t>(c.g) << 8 | static_cast<uint32_t>(c.b) << 16 |
+               static_cast<uint32_t>(c.a) << 24;
     }
 
     void push_quad(Vec2 tl, Vec2 bl, Vec2 br, Vec2 tr, Vec2 uv_tl, Vec2 uv_bl, Vec2 uv_br, Vec2 uv_tr, Color c) {
@@ -312,6 +671,21 @@ namespace {
     }
 
     void fill_rect(Rect r, Color c) {
+        if (sprite_compatible(cur_program) && !in_3d && gpu_sprites_enabled) {
+            if (r.width < 0) {
+                r.x += r.width;
+                r.width = -r.width;
+            }
+            if (r.height < 0) {
+                r.y += r.height;
+                r.height = -r.height;
+            }
+            Texture white;
+            white.id = white_texture;
+            white.width = white.height = 1;
+            draw_texture_pro(white, {0, 0, 1, 1}, r, {}, 0, c);
+            return;
+        }
         use(white_texture, false);
         push_quad({r.x, r.y}, {r.x, r.y + r.height}, {r.x + r.width, r.y + r.height}, {r.x + r.width, r.y}, {0, 0},
                   {0, 1}, {1, 1}, {1, 0}, c);
@@ -323,13 +697,13 @@ namespace {
             return segments;
         }
         const float th = acosf(2 * powf(1 - 0.5f / radius, 2) - 1);
-        const int s = (int)ceilf((2 * 3.14159265358979f / th) / 4.0f);
+        const int s = static_cast<int>(ceilf((2 * std::numbers::pi_v<float> / th) / 4.0f));
         return s > 0 ? s : 4;
     }
 
     // Annulus sector (inner may be 0) around `center` from `start_deg`, 90 degrees.
     void corner(Vec2 center, float inner, float outer, float start_deg, int segments, Color c) {
-        const float step = 90.0f / (float)segments;
+        const float step = 90.0f / static_cast<float>(segments);
         for (int i = 0; i < segments; i++) {
             const float a0 = (start_deg + step * i) * deg2rad, a1 = (start_deg + step * (i + 1)) * deg2rad;
             const Vec2 o0{center.x + cosf(a0) * outer, center.y + sinf(a0) * outer};
@@ -356,31 +730,31 @@ namespace {
             }
         }
         TextureSlot slot;
-        slot.handle = bgfx::createTexture2D((uint16_t)rgba.width, (uint16_t)rgba.height, levels > 1, 1,
-                                            bgfx::TextureFormat::RGBA8);
+        slot.handle = bgfx::createTexture2D(static_cast<uint16_t>(rgba.width), static_cast<uint16_t>(rgba.height),
+                                            levels > 1, 1, bgfx::TextureFormat::RGBA8);
         // ponytail: box-filtered mips on the CPU; GPU generation if load time ever matters
         const auto* level = static_cast<const uint8_t*>(rgba.data);
         std::vector<uint8_t> next, prev;
         int w = rgba.width, h = rgba.height;
         for (int mip = 0; mip < levels; mip++) {
-            const auto bytes = (uint32_t)(w * h * 4);
-            bgfx::updateTexture2D(slot.handle, 0, (uint8_t)mip, 0, 0, (uint16_t)w, (uint16_t)h,
-                                  bgfx::copy(level, bytes));
+            const auto bytes = static_cast<uint32_t>(w * h * 4);
+            bgfx::updateTexture2D(slot.handle, 0, static_cast<uint8_t>(mip), 0, 0, static_cast<uint16_t>(w),
+                                  static_cast<uint16_t>(h), bgfx::copy(level, bytes));
             pending_upload_bytes += bytes;
             if (mip + 1 == levels) {
                 break;
             }
             const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
-            next.resize((size_t)nw * nh * 4);
+            next.resize(static_cast<size_t>(nw) * nh * 4);
             for (int y = 0; y < nh; y++) {
                 const int y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
                 for (int x = 0; x < nw; x++) {
                     const int x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
                     for (int c = 0; c < 4; c++) {
                         next[(y * nw + x) * 4 + c] =
-                            (uint8_t)((level[(y0 * w + x0) * 4 + c] + level[(y0 * w + x1) * 4 + c] +
-                                       level[(y1 * w + x0) * 4 + c] + level[(y1 * w + x1) * 4 + c] + 2) /
-                                      4);
+                            static_cast<uint8_t>((level[(y0 * w + x0) * 4 + c] + level[(y0 * w + x1) * 4 + c] +
+                                                  level[(y1 * w + x0) * 4 + c] + level[(y1 * w + x1) * 4 + c] + 2) /
+                                                 4);
                     }
                 }
             }
@@ -403,6 +777,13 @@ namespace {
         return p;
     }
 
+    ProgramSlot make_mesh_program(const uint8_t* vs, uint32_t vs_size, const uint8_t* skin_vs, uint32_t skin_vs_size,
+                                  const uint8_t* fs, uint32_t fs_size) {
+        auto program = make_program(vs, vs_size, fs, fs_size);
+        program.skinned = make_program(skin_vs, skin_vs_size, fs, fs_size).program;
+        return program;
+    }
+
     void native_handles(void*& nwh, void*& ndt, bgfx::NativeWindowHandleType::Enum& type) {
 #ifdef YATAIDON_USE_SDL2 // no window properties: the platform's renderer bridge takes the SDL window
         nwh = window;
@@ -422,7 +803,8 @@ namespace {
             type = bgfx::NativeWindowHandleType::Wayland;
         } else {
             ndt = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
-            nwh = (void*)(uintptr_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+            nwh = reinterpret_cast<void*>(
+                static_cast<uintptr_t>(SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)));
             type = bgfx::NativeWindowHandleType::Default;
         }
 #endif
@@ -434,8 +816,8 @@ namespace {
             return bgfx::RendererType::Vulkan; // only SPIR-V shaders are built so far
         }
         for (int i = 0; i < bgfx::RendererType::Count; i++) {
-            if (SDL_strcasecmp(name, bgfx::getRendererName((bgfx::RendererType::Enum)i)) == 0) {
-                return (bgfx::RendererType::Enum)i;
+            if (SDL_strcasecmp(name, bgfx::getRendererName(static_cast<bgfx::RendererType::Enum>(i))) == 0) {
+                return static_cast<bgfx::RendererType::Enum>(i);
             }
         }
         spdlog::warn("bgfx: unknown YATAIDON_BGFX_RENDERER '{}', using Vulkan", name);
@@ -448,8 +830,8 @@ namespace {
         bgfx::SwapChain sc;
         bgfx::NativeWindowHandleType::Enum type;
         native_handles(sc.nwh, sc.ndt, type);
-        sc.width = (uint32_t)w;
-        sc.height = (uint32_t)h;
+        sc.width = static_cast<uint32_t>(w);
+        sc.height = static_cast<uint32_t>(h);
         bgfx::reset(reset_flags, &sc);
     }
 
@@ -468,7 +850,7 @@ namespace {
         uint32_t cacheReadSize(uint64_t id) override {
             std::error_code ec;
             const auto size = std::filesystem::file_size(cache_path(id), ec);
-            return ec ? 0 : (uint32_t)size;
+            return ec ? 0 : static_cast<uint32_t>(size);
         }
         bool cacheRead(uint64_t id, void* data, uint32_t size) override {
             std::ifstream f(cache_path(id), std::ios::binary);
@@ -481,7 +863,7 @@ namespace {
         }
         void screenShot(const char* path, uint32_t w, uint32_t h, uint32_t pitch, bgfx::TextureFormat::Enum format,
                         const void* data, uint32_t, bool yflip) override {
-            Image img = gen_image_color((int)w, (int)h, Color::BLACK);
+            Image img = gen_image_color(static_cast<int>(w), static_cast<int>(h), Color::BLACK);
             auto* out = static_cast<uint8_t*>(img.data);
             const bool bgra = format == bgfx::TextureFormat::BGRA8;
             for (uint32_t y = 0; y < h; y++) {
@@ -516,7 +898,7 @@ namespace {
         }
         shot_prefix = colon + 1;
         for (const char* p = env; p < colon; p = std::strchr(p, ',') ? std::strchr(p, ',') + 1 : colon) {
-            shot_times.push_back(std::atof(p));
+            shot_times.push_back(std::strtod(p, nullptr));
         }
     }
 
@@ -570,15 +952,17 @@ void init_window(int width, int height, const char* title) {
         spdlog::critical("SDL_CreateWindow failed: {}", SDL_GetError());
         std::abort();
     }
-    bgfx::renderFrame(); // before init: bgfx renders on this thread, no render thread
+    if (!platform_threaded_renderer()) {
+        bgfx::renderFrame();
+    }
 
     bgfx::Init init;
     init.type = renderer_from_env();
     native_handles(init.swapChain.nwh, init.swapChain.ndt, init.platformData.type);
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(window, &w, &h);
-    init.swapChain.width = (uint32_t)w;
-    init.swapChain.height = (uint32_t)h;
+    init.swapChain.width = static_cast<uint32_t>(w);
+    init.swapChain.height = static_cast<uint32_t>(h);
     reset_flags = (window_flags & window_flag::VSYNC) ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
     init.reset = reset_flags;
     init.callback = &callback;
@@ -590,7 +974,7 @@ void init_window(int width, int height, const char* title) {
     caps = bgfx::getCaps();
     spdlog::info("bgfx: {} renderer, {}x{}", bgfx::getRendererName(bgfx::getRendererType()), w, h);
     if (const char* dbg = std::getenv("YATAIDON_BGFX_DEBUG")) {
-        bgfx::setDebug(std::atoi(dbg) ? BGFX_DEBUG_STATS : BGFX_DEBUG_NONE);
+        bgfx::setDebug(std::strtol(dbg, nullptr, 10) ? BGFX_DEBUG_STATS : BGFX_DEBUG_NONE);
     }
 
     layout.begin()
@@ -600,6 +984,23 @@ void init_window(int width, int height, const char* title) {
         .end();
     s_tex_color = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     programs.push_back(make_program(vs_2d_spv, sizeof(vs_2d_spv), fs_2d_spv, sizeof(fs_2d_spv)));
+    gpu_sprites_enabled = false;
+    if (caps->limits.maxInstanceData >= 4 && caps->limits.maxVertexAttributes >= 5 &&
+        caps->limits.maxTextureSamplers >= SpriteTextures::capacity) {
+        sprite_instances.reserve(256);
+        constexpr float corners[] = {0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0};
+        bgfx::VertexLayout quad_layout;
+        quad_layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
+        sprite_quad = bgfx::createVertexBuffer(bgfx::copy(corners, sizeof(corners)), quad_layout);
+        sprite_program = make_program(vs_sprite_spv, sizeof(vs_sprite_spv), fs_sprite_spv, sizeof(fs_sprite_spv));
+        for (unsigned stage = 0; stage < SpriteTextures::capacity; ++stage) {
+            const std::string name = "s_sprite" + std::to_string(stage);
+            sprite_samplers[stage] = bgfx::createUniform(name.c_str(), bgfx::UniformType::Sampler);
+        }
+        gpu_sprites_enabled =
+            bgfx::isValid(sprite_quad) && bgfx::isValid(sprite_program.program) &&
+            std::ranges::all_of(sprite_samplers, [](const auto& sampler) { return bgfx::isValid(sampler); });
+    }
     init_3d();
 
     Image white = gen_image_color(1, 1, Color::WHITE);
@@ -614,7 +1015,26 @@ void init_window(int width, int height, const char* title) {
 }
 
 void close_window() {
+    gpu_sprites_enabled = false;
     verts.clear();
+    sprite_instances.clear();
+    sprite_textures.clear();
+    instance_ranges.reset();
+    cur_sprites = false;
+    if (bgfx::isValid(sprite_quad)) {
+        bgfx::destroy(sprite_quad);
+        sprite_quad = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(sprite_program.program)) {
+        bgfx::destroy(sprite_program.program);
+        sprite_program = {};
+    }
+    for (auto& sampler : sprite_samplers) {
+        if (bgfx::isValid(sampler)) {
+            bgfx::destroy(sampler);
+            sampler = BGFX_INVALID_HANDLE;
+        }
+    }
     for (auto& t : targets) {
         if (bgfx::isValid(t.fb)) {
             bgfx::destroy(t.fb);
@@ -626,6 +1046,9 @@ void close_window() {
         }
     }
     for (auto& p : programs) {
+        if (bgfx::isValid(p.skinned)) {
+            bgfx::destroy(p.skinned);
+        }
         if (bgfx::isValid(p.program)) {
             bgfx::destroy(p.program);
             for (auto u : p.uniforms) {
@@ -639,6 +1062,7 @@ void close_window() {
     programs.clear();
     bgfx::destroy(s_tex_color);
     bgfx::shutdown();
+    palette_frames.clear();
     SDL_DestroyWindow(window);
     window = nullptr;
 }
@@ -720,7 +1144,7 @@ int get_monitor_refresh_rate() {
 #else
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
 #endif
-    return mode ? (int)mode->refresh_rate : 0;
+    return mode ? static_cast<int>(mode->refresh_rate) : 0;
 }
 
 // ---- frame / passes -------------------------------------------------------------------
@@ -746,7 +1170,7 @@ void swap_screen_buffer() {
     pending_upload_bytes = 0; // uploaded by this frame
     submits_this_frame = 0;
     maybe_request_shot();
-    bgfx::frame();
+    advance_frame();
     frame_open = false;
     pass.target = 0;
 }
@@ -778,10 +1202,10 @@ RenderTarget load_render_texture(int width, int height) {
     t.width = width;
     t.height = height;
     TextureSlot color;
-    color.handle =
-        bgfx::createTexture2D((uint16_t)width, (uint16_t)height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-    bgfx::TextureHandle depth =
-        bgfx::createTexture2D((uint16_t)width, (uint16_t)height, false, 1, depth_format, depth_flags);
+    color.handle = bgfx::createTexture2D(static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+                                         bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+    bgfx::TextureHandle depth = bgfx::createTexture2D(static_cast<uint16_t>(width), static_cast<uint16_t>(height),
+                                                      false, 1, depth_format, depth_flags);
     if (!bgfx::isValid(color.handle) || !bgfx::isValid(depth)) {
         if (bgfx::isValid(color.handle)) {
             bgfx::destroy(color.handle);
@@ -801,8 +1225,6 @@ RenderTarget load_render_texture(int width, int height) {
         spdlog::warn("bgfx: failed to create {}x{} model framebuffer", width, height);
         return {};
     }
-    spdlog::info("bgfx: model framebuffer {}x{}, depth={}, handle={}", width, height, static_cast<int>(depth_format),
-                 t.fb.idx);
     t.color = add_slot(color);
 
     RenderTarget rt;
@@ -851,7 +1273,8 @@ void begin_scissor_mode(int x, int y, int width, int height) {
         height += y;
         y = 0;
     }
-    Scissor s{true, (uint16_t)x, (uint16_t)y, (uint16_t)std::max(width, 0), (uint16_t)std::max(height, 0)};
+    Scissor s{true, static_cast<uint16_t>(x), static_cast<uint16_t>(y), static_cast<uint16_t>(std::max(width, 0)),
+              static_cast<uint16_t>(std::max(height, 0))};
     if (!(s == cur_scissor)) {
         flush();
         cur_scissor = s;
@@ -929,7 +1352,7 @@ Texture load_texture_from_image(Image image, bool mipmaps) {
 
 void unload_texture(Texture tex) {
     if (TextureSlot* t = texture_slot(tex.id)) {
-        if (cur_texture == tex.id) {
+        if (batch_uses_texture(tex.id)) {
             flush();
         }
         bgfx::destroy(t->handle);
@@ -943,7 +1366,10 @@ bool is_texture_valid(Texture tex) {
 
 void set_texture_filter(Texture tex, int filter) {
     if (TextureSlot* t = texture_slot(tex.id)) {
-        if (cur_texture == tex.id) {
+        if (t->filter == filter) {
+            return;
+        }
+        if (batch_uses_texture(tex.id)) {
             flush();
         }
         t->filter = filter;
@@ -952,7 +1378,10 @@ void set_texture_filter(Texture tex, int filter) {
 
 void set_texture_wrap(Texture tex, int wrap) {
     if (TextureSlot* t = texture_slot(tex.id)) {
-        if (cur_texture == tex.id) {
+        if (t->wrap == wrap) {
+            return;
+        }
+        if (batch_uses_texture(tex.id)) {
             flush();
         }
         t->wrap = wrap;
@@ -964,7 +1393,7 @@ void update_texture(Texture tex, const void* pixels) {
     if (!t || !pixels) {
         return;
     }
-    if (cur_texture == tex.id) {
+    if (batch_uses_texture(tex.id)) {
         flush();
     }
     Image src{const_cast<void*>(pixels), tex.width, tex.height, 1, tex.format};
@@ -973,8 +1402,8 @@ void update_texture(Texture tex, const void* pixels) {
         rgba = image_copy(src);
         image_format(&rgba, pixel_format::RGBA8);
     }
-    bgfx::updateTexture2D(t->handle, 0, 0, 0, 0, (uint16_t)tex.width, (uint16_t)tex.height,
-                          bgfx::copy(rgba.data, (uint32_t)(tex.width * tex.height * 4)));
+    bgfx::updateTexture2D(t->handle, 0, 0, 0, 0, static_cast<uint16_t>(tex.width), static_cast<uint16_t>(tex.height),
+                          bgfx::copy(rgba.data, static_cast<uint32_t>(tex.width * tex.height * 4)));
     if (rgba.data != pixels) {
         unload_image(rgba);
     }
@@ -989,15 +1418,15 @@ Image load_image_from_texture(Texture tex) {
     // Blit mip 0 into a CPU-readable copy and run frames until it arrives. Those are FLUSH frames
     // (nothing presented); the game reads textures back while loading (Chara3D recolors).
     bgfx::TextureHandle staging =
-        bgfx::createTexture2D((uint16_t)tex.width, (uint16_t)tex.height, false, 1, bgfx::TextureFormat::RGBA8,
-                              BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+        bgfx::createTexture2D(static_cast<uint16_t>(tex.width), static_cast<uint16_t>(tex.height), false, 1,
+                              bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
     bgfx::TextureRegion dst, src;
     dst.init(staging);
     src.init(t->handle);
     bgfx::blit(pass.view, dst, src);
     Image img = gen_image_color(tex.width, tex.height, Color::BLANK);
     const uint32_t ready = bgfx::read(dst, img.data);
-    for (int i = 0; i < 8 && bgfx::frame(BGFX_FRAME_FLUSH) < ready; i++) {
+    for (int i = 0; i < 8 && advance_frame(BGFX_FRAME_FLUSH) < ready; i++) {
     }
     pending_upload_bytes = 0;
     bgfx::destroy(staging);
@@ -1019,6 +1448,8 @@ Shader load_shader(const char* vs_path, const char* fs_path) {
         const char* fs;
         const uint8_t *vs_bin, *fs_bin;
         uint32_t vs_size, fs_size;
+        const uint8_t* skin_vs = nullptr;
+        uint32_t skin_vs_size = 0;
     };
 #define PORT(name, vs, fs)                                                                                             \
     {                                                                                                                  \
@@ -1027,16 +1458,24 @@ Shader load_shader(const char* vs_path, const char* fs_path) {
     static const Port ports[] = {
         PORT("colortransform.fs", vs_2d, fs_colortransform),
         PORT("outline_fxaa.fs", vs_2d, fs_outline_fxaa),
-        PORT("cutout.fs", vs_mesh, fs_cutout),
-        PORT("null.fs", vs_mesh, fs_null),
-        PORT("outline.fs", vs_outline, fs_outline),
+        {"cutout.fs", vs_mesh_spv, fs_cutout_spv, sizeof(vs_mesh_spv), sizeof(fs_cutout_spv), vs_mesh_skin_spv,
+         sizeof(vs_mesh_skin_spv)},
+        {"face.fs", vs_mesh_spv, fs_face_spv, sizeof(vs_mesh_spv), sizeof(fs_face_spv), vs_mesh_skin_spv,
+         sizeof(vs_mesh_skin_spv)},
+        {"null.fs", vs_mesh_spv, fs_null_spv, sizeof(vs_mesh_spv), sizeof(fs_null_spv), vs_mesh_skin_spv,
+         sizeof(vs_mesh_skin_spv)},
+        {"outline.fs", vs_outline_spv, fs_outline_spv, sizeof(vs_outline_spv), sizeof(fs_outline_spv),
+         vs_outline_skin_spv, sizeof(vs_outline_skin_spv)},
     };
 #undef PORT
     const std::string fs = fs_path ? fs_path : "";
     Shader shader;
     for (const Port& p : ports) {
         if (fs.ends_with(std::string("/") + p.fs)) {
-            shader.id = add_program(make_program(p.vs_bin, p.vs_size, p.fs_bin, p.fs_size));
+            shader.id = add_program(
+                p.skin_vs ? make_mesh_program(p.vs_bin, p.vs_size, p.skin_vs, p.skin_vs_size, p.fs_bin, p.fs_size)
+                          : make_program(p.vs_bin, p.vs_size, p.fs_bin, p.fs_size));
+            programs[shader.id].sprite_color = fs.ends_with("/colortransform.fs");
             return shader;
         }
     }
@@ -1054,6 +1493,9 @@ void unload_shader(Shader shader) {
     }
     ProgramSlot& p = programs[shader.id];
     bgfx::destroy(p.program);
+    if (bgfx::isValid(p.skinned)) {
+        bgfx::destroy(p.skinned);
+    }
     for (auto u : p.uniforms) {
         bgfx::destroy(u);
     }
@@ -1071,32 +1513,39 @@ int get_shader_location(Shader shader, const char* name) {
     ProgramSlot& p = programs[shader.id];
     for (size_t i = 0; i < p.names.size(); i++) {
         if (p.names[i] == name) {
-            return (int)i;
+            return static_cast<int>(i);
         }
     }
     p.names.emplace_back(name);
     p.uniforms.push_back(bgfx::createUniform(name, bgfx::UniformType::Vec4));
     p.values.push_back({});
-    return (int)p.names.size() - 1;
+    return static_cast<int>(p.names.size()) - 1;
 }
 
 void set_shader_value(Shader shader, int loc, const void* value, int uniform_type) {
-    if (!is_shader_valid(shader) || loc < 0 || (size_t)loc >= programs[shader.id].values.size()) {
+    if (!is_shader_valid(shader) || loc < 0 || static_cast<size_t>(loc) >= programs[shader.id].values.size()) {
         return;
-    }
-    if (cur_program == shader.id) {
-        flush(); // uniforms apply per submit
     }
     const int n = uniform_type == shader_uniform::VEC3 ? 3 : uniform_type == shader_uniform::VEC2 ? 2 : 1;
     auto& v = programs[shader.id].values[loc];
-    v = {};
-    std::memcpy(v.data(), value, n * sizeof(float));
+    std::array<float, 4> updated{};
+    std::memcpy(updated.data(), value, n * sizeof(float));
+    if (std::memcmp(v.data(), updated.data(), sizeof(updated)) == 0) {
+        return;
+    }
+    if (cur_program == shader.id && !(cur_sprites && gpu_sprites_enabled && programs[shader.id].sprite_color)) {
+        flush(); // Submit queued vertices with the previous uniform values.
+    }
+    v = updated;
+    programs[shader.id].color_dirty = true;
 }
 
 void begin_shader_mode(Shader shader) {
     const unsigned prog = is_shader_valid(shader) ? shader.id : 0;
     if (prog != cur_program) {
-        flush();
+        if (!gpu_sprites_enabled || !sprite_compatible(prog) || !sprite_compatible(cur_program) || !verts.empty()) {
+            flush();
+        }
         cur_program = prog;
     }
 }
@@ -1111,7 +1560,11 @@ void draw_texture_pro(Texture tex, Rect src, Rect dst, Vec2 origin, float rotati
     if (!texture_slot(tex.id)) {
         return;
     }
-    const float w = (float)tex.width, h = (float)tex.height;
+    if (sprite_compatible(cur_program) && tint.a == 0 &&
+        (cur_blend == blend_state(BLEND_ALPHA) || cur_blend == custom_separate_blend)) {
+        return;
+    }
+    const float w = static_cast<float>(tex.width), h = static_cast<float>(tex.height);
     bool flip_x = false;
     if (src.width < 0) {
         flip_x = true;
@@ -1122,6 +1575,27 @@ void draw_texture_pro(Texture tex, Rect src, Rect dst, Vec2 origin, float rotati
     }
     dst.width = std::abs(dst.width);
     dst.height = std::abs(dst.height);
+
+    if (sprite_compatible(cur_program) && !in_3d && gpu_sprites_enabled) {
+        if (rotation == 0.0f && cur_model[1] == 0.0f && cur_model[4] == 0.0f) {
+            const float x0 = (dst.x - origin.x) * cur_model[0] + cur_model[12];
+            const float x1 = (dst.x - origin.x + dst.width) * cur_model[0] + cur_model[12];
+            const float y0 = (dst.y - origin.y) * cur_model[5] + cur_model[13];
+            const float y1 = (dst.y - origin.y + dst.height) * cur_model[5] + cur_model[13];
+            if (std::max(x0, x1) < -1.0f || std::min(x0, x1) > pass.width + 1.0f || std::max(y0, y1) < -1.0f ||
+                std::min(y0, y1) > pass.height + 1.0f) {
+                return;
+            }
+        }
+        const float u0 = src.x / w, u1 = (src.x + src.width) / w;
+        use(tex.id, false, true);
+        const auto texture_index = sprite_textures.add(tex.id, [] { flush(); });
+        static_assert(SpriteTextures::capacity <= 8);
+        sprite_instances.push_back(
+            SpriteInstance::make(dst, {flip_x ? u1 : u0, src.y / h, flip_x ? u0 : u1, (src.y + src.height) / h}, origin,
+                                 rotation * deg2rad, tint, texture_index, current_color_transform()));
+        return;
+    }
 
     Vec2 tl, tr, bl, br;
     if (rotation == 0.0f) {
@@ -1139,6 +1613,17 @@ void draw_texture_pro(Texture tex, Rect src, Rect dst, Vec2 origin, float rotati
         br = {dst.x + (dx + dst.width) * c - (dy + dst.height) * s,
               dst.y + (dx + dst.width) * s + (dy + dst.height) * c};
     }
+    // Both supported sprite programs leave vertex positions unchanged.
+    if (sprite_compatible(cur_program) && !in_3d && cur_model[1] == 0.0f && cur_model[4] == 0.0f) {
+        const float left = std::min({tl.x, tr.x, bl.x, br.x}) * cur_model[0] + cur_model[12];
+        const float right = std::max({tl.x, tr.x, bl.x, br.x}) * cur_model[0] + cur_model[12];
+        const float top = std::min({tl.y, tr.y, bl.y, br.y}) * cur_model[5] + cur_model[13];
+        const float bottom = std::max({tl.y, tr.y, bl.y, br.y}) * cur_model[5] + cur_model[13];
+        if (std::max(left, right) < -1.0f || std::min(left, right) > pass.width + 1.0f ||
+            std::max(top, bottom) < -1.0f || std::min(top, bottom) > pass.height + 1.0f) {
+            return;
+        }
+    }
     const float u0 = src.x / w, u1 = (src.x + src.width) / w;
     const float v0 = src.y / h, v1 = (src.y + src.height) / h;
     use(tex.id, false);
@@ -1154,7 +1639,7 @@ void draw_rectangle(Rect rec, Color color) {
 }
 
 void draw_rectangle(int x, int y, int w, int h, Color color) {
-    fill_rect({(float)x, (float)y, (float)w, (float)h}, color);
+    fill_rect({static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)}, color);
 }
 
 void draw_rectangle_lines_ex(Rect rec, float thick, Color color) {
@@ -1169,7 +1654,8 @@ void draw_rectangle_lines_ex(Rect rec, float thick, Color color) {
 
 void draw_rectangle_lines(int x, int y, int w, int h, Color color) {
     const float ox = 0.5f / cur_model[0], oy = 0.5f / cur_model[5]; // pixel centers, as raylib
-    const float l = (float)x + ox, t = (float)y + oy, r = (float)(x + w) - ox, b = (float)(y + h) - oy;
+    const float l = static_cast<float>(x) + ox, t = static_cast<float>(y) + oy, r = static_cast<float>(x + w) - ox,
+                b = static_cast<float>(y + h) - oy;
     push_line({l, t}, {r, t}, color);
     push_line({r, t}, {r, b}, color);
     push_line({r, b}, {l, b}, color);
@@ -1177,7 +1663,8 @@ void draw_rectangle_lines(int x, int y, int w, int h, Color color) {
 }
 
 void draw_line(int x0, int y0, int x1, int y1, Color color) {
-    push_line({(float)x0, (float)y0}, {(float)x1, (float)y1}, color);
+    push_line({static_cast<float>(x0), static_cast<float>(y0)}, {static_cast<float>(x1), static_cast<float>(y1)},
+              color);
 }
 
 void draw_rectangle_rounded(Rect rec, float roundness, int segments, Color color) {
@@ -1243,21 +1730,22 @@ void draw_text_ex(Font font, const char* text, Vec2 pos, float font_size, float 
     if (!text || !font.glyphs || !font.recs) {
         return;
     }
-    const float scale = font_size / (float)font.baseSize;
-    const float pad = (float)font.glyphPadding;
+    const float scale = font_size / static_cast<float>(font.baseSize);
+    const float pad = static_cast<float>(font.glyphPadding);
     float ox = 0.0f, oy = 0.0f;
+    GlyphLookup glyph_lookup(font, text);
     for (const char* p = text; *p;) {
         int n = 0;
         const int cp = get_codepoint_next(p, &n);
         p += n;
-        const int gi = get_glyph_index(font, cp);
-        const GlyphInfo& g = font.glyphs[gi];
-        const Rect& r = font.recs[gi];
         if (cp == '\n') {
             oy += font_size + TEXT_LINE_SPACING;
             ox = 0.0f;
             continue;
         }
+        const int gi = glyph_lookup.index(cp);
+        const GlyphInfo& g = font.glyphs[gi];
+        const Rect& r = font.recs[gi];
         if (cp != ' ' && cp != '\t') {
             draw_texture_pro(font.texture, {r.x - pad, r.y - pad, r.width + 2 * pad, r.height + 2 * pad},
                              {pos.x + ox + g.offsetX * scale - pad * scale,
@@ -1265,18 +1753,20 @@ void draw_text_ex(Font font, const char* text, Vec2 pos, float font_size, float 
                               (r.height + 2 * pad) * scale},
                              {0, 0}, 0.0f, tint);
         }
-        ox += g.advanceX == 0 ? r.width * scale + spacing : (float)g.advanceX * scale + spacing;
+        ox += g.advanceX == 0 ? r.width * scale + spacing : static_cast<float>(g.advanceX) * scale + spacing;
     }
 }
 
 void draw_text(const char* text, int x, int y, int font_size, Color color) {
     font_size = std::max(font_size, 10); // raylib's default-font minimum
-    draw_text_ex(default_font, text, {(float)x, (float)y}, (float)font_size, (float)(font_size / 10), color);
+    draw_text_ex(default_font, text, {static_cast<float>(x), static_cast<float>(y)}, static_cast<float>(font_size),
+                 static_cast<float>(font_size / 10), color);
 }
 
 int measure_text(const char* text, int font_size) {
     font_size = std::max(font_size, 10);
-    return (int)measure_text_ex(default_font, text, (float)font_size, (float)(font_size / 10)).x;
+    return static_cast<int>(
+        measure_text_ex(default_font, text, static_cast<float>(font_size), static_cast<float>(font_size / 10)).x);
 }
 
 Font get_font_default() {
@@ -1284,7 +1774,7 @@ Font get_font_default() {
 }
 
 // ---- 3D -------------------------------------------------------------------------------
-// Models load from glTF with cgltf and are CPU-skinned, with raylib 6.2's semantics
+// Models load from glTF with cgltf; GPU and fallback CPU skinning share raylib 6.2's semantics.
 // (rmodels.c LoadGLTF / LoadModelAnimationsGLTF / UpdateModelAnimation): material 0 is a
 // default one, node world transforms are baked into the vertices, animations are sampled at 60 fps.
 
@@ -1531,19 +2021,44 @@ namespace {
         uint32_t rgba;
     };
 
+    struct SkinVertex {
+        std::array<uint8_t, 4> joints;
+        std::array<float, 4> weights;
+    };
+    static_assert(sizeof(SkinVertex) == 20);
+
+    struct SkeletonCache;
     struct MeshSlot {
         bgfx::DynamicVertexBufferHandle vb = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle ib = BGFX_INVALID_HANDLE;
+        bgfx::VertexBufferHandle skin = BGFX_INVALID_HANDLE;
         std::vector<MeshVertex> cpu; // what vb holds, patched by update_mesh_buffer
+        SkinningBounds skin_bounds;
+        MeshBounds posed_bounds;
+        SkeletonCache* palette = nullptr;
+        bool cpu_deformed = false;
     };
 
-    bgfx::VertexLayout mesh_layout;
+    bgfx::VertexLayout mesh_layout, skin_layout;
     std::vector<MeshSlot> mesh_slots; // id = index + 1 (Mesh::vaoId)
-    ProgramSlot mesh_program;         // materials without a shader of their own
+    struct SkeletonCache {
+        std::vector<Mat4> inverse_bind;
+        std::vector<Mat4> normals;
+        std::vector<std::array<float, 4>> position_rows;
+        std::vector<std::array<float, 4>> normal_rows;
+        std::span<const Mat4> matrices;
+        IntegerPoseCache poses;
+        std::shared_ptr<const CachedSkinPose> active_pose;
+        uint64_t retained_frame = UINT64_MAX;
+        const CachedSkinPose* retained_pose = nullptr;
+    };
+    std::unordered_map<Mat4*, SkeletonCache> skeleton_caches;
+    ProgramSlot mesh_program; // materials without a shader of their own
     bgfx::UniformHandle u_col_diffuse = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_skin_position = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_skin_normal = BGFX_INVALID_HANDLE;
 
     // 3D mode and raylib's face culling state (on, back faces, front = counter-clockwise)
-    bool in_3d = false;
     bool backface_culling = true;
     bool cull_front = false;
 
@@ -1570,31 +2085,53 @@ namespace {
             } else {
                 v.u = v.v = 0.0f;
             }
-            v.rgba = mesh.colors ? (uint32_t)mesh.colors[i * 4] | (uint32_t)mesh.colors[i * 4 + 1] << 8 |
-                                       (uint32_t)mesh.colors[i * 4 + 2] << 16 | (uint32_t)mesh.colors[i * 4 + 3] << 24
+            v.rgba = mesh.colors ? static_cast<uint32_t>(mesh.colors[i * 4]) |
+                                       static_cast<uint32_t>(mesh.colors[i * 4 + 1]) << 8 |
+                                       static_cast<uint32_t>(mesh.colors[i * 4 + 2]) << 16 |
+                                       static_cast<uint32_t>(mesh.colors[i * 4 + 3]) << 24
                                  : 0xffffffffu; // raylib's default for a missing colour attribute
         }
         slot.vb = bgfx::createDynamicVertexBuffer(
-            bgfx::copy(slot.cpu.data(), (uint32_t)(slot.cpu.size() * sizeof(MeshVertex))), mesh_layout);
+            bgfx::copy(slot.cpu.data(), static_cast<uint32_t>(slot.cpu.size() * sizeof(MeshVertex))), mesh_layout);
+        if (caps->limits.maxVertexStreams >= 2 && caps->limits.maxVertexAttributes >= 6 &&
+            bgfx::isValid(u_skin_position) && bgfx::isValid(u_skin_normal) && slot.skin_bounds.prepare(mesh)) {
+            std::vector<SkinVertex> influences(mesh.vertexCount);
+            for (int vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+                for (int influence = 0; influence < 4; ++influence) {
+                    const auto joint = mesh.boneIndices[vertex * 4 + influence];
+                    const bool valid = joint < mesh.boneCount;
+                    influences[vertex].joints[influence] = valid ? joint : 0;
+                    influences[vertex].weights[influence] = valid ? mesh.boneWeights[vertex * 4 + influence] : 0;
+                }
+            }
+            slot.skin = bgfx::createVertexBuffer(
+                bgfx::copy(influences.data(), static_cast<uint32_t>(influences.size() * sizeof(SkinVertex))),
+                skin_layout);
+        }
         if (mesh.indices) {
             slot.ib = bgfx::createIndexBuffer(
-                bgfx::copy(mesh.indices, (uint32_t)(mesh.triangleCount * 3 * sizeof(unsigned short))));
+                bgfx::copy(mesh.indices, static_cast<uint32_t>(mesh.triangleCount * 3 * sizeof(unsigned short))));
         }
-        mesh.vaoId = add_slot(mesh_slots, std::move(slot), [](const MeshSlot& s) { return bgfx::isValid(s.vb); });
+        mesh.vaoId = add_slot(mesh_slots, slot, [](const MeshSlot& s) { return bgfx::isValid(s.vb); });
     }
 
     void unload_mesh(Mesh& mesh) {
         if (MeshSlot* slot = mesh_slot(mesh.vaoId)) {
             bgfx::destroy(slot->vb);
+            if (bgfx::isValid(slot->skin)) {
+                bgfx::destroy(slot->skin);
+            }
             if (bgfx::isValid(slot->ib)) {
                 bgfx::destroy(slot->ib);
             }
             *slot = MeshSlot{};
         }
-        for (void* p :
-             {(void*)mesh.vertices, (void*)mesh.texcoords, (void*)mesh.texcoords2, (void*)mesh.normals,
-              (void*)mesh.tangents, (void*)mesh.colors, (void*)mesh.indices, (void*)mesh.boneIndices,
-              (void*)mesh.boneWeights, (void*)mesh.animVertices, (void*)mesh.animNormals, (void*)mesh.vboId}) {
+        for (void* p : {reinterpret_cast<void*>(mesh.vertices), reinterpret_cast<void*>(mesh.texcoords),
+                        reinterpret_cast<void*>(mesh.texcoords2), reinterpret_cast<void*>(mesh.normals),
+                        reinterpret_cast<void*>(mesh.tangents), reinterpret_cast<void*>(mesh.colors),
+                        reinterpret_cast<void*>(mesh.indices), reinterpret_cast<void*>(mesh.boneIndices),
+                        reinterpret_cast<void*>(mesh.boneWeights), reinterpret_cast<void*>(mesh.animVertices),
+                        reinterpret_cast<void*>(mesh.animNormals), reinterpret_cast<void*>(mesh.vboId)}) {
             std::free(p);
         }
     }
@@ -1620,11 +2157,33 @@ namespace {
             tex = texture_slot(white_texture);
         }
         const Color c = diffuse.color;
-        const float col[4] = {(float)(c.r * tint.r / 255) / 255.0f, (float)(c.g * tint.g / 255) / 255.0f,
-                              (float)(c.b * tint.b / 255) / 255.0f, (float)(c.a * tint.a / 255) / 255.0f};
+        const float col[4] = {
+            static_cast<float>(c.r * tint.r / 255) / 255.0f, static_cast<float>(c.g * tint.g / 255) / 255.0f,
+            static_cast<float>(c.b * tint.b / 255) / 255.0f, static_cast<float>(c.a * tint.a / 255) / 255.0f};
         const auto model = to_bgfx(transform);
         bgfx::setTransform(model.data());
         bgfx::setVertexBuffer(0, slot->vb);
+        const bool skinned = slot->palette && bgfx::isValid(slot->skin) && bgfx::isValid(prog.skinned);
+        if (skinned) {
+            bgfx::setVertexBuffer(1, slot->skin);
+            auto& palette = *slot->palette;
+            if (palette.active_pose) {
+                if (palette.retained_frame != palette_frames.current_frame() ||
+                    palette.retained_pose != palette.active_pose.get()) {
+                    palette_frames.keep(palette.active_pose);
+                    palette.retained_frame = palette_frames.current_frame();
+                    palette.retained_pose = palette.active_pose.get();
+                }
+                const auto& pose = *palette.active_pose;
+                const auto count = static_cast<uint16_t>(pose.position_rows.size());
+                bgfx::setUniformRef(u_skin_position, pose.position_rows.data(), count);
+                bgfx::setUniformRef(u_skin_normal, pose.normal_rows.data(), count);
+            } else {
+                const auto count = static_cast<uint16_t>(palette.position_rows.size());
+                bgfx::setUniform(u_skin_position, palette.position_rows.data(), count);
+                bgfx::setUniform(u_skin_normal, palette.normal_rows.data(), count);
+            }
+        }
         if (bgfx::isValid(slot->ib)) {
             bgfx::setIndexBuffer(slot->ib);
         }
@@ -1638,7 +2197,7 @@ namespace {
         }
         const uint64_t depth = in_3d ? BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL : 0;
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | depth | cur_blend | cull_state());
-        bgfx::submit(pass.view, prog.program);
+        bgfx::submit(pass.view, skinned ? prog.skinned : prog.program);
         submits_this_frame++;
         pass.submits++;
         screen_drawn |= pass.target == 0;
@@ -1671,7 +2230,7 @@ namespace {
     }
 
     BoneInfo* load_bones(const cgltf_skin& skin, unsigned& count) {
-        count = (unsigned)skin.joints_count;
+        count = static_cast<unsigned>(skin.joints_count);
         auto* bones = static_cast<BoneInfo*>(std::calloc(skin.joints_count, sizeof(BoneInfo)));
         for (size_t i = 0; i < skin.joints_count; i++) {
             const cgltf_node* node = skin.joints[i];
@@ -1683,7 +2242,7 @@ namespace {
             for (const cgltf_node* a = node->parent; a && bones[i].parent == -1; a = a->parent) {
                 for (size_t j = 0; j < skin.joints_count; j++) {
                     if (skin.joints[j] == a) {
-                        bones[i].parent = (int)j;
+                        bones[i].parent = static_cast<int>(j);
                         break;
                     }
                 }
@@ -1721,7 +2280,7 @@ namespace {
             switch (attr.type) {
             case cgltf_attribute_type_position:
                 if (acc->type == cgltf_type_vec3 && !mesh.vertices) {
-                    mesh.vertexCount = (int)acc->count;
+                    mesh.vertexCount = static_cast<int>(acc->count);
                     mesh.vertices = read_floats(acc, 3);
                     for (int k = 0; k < mesh.vertexCount; k++) {
                         float* v = mesh.vertices + k * 3;
@@ -1759,14 +2318,15 @@ namespace {
                             float f[4] = {};
                             cgltf_accessor_read_float(acc, k, f, n);
                             for (int i = 0; i < n; i++) {
-                                c[i] = (unsigned char)(f[i] * 255.0f); // truncated, as raylib
+                                c[i] = static_cast<unsigned char>(f[i] * 255.0f); // truncated, as raylib
                             }
                         } else {
                             cgltf_uint u[4] = {};
                             cgltf_accessor_read_uint(acc, k, u, n);
                             const bool wide = acc->component_type == cgltf_component_type_r_16u;
                             for (int i = 0; i < n; i++) {
-                                c[i] = wide ? (unsigned char)((float)u[i] / 65535.0f * 255.0f) : (unsigned char)u[i];
+                                c[i] = wide ? static_cast<unsigned char>(static_cast<float>(u[i]) / 65535.0f * 255.0f)
+                                            : static_cast<unsigned char>(u[i]);
                             }
                         }
                     }
@@ -1779,7 +2339,7 @@ namespace {
                         cgltf_uint u[4] = {};
                         cgltf_accessor_read_uint(acc, k, u, 4);
                         for (int i = 0; i < 4; i++) {
-                            mesh.boneIndices[k * 4 + i] = (unsigned char)u[i]; // raylib's u8 bone ids
+                            mesh.boneIndices[k * 4 + i] = static_cast<unsigned char>(u[i]); // raylib's u8 bone ids
                         }
                     }
                 }
@@ -1795,10 +2355,11 @@ namespace {
         }
         if (prim.indices && prim.indices->buffer_view) {
             const cgltf_accessor* acc = prim.indices;
-            mesh.triangleCount = (int)acc->count / 3;
+            mesh.triangleCount = static_cast<int>(acc->count) / 3;
             mesh.indices = static_cast<unsigned short*>(std::malloc(acc->count * sizeof(unsigned short)));
             for (size_t k = 0; k < acc->count; k++) {
-                mesh.indices[k] = (unsigned short)cgltf_accessor_read_index(acc, k); // u32 truncated, as raylib
+                mesh.indices[k] =
+                    static_cast<unsigned short>(cgltf_accessor_read_index(acc, k)); // u32 truncated, as raylib
             }
         } else {
             mesh.triangleCount = mesh.vertexCount / 3;
@@ -1826,7 +2387,7 @@ namespace {
         float t0 = 0.0f, t1 = 0.0f;
         int key = 0;
         bool found = false;
-        for (int i = 0; i + 1 < (int)input->count; i++) {
+        for (int i = 0; i + 1 < static_cast<int>(input->count); i++) {
             cgltf_accessor_read_float(input, i, &t0, 1);
             cgltf_accessor_read_float(input, i + 1, &t1, 1);
             if (t0 <= time && time < t1) {
@@ -1836,7 +2397,7 @@ namespace {
             }
         }
         if (!found && input->count >= 2) {
-            key = (int)input->count - 2;
+            key = static_cast<int>(input->count) - 2;
             float first = 0.0f;
             cgltf_accessor_read_float(input, 0, &first, 1);
             if (time < first) {
@@ -1881,18 +2442,101 @@ namespace {
         }
     }
 
+    class SkinWorker {
+        std::mutex mutex;
+        std::condition_variable ready, finished;
+        std::function<void()> job;
+        bool stopping = false;
+        bool busy = false;
+        std::thread thread;
+
+    public:
+        SkinWorker()
+            : thread([this] {
+                  platform_initialize_animation_worker();
+                  std::unique_lock lock(mutex);
+                  for (;;) {
+                      ready.wait(lock, [this] { return stopping || busy; });
+                      if (stopping) {
+                          return;
+                      }
+                      lock.unlock();
+                      job();
+                      lock.lock();
+                      job = {};
+                      busy = false;
+                      finished.notify_one();
+                  }
+              }) {}
+        ~SkinWorker() {
+            {
+                std::scoped_lock lock(mutex);
+                stopping = true;
+            }
+            ready.notify_one();
+            thread.join();
+        }
+        void start(std::function<void()> work) {
+            std::scoped_lock lock(mutex);
+            job = std::move(work);
+            busy = true;
+            ready.notify_one();
+        }
+        void wait() {
+            std::unique_lock lock(mutex);
+            finished.wait(lock, [this] { return !busy; });
+        }
+    };
+
     // raylib UpdateModelAnimationVertexBuffers: CPU skinning into animVertices/animNormals
-    void skin_meshes(Model& model) {
-        std::vector<Mat4> normal_mats(model.skeleton.boneCount);
+    void skin_meshes(Model& model, SkeletonCache& cache) {
+        cache.matrices = {model.boneMatrices, model.skeleton.boneCount};
+        auto& normal_mats = cache.normals;
+        normal_mats.resize(model.skeleton.boneCount);
+        cache.position_rows.resize(model.skeleton.boneCount * 3);
+        cache.normal_rows.resize(model.skeleton.boneCount * 3);
         for (unsigned b = 0; b < model.skeleton.boneCount; b++) {
             normal_mats[b] = matrix_transpose(matrix_invert(model.boneMatrices[b]));
+            const auto position = skin_matrix_rows(model.boneMatrices[b]);
+            const auto normal = skin_matrix_rows(normal_mats[b]);
+            std::ranges::copy(position, cache.position_rows.begin() + b * 3);
+            std::ranges::copy(normal, cache.normal_rows.begin() + b * 3);
         }
         for (int m = 0; m < model.meshCount; m++) {
             Mesh& mesh = model.meshes[m];
             if (!mesh.boneWeights || !mesh.boneIndices) {
                 continue;
             }
-            const size_t floats = (size_t)mesh.vertexCount * 3;
+            MeshSlot* slot = mesh_slot(mesh.vaoId);
+            const Material& material = model.materials[model.meshMaterial[m]];
+            const ProgramSlot& program = is_shader_valid(material.shader) ? programs[material.shader.id] : mesh_program;
+            if (slot && bgfx::isValid(slot->skin) && bgfx::isValid(program.skinned)) {
+                if (slot->cpu_deformed) {
+                    for (int vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+                        auto& v = slot->cpu[vertex];
+                        v.x = mesh.vertices[vertex * 3];
+                        v.y = mesh.vertices[vertex * 3 + 1];
+                        v.z = mesh.vertices[vertex * 3 + 2];
+                        if (mesh.normals) {
+                            v.nx = mesh.normals[vertex * 3];
+                            v.ny = mesh.normals[vertex * 3 + 1];
+                            v.nz = mesh.normals[vertex * 3 + 2];
+                        }
+                    }
+                    bgfx::update(
+                        slot->vb, 0,
+                        bgfx::copy(slot->cpu.data(), static_cast<uint32_t>(slot->cpu.size() * sizeof(MeshVertex))));
+                    slot->cpu_deformed = false;
+                }
+                slot->palette = &cache;
+                slot->posed_bounds = slot->skin_bounds.posed(cache.matrices);
+                continue;
+            }
+            if (slot) {
+                slot->palette = nullptr;
+                slot->cpu_deformed = true;
+            }
+            const size_t floats = static_cast<size_t>(mesh.vertexCount) * 3;
             if (!mesh.animVertices) {
                 mesh.animVertices = static_cast<float*>(std::malloc(floats * sizeof(float)));
             }
@@ -1900,34 +2544,61 @@ namespace {
                 mesh.animNormals = static_cast<float*>(std::malloc(floats * sizeof(float)));
             }
             bool changed = false;
-            for (int v = 0; v < mesh.vertexCount; v++) {
-                Vec3 pos{}, nrm{};
-                const Vec3 src{mesh.vertices[v * 3], mesh.vertices[v * 3 + 1], mesh.vertices[v * 3 + 2]};
-                const Vec3 src_n =
-                    mesh.normals ? Vec3{mesh.normals[v * 3], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2]} : Vec3{};
-                for (int j = 0; j < 4; j++) {
-                    const float w = mesh.boneWeights[v * 4 + j];
-                    const unsigned b = mesh.boneIndices[v * 4 + j];
-                    if (w == 0.0f || b >= model.skeleton.boneCount) {
-                        continue;
+            auto skin_range = [&](int begin, int end) {
+                bool range_changed = false;
+                for (int v = begin; v < end; v++) {
+                    Vec3 pos{}, nrm{};
+                    const Vec3 src{mesh.vertices[v * 3], mesh.vertices[v * 3 + 1], mesh.vertices[v * 3 + 2]};
+                    const Vec3 src_n = mesh.normals
+                                           ? Vec3{mesh.normals[v * 3], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2]}
+                                           : Vec3{};
+                    for (int j = 0; j < 4; j++) {
+                        const float w = mesh.boneWeights[v * 4 + j];
+                        const unsigned b = mesh.boneIndices[v * 4 + j];
+                        if (w == 0.0f || b >= model.skeleton.boneCount) {
+                            continue;
+                        }
+                        pos = v3_add(pos, v3_scale(vector3_transform(src, model.boneMatrices[b]), w));
+                        if (mesh.animNormals) {
+                            nrm = v3_add(nrm, v3_scale(v3_transform_dir(src_n, normal_mats[b]), w));
+                        }
+                        range_changed = true;
                     }
-                    pos = v3_add(pos, v3_scale(vector3_transform(src, model.boneMatrices[b]), w));
-                    nrm = v3_add(nrm, v3_scale(v3_transform_dir(src_n, normal_mats[b]), w));
-                    changed = true;
+                    mesh.animVertices[v * 3] = pos.x, mesh.animVertices[v * 3 + 1] = pos.y,
+                                          mesh.animVertices[v * 3 + 2] = pos.z;
+                    if (mesh.animNormals) {
+                        mesh.animNormals[v * 3] = nrm.x, mesh.animNormals[v * 3 + 1] = nrm.y,
+                                             mesh.animNormals[v * 3 + 2] = nrm.z;
+                    }
+                    if (slot && v < static_cast<int>(slot->cpu.size())) {
+                        auto& vertex = slot->cpu[v];
+                        vertex.x = pos.x;
+                        vertex.y = pos.y;
+                        vertex.z = pos.z;
+                        if (mesh.animNormals) {
+                            vertex.nx = nrm.x;
+                            vertex.ny = nrm.y;
+                            vertex.nz = nrm.z;
+                        }
+                    }
                 }
-                mesh.animVertices[v * 3] = pos.x, mesh.animVertices[v * 3 + 1] = pos.y,
-                                      mesh.animVertices[v * 3 + 2] = pos.z;
-                if (mesh.animNormals) {
-                    mesh.animNormals[v * 3] = nrm.x, mesh.animNormals[v * 3 + 1] = nrm.y,
-                                         mesh.animNormals[v * 3 + 2] = nrm.z;
-                }
+                return range_changed;
+            };
+            if (platform_threaded_renderer() && mesh.vertexCount >= 2048) {
+                static SkinWorker worker;
+                bool worker_changed = false;
+                const int middle = mesh.vertexCount / 2;
+                worker.start([&] { worker_changed = skin_range(0, middle); });
+                changed = skin_range(middle, mesh.vertexCount);
+                worker.wait();
+                changed = changed || worker_changed;
+            } else {
+                changed = skin_range(0, mesh.vertexCount);
             }
-            if (changed) {
-                const int bytes = mesh.vertexCount * 3 * (int)sizeof(float);
-                update_mesh_buffer(mesh, MESH_BUFFER_POSITION, mesh.animVertices, bytes, 0);
-                if (mesh.animNormals) {
-                    update_mesh_buffer(mesh, MESH_BUFFER_NORMAL, mesh.animNormals, bytes, 0);
-                }
+            if (changed && slot) {
+                bgfx::update(
+                    slot->vb, 0,
+                    bgfx::copy(slot->cpu.data(), static_cast<uint32_t>(slot->cpu.size() * sizeof(MeshVertex))));
             }
         }
     }
@@ -1959,7 +2630,7 @@ Model load_model(const char* path) {
 
     // material 0 is the default one; glTF material i is i + 1
     const std::filesystem::path dir = std::filesystem::path(path).parent_path();
-    model.materialCount = (int)data->materials_count + 1;
+    model.materialCount = static_cast<int>(data->materials_count) + 1;
     model.materials = static_cast<Material*>(std::calloc(model.materialCount, sizeof(Material)));
     model.materials[0] = default_material();
     for (size_t i = 0; i < data->materials_count; i++) {
@@ -1978,8 +2649,9 @@ Model load_model(const char* path) {
             }
         }
         Color& c = mat.maps[material_map::DIFFUSE].color;
-        c = Color((uint8_t)(pbr.base_color_factor[0] * 255), (uint8_t)(pbr.base_color_factor[1] * 255),
-                  (uint8_t)(pbr.base_color_factor[2] * 255), (uint8_t)(pbr.base_color_factor[3] * 255));
+        c = Color(
+            static_cast<uint8_t>(pbr.base_color_factor[0] * 255), static_cast<uint8_t>(pbr.base_color_factor[1] * 255),
+            static_cast<uint8_t>(pbr.base_color_factor[2] * 255), static_cast<uint8_t>(pbr.base_color_factor[3] * 255));
     }
 
     const cgltf_skin* skin = data->skins_count > 0 ? &data->skins[0] : nullptr;
@@ -2001,7 +2673,7 @@ Model load_model(const char* path) {
             Mesh& mesh = model.meshes[mesh_index];
             load_primitive(mesh, prim, world, world_normals);
             if (prim.material) {
-                model.meshMaterial[mesh_index] = (int)(prim.material - data->materials) + 1;
+                model.meshMaterial[mesh_index] = static_cast<int>(prim.material - data->materials) + 1;
             }
             // a rigid mesh parented to a joint follows that joint
             if (skin && !mesh.boneIndices && node->parent && !node->parent->mesh) {
@@ -2010,7 +2682,7 @@ Model load_model(const char* path) {
                         mesh.boneIndices = static_cast<unsigned char*>(std::calloc(mesh.vertexCount * 4, 1));
                         mesh.boneWeights = static_cast<float*>(std::calloc(mesh.vertexCount * 4, sizeof(float)));
                         for (int v = 0; v < mesh.vertexCount; v++) {
-                            mesh.boneIndices[v * 4] = (unsigned char)j;
+                            mesh.boneIndices[v * 4] = static_cast<unsigned char>(j);
                             mesh.boneWeights[v * 4] = 1.0f;
                         }
                         break;
@@ -2045,13 +2717,14 @@ Model load_model(const char* path) {
         }
     }
     for (int m = 0; m < model.meshCount; m++) {
-        model.meshes[m].boneCount = (int)model.skeleton.boneCount;
+        model.meshes[m].boneCount = static_cast<int>(model.skeleton.boneCount);
         upload_mesh(model.meshes[m]);
     }
     return model;
 }
 
 void unload_model(Model model) {
+    skeleton_caches.erase(model.boneMatrices);
     for (int i = 0; i < model.meshCount; i++) {
         unload_mesh(model.meshes[i]);
     }
@@ -2063,8 +2736,10 @@ void unload_model(Model model) {
             std::free(model.materials[i].maps);
         }
     }
-    for (void* p : {(void*)model.meshes, (void*)model.materials, (void*)model.meshMaterial, (void*)model.skeleton.bones,
-                    (void*)model.skeleton.bindPose, (void*)model.currentPose, (void*)model.boneMatrices}) {
+    for (void* p : {reinterpret_cast<void*>(model.meshes), reinterpret_cast<void*>(model.materials),
+                    reinterpret_cast<void*>(model.meshMaterial), reinterpret_cast<void*>(model.skeleton.bones),
+                    reinterpret_cast<void*>(model.skeleton.bindPose), reinterpret_cast<void*>(model.currentPose),
+                    reinterpret_cast<void*>(model.boneMatrices)}) {
         std::free(p);
     }
 }
@@ -2126,11 +2801,11 @@ ModelAnimation* load_model_animations(const char* path, int* count) {
         if (src.name) {
             std::snprintf(anim.name, sizeof(anim.name), "%s", src.name);
         }
-        anim.keyframeCount = (int)(duration * GLTF_FRAMERATE) + 1;
+        anim.keyframeCount = static_cast<int>(duration * GLTF_FRAMERATE) + 1;
         anim.keyframePoses = static_cast<Transform**>(std::calloc(anim.keyframeCount, sizeof(Transform*)));
         for (int f = 0; f < anim.keyframeCount; f++) {
             Transform* pose = anim.keyframePoses[f] = static_cast<Transform*>(std::calloc(joints, sizeof(Transform)));
-            const float time = (float)f / GLTF_FRAMERATE;
+            const float time = static_cast<float>(f) / GLTF_FRAMERATE;
             for (size_t k = 0; k < joints; k++) {
                 const cgltf_node* j = skin.joints[k];
                 float tr[3] = {j->translation[0], j->translation[1], j->translation[2]};
@@ -2142,17 +2817,20 @@ ModelAnimation* load_model_animations(const char* path, int* count) {
                 const Transform local{{tr[0], tr[1], tr[2]}, {rot[0], rot[1], rot[2], rot[3]}, {sc[0], sc[1], sc[2]}};
                 pose[k] = matrix_decompose(matrix_multiply(transform_matrix(local), ext_offset[k]));
             }
-            build_pose_from_parents(bones, (int)anim.boneCount, pose);
+            build_pose_from_parents(bones, static_cast<int>(anim.boneCount), pose);
         }
         std::free(bones);
     }
-    *count = (int)data->animations_count;
+    *count = static_cast<int>(data->animations_count);
     return anims;
 }
 
 void unload_model_animations(ModelAnimation* anims, int count) {
     if (!anims) {
         return;
+    }
+    for (auto& [key, cache] : skeleton_caches) {
+        cache.poses.clear();
     }
     for (int a = 0; a < count; a++) {
         for (int f = 0; f < anims[a].keyframeCount; f++) {
@@ -2168,8 +2846,8 @@ void update_model_animation(Model model, ModelAnimation anim, float frame) {
         return;
     }
     // raylib UpdateModelAnimationBones: blend two keyframes, bone matrix = inverse(bind) * pose
-    int cur = (int)frame, next = cur + 1;
-    const float blend = std::clamp(frame - (float)cur, 0.0f, 1.0f);
+    int cur = static_cast<int>(frame), next = cur + 1;
+    const float blend = std::clamp(frame - static_cast<float>(cur), 0.0f, 1.0f);
     cur %= anim.keyframeCount;
     next %= anim.keyframeCount;
     const Transform* a = anim.keyframePoses[cur];
@@ -2177,15 +2855,80 @@ void update_model_animation(Model model, ModelAnimation anim, float frame) {
     if (!a || !b) {
         return;
     }
+    auto& cache = skeleton_caches[model.boneMatrices];
+    cache.active_pose.reset();
+    bool cache_pose = blend == 0.0f && anim.boneCount >= model.skeleton.boneCount;
+    if (cache_pose) {
+        for (int m = 0; m < model.meshCount; ++m) {
+            const auto& mesh = model.meshes[m];
+            if (!mesh.boneIndices || !mesh.boneWeights) {
+                continue;
+            }
+            const auto* slot = mesh_slot(mesh.vaoId);
+            const auto& material = model.materials[model.meshMaterial[m]];
+            const auto& program = is_shader_valid(material.shader) ? programs[material.shader.id] : mesh_program;
+            if (!slot || slot->cpu_deformed || !bgfx::isValid(slot->skin) || !bgfx::isValid(program.skinned)) {
+                cache.poses.clear();
+                cache_pose = false;
+                break;
+            }
+        }
+    }
+    cache_pose = cache_pose &&
+                 cache.poses.select(anim.keyframePoses, anim.keyframeCount, model.skeleton.boneCount, model.meshCount);
+    if (cache_pose) {
+        if (auto cached = cache.poses.get(cur)) {
+            std::ranges::copy(cached->pose, model.currentPose);
+            std::ranges::copy(cached->matrices, model.boneMatrices);
+            cache.active_pose = cached;
+            cache.matrices = {model.boneMatrices, model.skeleton.boneCount};
+            for (int m = 0; m < model.meshCount; ++m) {
+                if (auto* slot = mesh_slot(model.meshes[m].vaoId); slot && cached->bounds[m].valid) {
+                    slot->palette = &cache;
+                    slot->posed_bounds = cached->bounds[m];
+                }
+            }
+            return;
+        }
+    }
+    if (cache.inverse_bind.size() != model.skeleton.boneCount) {
+        cache.inverse_bind.resize(model.skeleton.boneCount);
+        for (unsigned i = 0; i < model.skeleton.boneCount; ++i) {
+            cache.inverse_bind[i] = matrix_invert(transform_matrix(model.skeleton.bindPose[i]));
+        }
+    }
     for (unsigned i = 0; i < model.skeleton.boneCount && i < anim.boneCount; i++) {
         Transform& pose = model.currentPose[i];
         pose.translation = v3_lerp(a[i].translation, b[i].translation, blend);
         pose.rotation = quat_slerp(a[i].rotation, b[i].rotation, blend);
         pose.scale = v3_lerp(a[i].scale, b[i].scale, blend);
-        model.boneMatrices[i] =
-            matrix_multiply(matrix_invert(transform_matrix(model.skeleton.bindPose[i])), transform_matrix(pose));
+        model.boneMatrices[i] = matrix_multiply(cache.inverse_bind[i], transform_matrix(pose));
     }
-    skin_meshes(model);
+    skin_meshes(model, cache);
+    if (cache_pose) {
+        auto cached = std::make_shared<CachedSkinPose>();
+        cached->pose.assign(model.currentPose, model.currentPose + model.skeleton.boneCount);
+        cached->matrices.assign(model.boneMatrices, model.boneMatrices + model.skeleton.boneCount);
+        cached->position_rows = cache.position_rows;
+        cached->normal_rows = cache.normal_rows;
+        cached->bounds.resize(model.meshCount);
+        for (int m = 0; m < model.meshCount; ++m) {
+            if (const auto* slot = mesh_slot(model.meshes[m].vaoId); slot && slot->palette) {
+                cached->bounds[m] = slot->posed_bounds;
+            }
+        }
+        cache.active_pose = cached;
+        cache.poses.put(cur, std::move(cached));
+    }
+}
+
+bool get_mesh_bounds(const Mesh& mesh, Vec3& lower, Vec3& upper) {
+    if (const auto* slot = mesh_slot(mesh.vaoId); slot && slot->palette && slot->posed_bounds.valid) {
+        lower = slot->posed_bounds.lower;
+        upper = slot->posed_bounds.upper;
+        return true;
+    }
+    return cpu_mesh_bounds(mesh, lower, upper);
 }
 
 void update_mesh_buffer(Mesh mesh, int index, const void* data, int data_size, int offset) {
@@ -2201,16 +2944,25 @@ void update_mesh_buffer(Mesh mesh, int index, const void* data, int data_size, i
         spdlog::warn("bgfx: update_mesh_buffer index {} not supported", index); // ponytail: colours never change
         return;
     }
-    const int stride = comps * (int)sizeof(float);
+    const int stride = comps * static_cast<int>(sizeof(float));
     const int first = offset / stride;
-    const int n = std::min(data_size / stride, (int)slot->cpu.size() - first);
+    const int n = std::min(data_size / stride, static_cast<int>(slot->cpu.size()) - first);
     const auto* src = static_cast<const float*>(data);
     for (int i = 0; i < n; i++) {
         std::memcpy(field(slot->cpu[first + i]), src + i * comps, stride);
     }
     if (n > 0) {
-        bgfx::update(slot->vb, (uint32_t)first,
-                     bgfx::copy(slot->cpu.data() + first, (uint32_t)(n * sizeof(MeshVertex))));
+        if (slot->palette) {
+            slot->palette->poses.clear();
+        }
+        if (index == MESH_BUFFER_POSITION && bgfx::isValid(slot->skin)) {
+            slot->skin_bounds.prepare(mesh);
+            if (slot->palette) {
+                slot->posed_bounds = slot->skin_bounds.posed(slot->palette->matrices);
+            }
+        }
+        bgfx::update(slot->vb, static_cast<uint32_t>(first),
+                     bgfx::copy(slot->cpu.data() + first, static_cast<uint32_t>(n * sizeof(MeshVertex))));
     }
 }
 
@@ -2236,7 +2988,7 @@ void begin_mode_3d(Camera3D camera) {
     in_3d = true;
     // raylib BeginMode3D: right-handed, near/far 0.05/4000, aspect of the current target
     constexpr float near = 0.05f, far = 4000.0f;
-    const float aspect = (float)pass.width / (float)std::max(pass.height, 1);
+    const float aspect = static_cast<float>(pass.width) / static_cast<float>(std::max(pass.height, 1));
     float view[16], proj[16];
     bx::mtxLookAt(view, {camera.position.x, camera.position.y, camera.position.z},
                   {camera.target.x, camera.target.y, camera.target.z}, {camera.up.x, camera.up.y, camera.up.z},
@@ -2277,12 +3029,22 @@ namespace {
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
             .end();
-        mesh_program = make_program(vs_mesh_spv, sizeof(vs_mesh_spv), fs_mesh_spv, sizeof(fs_mesh_spv));
+        skin_layout.begin()
+            .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Uint8, false, true)
+            .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
+            .end();
+        mesh_program = make_mesh_program(vs_mesh_spv, sizeof(vs_mesh_spv), vs_mesh_skin_spv, sizeof(vs_mesh_skin_spv),
+                                         fs_mesh_spv, sizeof(fs_mesh_spv));
         u_col_diffuse = bgfx::createUniform("colDiffuse", bgfx::UniformType::Vec4);
+        u_skin_position = bgfx::createUniform("u_skinPosition", bgfx::UniformType::Vec4, GPU_SKIN_BONES * 3);
+        u_skin_normal = bgfx::createUniform("u_skinNormal", bgfx::UniformType::Vec4, GPU_SKIN_BONES * 3);
     }
 
     void shutdown_3d() {
         for (auto& m : mesh_slots) {
+            if (bgfx::isValid(m.skin)) {
+                bgfx::destroy(m.skin);
+            }
             if (bgfx::isValid(m.vb)) {
                 bgfx::destroy(m.vb);
             }
@@ -2292,7 +3054,13 @@ namespace {
         }
         mesh_slots.clear();
         bgfx::destroy(mesh_program.program);
+        if (bgfx::isValid(mesh_program.skinned)) {
+            bgfx::destroy(mesh_program.skinned);
+        }
         bgfx::destroy(u_col_diffuse);
+        bgfx::destroy(u_skin_position);
+        bgfx::destroy(u_skin_normal);
+        skeleton_caches.clear();
     }
 
 } // namespace

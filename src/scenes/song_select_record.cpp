@@ -24,18 +24,18 @@ void RecordSongSelectScreen::select_song(SongBox* box) {
         return; // the course stays decided behind the window
     }
     song = box->path;
-    difficulty = (int)player->selected_difficulty;
+    difficulty = static_cast<int>(player->selected_difficulty);
     title = box->text_name;
     cursor = 0;
     available.clear();
     ticked = {};
-    for (int c = 0; c < (int)ticked.size(); c++) { // every course of the song starts ticked
+    for (int c = 0; c < static_cast<int>(ticked.size()); c++) { // every course of the song starts ticked
         if (box->course_info(c).has_course) {
             available.push_back(c);
             ticked[c] = true;
         }
     }
-    if (difficulty >= 0 && difficulty < (int)ticked.size()) {
+    if (difficulty >= 0 && difficulty < static_cast<int>(ticked.size())) {
         ticked[difficulty] = true;
     }
     modal = Modal::Choose;
@@ -43,7 +43,7 @@ void RecordSongSelectScreen::select_song(SongBox* box) {
 
 std::vector<int> RecordSongSelectScreen::lanes() const {
     std::vector<int> v = {difficulty};
-    for (int c = (int)ticked.size() - 1; c >= 0; c--) {
+    for (int c = static_cast<int>(ticked.size()) - 1; c >= 0; c--) {
         if (ticked[c] && c != difficulty) {
             v.push_back(c);
         }
@@ -102,7 +102,7 @@ std::string RecordSongSelectScreen::eta() const {
     if (progress < 0.02 || elapsed < 2.0) {
         return "";
     }
-    const int left = (int)std::lround(elapsed * (1.0 - progress) / progress);
+    const int left = static_cast<int>(std::lround(elapsed * (1.0 - progress) / progress));
     char buf[16];
     std::snprintf(buf, sizeof(buf), "%d:%02d", left / 60, left % 60);
     return zhud::text("rec_eta", buf);
@@ -110,7 +110,7 @@ std::string RecordSongSelectScreen::eta() const {
 
 void RecordSongSelectScreen::show_toast(const std::string& s, double seconds) {
     toast = s;
-    toast_until = std::chrono::steady_clock::now() + std::chrono::milliseconds((long long)(seconds * 1000));
+    toast_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<long long>(seconds * 1000));
 }
 
 void RecordSongSelectScreen::update_modal() {
@@ -125,7 +125,7 @@ void RecordSongSelectScreen::update_modal() {
         if (cancel) {
             close_modal();
         } else if (kat) { // left / right through auto, no hits and the courses
-            const int n = 2 + (int)available.size();
+            const int n = 2 + static_cast<int>(available.size());
             cursor = (cursor + (r_kat ? 1 : n - 1)) % n;
             audio.play_sound("kat", VolumePreset::SOUND);
         } else if (don && cursor >= 2) { // tick a course to record with the decided one (that one stays)
@@ -237,7 +237,7 @@ void RecordSongSelectScreen::draw() {
 void RecordSongSelectScreen::draw_background_panel() {
     const float u = tex.screen_width / 1920.0f;
     const Color gold{255, 226, 120, 255};
-    std::string head = zhud::text("rec_bg", std::to_string((int)(progress * 100.0 + 0.5)), eta());
+    std::string head = zhud::text("rec_bg", std::to_string(static_cast<int>(progress * 100.0 + 0.5)), eta());
     while (!head.empty() && head.back() == ' ') { // no time left shown yet: a trailing space drew no text at all
         head.pop_back();
     }
@@ -253,8 +253,10 @@ void RecordSongSelectScreen::draw_background_panel() {
     zhud::panel(px, py, pw, ph, 0.85f, Color{255, 226, 120, 160});
     a.draw({.x = px + pad, .y = py + pad});
     const float by = py + 2 * pad + a.height;
-    draw_rectangle((int)(px + pad), (int)by, (int)(pw - 2 * pad), (int)bar, Color{60, 60, 60, 255});
-    draw_rectangle((int)(px + pad), (int)by, (int)((pw - 2 * pad) * progress), (int)bar, gold);
+    draw_rectangle(static_cast<int>(px + pad), static_cast<int>(by), static_cast<int>(pw - 2 * pad),
+                   static_cast<int>(bar), Color{60, 60, 60, 255});
+    draw_rectangle(static_cast<int>(px + pad), static_cast<int>(by), static_cast<int>((pw - 2 * pad) * progress),
+                   static_cast<int>(bar), gold);
     b.draw({.x = px + pad, .y = by + bar + pad});
 }
 
@@ -301,14 +303,14 @@ void RecordSongSelectScreen::draw_modal() {
             const int c = available[i];
             const float bx = cx - row / 2 + i * (cw + cgap);
             const float by = y + 265 * u;
-            const bool sel = cursor == 2 + (int)i;
+            const bool sel = cursor == 2 + static_cast<int>(i);
             const bool on = ticked[c];
             // ticked: a green fill (no tick glyph: not every skin's font has one)
             const Color edge = sel ? gold : on ? Color{140, 220, 140, 220} : Color{255, 255, 255, 90};
             zhud::panel(bx, by, cw, ch, sel ? 0.95f : 0.6f, edge);
             if (on) {
-                draw_rectangle((int)(bx + 4 * u), (int)(by + 4 * u), (int)(cw - 8 * u), (int)(ch - 8 * u),
-                               Color{70, 150, 80, 200});
+                draw_rectangle(static_cast<int>(bx + 4 * u), static_cast<int>(by + 4 * u), static_cast<int>(cw - 8 * u),
+                               static_cast<int>(ch - 8 * u), Color{70, 150, 80, 200});
             }
             OutlinedText& t = zhud::label(zhud::course_name(c), 24, on ? Color::WHITE : Color{150, 150, 150, 255});
             t.draw({.x = bx + cw / 2 - t.width / 2, .y = by + ch / 2 - t.height / 2});
@@ -318,13 +320,16 @@ void RecordSongSelectScreen::draw_modal() {
         break;
     }
     case Modal::Running: {
-        const int pct = (int)(progress * 100.0 + 0.5);
+        const int pct = static_cast<int>(progress * 100.0 + 0.5);
         centered(zhud::text("rec_running", std::to_string(pct)), 32, y + 90 * u, gold);
         const float bw = 700 * u, bh = 24 * u;
         const float bx = cx - bw / 2, by = y + 150 * u;
-        draw_rectangle((int)bx, (int)by, (int)bw, (int)bh, Color{60, 60, 60, 255});
-        draw_rectangle((int)bx, (int)by, (int)(bw * progress), (int)bh, gold);
-        draw_rectangle_lines((int)bx, (int)by, (int)bw, (int)bh, Color{255, 255, 255, 160});
+        draw_rectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(bw), static_cast<int>(bh),
+                       Color{60, 60, 60, 255});
+        draw_rectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(bw * progress),
+                       static_cast<int>(bh), gold);
+        draw_rectangle_lines(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(bw), static_cast<int>(bh),
+                             Color{255, 255, 255, 160});
         std::string info = eta();
         if (!queue.empty()) {
             info += (info.empty() ? "" : "   ") + zhud::text("rec_queue_n", std::to_string(queue.size()));

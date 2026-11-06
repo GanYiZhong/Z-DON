@@ -3,14 +3,19 @@
 #include "../libs/file/scores.h"
 #include "../libs/network/network.h"
 #include "../libs/screen.h"
+#include "../objects/entry/bncoin_popup.h"
 #include "../objects/entry/box_manager.h"
+#include "../objects/entry/campaign_menu.h"
+#include "../objects/entry/entry_info.h"
 #include "../objects/entry/entry_script.h"
 #include "../objects/entry/name_entry.h"
 #include "../objects/entry/player.h"
+#include "../objects/entry/practice_help.h"
 #include "../objects/global/allnet_indicator.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/coin_overlay.h"
 #include "../objects/global/entry_overlay.h"
+#include "../objects/global/kinotake_indicator.h"
 #include "../objects/global/nameplate.h"
 #include "../objects/global/network_msg.h"
 #include "../objects/global/timer.h"
@@ -26,8 +31,12 @@ enum class EntryState {
     SELECT_SIDE = 0,
     SELECT_MODE = 1,
     SELECT_COSTUME = 2,
-    WAITING = 3,   // online, auto_login off: side select hidden until Enter (online) or Don (local)
-    NAME_ENTRY = 4 // a freshly registered account picks its name; resumes name_prev_state_
+    WAITING = 3,
+    NAME_ENTRY = 4,
+    CAMPAIGN = 5,
+    BNCOIN = 6,
+    PRACTICE_HELP = 7,
+    ENTRY_INFO = 8
 };
 
 struct RemoteLogin {
@@ -50,6 +59,8 @@ private:
     Nameplate nameplate;
     CoinOverlay coin_overlay;
     AllNetIcon allnet_indicator;
+    KinotakeIndicator kinotake_indicator;
+    bool kinotake_on = false;
     NetworkMsg network_msg; // login / probe wait banner
     EntryOverlay entry_overlay;
     std::unique_ptr<Timer> timer;
@@ -73,6 +84,7 @@ private:
     void reload_preview_chara(PlayerNum player_num);
     bool arcade_credit() const;
     bool seat_joined(PlayerNum player_num) const;
+    void open_reward_shop();
     void join_player(PlayerNum player_num, bool do_login = true);
     void start_second_player_join();
     void draw_background();
@@ -100,6 +112,19 @@ private:
     void begin_name_entry(int slot, std::function<void()> then);
     void end_name_entry();
     void on_card_login();
+
+    std::unique_ptr<CampaignMenu> campaign_menu_;
+    std::unique_ptr<BanaCoinPopup> bncoin_popup_;
+    static constexpr int BNCOIN_PRACTICE_COST = 100;
+    void open_bncoin_popup();
+    std::unique_ptr<PracticeHelp> practice_help_;
+    void start_practice();
+    std::unique_ptr<EntryInfo> entry_info_;
+    void enter_reward_shop();
+    bool campaign_shown_ = false;
+    bool update_campaign(double current_ms);
+    void resume_from_campaign();
+    void leave_for_campaign();
 
 public:
     EntryScreen() : Screen("entry") {}

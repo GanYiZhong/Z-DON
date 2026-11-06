@@ -125,7 +125,7 @@ namespace {
             return 0.0;
         }
         const auto ed = tex.skin_config_by_name.find("zdon_ai_end_delay");
-        return (ed != tex.skin_config_by_name.end() && ed->second.x != 0.0f) ? 0.0 : (double)it->second.x;
+        return (ed != tex.skin_config_by_name.end() && ed->second.x != 0.0f) ? 0.0 : static_cast<double>(it->second.x);
     }
     // Nijiiro: the ready SE follows the start voice by 0.37 s (footage 1Lg6EXE2mo8: voice 1.54 s, SE 1.91 s)
     constexpr double kReadySeLagMs = 370.0;
@@ -141,7 +141,7 @@ namespace {
             return ok == 0 ? 3 : 2;
         }
         const int all = good + ok + bad;
-        return (float)(good + ok) / (float)all > 0.7f ? 1 : 0;
+        return static_cast<float>(good + ok) / static_cast<float>(all) > 0.7f ? 1 : 0;
     }
 } // namespace
 
@@ -159,7 +159,7 @@ bool zdon_ai_end_delay_on() {
 }
 
 int zdon_ai_tuning_level(double star_level) {
-    const int s = (int)star_level;
+    const int s = static_cast<int>(star_level);
     return s > 10 ? 11 : std::clamp(s, 1, 10);
 }
 
@@ -332,7 +332,8 @@ PlayerData zdon_ai_player_data(int level) {
 void Player::enable_zdon_ai(int level) {
     // ZDON_AI_SEED=<n>: a fixed seed (reproducible hidden test runs)
     const char* seed_env = std::getenv("ZDON_AI_SEED");
-    const unsigned seed = seed_env ? (unsigned)std::strtoul(seed_env, nullptr, 10) : std::random_device{}();
+    const unsigned seed =
+        seed_env ? static_cast<unsigned>(std::strtoul(seed_env, nullptr, 10)) : std::random_device{}();
     zdon_ai = std::make_shared<ZdonAiDriver>(std::clamp(level, 1, 11), seed);
     // skin_config "zdon_ai_lane": the AI's lane is the AI's own (Green ghost: lane/ai_lane_cover, the circuit obi,
     // lane/ai_lane_background, no lane badges)
@@ -381,7 +382,7 @@ void Player::zdon_ai_manager(double ms_from_start, double current_ms, std::optio
         return;
     }
 
-    const double bad_window = (difficulty <= (int)Difficulty::NORMAL) ? Timing::BAD_EASY : Timing::BAD;
+    const double bad_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
     for (int k = 0; k < 2; ++k) {
         auto& lane = k == 0 ? don_notes : kat_notes;
         const DrumType type = k == 0 ? DrumType::DON : DrumType::KAT;
@@ -438,16 +439,16 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
     // (Green ghosttuning.xml thres5section = 120)
     const auto rules = tex.skin_config_by_name.find("zdon_ai_rules");
     const size_t five_from =
-        rules != tex.skin_config_by_name.end() && rules->second.x > 0 ? (size_t)rules->second.x : 200;
+        rules != tex.skin_config_by_name.end() && rules->second.x > 0 ? static_cast<size_t>(rules->second.x) : 200;
     const size_t count = n >= five_from ? 5 : 3;
     // AiEnsoGameManager (disassembly of its section setup): step = (LastOnpuDurationTime + 500) / count from the
     // chart's start; section i ends at SyusetsuJustTime(NumberOfSyousetsuByTime((i + 1) * step) + 1), the bar line
     // that starts the measure after the one holding that time; the last one ends 500 ms after the last note
     const double first = note_times.front();
     const double last = note_times.back();
-    const double step = (last + 500.0) / (double)count;
+    const double step = (last + 500.0) / static_cast<double>(count);
     for (size_t s = 1; s < count; ++s) {
-        const double at = step * (double)s;
+        const double at = step * static_cast<double>(s);
         double cut = at;
         for (double bar : bar_times) {
             if (bar > at) {
@@ -543,7 +544,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.state = 0;
     }
 
-    while (b.section < (int)b.bounds.size() && chart_ms >= b.bounds[b.section]) {
+    while (b.section < static_cast<int>(b.bounds.size()) && chart_ms >= b.bounds[b.section]) {
         const int s = b.section;
         b.points_p[s] = b.live_p;
         b.points_ai[s] = b.live_ai;
@@ -562,13 +563,13 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.tug = 9;
         b.state = 0;
         b.section++;
-        const int n = (int)b.winners.size();
+        const int n = static_cast<int>(b.winners.size());
         if (b.section < n) {
             cue(b.winners[s] == 0 ? "section_win" : "section_lose", b.winners[s] == 0 ? "section_win" : "section_lose",
                 2);
             // the next section decides the match / gives the AI the match (voice_aienso section_match / ai_reach)
-            const int wins_p = (int)std::ranges::count(b.winners, 0);
-            const int wins_ai = (int)std::ranges::count(b.winners, 1);
+            const int wins_p = static_cast<int>(std::ranges::count(b.winners, 0));
+            const int wins_ai = static_cast<int>(std::ranges::count(b.winners, 1));
             const int left = n - b.section;
             if (wins_ai + 1 > n / 2 && wins_ai <= n / 2 && wins_p + left > wins_ai) {
                 match_cue_pending = true;
@@ -581,15 +582,15 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             }
         }
     }
-    if (!b.finished && b.section >= (int)b.bounds.size()) {
+    if (!b.finished && b.section >= static_cast<int>(b.bounds.size())) {
         // skin_config zdon_ai_end_hold (Nijiiro): the last section's own SE comes at the section end and the
         // emblem (cut-in, song cue) follows 3.25 s later (footage MBAZD6xA1D8: last note 152.5 s, section flash 153.0,
         // emblem 156.25; n6a4oDaaJ4w: the last section's SE alone 0.43 s after the last note)
         const double hold_ms = end_hold_ms();
         b.finished = true;
         b.finished_at_ms = get_current_ms() + std::max(0.0, hold_ms);
-        const int wins_p = (int)std::ranges::count(b.winners, 0);
-        b.won = wins_p >= (int)b.winners.size() - wins_p;
+        const int wins_p = static_cast<int>(std::ranges::count(b.winners, 0));
+        b.won = wins_p >= static_cast<int>(b.winners.size()) - wins_p;
         if (zdon_ai_end_delay_on()) {
             end_cue_pending = true;
             end_cue_won = b.won;
@@ -611,7 +612,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         if (record) {
             global_data.config->general.zdon_ai_wins += b.won ? 1 : 0;
             save_config(*global_data.config);
-            const auto& sd = global_data.session_data[(int)PlayerNum::P1];
+            const auto& sd = global_data.session_data[static_cast<int>(PlayerNum::P1)];
             scores_manager.set_zdon_ai_section_crowns(get_player_id(PlayerNum::P1), sd.song_hash,
                                                       sd.selected_difficulty, b.crowns);
             // AiResultSectionMain: the detail view compares each section with the best play's
@@ -633,7 +634,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             page_steps = 0;
             if (b.won) {
                 const int c = std::clamp(sd.selected_difficulty, 0, 4);
-                const int star = (int)b.star;
+                const int star = static_cast<int>(b.star);
                 // the rank-up conditions are the next rank's row (ai_rankup_todo rank_r shows row r + 1's
                 // minimums; at rank 10 only the task folder's songs count = least 99, not reachable here)
                 const ZdonAiRank& r = zdon_ai_rank_info(std::min(rank + 1, kZdonAiRanks - 1));

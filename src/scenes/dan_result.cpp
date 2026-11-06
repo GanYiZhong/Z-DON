@@ -30,6 +30,9 @@ namespace {
     constexpr double ROW_UNIT_MS = 2 * LUA_FRAME_MS;
     constexpr double ROW_NUMIN_MS = 15 * FRAME_MS;
     constexpr double ROW_NUMWAIT_MS = 60 * LUA_FRAME_MS; // 500 ms
+    constexpr double STAFFROLL_AT_MS = (249 + 240 + 30 + 120) * FRAME_MS;
+    constexpr double STAFFROLL_END_MS = STAFFROLL_AT_MS + (420 + 4 * 270) * FRAME_MS;
+    constexpr double CONGRATS_END_MS = 899 * FRAME_MS + 180 * LUA_FRAME_MS;
 
     int digit_count(int v) {
         int n = 1;
@@ -93,7 +96,8 @@ void DanResultScreen::on_screen_start() {
     prev_best = 0;
     congrats_due = congrats_showing = false;
     congrats_start_ms = 0;
-    se_congrats = false;
+    se_congrats = se_staffroll = false;
+    has_staffroll = has_dan_result_art("staffroll");
     prev_best_score = 0;
     best_score_show = false;
     prev_arrival = 0;
@@ -146,7 +150,7 @@ static std::vector<DanExamBest> merge_exam_bests(const std::vector<DanExamBest>&
             if (re.song_actual[j] < 0) {
                 continue;
             }
-            if (j < (int)rd.songs.size() && rd.songs[j].unreached) {
+            if (j < static_cast<int>(rd.songs.size()) && rd.songs[j].unreached) {
                 continue;
             }
             b.song[j] = better(b.song[j], re.song_actual[j]);
@@ -379,6 +383,11 @@ void DanResultScreen::update_sounds(double now) {
             audio.play_sound("voice_glad", VolumePreset::VOICE);
             audio.play_sound("popup_superlative", VolumePreset::SOUND);
         }
+        if (!se_staffroll && now - congrats_start_ms >= STAFFROLL_AT_MS && has_staffroll) {
+            se_staffroll = true;
+            audio.stop_sound("bgm");
+            audio.play_sound("staffroll", VolumePreset::MUSIC);
+        }
         return;
     }
 
@@ -482,8 +491,8 @@ std::optional<Screens> DanResultScreen::update() {
         }
     }
 
-    if (congrats_showing && current_ms - congrats_start_ms >= 899 * FRAME_MS + 180 * LUA_FRAME_MS &&
-        !fade_out->is_started) {
+    const double congrats_end_ms = has_staffroll ? STAFFROLL_END_MS : CONGRATS_END_MS;
+    if (congrats_showing && current_ms - congrats_start_ms >= congrats_end_ms && !fade_out->is_started) {
         fade_out->start();
     }
 

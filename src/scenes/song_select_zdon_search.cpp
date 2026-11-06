@@ -15,8 +15,10 @@ namespace {
         if (r.width <= 0 || r.height <= 0) {
             return false;
         }
-        const float x0 = (float)virtual_to_screen_x(r.x), y0 = (float)virtual_to_screen_y(r.y);
-        const float x1 = (float)virtual_to_screen_x(r.x + r.width), y1 = (float)virtual_to_screen_y(r.y + r.height);
+        const float x0 = static_cast<float>(virtual_to_screen_x(r.x)),
+                    y0 = static_cast<float>(virtual_to_screen_y(r.y));
+        const float x1 = static_cast<float>(virtual_to_screen_x(r.x + r.width)),
+                    y1 = static_cast<float>(virtual_to_screen_y(r.y + r.height));
         return m.x >= x0 && m.x < x1 && m.y >= y0 && m.y < y1;
     }
 
@@ -61,7 +63,7 @@ void SongSelectScreen::zdon_search_refresh() {
         zdon_search.lines.clear();
         return; // nothing asked yet
     }
-    const std::string genre = zdon_search.genre >= 0 && zdon_search.genre < (int)zdon_search.genres.size()
+    const std::string genre = zdon_search.genre >= 0 && zdon_search.genre < static_cast<int>(zdon_search.genres.size())
                                   ? zdon_search.genres[zdon_search.genre]
                                   : std::string();
     zdon_search.hits =
@@ -79,7 +81,7 @@ void SongSelectScreen::zdon_search_refresh() {
         }
         std::string right = c >= 0 ? zhud::course_name(c) + " ★" + std::to_string(lv[c]) : std::string();
         const std::string g = navigator.zdon_genre_of(p).second;
-        zdon_search.lines.push_back({display_title(p), g.empty() ? right : g + "　" + right});
+        zdon_search.lines.emplace_back(display_title(p), g.empty() ? right : g + "　" + right);
     }
 }
 
@@ -89,7 +91,7 @@ void SongSelectScreen::zdon_search_step_filter(int which, int dir) {
         if (zdon_search.genres.empty()) {
             zdon_search.genres = navigator.zdon_genres();
         }
-        const int n = (int)zdon_search.genres.size() + 1; // -1 = all
+        const int n = static_cast<int>(zdon_search.genres.size()) + 1; // -1 = all
         zdon_search.genre = ((zdon_search.genre + 1 + dir) % n + n) % n - 1;
     } else if (which == 1) {
         zdon_search.course = ((zdon_search.course + 1 + dir) % 6 + 6) % 6 - 1;
@@ -135,10 +137,10 @@ bool SongSelectScreen::zdon_search_input() {
         return true;
     }
     zdon_search_refresh();
-    const int n = (int)zdon_search.hits.size();
+    const int n = static_cast<int>(zdon_search.hits.size());
     // the mouse: hovering picks (only when it moved, so the keys keep their pick), the wheel steps
     int clicked_row = -1;
-    for (int i = 0; i < n && i < (int)zdon_search.row_rects.size(); ++i) {
+    for (int i = 0; i < n && i < static_cast<int>(zdon_search.row_rects.size()); ++i) {
         if (mouse_in(zdon_search.row_rects[i], m)) {
             if (m.x != zdon_search.last_mouse.x || m.y != zdon_search.last_mouse.y) {
                 zdon_search.sel = i;
@@ -194,9 +196,10 @@ void SongSelectScreen::zdon_draw_search() {
     const float row_h = 40 * s;
     const float top = tex.screen_height * 0.5f;
     const std::string chip_text[3] = {
-        zhud::text("search_genre", zdon_search.genre >= 0 && zdon_search.genre < (int)zdon_search.genres.size()
-                                       ? zdon_search.genres[zdon_search.genre]
-                                       : zhud::text("search_all")),
+        zhud::text("search_genre",
+                   zdon_search.genre >= 0 && zdon_search.genre < static_cast<int>(zdon_search.genres.size())
+                       ? zdon_search.genres[zdon_search.genre]
+                       : zhud::text("search_all")),
         zhud::text("search_course",
                    zdon_search.course >= 0 ? zhud::course_name(zdon_search.course) : zhud::text("search_all")),
         zdon_search.level > 0 ? zhud::text("search_level", std::to_string(zdon_search.level))
@@ -236,8 +239,8 @@ void SongSelectScreen::zdon_draw_search() {
         y += row_h;
     }
     for (size_t i = 0; i < zdon_search.lines.size(); ++i) {
-        const bool sel = (int)i == zdon_search.sel;
-        zdon_search.row_rects.push_back(Rect{x + 12 * s, y, w - 24 * s, row_h});
+        const bool sel = static_cast<int>(i) == zdon_search.sel;
+        zdon_search.row_rects.emplace_back(x + 12 * s, y, w - 24 * s, row_h);
         if (sel) {
             draw_rectangle_rounded(Rect{x + 12 * s, y + 2 * s, w - 24 * s, row_h - 4 * s}, 0.3f, 6,
                                    Color{232, 96, 40, 230});

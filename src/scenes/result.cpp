@@ -1,11 +1,14 @@
 #include "result.h"
 
 #include "../libs/density.h"
+#include "../libs/file/script.h"
 #include "../libs/input/input.h"
+#include "../libs/network/network.h"
 #include "../libs/zdon_record.h"
 #include "../objects/game/player.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/global/zdon_hud.h"
+#include "total_result.h"
 
 void ResultScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -21,6 +24,7 @@ void ResultScreen::on_screen_start() {
     retrying = false;
     zdon_freeze_exit = 0;
     density::freeze_release();
+    quitting = false;
     fade_in.emplace(global_data.player_num);
     skipped_time = 0;
     skip_enabled_ms = 0;
@@ -46,7 +50,7 @@ Screens ResultScreen::on_screen_end(Screens next_screen) {
         loading_graphic.reset();
     }
     // the retry mini-game restarts the song from this session
-    if (next_screen != Screens::RETRY_GAME) {
+    if (next_screen != Screens::RETRY_GAME && next_screen != Screens::WAIWAI_RETRY_GAME) {
         reset_session();
     }
     player_1.reset(); // Z-DON: its Don's model goes back to the part pool for the next screen
@@ -57,12 +61,15 @@ double ResultScreen::reveal_end_ms() {
     return player_1.has_value() ? player_1->reveal_end_ms() : 0.0;
 }
 
+bool ResultScreen::run_failed() const {
+    return !global_data.session_data[static_cast<int>(global_data.player_num)].result_data.cleared;
+}
+
 bool ResultScreen::retry_pending() const {
-    const SessionData& session_data = global_data.session_data[static_cast<int>(global_data.player_num)];
     const bool limit_reached =
         global_data.config->limits.song_limit > 0 && global_data.config->limits.song_limit == global_data.songs_played;
-    return allow_retry && !tex.options[SCO::DISABLE_RETRY_GAME] && !session_data.result_data.cleared &&
-           !limit_reached && script_manager.has_lua_script("retry_game");
+    return allow_retry && !tex.options[SCO::DISABLE_RETRY_GAME] && run_failed() && !limit_reached &&
+           script_manager.has_lua_script("retry_game");
 }
 
 // Z-DON: a skin with skin_config zdon_end_over_result (Nijiiro) ends the credit over the live result board: the last
@@ -152,6 +159,12 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     }
 
     if (skip_enabled_ms > 0 && current_ms >= skip_enabled_ms) {
+        if (check_key_pressed(global_data.config->keys.back_key) && reveal_end_ms() > 0) {
+            quitting = true;
+            fade_out->start();
+            audio.play_sound("don", VolumePreset::SOUND);
+            return;
+        }
         handle_input(current_ms);
     }
 
@@ -161,6 +174,16 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
     if (reveal_end > 0 && !exiting() && !hist_open && current_ms >= idle_from + kAutoNextSceneMs) {
         begin_exit();
     }
+}
+
+Screens ResultScreen::credit_end_screen() {
+    const Screens next = begin_total_result();
+    if (!(network.kinotake_pending() || network.kinotake_tally().any()) ||
+        !script_manager.has_lua_script("kinotake_result")) {
+        return next;
+    }
+    global_data.kinotake_next = static_cast<int>(next);
+    return Screens::KINOTAKE_RESULT;
 }
 
 std::optional<Screens> ResultScreen::update() {
@@ -198,13 +221,12 @@ std::optional<Screens> ResultScreen::update() {
     } else if (fade_out) {
         fade_out->update(current_time);
         if (fade_out->is_finished) {
-            if (global_data.config->limits.song_limit > 0 &&
-                global_data.config->limits.song_limit == global_data.songs_played) {
-                global_data.songs_played = 0;
-                return on_screen_end(Screens::GAME_OVER);
+            if (quitting || (global_data.config->limits.song_limit > 0 &&
+                             global_data.config->limits.song_limit == global_data.songs_played)) {
+                return on_screen_end(credit_end_screen());
             }
             global_data.returned_from_result = true;
-            return on_screen_end(Screens::SONG_SELECT);
+            return on_screen_end(select_screen());
         }
     }
     return std::nullopt;
@@ -297,7 +319,7 @@ void ResultScreen::zdon_draw_hist() const {
             hint = true;
             continue;
         }
-        const bool easy = sd.selected_difficulty <= (int)Difficulty::NORMAL;
+        const bool easy = sd.selected_difficulty <= static_cast<int>(Difficulty::NORMAL);
         const float good = easy ? Timing::GOOD_EASY : Timing::GOOD;
         const float ok = easy ? Timing::OK_EASY : Timing::OK;
         const float bin_ms = std::max(2.0f, std::round(ok / 25.0f));
@@ -307,7 +329,7 @@ void ResultScreen::zdon_draw_hist() const {
         int early = 0, late = 0;
         for (float o : off) {
             sum += o;
-            sum2 += (double)o * o;
+            sum2 += static_cast<double>(o) * o;
             early += o < 0;
             late += o > 0;
             const int b = std::clamp(static_cast<int>(std::lround(o / bin_ms)), -half, half);

@@ -164,7 +164,7 @@ namespace texture_bc7 {
 
         // the image's pixels as RGBA8 (a copy for RGB8)
         std::vector<uint8_t> rgba_copy(const Image& img) {
-            const size_t n = size_t(img.width) * img.height;
+            const size_t n = static_cast<size_t>(img.width) * img.height;
             std::vector<uint8_t> out(n * 4);
             const auto* src = static_cast<const uint8_t*>(img.data);
             if (img.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
@@ -182,15 +182,20 @@ namespace texture_bc7 {
 
         uint64_t key_of(const Image& img) {
             const size_t bpp = img.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 ? 4 : 3;
-            const uint64_t h = hash64(static_cast<const uint8_t*>(img.data), size_t(img.width) * img.height * bpp);
-            return h ^ ((uint64_t(uint32_t(img.width)) << 32 | uint32_t(img.height)) * 0x9E3779B97F4A7C15ull) ^ bpp;
+            const uint64_t h =
+                hash64(static_cast<const uint8_t*>(img.data), static_cast<size_t>(img.width) * img.height * bpp);
+            return h ^
+                   ((static_cast<uint64_t>(static_cast<uint32_t>(img.width)) << 32 |
+                     static_cast<uint32_t>(img.height)) *
+                    0x9E3779B97F4A7C15ull) ^
+                   bpp;
         }
 
         // GetImageAlphaBorder(img, 0)
         Rect border_of(const uint8_t* rgba, int w, int h) {
             int x0 = w, x1 = -1, y0 = h, y1 = -1;
             for (int y = 0; y < h; ++y) {
-                const uint8_t* row = rgba + size_t(y) * w * 4;
+                const uint8_t* row = rgba + static_cast<size_t>(y) * w * 4;
                 int first = -1, last = -1;
                 for (int x = 0; x < w; ++x) {
                     if (row[x * 4 + 3] > 0) {
@@ -215,7 +220,8 @@ namespace texture_bc7 {
             if (x1 < 0) {
                 return Rect{};
             }
-            return Rect{float(x0), float(y0), float(x1 + 1 - x0), float(y1 + 1 - y0)};
+            return Rect{static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(x1 + 1 - x0),
+                        static_cast<float>(y1 + 1 - y0)};
         }
 
         bool inflate_to(const uint8_t* z, size_t zn, uint8_t* out, size_t n) {
@@ -412,7 +418,7 @@ namespace texture_bc7 {
                 uint8_t kind = 0;
                 if (std::fseek(f, pos, SEEK_SET) != 0 || !get(f, key) || !get(f, w) || !get(f, h) || !get(f, kind) ||
                     !get(f, size) || pos + static_cast<long>(kRecordHeader + size) > file_size ||
-                    kind > uint8_t(Kind::Zstd)) {
+                    kind > static_cast<uint8_t>(Kind::Zstd)) {
                     spdlog::warn("BC7 texture cache: {} is cut short, using {} entries", cache_path().string(),
                                  s.entries.size());
                     break;
@@ -482,7 +488,7 @@ namespace texture_bc7 {
                 put(f, key);
                 put(f, e.width);
                 put(f, e.height);
-                put(f, uint8_t(e.kind));
+                put(f, static_cast<uint8_t>(e.kind));
                 put(f, e.size);
                 std::fwrite(payload.data(), 1, payload.size(), f);
                 offsets[i] = pos + kRecordHeader;
@@ -616,13 +622,13 @@ namespace texture_bc7 {
             for (int i = 0; i < 16; ++i) {
                 const uint8_t* s = px + i * 4;
                 const int a = std::max<int>(s[3], out[i].m_comps[3]);
-                const int ea = std::abs(int(s[3]) - int(out[i].m_comps[3]));
+                const int ea = std::abs(static_cast<int>(s[3]) - static_cast<int>(out[i].m_comps[3]));
                 worst = std::max(worst, ea);
-                sse += uint64_t(ea * ea);
+                sse += static_cast<uint64_t>(ea * ea);
                 for (int c = 0; c < 3; ++c) {
-                    const int e = std::abs(int(s[c]) - int(out[i].m_comps[c])) * a / 255;
+                    const int e = std::abs(static_cast<int>(s[c]) - static_cast<int>(out[i].m_comps[c])) * a / 255;
                     worst = std::max(worst, e);
-                    sse += uint64_t(e * e);
+                    sse += static_cast<uint64_t>(e * e);
                 }
             }
             return worst;
@@ -653,17 +659,17 @@ namespace texture_bc7 {
                     for (uint32_t y = 0; y < 4; ++y) {
                         for (uint32_t x = 0; x < 4; ++x) {
                             const uint32_t sx = std::min(bx * 4 + x, w - 1), sy = std::min(by * 4 + y, h - 1);
-                            std::memcpy(px + (y * 4 + x) * 4, &rgba[(size_t(sy) * w + sx) * 4], 4);
+                            std::memcpy(px + (y * 4 + x) * 4, &rgba[(static_cast<size_t>(sy) * w + sx) * 4], 4);
                         }
                     }
-                    uint8_t* block = &blocks[(size_t(by) * bw + bx) * 16];
+                    uint8_t* block = &blocks[(static_cast<size_t>(by) * bw + bx) * 16];
                     bc7enc_compress_block(block, px, &params);
                     worst = std::max(worst, block_error(block, px, sse));
                 }
             }
             // painted skins (gradients) rarely stay under kMaxError everywhere; a small error over the
             // whole image is accepted too
-            const double mse = double(sse) / (double(bw) * bh * 64);
+            const double mse = static_cast<double>(sse) / (static_cast<double>(bw) * bh * 64);
             const bool ok = worst <= kMaxError || mse <= kMaxMse;
             std::vector<uint8_t> z = ok ? pack_blocks(blocks.data(), blocks.size()) : std::vector<uint8_t>{};
             const bool keep = z.empty();
@@ -841,7 +847,7 @@ namespace texture_bc7 {
         }
         const size_t n = block_bytes(r.width, r.height);
         remember_border(blocks, n, r.border);
-        s.raw_bytes += size_t(r.width) * r.height * r.bpp;
+        s.raw_bytes += static_cast<size_t>(r.width) * r.height * r.bpp;
         s.bc7_bytes += n;
         ++s.hits;
         ++s.file_hits;
@@ -890,13 +896,13 @@ namespace texture_bc7 {
             const size_t n = block_bytes(w, h);
             const bool rgba = image.format == ray::PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
             const Rect border = rgba ? border_of(static_cast<const uint8_t*>(image.data), image.width, image.height)
-                                     : Rect{0, 0, float(w), float(h)};
+                                     : Rect{0, 0, static_cast<float>(w), static_cast<float>(h)};
             remember_border(blocks, n, border);
-            s.raw_bytes += size_t(w) * h * (rgba ? 4 : 3);
+            s.raw_bytes += static_cast<size_t>(w) * h * (rgba ? 4 : 3);
             s.bc7_bytes += n;
             ++s.hits;
             if (files_on() && !path.empty() && st.size != 0) { // cached_image finds the file next time
-                const FileRec r{st, key, w, h, uint8_t(rgba ? 4 : 3), border};
+                const FileRec r{st, key, w, h, static_cast<uint8_t>(rgba ? 4 : 3), border};
                 std::unique_lock lock(s.mutex);
                 auto [it, added] = s.files.try_emplace(path.string(), r);
                 if (!added &&
@@ -912,7 +918,7 @@ namespace texture_bc7 {
             return;
         }
         // not known yet: encode for the next load
-        const size_t bytes = size_t(w) * h * 4;
+        const size_t bytes = static_cast<size_t>(w) * h * 4;
         {
             std::unique_lock lock(s.mutex);
             if (s.stopping || s.queued.contains(key) || s.queued_bytes + bytes > kQueueCap) {
@@ -921,7 +927,7 @@ namespace texture_bc7 {
             s.queued.insert(key);
             s.queued_bytes += bytes;
         }
-        submit_work([key, w, h, px = rgba_copy(image)]() mutable { encode_job(key, w, h, std::move(px)); });
+        submit_work([key, w, h, px = rgba_copy(image)] mutable { encode_job(key, w, h, std::move(px)); });
     }
 
     Rect alpha_border(const Image& image) {
@@ -938,15 +944,16 @@ namespace texture_bc7 {
             }
         }
         // not remembered: the border of the decoded blocks
-        std::vector<uint8_t> rgba(size_t(w) * h * 4);
+        std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
         const int bw = (w + 3) / 4, bh = (h + 3) / 4;
         for (int by = 0; by < bh; ++by) {
             for (int bx = 0; bx < bw; ++bx) {
                 bc7decomp::color_rgba out[16];
-                bc7decomp::unpack_bc7(blocks + (size_t(by) * bw + bx) * 16, out);
+                bc7decomp::unpack_bc7(blocks + (static_cast<size_t>(by) * bw + bx) * 16, out);
                 for (int y = 0; y < 4 && by * 4 + y < h; ++y) {
                     for (int x = 0; x < 4 && bx * 4 + x < w; ++x) {
-                        std::memcpy(&rgba[(size_t(by * 4 + y) * w + bx * 4 + x) * 4], out[y * 4 + x].m_comps, 4);
+                        std::memcpy(&rgba[(static_cast<size_t>(by * 4 + y) * w + bx * 4 + x) * 4],
+                                    out[y * 4 + x].m_comps, 4);
                     }
                 }
             }

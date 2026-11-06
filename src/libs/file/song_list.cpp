@@ -13,6 +13,7 @@
 #include <thread>
 #include <utility>
 
+#include "../../platform/platform.h"
 #include "../library_index.h"
 #include "../test_mode.h"
 #include "filesystem.h"
@@ -23,6 +24,10 @@ namespace {
     using Entries = std::vector<SongListEntry>;
 
     fs::path song_list_destination(fs::path path) {
+        fs::path native;
+        if (platform_resolve_file_path(path, native)) {
+            return native;
+        }
         path = fs::absolute(path);
 
         for (int depth = 0; depth < 40; ++depth) {

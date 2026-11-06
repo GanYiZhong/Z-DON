@@ -49,6 +49,11 @@ void PracticeMenu::open_jump_mode() {
     jumping_marks = true;
 }
 
+void PracticeMenu::open_review_end() {
+    open = true;
+    open_dialog(Dialog::REVIEW_END, false);
+}
+
 void PracticeMenu::open_dialog(Dialog which, bool auto_on) {
     dialog = which;
 
@@ -59,6 +64,7 @@ void PracticeMenu::open_dialog(Dialog which, bool auto_on) {
     case Dialog::RESTART:
     case Dialog::ANOTHER:
     case Dialog::END:
+    case Dialog::REVIEW_END:
         dialog_sel = 0;
         break;
     default:
@@ -107,6 +113,9 @@ PracticeMenu::Action PracticeMenu::confirm() {
         return left ? Action::ANOTHER_SONG : Action::NONE;
     case Dialog::END:
         return left ? Action::END_GAME : Action::NONE;
+    case Dialog::REVIEW_END:
+        open = false;
+        return left ? Action::END_GAME : Action::NONE;
     default:
         return Action::NONE;
     }
@@ -122,6 +131,8 @@ const char* PracticeMenu::dialog_name() const {
         return "another";
     case Dialog::END:
         return "end";
+    case Dialog::REVIEW_END:
+        return "review_end";
     default:
         return nullptr;
     }

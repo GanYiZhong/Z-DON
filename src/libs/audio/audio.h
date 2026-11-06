@@ -347,7 +347,7 @@ private:
     size_t resident_bytes = 0;
     bool is_resident_locked(const std::string& name, const sound* pcm) const;
     void drop_resident_sounds();
-    void install_music(const std::string& name, std::shared_ptr<music> mus);
+    void install_music(const std::string& name, const std::shared_ptr<music>& mus);
     double target_sample_rate;
     unsigned long buffer_size;
     std::string device_name; // Output device to open (empty = system default)

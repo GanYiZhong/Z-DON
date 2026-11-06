@@ -1,5 +1,6 @@
 #include "player.h"
 
+#include <algorithm>
 #include <spdlog/spdlog.h>
 
 #include "../../libs/file/scores.h"
@@ -64,6 +65,19 @@ void EntryPlayer::refresh_from_player_data() {
     apply_pd_look(*chara, pd_ptr, player_num);
 }
 
+void save_player_costume(const PlayerData& pd) {
+    scores_manager.save_player_data(pd);
+    spdlog::info("costume_save: player_id={} is_costume={} head={} body={} cos={}", pd.player_id, pd.chara_is_costume,
+                 pd.chara_head_index, pd.chara_body_index, pd.chara_cos_index);
+    if (pd.player_id == scores_manager.player_1 && !global_data.config->network.access_code_1.empty()) {
+        network.update_costume(global_data.config->network.access_code_1, pd.chara_head_index, pd.chara_body_index,
+                               pd.chara_cos_index, pd.chara_is_costume);
+    } else if (pd.player_id == scores_manager.player_2 && !global_data.config->network.access_code_2.empty()) {
+        network.update_costume(global_data.config->network.access_code_2, pd.chara_head_index, pd.chara_body_index,
+                               pd.chara_cos_index, pd.chara_is_costume);
+    }
+}
+
 void EntryPlayer::start_animations(bool hold_cloud) {
     loading = hold_cloud;
     call(fn_start_animations, "EntryPlayer:start_animations", hold_cloud);
@@ -89,8 +103,11 @@ void EntryPlayer::open_costume_menu() {
         audio.play_sound("select_costume", VolumePreset::VOICE);
         return;
     }
-    costume_menu.emplace(player_num);
-    audio.play_player_sound("select_costume", player_num, VolumePreset::VOICE);
+    const auto campaigns = network.active_campaigns();
+    const bool bonus = !collabo_bonus_seen && std::ranges::find(campaigns, "mario") != campaigns.end();
+    collabo_bonus_seen = collabo_bonus_seen || bonus;
+    costume_menu.emplace(player_num, bonus);
+    audio.play_player_sound("mode_costume", player_num, VolumePreset::VOICE);
     preset_seq_applied = 0;
 }
 
@@ -196,19 +213,7 @@ void EntryPlayer::handle_input() {
                     parsed = false;
                 }
                 if (parsed) {
-                    scores_manager.save_player_data(*pd);
-                    spdlog::info("costume_save: player_id={} is_costume={} head={} body={} cos={}", pd->player_id,
-                                 pd->chara_is_costume, pd->chara_head_index, pd->chara_body_index, pd->chara_cos_index);
-
-                    if (pd->player_id == scores_manager.player_1 &&
-                        !global_data.config->network.access_code_1.empty()) {
-                        network.update_costume(global_data.config->network.access_code_1, pd->chara_head_index,
-                                               pd->chara_body_index, pd->chara_cos_index, pd->chara_is_costume);
-                    } else if (pd->player_id == scores_manager.player_2 &&
-                               !global_data.config->network.access_code_2.empty()) {
-                        network.update_costume(global_data.config->network.access_code_2, pd->chara_head_index,
-                                               pd->chara_body_index, pd->chara_cos_index, pd->chara_is_costume);
-                    }
+                    save_player_costume(*pd);
                 }
             }
             costume_menu.reset();

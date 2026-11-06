@@ -29,10 +29,10 @@ void AudioEngine::run_selftest(const std::string& spec) {
     const double rate = target_sample_rate;
 
     auto mix_for = [&](double seconds, unsigned int block) {
-        size_t frames = (size_t)(seconds * rate);
+        size_t frames = static_cast<size_t>(seconds * rate);
         std::vector<float> buf(block * 2);
         while (frames > 0) {
-            const unsigned int n = (unsigned int)std::min<size_t>(frames, block);
+            const unsigned int n = static_cast<unsigned int>(std::min<size_t>(frames, block));
             dev_wait_streams();
             mix(buf.data(), n, this);
             out.insert(out.end(), buf.begin(), buf.begin() + n * 2);
@@ -191,15 +191,15 @@ void AudioEngine::run_selftest(const std::string& spec) {
     if (wav) {
         auto u32 = [wav](uint32_t v) { std::fwrite(&v, 4, 1, wav); };
         auto u16 = [wav](uint16_t v) { std::fwrite(&v, 2, 1, wav); };
-        const uint32_t bytes = (uint32_t)(out.size() * sizeof(float));
+        const uint32_t bytes = static_cast<uint32_t>(out.size() * sizeof(float));
         std::fwrite("RIFF", 1, 4, wav);
         u32(36 + bytes);
         std::fwrite("WAVEfmt ", 1, 8, wav);
         u32(16);
         u16(3);
         u16(2);
-        u32((uint32_t)rate);
-        u32((uint32_t)rate * 8);
+        u32(static_cast<uint32_t>(rate));
+        u32(static_cast<uint32_t>(rate) * 8);
         u16(8);
         u16(32);
         std::fwrite("data", 1, 4, wav);

@@ -232,10 +232,10 @@ void main() {
         const double ys = fmt.full_range ? 1.0 : 255.0 / 219.0;
         const double cs = fmt.full_range ? 1.0 : 255.0 / 224.0;
         const float off[3] = {fmt.full_range ? 0.0f : 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f};
-        const float row_r[3] = {(float)ys, 0.0f, (float)(cs * 2.0 * (1.0 - kr))};
-        const float row_g[3] = {(float)ys, (float)(-cs * 2.0 * kb * (1.0 - kb) / kg),
-                                (float)(-cs * 2.0 * kr * (1.0 - kr) / kg)};
-        const float row_b[3] = {(float)ys, (float)(cs * 2.0 * (1.0 - kb)), 0.0f};
+        const float row_r[3] = {static_cast<float>(ys), 0.0f, static_cast<float>(cs * 2.0 * (1.0 - kr))};
+        const float row_g[3] = {static_cast<float>(ys), static_cast<float>(-cs * 2.0 * kb * (1.0 - kb) / kg),
+                                static_cast<float>(-cs * 2.0 * kr * (1.0 - kr) / kg)};
+        const float row_b[3] = {static_cast<float>(ys), static_cast<float>(cs * 2.0 * (1.0 - kb)), 0.0f};
         ray::BeginShaderMode(shader);
         ray::SetShaderValueTexture(shader, loc_u, u);
         ray::SetShaderValueTexture(shader, loc_v, v);
@@ -262,7 +262,8 @@ void main() {
         RenderTarget rt = ray::LoadRenderTexture(w, h);
         ray::BeginTextureMode(rt);
         ray::ClearBackground(Color::BLACK);
-        draw({0.0f, 0.0f, (float)w, (float)h}, {0.0f, 0.0f, (float)w, (float)h});
+        draw({0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)},
+             {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)});
         end_texture_mode(); // back to the texture-density target, if the frame draws into one
         ray::rlSetMatrixProjection(proj);
         ray::rlSetMatrixModelview(view);
@@ -278,7 +279,7 @@ void main() {
         for (size_t i = 0; i < n; ++i) {
             int m = 0;
             for (int c = 0; c < 3; ++c) {
-                const int dd = std::abs((int)got[i * 3 + c] - (int)rgb[i * 3 + c]);
+                const int dd = std::abs(static_cast<int>(got[i * 3 + c]) - static_cast<int>(rgb[i * 3 + c]));
                 max_d[c] = std::max(max_d[c], dd);
                 sum[c] += dd;
                 m = std::max(m, dd);

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <print>
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <utility>
@@ -181,12 +182,12 @@ void main() {
             int bg_w = 0, bg_h = 0;   // the backdrop's source: the picture at a fifth of the size
         };
         BandLayout band_layout(int w, int h, int lanes) {
-            const auto even = [](double v) { return 2 * (int)std::lround(v / 2.0); };
-            const auto four = [](double v) { return 4 * std::max(1, (int)std::lround(v / 4.0)); };
+            const auto even = [](double v) { return 2 * static_cast<int>(std::lround(v / 2.0)); };
+            const auto four = [](double v) { return 4 * std::max(1, static_cast<int>(std::lround(v / 4.0))); };
             BandLayout b;
             b.src_y = even(h * 136.0 / 720.0); // the lane is 184..360 at 720p
             b.src_h = even(h * 224.0 / 720.0);
-            const double scale = std::min(1.0, (double)h / (std::max(1, lanes) * b.src_h));
+            const double scale = std::min(1.0, static_cast<double>(h) / (std::max(1, lanes) * b.src_h));
             b.out_w = four(w * scale);
             b.out_h = std::max(2, even(b.src_h * scale));
             b.bg_w = four(w / 5.0);
@@ -276,7 +277,7 @@ void main() {
         void write_wav_header(FILE* f, double rate, uint64_t data_bytes) {
             auto u32 = [f](uint32_t v) { std::fwrite(&v, 4, 1, f); };
             auto u16 = [f](uint16_t v) { std::fwrite(&v, 2, 1, f); };
-            const uint32_t data = (uint32_t)std::min<uint64_t>(data_bytes, 0xFFFFFFF0u);
+            const uint32_t data = static_cast<uint32_t>(std::min<uint64_t>(data_bytes, 0xFFFFFFF0u));
             std::fseek(f, 0, SEEK_SET);
             std::fwrite("RIFF", 1, 4, f);
             u32(36 + data);
@@ -284,8 +285,8 @@ void main() {
             u32(16);
             u16(3); // IEEE float
             u16(2);
-            u32((uint32_t)rate);
-            u32((uint32_t)rate * 2 * 4);
+            u32(static_cast<uint32_t>(rate));
+            u32(static_cast<uint32_t>(rate) * 2 * 4);
             u16(2 * 4);
             u16(32);
             std::fwrite("data", 1, 4, f);
@@ -339,7 +340,7 @@ void main() {
             }
             buf.resize(bytes);
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, s.pbo[i]);
-            const void* p = s.gl.map(Gl::PIXEL_PACK_BUFFER, 0, (std::ptrdiff_t)bytes, Gl::MAP_READ_BIT);
+            const void* p = s.gl.map(Gl::PIXEL_PACK_BUFFER, 0, static_cast<std::ptrdiff_t>(bytes), Gl::MAP_READ_BIT);
             if (p) {
                 std::memcpy(buf.data(), p, bytes);
                 s.gl.unmap(Gl::PIXEL_PACK_BUFFER);
@@ -398,11 +399,11 @@ void main() {
                 ray::ClearBackground(ray::Color{0, 0, 0, 255});
                 ray::EndTextureMode();
             }
-            s.frame_bytes = s.nv12 ? (size_t)ew * eh * 3 / 2 : (size_t)ew * eh * 4;
+            s.frame_bytes = s.nv12 ? static_cast<size_t>(ew) * eh * 3 / 2 : static_cast<size_t>(ew) * eh * 4;
             s.gl.gen(kPbo, s.pbo.data());
             for (unsigned int b : s.pbo) {
                 s.gl.bind(Gl::PIXEL_PACK_BUFFER, b);
-                s.gl.data(Gl::PIXEL_PACK_BUFFER, (std::ptrdiff_t)s.frame_bytes, nullptr, Gl::STREAM_READ);
+                s.gl.data(Gl::PIXEL_PACK_BUFFER, static_cast<std::ptrdiff_t>(s.frame_bytes), nullptr, Gl::STREAM_READ);
             }
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, 0);
             // a band: the window's size and the frame format, for the coordinator (once the pipe can be opened)
@@ -410,7 +411,7 @@ void main() {
                 if (s.band_lanes > 0) {
                     fs::path size_file = s.out;
                     if (FILE* f = open_file(size_file.replace_extension(".size"))) {
-                        std::fprintf(f, "%d %d %s\n", w, h, s.nv12 ? "nv12" : "rgba");
+                        std::println(f, "{} {} {}", w, h, s.nv12 ? "nv12" : "rgba");
                         std::fclose(f);
                     }
                 }
@@ -453,7 +454,7 @@ void main() {
                 return;
             }
             if (FILE* f = open_file(s.status)) {
-                std::fprintf(f, "%.4f\n", progress);
+                std::println(f, "{:.4f}", progress);
                 std::fclose(f);
             }
         }
@@ -632,9 +633,9 @@ void main() {
 
         // this frame's audio: the samples from frame f to frame f + 1 of the fixed clock
         const auto t2 = clk::now();
-        const auto at = [](long long f) { return (long long)std::llround((double)f * s.rate / s.fps); };
-        const unsigned int n = (unsigned int)(at(s.frames + 1) - at(s.frames));
-        s.mix.resize((size_t)n * 2);
+        const auto at = [](long long f) { return (long long)std::llround(static_cast<double>(f) * s.rate / s.fps); };
+        const unsigned int n = static_cast<unsigned int>(at(s.frames + 1) - at(s.frames));
+        s.mix.resize(static_cast<size_t>(n) * 2);
         audio.dev_mix_offline(s.mix.data(), n);
         if (recording) {
             std::fwrite(s.mix.data(), sizeof(float), s.mix.size(), s.wav);
@@ -645,24 +646,24 @@ void main() {
         s.ms_audio += ms_since(t2);
         s.frame_end = clk::now();
 
-        const double video_s = (double)s.frames / s.fps;
+        const double video_s = static_cast<double>(s.frames) / s.fps;
         if (video_s >= s.next_log_s) {
             s.next_log_s += 10.0;
             const double real = std::chrono::duration<double>(clk::now() - s.started).count();
-            const double f = (double)std::max(1LL, s.recorded);
+            const double f = static_cast<double>(std::max(1LL, s.recorded));
             spdlog::info("[record] {:.0f} s ({:.0f} s recorded, {:.1f}x real time); per recorded frame ms: game "
                          "{:.2f}, read {:.2f}, encoder wait {:.2f}, audio {:.2f}",
-                         video_s, s.recorded / (double)s.fps, video_s / std::max(real, 1e-3), s.ms_game / f,
-                         s.ms_read / f, s.ms_queue / f, s.ms_audio / f);
+                         video_s, s.recorded / static_cast<double>(s.fps), video_s / std::max(real, 1e-3),
+                         s.ms_game / f, s.ms_read / f, s.ms_queue / f, s.ms_audio / f);
         }
 
         const bool game = screen.starts_with("GAME");
-        const bool result = screen.find("RESULT") != std::string::npos;
+        const bool result = screen.contains("RESULT");
         s.played = s.played || game;
         if (s.frames % 15 == 0) {
             const double result_total = std::max(1.0, s.result_s * s.fps);
-            write_status(s.part >= 0      ? (double)s.recorded // the coordinator sums the parts' frames
-                         : result         ? 0.95 + 0.05 * std::min(1.0, (double)s.result_frames / result_total)
+            write_status(s.part >= 0 ? static_cast<double>(s.recorded) // the coordinator sums the parts' frames
+                         : result    ? 0.95 + 0.05 * std::min(1.0, static_cast<double>(s.result_frames) / result_total)
                          : s.song_end > 0 ? 0.95 * std::clamp(s.song_pos / s.song_end, 0.0, 1.0)
                                           : 0.0);
         }
@@ -694,7 +695,7 @@ void main() {
             }
 
             // the picture: into a free pbo; the oldest one out to the writer
-            if ((int)s.in_flight.size() == kPbo) {
+            if (static_cast<int>(s.in_flight.size()) == kPbo) {
                 const auto tq = clk::now();
                 if (!take_oldest()) {
                     spdlog::error("[record] ffmpeg stopped taking frames");
@@ -729,14 +730,15 @@ void main() {
                 ray::BeginTextureMode(s.nv12_rt);
                 ray::rlDisableColorBlend(); // the alpha byte is data
                 ray::BeginShaderMode(s.shader);
-                ray::DrawTexturePro(s.copy_rt.texture, Rect{0, 0, (float)ew, (float)eh},
-                                    Rect{0, 0, (float)rw, (float)rh}, Vec2{0, 0}, 0.0f, ray::Color{255, 255, 255, 255});
+                ray::DrawTexturePro(s.copy_rt.texture, Rect{0, 0, static_cast<float>(ew), static_cast<float>(eh)},
+                                    Rect{0, 0, static_cast<float>(rw), static_cast<float>(rh)}, Vec2{0, 0}, 0.0f,
+                                    ray::Color{255, 255, 255, 255});
                 ray::EndShaderMode();
                 ray::rlEnableColorBlend();
                 ray::EndTextureMode();
                 s.gl.bind_fb(Gl::READ_FRAMEBUFFER, s.nv12_rt.id);
             }
-            const int slot = (int)(s.frames % kPbo);
+            const int slot = static_cast<int>(s.frames % kPbo);
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, s.pbo[slot]);
             s.gl.read(0, 0, rw, rh, Gl::RGBA, Gl::UNSIGNED_BYTE, nullptr);
             s.gl.bind(Gl::PIXEL_PACK_BUFFER, 0);
@@ -805,7 +807,8 @@ void main() {
         fs::remove(s.video_tmp, ec);
         fs::remove(s.audio_tmp, ec);
         const double real = std::chrono::duration<double>(std::chrono::steady_clock::now() - s.started).count();
-        spdlog::info("[record] done: {} ({:.1f} s of video in {:.1f} s)", utf8(s.out), (double)s.frames / s.fps, real);
+        spdlog::info("[record] done: {} ({:.1f} s of video in {:.1f} s)", utf8(s.out),
+                     static_cast<double>(s.frames) / s.fps, real);
         return true;
     }
 
@@ -892,7 +895,7 @@ void main() {
                 wavs.push_back(fs::path(outs.back()).replace_extension(".wav"));
                 sizes.push_back(fs::path(outs.back()).replace_extension(".size"));
                 statuses.push_back(status_dir / ("part" + std::to_string(k) + ".txt"));
-                pipes.push_back(fifo_name((int)k));
+                pipes.push_back(fifo_name(static_cast<int>(k)));
                 fs::remove(statuses.back(), ec);
                 fs::remove(sizes.back(), ec);
                 std::vector<std::string> a = base;
@@ -940,7 +943,7 @@ void main() {
             std::thread stacker;
             std::atomic<bool> stack_done{false};
             int stack_rc = -1;
-            auto start_stacking = [&]() -> bool {
+            auto start_stacking = [&] -> bool {
                 int w = 0, h = 0;
                 std::vector<bool> nv12(n);
                 for (size_t k = 0; k < n; k++) {
@@ -950,7 +953,7 @@ void main() {
                     }
                     nv12[k] = v;
                 }
-                const BandLayout b = band_layout(w, h, (int)n);
+                const BandLayout b = band_layout(w, h, static_cast<int>(n));
                 std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y";
                 std::string fc, stack;
                 for (size_t k = 0; k < n; k++) {
@@ -987,7 +990,8 @@ void main() {
                 return true;
             };
 
-            const double frames = std::max(1.0, (double)n * (double)(total - (long long)(s.result_s * s.fps)));
+            const double frames = std::max(
+                1.0, static_cast<double>(n) * static_cast<double>(total - static_cast<long long>(s.result_s * s.fps)));
             bool stacking = false;
             const bool ok = run_children(args, [&] {
                 double done = 0;
@@ -1056,7 +1060,7 @@ void main() {
         const auto started = std::chrono::steady_clock::now();
         // the length: the song ends at its last note (Player::end_time), then the time before the song, after
         // its end and the result screen
-        const SessionData& sd = global_data.session_data[(int)PlayerNum::P1];
+        const SessionData& sd = global_data.session_data[static_cast<int>(PlayerNum::P1)];
         double chart_end_ms = 0;
         try {
             SongParser parser(sd.selected_song);
@@ -1089,7 +1093,7 @@ void main() {
         }
         const long long total = std::llround((chart_end_ms / 1000.0 + kOverheadS + s.result_s) * s.fps);
         spdlog::info("[record] the chart ends at {:.1f} s: about {:.1f} s of video", chart_end_ms / 1000.0,
-                     total / (double)s.fps);
+                     total / static_cast<double>(s.fps));
 
         // the parts' command lines: this one without the --record options, then each part's
         std::vector<std::string> base;
@@ -1184,7 +1188,7 @@ void main() {
             for (char c : p) {
                 escaped += c == '\'' ? std::string("'\\''") : std::string(1, c);
             }
-            std::fprintf(lf, "file '%s'\n", escaped.c_str());
+            std::println(lf, "file '{}'", escaped);
             wav_bytes += append_wav_data(wavs[k], wf);
             parts++;
         }

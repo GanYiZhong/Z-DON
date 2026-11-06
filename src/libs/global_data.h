@@ -199,6 +199,7 @@ struct ResultData {
     float gauge_length = 0.0f;
     bool cleared = true;
     int prev_score = 0;
+    bool submitted = false;
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;
     std::vector<float> hit_offsets; // Z-DON: every judged hit's offset in ms (+ = late), in hit order
@@ -210,6 +211,21 @@ struct ZdonLiveData {
     double last_hit_at_ms = -1.0;                       // get_current_ms() of that hit; -1 = none yet
     double song_end_ms = 0.0;                           // the last playable note's time on the chart clock
     std::vector<std::pair<double, double>> gogo_ranges; // GOGO sections, chart ms (start, end)
+};
+
+struct AISectionTally {
+    int good = 0;
+    int ok = 0;
+    int bad = 0;
+    int drumroll = 0;
+    bool won = false;
+};
+
+struct AIMatchResult {
+    std::vector<AISectionTally> sections;
+    bool won = false;
+    bool saves = false;
+    int stars = 1;
 };
 
 struct SessionData {
@@ -226,6 +242,10 @@ struct SessionData {
     bool dan_gaiden = false;
     bool dan_gen3 = false;
     int selected_difficulty = 0;
+    int subdiff = 0;
+    int ai_sections_won = 0;
+    int ai_sections_total = 0;
+    bool ai_assigned = false;
     std::string song_title = "default_title";
     std::string song_subtitle = "default_subtitle";
     bool song_subtitle_full_display = false;
@@ -325,6 +345,7 @@ struct GlobalData {
         std::vector<int> section_score, section_crown;
     };
     std::vector<ZdonAiSong> zdon_ai_credit;
+    double ai_condition = 0.95;
     std::string current_screen = "LOADING";
     std::string previous_screen;
     bool in_transition = false;
@@ -339,6 +360,18 @@ struct GlobalData {
     bool returned_from_result = false;
     bool entry_join_pending = false;
     PlayerNum entry_joined_seat = PlayerNum::P1;
+    std::string campaign;
+    int bncoin = 99999;
+    int campaign_next = 0;
+    bool entry_campaign_resume = false;
+    PlayerNum entry_resume_seats[2] = {PlayerNum::ALL, PlayerNum::ALL};
+    int kinotake_team[2] = {-1, -1};
+    int kinotake_next = 0;
+    AIMatchResult ai_match;
+    std::vector<int> credit_gauges[2];         // soul gauge percent per scored song this credit, per seat
+    std::vector<std::string> credit_titles[2]; // same songs
+    bool reward_shop_from_entry = false;       // mode select opened the shop: no reward time, back to entry
+    bool credit_seats[2] = {false, false};     // seats that played the credit that just ended
     // Card reader
     std::string card_reader_card_id_hex; // 16-char hex card ID
     bool card_reader_card_valid = false;

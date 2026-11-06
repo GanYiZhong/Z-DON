@@ -8,6 +8,7 @@
 
 #include "../../libs/file/script.h"
 #include "../../libs/global_data.h" // IWYU pragma: keep
+#include "../../libs/network/network.h"
 
 enum class CostumePickStage {
     NONE,
@@ -25,7 +26,7 @@ public:
 
     bool confirmed = false;
 
-    CostumeMenu(PlayerNum player_num);
+    CostumeMenu(PlayerNum player_num, bool collabo_bonus = false);
     ~CostumeMenu() override;
     void update(double current_time_ms);
     void handle_input();
@@ -57,8 +58,12 @@ private:
 
     TextureObject* t_item_box = nullptr;
 
-    // icon glide after a selection change (matches SCROLL_MS in costume_menu.lua)
     static constexpr double ICON_SCROLL_MS = 67.0;
+    static constexpr double COLLABO_BONUS_MS = 6000.0;
+    bool collabo_bonus = false;
+    double open_ms = -1.0;
+    bool intro_voice_pending = true;
+    void play_voice(const std::string& name) const;
     double now_ms = 0.0;
     int icon_prev_index = -1;
     int icon_scroll_dir = 0;
@@ -73,6 +78,8 @@ private:
     bool preset_data_loaded = false;
     std::unordered_map<std::string, int> preset_rolled;
     void load_preset_data();
+    std::optional<OwnedCosmetics> owned_cosmetics;
+    const OwnedCosmetics& owned();
     void apply_preset(const std::string& item);
     static bool is_preset_item(const std::string& item);
 

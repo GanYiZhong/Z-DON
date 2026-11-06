@@ -17,6 +17,8 @@ struct CourseStats {
     int total = 0;
     int full_combos = 0;
     int clears = 0;
+    int full_combos_2p = 0;
+    int clears_2p = 0;
 };
 
 struct InlineState {
@@ -55,6 +57,9 @@ private:
     bool genre_box_defs_built = false;
     std::map<GenreIndex, BoxDef> genre_box_defs;
     bool built_hide_dan = false;
+    bool built_waiwai = false;
+    bool built_is_2p = false;
+    bool built_ai_assigned = false;
 
     std::optional<InlineState> inline_state;
     std::optional<fs::path> pending_inline_path;
@@ -102,6 +107,7 @@ private:
     std::optional<fs::path> reopen_folder_path;
     std::optional<fs::path> reopen_song_path;
     std::optional<fs::path> restore_cursor_path;
+    std::optional<fs::path> open_start_folder;
 
     std::optional<fs::path> recent_folder_path;
     std::optional<fs::path> favorite_folder_path;
@@ -142,8 +148,9 @@ private:
     void wait_for_song_files();
     void enqueue_box(std::unique_ptr<BaseBox> box);
     void enqueue_inline_box(std::unique_ptr<BaseBox> box);
-    void parse_song_list(const fs::path& path, BoxDef box_def, bool inline_mode);
+    void parse_song_list(const fs::path& path, const BoxDef& box_def, bool inline_mode);
     void load_current_directory_async(const fs::path path);
+    void clear_directory_state(); // merge 0ed42ec: upstream's split of load_all_roots
     void load_all_roots();
     void load_collection_difficulty(const fs::path& path, const BoxDef& box_def, int course, int level, int order = 1);
     void load_from_song_list(const fs::path& path, const BoxDef& box_def, bool mark_favorite);
@@ -152,6 +159,8 @@ private:
     void load_collection_search(const fs::path& path, const BoxDef& box_def);
     void load_collection_play_count(const fs::path& path, const BoxDef& box_def);
     void load_songs_inline_async(const fs::path path, BoxDef box_def);
+    fs::path resolve_start_path(); // upstream: config start_path
+    void load_start_folder();
     void promote_recent_box(const SongBox* song);
     void collapse_inline_now();
     void flush_pending_boxes();
@@ -166,9 +175,12 @@ public:
 
     std::atomic<bool> is_processing{false};
     bool hide_dan = false;
+    bool ai_assigned = false; // AI battle rank 10: show the assigned songs folder
+    bool waiwai = false;
     bool is_2p = false;
     bool inline_streaming = false;
     fs::path current_path;
+    fs::path start_path;
     std::string current_search;
 
     SongSelectScript* script = nullptr;
@@ -180,7 +192,7 @@ public:
     void enqueue_inline_back_every_ten(int songs_added, const fs::path& parent);
     // `files`: the chart files under songs_paths when the caller already listed them (the loading screen),
     // `stamps` what their listing said about each (get_song_files)
-    void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> files = std::nullopt,
+    void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> listed = std::nullopt,
                  std::vector<SongFileStamp> stamps = {});
     void init(std::vector<fs::path> songs_paths);
 

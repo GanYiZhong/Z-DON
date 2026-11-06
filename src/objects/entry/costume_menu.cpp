@@ -11,7 +11,8 @@
 #include "../../libs/gfx/texture.h"
 #include "../../libs/input/input.h"
 
-CostumeMenu::CostumeMenu(PlayerNum player_num) : player_num(player_num), is_2p(player_num == PlayerNum::P2) {
+CostumeMenu::CostumeMenu(PlayerNum player_num, bool collabo_bonus)
+    : player_num(player_num), is_2p(player_num == PlayerNum::P2), collabo_bonus(collabo_bonus) {
     PlayerSoundScope audio_owner(player_num);
     const SkinInfo* info = font_manager.get_text_info("entry_costume_text");
     std::string text_str = font_manager.get_text_label("entry_costume_text");
@@ -20,7 +21,7 @@ CostumeMenu::CostumeMenu(PlayerNum player_num) : player_num(player_num), is_2p(p
 
     t_item_box = is_2p ? tex.get_texture("costume_select/item_box_2p") : tex.get_texture("costume_select/item_box_1p");
 
-    if (!load("CostumeMenu", "costume_menu", is_2p, text_str, title_x, title_y)) {
+    if (!load("CostumeMenu", "costume_menu", is_2p, text_str, title_x, title_y, collabo_bonus)) {
         return;
     }
     fn_update = lua_object["update"];
@@ -68,7 +69,12 @@ void CostumeMenu::load_costume_icons(const std::string& subdir, const std::strin
         }
     }
     std::ranges::sort(entries, [](const auto& a, const auto& b) { return a.first < b.first; });
+    const OwnedCosmetics& allowed = owned();
+    const std::set<int>& ids = json_key == "head" ? allowed.head : json_key == "body" ? allowed.body : allowed.costume;
     for (auto& [id, path] : entries) {
+        if (!allowed.all && !ids.contains(id)) {
+            continue;
+        }
         Texture t = load_texture(path.string().c_str());
         if (t.id == 0 || t.width <= 0 || t.height <= 0) {
             spdlog::warn("CostumeMenu: failed to load icon {}", path.string());
@@ -94,6 +100,15 @@ void CostumeMenu::load_costume_icons(const std::string& subdir, const std::strin
             spdlog::warn("CostumeMenu: failed to parse {}: {}", names_path.string(), ex.what());
         }
     }
+}
+
+const OwnedCosmetics& CostumeMenu::owned() {
+    if (!owned_cosmetics) {
+        owned_cosmetics =
+            network.fetch_owned_cosmetics(player_num == PlayerNum::P2 ? global_data.config->network.access_code_2
+                                                                      : global_data.config->network.access_code_1);
+    }
+    return *owned_cosmetics;
 }
 
 bool CostumeMenu::is_preset_item(const std::string& item) {
@@ -151,6 +166,13 @@ void CostumeMenu::load_preset_data() {
             spdlog::warn("CostumeMenu: failed to parse {}: {}", presets_path.string(), ex.what());
         }
     }
+    if (const OwnedCosmetics& allowed = owned(); !allowed.all) {
+        const auto not_owned = [&](int id) { return !allowed.costume.contains(id); };
+        std::erase_if(preset_pool, not_owned);
+        for (auto& [item, ids] : preset_sets) {
+            std::erase_if(ids, not_owned);
+        }
+    }
     if (!preset_sets.contains("costume_select/default")) {
         preset_sets["costume_select/default"] = {0};
     }
@@ -197,7 +219,20 @@ void CostumeMenu::apply_preset(const std::string& item) {
 void CostumeMenu::update(double current_time_ms) {
     PlayerSoundScope audio_owner(player_num);
     now_ms = current_time_ms;
+    if (open_ms < 0.0) {
+        open_ms = current_time_ms;
+    }
+    if (intro_voice_pending && current_time_ms - open_ms >= (collabo_bonus ? COLLABO_BONUS_MS : 0.0) &&
+        (!audio.has_sound("mode_costume") || !audio.is_sound_playing("mode_costume"))) {
+        intro_voice_pending = false;
+        audio.play_player_sound("select_costume", player_num, VolumePreset::VOICE);
+    }
     call(fn_update, "CostumeMenu:update", current_time_ms);
+}
+
+void CostumeMenu::play_voice(const std::string& name) const {
+    audio.play_player_sound(name + "_" + std::to_string(static_cast<int>(player_num)) + "p", player_num,
+                            VolumePreset::VOICE);
 }
 
 std::optional<int> CostumeMenu::get_index() {
@@ -241,6 +276,7 @@ void CostumeMenu::handle_input() {
                     picked_head_id = costume_ids[costume_icon_index];
                     pick_stage = CostumePickStage::BODY;
                     load_costume_icons("costume_body_icon", "body");
+                    play_voice("costume_body");
                     if (costume_icons.empty()) {
                         spdlog::warn("CostumeMenu: no body icons found, confirming head only");
                         confirmed = true;
@@ -272,7 +308,7 @@ void CostumeMenu::handle_input() {
 
         if (menu_confirm_pressed(player_num)) {
             auto open_icon_select = [&](CostumePickStage stage, const char* subdir, const char* key,
-                                        const char* empty_msg) {
+                                        const char* empty_msg, const char* voice) {
                 pick_stage = stage;
                 if (stage == CostumePickStage::HEAD) {
                     picked_head_id = -1;
@@ -284,13 +320,15 @@ void CostumeMenu::handle_input() {
                 }
                 costume_select_mode = true;
                 audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                play_voice(voice); // upstream b8d6157: the item's voice line
             };
+            // Z-DON: the shared open_icon_select lambda, with upstream's per-item voice as a parameter
             if (std::string(ITEMS[selected_index]) == "costume_select/costume") {
                 open_icon_select(CostumePickStage::NONE, "costume_icon", "costume",
-                                 "CostumeMenu: no costume icons found, staying in menu");
+                                 "CostumeMenu: no costume icons found, staying in menu", "costume_kigurumi");
             } else if (std::string(ITEMS[selected_index]) == "costume_select/head_body") {
                 open_icon_select(CostumePickStage::HEAD, "costume_head_icon", "head",
-                                 "CostumeMenu: no head icons found, staying in menu");
+                                 "CostumeMenu: no head icons found, staying in menu", "costume_head");
             } else if (is_preset_item(ITEMS[selected_index])) {
                 if (!preset_cos_id) {
                     apply_preset(ITEMS[selected_index]);

@@ -95,6 +95,8 @@ private:
     int current_face_index = -1;
 
     int anim_frame = 0;
+    int applied_anim = -1;
+    int applied_frame = -1;
     AnimIndex anim_index = AnimIndex::DON_NORMAL;
 
     float bpm = 100;
@@ -103,6 +105,7 @@ private:
 
     float scale = 1.0f;
     float draw_scale = 1.0f;
+    float call_scale = 1.0f; // the last draw()'s scale_mul (upstream's draw_scale)
     float rot_x = 0.0f;
     float rot_y = 0.0f;
     float rot_z = 0.0f;
@@ -205,6 +208,7 @@ public:
             last_draw_x = std::numeric_limits<float>::lowest();
         }
     }
+    void use_default_pose(bool mirror);
     void set_frozen(bool value);
     void set_anim_progress(float progress);
     int get_anim_count() const;

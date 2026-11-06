@@ -1,6 +1,7 @@
 ﻿#include "entry.h"
 
 #include <algorithm>
+#include <array>
 #include <thread>
 
 #include "../libs/file/config.h"
@@ -13,6 +14,7 @@
 void EntryScreen::on_screen_start() {
     Screen::on_screen_start();
     zdon_ai_new_session(); // Z-DON AI battle: a new session rolls a new AI condition
+    kinotake_indicator = KinotakeIndicator("entry");
     side = 1;
     is_2p = false;
     box_manager = std::make_unique<BoxManager>(global_data.entry_join_pending);
@@ -29,7 +31,17 @@ void EntryScreen::on_screen_start() {
     login_ready_ = false;
     name_pending_ = -1;
     name_entry_.reset();
-    // Non-blocking: an unreachable server held the screen for the 1.5 s timeout. Logins wait for it.
+    campaign_menu_.reset();
+    bncoin_popup_.reset();
+    practice_help_.reset();
+    entry_info_.reset();
+    const bool resuming = global_data.entry_join_pending || global_data.entry_campaign_resume;
+    campaign_shown_ = resuming;
+    if (!resuming) {
+        global_data.campaign.clear();
+        global_data.kinotake_team[0] = global_data.kinotake_team[1] = -1;
+    }
+
     if (online) {
         network.start_probe();
     }
@@ -80,20 +92,37 @@ void EntryScreen::on_screen_start() {
     audio.play_sound("bgm", VolumePreset::MUSIC);
 
     // Online: auto_login shows side select right away, otherwise wait for Enter/Don
-    if (online && !global_data.config->network.auto_login && !global_data.entry_join_pending) {
+    if (online && !global_data.config->network.auto_login && !resuming) {
         state = EntryState::WAITING;
     }
 
     if (global_data.entry_join_pending) {
         global_data.entry_join_pending = false;
         start_second_player_join();
+    } else if (global_data.entry_campaign_resume) {
+        global_data.entry_campaign_resume = false;
+        resume_from_campaign();
     }
 }
 
-// Resolve + load the account for the next free login slot (1st login -> access_code_1, 2nd -> access_code_2).
-// card_hex empty: key/auto login. Returns false if login impossible. Offline the login finishes and
-// then() runs before this returns; online the network part runs on a worker thread, update() applies
-// it and then runs then(), and a card that cannot be registered never runs it.
+void EntryScreen::resume_from_campaign() {
+    int n = 0;
+    for (const PlayerNum seat : global_data.entry_resume_seats) {
+        if (seat == PlayerNum::ALL) {
+            continue;
+        }
+        global_data.player_num = seat;
+        players[n] = std::make_unique<EntryPlayer>(seat, seat == PlayerNum::P1 ? 0 : 2, box_manager.get());
+        players[n]->start_animations();
+        n++;
+    }
+    is_2p = n == 2;
+    audio.set_two_player_mode(is_2p);
+    global_data.player_num = is_2p ? PlayerNum::P1 : global_data.entry_resume_seats[0];
+    side = 1;
+    state = EntryState::SELECT_MODE;
+}
+
 bool EntryScreen::login_slot(const std::string& card_hex, std::function<void()> then) {
     if (login_pending()) {
         return false;
@@ -271,6 +300,11 @@ void EntryScreen::end_name_entry() {
         const std::string& code =
             name_slot_ == 0 ? global_data.config->network.access_code_1 : global_data.config->network.access_code_2;
         std::thread([code, name] { network.update_username(code, name); }).detach();
+        if (players[name_slot_]) {
+            const PlayerNum seat = players[name_slot_]->player_num;
+            audio.play_player_sound("name_fixed_" + std::to_string(static_cast<int>(seat)) + "p", seat,
+                                    VolumePreset::VOICE);
+        }
     }
     audio.stop_sound("name_select_bgm");
     audio.stop_sound("name_entry_vo");
@@ -466,6 +500,42 @@ std::optional<Screens> EntryScreen::handle_input() {
         }
         return std::nullopt;
     }
+    if (state == EntryState::BNCOIN) {
+        if (menu_left_pressed() && bncoin_popup_->input(BanaCoinPopup::LEFT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_right_pressed() && bncoin_popup_->input(BanaCoinPopup::RIGHT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_confirm_pressed() && bncoin_popup_->input(BanaCoinPopup::DECIDE)) {
+            audio.play_sound("don", VolumePreset::SOUND);
+        }
+        return std::nullopt;
+    }
+    if (state == EntryState::PRACTICE_HELP) {
+        if (menu_left_pressed() && practice_help_->input(PracticeHelp::LEFT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_right_pressed() && practice_help_->input(PracticeHelp::RIGHT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_confirm_pressed() && practice_help_->input(PracticeHelp::DECIDE)) {
+            audio.play_sound("don", VolumePreset::SOUND);
+        }
+        return std::nullopt;
+    }
+    if (state == EntryState::ENTRY_INFO) {
+        if (menu_confirm_pressed() && entry_info_->input()) {
+            audio.play_sound("don", VolumePreset::SOUND);
+        }
+        return std::nullopt;
+    }
+    if (state == EntryState::CAMPAIGN) {
+        if (menu_left_pressed() && campaign_menu_->input(CampaignMenu::LEFT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_right_pressed() && campaign_menu_->input(CampaignMenu::RIGHT)) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else if (menu_confirm_pressed() && campaign_menu_->input(CampaignMenu::DECIDE)) {
+            audio.play_sound("don", VolumePreset::SOUND);
+        }
+        return std::nullopt;
+    }
     if (state == EntryState::WAITING) {
         const bool enter = key_pressed(SDL_SCANCODE_RETURN);
         const bool don = is_l_don_pressed() || is_r_don_pressed();
@@ -596,6 +666,12 @@ std::optional<Screens> EntryScreen::handle_input() {
     return std::nullopt;
 }
 
+static bool mode_voice_playing() {
+    return std::ranges::any_of(std::array{"mode_game", "mode_ai", "mode_practice", "mode_shop"}, [](const char* voice) {
+        return audio.has_sound(voice) && audio.is_sound_playing(voice);
+    });
+}
+
 std::optional<Screens> EntryScreen::update() {
     Screen::update();
     double current_time = get_current_ms();
@@ -623,7 +699,8 @@ std::optional<Screens> EntryScreen::update() {
     }
     // Case 6: any card while a seat is free (P1 first, then P2)
     if (card_reader_ && card_reader_->is_polling() && !login_ready_ && !login_pending() && !network.probing() &&
-        state != EntryState::SELECT_COSTUME && state != EntryState::NAME_ENTRY &&
+        state != EntryState::SELECT_COSTUME && state != EntryState::NAME_ENTRY && state != EntryState::CAMPAIGN &&
+        state != EntryState::BNCOIN && state != EntryState::PRACTICE_HELP && state != EntryState::ENTRY_INFO &&
         !(seat_joined(PlayerNum::P1) && seat_joined(PlayerNum::P2))) {
         if (current_time - last_card_poll_ms_ >= global_data.config->card_reader.poll_interval_ms) {
             last_card_poll_ms_ = current_time;
@@ -640,6 +717,9 @@ std::optional<Screens> EntryScreen::update() {
 #endif
 
     allnet_indicator.update(current_time);
+    kinotake_on =
+        (global_data.kinotake_team[0] >= 0 || global_data.kinotake_team[1] >= 0) && kinotake_indicator.refresh();
+    kinotake_indicator.update(current_time);
     network_msg.update(current_time);
     if (login_pending() || network.probing()) {
         network_msg.show("clear_reading");
@@ -652,8 +732,9 @@ std::optional<Screens> EntryScreen::update() {
         name_entry_->update(current_time);
     }
     box_manager->update(current_time, is_2p);
-    if (state != EntryState::WAITING && state != EntryState::NAME_ENTRY &&
-        !(arcade_credit() && state == EntryState::SELECT_SIDE) && !login_pending()) {
+    if (state != EntryState::WAITING && state != EntryState::NAME_ENTRY && state != EntryState::CAMPAIGN &&
+        state != EntryState::BNCOIN && state != EntryState::PRACTICE_HELP && state != EntryState::ENTRY_INFO &&
+        !(arcade_credit() && state == EntryState::SELECT_SIDE) && !login_pending() && !box_manager->is_box_selected()) {
         timer->update(current_time);
     }
     nameplate.update(current_time);
@@ -670,6 +751,9 @@ std::optional<Screens> EntryScreen::update() {
             player->update(current_time);
         }
     }
+    if (update_campaign(current_time)) {
+        return on_screen_end(Screens::CAMPAIGN);
+    }
     if (box_manager->costume_menu_open) {
         box_manager->costume_menu_open = false;
         state = EntryState::SELECT_COSTUME;
@@ -677,6 +761,42 @@ std::optional<Screens> EntryScreen::update() {
             if (player && player->player_num == box_manager->opening_player) {
                 player->open_costume_menu();
             }
+        }
+    }
+    if (box_manager->shop_request) {
+        box_manager->shop_request = false;
+        open_reward_shop();
+    }
+    if (box_manager->bncoin_request) {
+        box_manager->bncoin_request = false;
+        open_bncoin_popup();
+    }
+    if (state == EntryState::BNCOIN) {
+        bncoin_popup_->update(current_time);
+        if (bncoin_popup_->is_done()) {
+            if (bncoin_popup_->paid()) {
+                global_data.bncoin -= BNCOIN_PRACTICE_COST;
+            }
+            const bool paid = bncoin_popup_->paid();
+            bncoin_popup_.reset();
+            state = EntryState::SELECT_MODE;
+            if (paid) {
+                start_practice();
+            }
+        }
+    }
+    if (state == EntryState::ENTRY_INFO) {
+        entry_info_->update(current_time);
+        if (entry_info_->is_done()) {
+            entry_info_.reset();
+            state = EntryState::SELECT_MODE;
+            enter_reward_shop();
+        }
+    }
+    if (state == EntryState::PRACTICE_HELP) {
+        practice_help_->update(current_time);
+        if (practice_help_->is_done() && !box_manager->is_box_selected()) {
+            box_manager->start_selected();
         }
     }
     if (state == EntryState::SELECT_COSTUME) {
@@ -692,17 +812,144 @@ std::optional<Screens> EntryScreen::update() {
         }
     }
     if (box_manager->is_finished()) {
+        // stay on the screen so the next screen's audio doesn't cut the voice off
+        if (mode_voice_playing()) {
+            return std::nullopt;
+        }
+        if (box_manager->selected_box() == Screens::REWARD_SHOP) {
+            leave_for_campaign(); // same resume: back to mode select with these seats
+            global_data.reward_shop_from_entry = true;
+        }
         return on_screen_end(box_manager->selected_box());
     }
     for (auto& player : players) {
         if (player && player->is_cloud_animation_finished() &&
             !audio.is_sound_playing("entry_start_" + std::to_string(static_cast<int>(global_data.player_num)) + "p") &&
-            !announce_played && state != EntryState::NAME_ENTRY) {
+            !announce_played && state != EntryState::NAME_ENTRY && state != EntryState::CAMPAIGN) {
             audio.play_sound("select_mode", VolumePreset::VOICE);
             announce_played = true;
         }
     }
     return handle_input();
+}
+
+void EntryScreen::enter_reward_shop() {
+    audio.play_sound("mode_shop", VolumePreset::VOICE);
+    box_manager->start_selected();
+}
+
+void EntryScreen::open_reward_shop() {
+    const auto& cfg = global_data.config->network;
+    const bool card = (seat_joined(PlayerNum::P1) && !cfg.access_code_1.empty()) ||
+                      (seat_joined(PlayerNum::P2) && !cfg.access_code_2.empty());
+    if (card && network.is_online()) {
+        const PlayerNum seat = seat_joined(PlayerNum::P1) ? PlayerNum::P1 : PlayerNum::P2;
+        if (script_manager.has_lua_script("entry_info") &&
+            scores_manager.first_visit(get_player_id(seat), "reward_info_seen")) {
+            auto info = std::make_unique<EntryInfo>();
+            if (!info->unavailable()) {
+                entry_info_ = std::move(info);
+                state = EntryState::ENTRY_INFO;
+                return;
+            }
+        }
+        enter_reward_shop();
+        return;
+    }
+    auto popup = std::make_unique<BanaCoinPopup>("cantshop", global_data.bncoin, 0);
+    if (popup->unavailable()) {
+        audio.play_sound("kat", VolumePreset::SOUND);
+        return;
+    }
+    bncoin_popup_ = std::move(popup);
+    state = EntryState::BNCOIN;
+}
+
+void EntryScreen::open_bncoin_popup() {
+    const bool two_players = !box_manager->selection_allowed();
+    const char* kind = two_players ? "onlyplay" : global_data.bncoin < BNCOIN_PRACTICE_COST ? "shortage" : "practice";
+    auto popup = std::make_unique<BanaCoinPopup>(kind, global_data.bncoin, BNCOIN_PRACTICE_COST);
+    if (popup->unavailable()) { // skin without the popups: practice as before
+        if (two_players) {
+            audio.play_sound("kat", VolumePreset::SOUND);
+        } else {
+            audio.play_sound("mode_practice", VolumePreset::VOICE);
+            start_practice();
+        }
+        return;
+    }
+    if (!two_players) {
+        audio.play_sound("mode_practice", VolumePreset::VOICE);
+    }
+    bncoin_popup_ = std::move(popup);
+    state = EntryState::BNCOIN;
+}
+
+void EntryScreen::start_practice() {
+    const PlayerNum seat = seat_joined(PlayerNum::P1) ? PlayerNum::P1 : PlayerNum::P2;
+    if (!script_manager.has_lua_script("practice_help") ||
+        !scores_manager.first_visit(get_player_id(seat), "practice_help_seen")) {
+        box_manager->start_selected();
+        return;
+    }
+    auto help = std::make_unique<PracticeHelp>(seat == PlayerNum::P2);
+    if (help->unavailable()) {
+        box_manager->start_selected();
+        return;
+    }
+    audio.stop_sound("bgm");
+    practice_help_ = std::move(help);
+    state = EntryState::PRACTICE_HELP;
+}
+
+bool EntryScreen::update_campaign(double current_ms) {
+    if (state == EntryState::SELECT_MODE && !campaign_shown_ && players[0] && !login_pending() && !network.probing() &&
+        mode_select_ready()) {
+        campaign_shown_ = true;
+        std::vector<std::string> campaigns = network.active_campaigns();
+        std::erase(campaigns, "mario");
+        if (std::ranges::contains(campaigns, "kinotake") && script_manager.has_lua_script("campaign_event")) {
+            global_data.campaign = "kinotake";
+            spdlog::info("[entry] campaign: kinotake");
+            leave_for_campaign();
+            return true;
+        }
+        if (campaigns.empty()) {
+            return false;
+        }
+        campaign_menu_ = std::make_unique<CampaignMenu>(campaigns);
+        if (campaign_menu_->unavailable()) { // skin without the menu: no campaigns
+            campaign_menu_.reset();
+            return false;
+        }
+        state = EntryState::CAMPAIGN;
+    }
+    if (state != EntryState::CAMPAIGN) {
+        return false;
+    }
+    campaign_menu_->update(current_ms);
+    if (campaign_menu_->is_done()) {
+        const std::string choice = campaign_menu_->get_choice();
+        global_data.campaign = choice == "skip" ? "" : choice;
+        spdlog::info("[entry] campaign: {}", global_data.campaign.empty() ? "none" : global_data.campaign);
+        campaign_menu_.reset();
+        state = EntryState::SELECT_MODE;
+
+        if (!global_data.campaign.empty()) {
+            leave_for_campaign();
+            return true;
+        }
+    }
+    return false;
+}
+
+void EntryScreen::leave_for_campaign() {
+    global_data.campaign_next = static_cast<int>(Screens::ENTRY);
+    global_data.entry_campaign_resume = true;
+    int n = 0;
+    for (const auto& player : players) {
+        global_data.entry_resume_seats[n++] = player ? player->player_num : PlayerNum::ALL;
+    }
 }
 
 void EntryScreen::draw_background() {
@@ -768,8 +1015,10 @@ void EntryScreen::draw() {
         }
     } else if (state == EntryState::SELECT_SIDE) {
         draw_side_select(lua_entry->get_side_select_fade());
-    } else if (state == EntryState::SELECT_MODE) {
+    } else if (state == EntryState::SELECT_MODE || state == EntryState::BNCOIN || state == EntryState::ENTRY_INFO) {
         draw_mode_select();
+    } else if (state == EntryState::CAMPAIGN) {
+        campaign_menu_->draw();
     } else if (state == EntryState::SELECT_COSTUME) {
         for (auto& player : players) {
             if (player) {
@@ -796,11 +1045,23 @@ void EntryScreen::draw() {
     if (name_entry_) {
         name_entry_->draw();
     }
+    if (bncoin_popup_) {
+        bncoin_popup_->draw();
+    }
+    if (practice_help_) {
+        practice_help_->draw();
+    }
+    if (entry_info_) {
+        entry_info_->draw();
+    }
 
-    if (box_manager->is_finished()) {
+    if (box_manager->is_finished() && !mode_voice_playing()) {
         draw_rectangle(0, 0, tex.screen_width, tex.screen_height, Color::BLACK);
     }
 
+    if (kinotake_on) {
+        kinotake_indicator.draw();
+    }
     network_msg.draw();
     timer->draw();
     entry_overlay.draw(false);

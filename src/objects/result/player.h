@@ -41,13 +41,16 @@ class ResultPlayer : public LuaScript {
     bool count_up_sound_1p_only = false;
     void assign_field(const std::string& field_name, const std::string& value);
     void update_score_animation(double current_ms, bool is_skipped);
+    void update_ranking();
+    std::string ranking_name;
+    bool ranking_pending = false;
 
 public:
     ResultPlayer() = default;
     ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p);
     void update(double current_ms, bool fade_in_finished, bool is_skipped);
     void draw();
-    // the song number, title and subtitle at the top of the screen (the skin places and draws them)
     void draw_song_info(const std::string& title, const std::string& subtitle, int song_number);
     double reveal_end_ms();
+    void hide_stage();
 };

@@ -15,6 +15,9 @@ void SongSelectScreen::on_screen_start() {
     audio.set_sound_volume("add_favorite", 3.0f);
     SongBox::reset_bgm_slot();
     SongBox::bgm_sound = "bgm";
+    if (const fs::path bgm = bgm_override(); !bgm.empty()) {
+        audio.load_sound(resolve_skin_path(bgm), "bgm");
+    }
     audio.play_sound("bgm", VolumePreset::MUSIC);
     audio.play_sound("voice_enter", VolumePreset::VOICE, mutes_enter_voice() ? 0.0f : 1.0f);
 
@@ -34,7 +37,10 @@ void SongSelectScreen::on_screen_start() {
     dan_transition.reset();
 
     navigator.hide_dan = hides_dan();
+    navigator.ai_assigned = shows_ai_assigned();
     navigator.is_2p = is_2p_screen();
+    navigator.waiwai = is_waiwai_screen();
+    navigator.start_path = global_data.config->paths.start_path;
     navigator.init(global_data.config->paths.tja_path);
 #ifndef __EMSCRIPTEN__
     stats_stop.request_stop();
@@ -353,7 +359,7 @@ void SongSelectScreen::update_diff_sort(double current_time) {
             cached_stats = stats_future.get();
         }
         diff_sort_selector.emplace(cached_stats, last_diff_sort.first, last_diff_sort.second, script.get(),
-                                   last_diff_order);
+                                   last_diff_order, is_2p_screen());
     }
     if (diff_sort_selector) {
         state = SongSelectState::DIFF_SORTING;

@@ -56,7 +56,7 @@ namespace zdon_record {
             for (size_t i = 0; i < title.size() && chars < 60;) {
                 const unsigned char c = title[i];
                 const size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
-                if (n == 1 && (c < 0x20 || std::string_view("<>:\"/\\|?*").find((char)c) != std::string_view::npos)) {
+                if (n == 1 && (c < 0x20 || std::string_view("<>:\"/\\|?*").contains((char)c))) {
                     out += '_';
                 } else {
                     out.append(title, i, n);
@@ -75,7 +75,7 @@ namespace zdon_record {
 #ifdef _WIN32
             std::wstring exe(MAX_PATH, L'\0');
             for (;;) {
-                const DWORD n = GetModuleFileNameW(nullptr, exe.data(), (DWORD)exe.size());
+                const DWORD n = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
                 if (n < exe.size()) {
                     exe.resize(n);
                     return exe;
@@ -327,7 +327,7 @@ namespace zdon_record {
             procs.push_back(pi.hProcess);
         }
         while (ok) {
-            const DWORD r = WaitForMultipleObjects((DWORD)procs.size(), procs.data(), TRUE, 250);
+            const DWORD r = WaitForMultipleObjects(static_cast<DWORD>(procs.size()), procs.data(), TRUE, 250);
             if (!tick()) {
                 ok = false; // the children are stopped below
                 break;

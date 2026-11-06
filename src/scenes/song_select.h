@@ -97,7 +97,7 @@ protected:
     std::optional<Screens> poll_second_player_join(double current_ms);
 
     virtual void draw_overlays();
-    virtual void draw_extra_players() {} // Z-DON: after the player (AiSongSelectScreen: the AI on the 2P side)
+    virtual void draw_extra_players() {} // Z-DON: after the player (ZdonAiSongSelectScreen: the AI on the 2P side)
 
     // Z-DON: the course select's timer (seconds), the cue when a timer runs out, backing out of the course select
     virtual int diff_select_seconds() { return 60; }
@@ -113,8 +113,11 @@ protected:
     bool diff_timer_extended = false;
 
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
+    virtual bool shows_ai_assigned() { return false; }
     virtual bool is_2p_screen() { return false; }
     virtual bool mutes_enter_voice() { return false; } // the AI select (skin zdon_ai_no_enter_voice)
+    virtual bool is_waiwai_screen() { return false; }
+    virtual fs::path bgm_override() { return {}; }
     virtual Screens get_game_screen_target() { return Screens::GAME; }
 
 public:
