@@ -96,6 +96,13 @@ Modifiers GameScreen::get_player_modifiers(PlayerNum pn) {
     if (global_data.force_auto_play) {
         m.auto_play = true; // `--auto`
     }
+    if (zdon_record::active()) { // Z-DON: a lane's support level (--record-tracks <course>@<level>[y])
+        const size_t lane = pn == PlayerNum::P2 ? 1 : 0;
+        if (const int level = zdon_record::track_subdiff(lane)) {
+            m.subdiff = level;
+            m.zdon_subdiff_yono = zdon_record::track_subdiff_yono(lane);
+        }
+    }
     if (m.equal_speed) {
         m.equal_speed_bpm = (parser && parser->metadata.bpm > 0) ? parser->metadata.bpm : 120.0;
     }

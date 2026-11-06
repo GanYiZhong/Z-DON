@@ -158,17 +158,20 @@ void main() {
             fs::path status;                   // --record-status
             double song_pos = 0, song_end = 0; // note_song
 
-            int jobs = kDefaultJobs;   // --record-jobs
-            int part = -1;             // --record-part
-            long long range_first = 0; // --record-range: this part's first frame
-            long long range_end = -1;  //   and the frame after its last (-1: the natural end)
-            long long recorded = 0;    // frames this process encoded
-            std::vector<int> tracks;   // --record-tracks: one difficulty per lane
-            double sync_end_ms = 0;    // --record-sync-end: the song ends no earlier (a lane of a composite)
-            bool no_music = false;     // --record-no-music: the hit sounds only (a lane of a composite)
-            int band_lanes = 0;        // --record-band: only this lane's band, scaled for a stack of that many
-            bool backdrop = false;     // --record-backdrop: and the picture at a fifth of the size below it
-            std::string fifo;          // --record-pipe: the raw frames go there (the stacking ffmpeg reads them)
+            int jobs = kDefaultJobs;               // --record-jobs
+            int part = -1;                         // --record-part
+            long long range_first = 0;             // --record-range: this part's first frame
+            long long range_end = -1;              //   and the frame after its last (-1: the natural end)
+            long long recorded = 0;                // frames this process encoded
+            std::vector<int> tracks;               // --record-tracks: one difficulty per lane
+            std::vector<std::string> track_tokens; // as given (a stacked recording hands them on)
+            std::vector<int> track_subdiff;        // the support level of each lane (0: none)
+            std::vector<bool> track_yono;          // upstream's earlier simplification
+            double sync_end_ms = 0; // --record-sync-end: the song ends no earlier (a lane of a composite)
+            bool no_music = false;  // --record-no-music: the hit sounds only (a lane of a composite)
+            int band_lanes = 0;     // --record-band: only this lane's band, scaled for a stack of that many
+            bool backdrop = false;  // --record-backdrop: and the picture at a fifth of the size below it
+            std::string fifo;       // --record-pipe: the raw frames go there (the stacking ffmpeg reads them)
 
             int enc_w = 0, enc_h = 0; // the encoded frame (the window's, or the band's)
             bool via_copy = false;    // the frame is put together in copy_rt (NV12 or a band)
@@ -498,11 +501,20 @@ void main() {
                 s.sync_end_ms = std::max(0.0, std::atof(argv[++i]));
             } else if (a == "--record-tracks" && i + 1 < argc) {
                 s.tracks.clear();
+                s.track_tokens.clear();
+                s.track_subdiff.clear();
+                s.track_yono.clear();
                 const std::string v = argv[++i];
                 for (size_t p = 0; p <= v.size();) {
                     const size_t q = std::min(v.find(',', p), v.size());
                     if (q > p) {
-                        s.tracks.push_back(std::atoi(v.substr(p, q - p).c_str()));
+                        // <course>[@<support level>[y]]: y = upstream's earlier simplification
+                        const std::string t = v.substr(p, q - p);
+                        const size_t at = t.find('@');
+                        s.track_tokens.push_back(t);
+                        s.tracks.push_back(std::atoi(t.substr(0, at).c_str()));
+                        s.track_subdiff.push_back(at == std::string::npos ? 0 : std::atoi(t.c_str() + at + 1));
+                        s.track_yono.push_back(at != std::string::npos && t.back() == 'y');
                     }
                     p = q + 1;
                 }
@@ -567,6 +579,14 @@ void main() {
 
     const std::vector<int>& tracks() {
         return s.tracks;
+    }
+
+    int track_subdiff(size_t k) {
+        return s.active && k < s.track_subdiff.size() ? s.track_subdiff[k] : 0;
+    }
+
+    bool track_subdiff_yono(size_t k) {
+        return s.active && k < s.track_yono.size() && s.track_yono[k];
     }
 
     bool begin() {
@@ -900,7 +920,7 @@ void main() {
                 fs::remove(sizes.back(), ec);
                 std::vector<std::string> a = base;
                 a.insert(a.end(), {"--record-tracks",
-                                   std::to_string(s.tracks[k]),
+                                   s.track_tokens[k],
                                    "--record",
                                    utf8(outs.back()),
                                    "--record-part",
@@ -1109,8 +1129,8 @@ void main() {
         }
         if (!s.tracks.empty()) {
             std::string v;
-            for (const int t : s.tracks) {
-                v += (v.empty() ? "" : ",") + std::to_string(t);
+            for (const std::string& t : s.track_tokens) {
+                v += (v.empty() ? "" : ",") + t;
             }
             base.insert(base.end(), {"--record-tracks", v});
         }

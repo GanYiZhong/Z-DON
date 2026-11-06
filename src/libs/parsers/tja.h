@@ -35,6 +35,7 @@ struct Modifiers {
     int zdon_fade = 0;
     bool zdon_ghost = false; // Z-DON: the player's best play's score at the same moment, shown as +/- (game.cpp)
     bool no_kusudama = false;
+    bool zdon_subdiff_yono = false; // Z-DON recording: upstream's earlier simplification (zdon_subdiff_yono.cpp)
 };
 
 enum class NoteType : int {
@@ -431,4 +432,5 @@ void modifier_display(NoteList& notes);
 void modifier_inverse(NoteList& notes);
 void modifier_random(NoteList& notes, int value);
 void modifier_difficulty(NoteList& notes, int level);
+void zdon_modifier_difficulty_yono(NoteList& notes, int level);
 void apply_modifiers(NoteList& notes, const Modifiers& modifiers);

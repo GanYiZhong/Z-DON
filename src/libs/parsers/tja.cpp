@@ -1635,7 +1635,11 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
         modifier_random(notes, modifiers.random);
     }
 
-    modifier_difficulty(notes, modifiers.subdiff);
+    if (modifiers.zdon_subdiff_yono) {
+        zdon_modifier_difficulty_yono(notes, modifiers.subdiff);
+    } else {
+        modifier_difficulty(notes, modifiers.subdiff);
+    }
 
     if (modifiers.no_kusudama) {
         for (Note& note : notes.notes) {

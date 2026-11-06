@@ -63,6 +63,9 @@ namespace zdon_record {
     // at once, then their gauge + lane bands stacked top to bottom in one video (the skins place everything else
     // for a lane at 1P's place, so N lanes in one game screen overlap). Empty: one lane.
     const std::vector<int>& tracks();
+    // lane k's support level (<course>@<level>, 0: the original chart) and whether it is upstream's earlier one (y)
+    int track_subdiff(size_t k);
+    bool track_subdiff_yono(size_t k);
     // --record-sync-end <ms> (a course of a stacked recording): the song does not end before ms (the longest
     // course's last note), so every course reaches its result screen at the same frame
     double sync_end_ms();
