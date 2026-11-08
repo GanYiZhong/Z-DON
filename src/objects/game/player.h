@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <functional>
 #include <memory>
@@ -36,14 +36,11 @@ namespace JudgePos {
     inline float Y = 0.0f;
 } // namespace JudgePos
 
-namespace Timing {
-    constexpr float GOOD = 25.0250015258789f;
-    constexpr float OK = 75.0750045776367f;
-    constexpr float BAD = 108.441665649414f;
-    constexpr float GOOD_EASY = 41.7083358764648f;
-    constexpr float OK_EASY = 108.441665649414f;
-    constexpr float BAD_EASY = 125.125f;
-} // namespace Timing
+// 82 is added to the screen_width to slightly boost the scroll speed;
+// The correct value for 720p is 948px per 4 beats
+inline float scroll_distance() {
+    return tex.screen_width + 82 * tex.screen_scale - JudgePos::X;
+}
 
 class Player {
 public:
@@ -52,7 +49,7 @@ public:
     PlayerNum player_num;
     PlayerNum input_player; // whose drums play this lane: ALL for a solo #PAPAMAMA course
     double last_note_hit;
-    std::map<double, InputLogType> input_log;
+    InputLog input_log;
 
     std::vector<BranchDifficulty> branch_history;
 
@@ -109,6 +106,15 @@ public:
     // Z-DON (zdon_upai_arena): the AI's lane in upstream's AI game takes Z-DON's AI lane (circuit cover / background,
     // no course mark, no plate or auto marker: the skin draws "AIどん")
     void use_upai_lane();
+    // AI battle: the AI lane's cover and background, no course mark and no plate (the skin draws the AI's)
+    void use_ai_lane();
+    void draw_shared_kusudama() {
+        if (kusudama_counter.has_value() && kusudama_partner != nullptr) {
+            kusudama_counter->draw();
+        }
+    }
+    // merge 09db50f: upstream's JudgeCore is not taken (Z-DON keeps its judging in Player): no replay parameters
+    std::optional<JudgeParams> judge_params() const { return std::nullopt; }
 
     void place_chara_on_stage(float x, float y);
     void move_stage_chara(float x, float y) { stage_chara = {x, y}; }
@@ -141,8 +147,8 @@ public:
     // Z-DON practice loop: notes outside [first, second) chart ms are drawn grey (nullopt: none)
     std::optional<std::pair<double, double>> zdon_dim_range;
     bool is_replay() const { return replay_active; }
-    void load_replay(const std::map<double, InputLogType>& log) {
-        replay_log.assign(log.begin(), log.end());
+    void load_replay(const InputLog& log) {
+        replay_log = log;
         replay_cursor = 0;
         replay_active = true;
     }
@@ -217,13 +223,14 @@ protected:
     bool show_drumroll_count = true;    // the "N hits" counter during a drumroll
     bool show_lane_badges = true;       // the player icon (1P/2P) and the modifier badges
     bool upai_ai = false;               // Z-DON: use_upai_lane
+    bool ai_lane = false;               // use_ai_lane
 
 private:
     bool is_2p;
     int judgeable_note_count = 0;
     bool skipped_run = false;
     bool replay_active = false;
-    std::vector<std::pair<double, InputLogType>> replay_log;
+    InputLog replay_log;
     size_t replay_cursor = 0;
     bool is_dan{false};
     int difficulty;

@@ -122,7 +122,8 @@ std::optional<Screens> Result2PScreen::update() {
                 global_data.songs_played = 0;
                 return on_screen_end(Screens::GAME_OVER);
             }
-            if (quitting) {
+            if (quitting || (global_data.config->limits.song_limit > 0 &&
+                             global_data.config->limits.song_limit == global_data.songs_played)) {
                 return on_screen_end(credit_end_screen());
             }
             global_data.returned_from_result = true;

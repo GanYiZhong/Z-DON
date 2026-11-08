@@ -44,6 +44,9 @@ rapidjson::Document read_json_file(const fs::path& file_path);
 // read-only); others are parsed into a new one
 std::shared_ptr<const rapidjson::Document> read_json_shared(const fs::path& file_path);
 
+// Pretty-prints doc over file_path and drops the stale read_json_file cache entry.
+bool write_json_file(const fs::path& file_path, const rapidjson::Document& doc);
+
 struct SongListEntry {
     std::string hash;
     std::string title;

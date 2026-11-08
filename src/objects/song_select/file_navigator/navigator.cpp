@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "../../../libs/encoding.h"
 #include "../../../libs/file/filesystem.h"
 #include "../../../libs/fixed_step.h"
 #include "../../../libs/gfx/han_fold_table.h"
@@ -602,6 +603,7 @@ void Navigator::load_start_folder() {
     const fs::path start = resolve_start_path();
     const bool leaf = !start.empty() && !has_child_folders(start);
     const fs::path target = leaf ? start.parent_path() : start;
+    start_folder = leaf ? fs::path{} : start;
     // A folder without subfolders only opens inline, from its box in the parent listing.
     if (leaf) {
         restore_cursor_path = start;
@@ -759,8 +761,8 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
 void Navigator::init(std::vector<fs::path> songs_paths) {
     t_background = tex.get_texture("box/background");
     emit_wheel_event(WHEEL_EVENT_SCENE_ENTRY);
-    if (is_init && (hide_dan != built_hide_dan || waiwai != built_waiwai || is_2p != built_is_2p ||
-                    ai_assigned != built_ai_assigned)) {
+    if (is_init && (hide_dan != built_hide_dan || hide_collections != built_hide_collections ||
+                    waiwai != built_waiwai || is_2p != built_is_2p || ai_assigned != built_ai_assigned)) {
         join_loader();
         is_inline = false;
         inline_state.reset();
@@ -777,6 +779,7 @@ void Navigator::init(std::vector<fs::path> songs_paths) {
         is_init = false;
     }
     built_hide_dan = hide_dan;
+    built_hide_collections = hide_collections;
     built_waiwai = waiwai;
     built_ai_assigned = ai_assigned;
     built_is_2p = is_2p;
@@ -931,7 +934,7 @@ void sort_items(std::vector<std::unique_ptr<BaseBox>>& items, int first_index, i
         }
 
         std::ranges::sort(sortable, [](const std::unique_ptr<BaseBox>& a, const std::unique_ptr<BaseBox>& b) {
-            return alpha_less(a->text_name, b->text_name);
+            return alpha_less(strip_text_markup(a->text_name), strip_text_markup(b->text_name));
         });
 
         int sortable_idx = 0;
@@ -1539,7 +1542,7 @@ void Navigator::load_from_song_list(const fs::path& path, const BoxDef& box_def,
 }
 
 void Navigator::toggle_favorite(SongBox* song) {
-    if (!favorite_folder_path) {
+    if (!favorite_folder_path || hide_collections) {
         return;
     }
     FolderBox::invalidate_scan_cache(); // song_list.txt counts change
@@ -1577,7 +1580,7 @@ fs::path Navigator::find_box_def_folder(const fs::path& song_path) {
 }
 
 void Navigator::add_to_recent(const SongBox* song) {
-    if (!recent_folder_path) {
+    if (!recent_folder_path || hide_collections) {
         return;
     }
     FolderBox::invalidate_scan_cache(); // song_list.txt counts change
@@ -2330,6 +2333,7 @@ void Navigator::load_current_directory(const fs::path path) {
         pending_inline_box_def = box_def;
 
         if (box_def.collection == "DIFFICULTY") {
+            diff_sort_scope.reset(); // merge 09db50f: upstream's per-folder scope needs its navigation loader
             awaiting_diff_sort = true;
             return;
         }
@@ -2516,7 +2520,7 @@ void Navigator::setup_back_box(const fs::path& path, bool has_children, const Ba
         if (!reloading_roots) {
             items.clear();
         }
-        if (std::ranges::contains(root_paths, path)) {
+        if (std::ranges::contains(root_paths, path) || path == start_folder) {
             return;
         }
         items.push_back(make_back_box(path.parent_path(), &folder));
@@ -3439,7 +3443,10 @@ void Navigator::draw_score_history() {
 // Course clear counts for the difficulty sort. The levels come from the startup scan (song_levels),
 // not a parse of every chart on disk: song select waits for this before it opens the difficulty
 // sort and before it hands over to the next screen.
-Statistics Navigator::get_statistics(const fs::path& path, const std::stop_token& stop) {
+Statistics Navigator::get_statistics(const std::vector<fs::path>& paths, const std::stop_token& stop,
+                                     const std::set<fs::path>* scope) {
+    std::atomic<bool> cancelled{stop.stop_requested()};
+    std::stop_callback cancellation(stop, [&cancelled] { cancelled = true; });
     Statistics stats;
 
     for (int course = 0; course <= 4; course++) {
@@ -3456,17 +3463,27 @@ Statistics Navigator::get_statistics(const fs::path& path, const std::stop_token
         return stats;
     }
 
-    // Songs below a folder of `path` (not files directly in it), as the directory walk counted them
-    for (const auto& [path_str, levels] : song_levels) {
+    // Songs below a folder of a root (not files directly in it), as the directory walk counted them
+    std::vector<std::pair<fs::path, std::array<int, 5>>> songs;
+    for (const fs::path& path : paths) {
+        for (const auto& [path_str, levels] : song_levels) {
+            fs::path song_path(path_str);
+            fs::path rel = song_path.lexically_relative(path);
+            if (rel.empty() || *rel.begin() == ".." || std::distance(rel.begin(), rel.end()) < 2) {
+                continue;
+            }
+            if (!scope || scope->contains(song_path)) {
+                std::array<int, 5> course_levels{};
+                std::ranges::copy_n(levels.begin(), 5, course_levels.begin());
+                songs.emplace_back(song_path, course_levels);
+            }
+        }
+    }
+
+    for (const auto& [song_path, levels] : songs) {
         if (stop.stop_requested()) {
             break;
         }
-        fs::path song_path(path_str);
-        fs::path rel = song_path.lexically_relative(path);
-        if (rel.empty() || *rel.begin() == ".." || std::distance(rel.begin(), rel.end()) < 2) {
-            continue;
-        }
-
         const auto& hashes = scores_manager.get_hashes(song_path);
         for (int course = 0; course <= 4; course++) {
             int level = levels[course];

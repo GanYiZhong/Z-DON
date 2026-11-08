@@ -5,7 +5,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -124,10 +123,22 @@ inline std::string localized_text(const std::map<std::string, std::string>& valu
 
 struct CachedOutlinedText;
 
+// Fill color for the bytes [begin, end) of a text with its markup removed.
+struct TextColorSpan {
+    size_t begin;
+    size_t end;
+    Color color;
+};
+
+// OutlinedText reads <c=#RRGGBB>...</c> in its text as a fill color for that part (box.def titles use this).
+// `text` without those tags, for code that compares or counts what is shown.
+std::string strip_text_markup(const std::string& text);
+
 class OutlinedText {
 private:
     std::string text;
     int density = 1; // Z-DON texture density: font_size / outline_thickness are physical (x density)
+    std::vector<TextColorSpan> color_spans;
     float font_size;
     float outline_thickness;
     float v_advance = 1.0f;
@@ -148,6 +159,8 @@ private:
     struct BuildData {
         Image img;
     };
+
+    Color fill_at(size_t offset, Color base) const;
 
     BuildData build_horizontal_text(Color color, Color outline_color, float spacing);
     BuildData build_vertical_text(Color color, Color outline_color, float spacing);
@@ -181,12 +194,3 @@ extern FontManager font_manager;
 // Skin font by name ("Fonts/<name>[.ttf]"); empty or unloadable -> the default font_manager.
 FontManager& named_font_manager(const std::string& name);
 void unload_named_fonts();
-
-// Text read from charts and box.def files is UTF-8 (with or without a BOM) or, in files made for
-// older simulators, Shift-JIS without a BOM.
-
-bool is_valid_utf8(std::string_view text);
-
-// `text` as UTF-8: returned as it is when it already is valid UTF-8, otherwise read as Shift-JIS
-// (code page 932). Where no converter is available the bytes are returned unchanged.
-std::string utf8_from_utf8_or_sjis(std::string_view text);

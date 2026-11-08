@@ -763,7 +763,7 @@ static void run_frame() {
         PROFILE_SCOPE_N("screen update");
         PROFILE_ZONE_TEXT(screen->screen_name);
         const auto t0 = std::chrono::steady_clock::now();
-        next_screen = screen->update();
+        next_screen = screen->in_game_over() ? screen->update_game_over() : screen->update();
         g_spike_update_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         g_spike_screen = screen->screen_name;
     }

@@ -83,6 +83,11 @@ struct TextureObject {
     std::vector<int> y2;
     std::optional<std::vector<Rect>> crop_data;
 
+    // Where x/y/x2/y2 came from, so the debug menu can write edits back.
+    std::filesystem::path json_path;
+    std::string json_key;
+    float json_scale = 1.0f;
+
     float opaque_right = 0.0f;
     // Z-DON texture density (screen.texture_density): the image's pixels per unit of width / height /
     // x / y / x2 / y2, which are logical. Only the source rect is scaled by it (crop_data is in image pixels).
@@ -160,6 +165,9 @@ struct FramedTexture : public TextureObject {
         return textures[frame].get();
     }
 };
+
+// Writes obj's x/y/x2/y2 at index back into the texture.json it was loaded from.
+bool save_texture_position(const TextureObject& obj, int index);
 
 struct DrawLogEntry {
     std::string name;

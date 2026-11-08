@@ -17,7 +17,7 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
         pd = zdon_ai_player_data(global_data.zdon_ai.level); // Z-DON AI battle
     }
 
-    chara = make_chara_from_player_data(pd ? &*pd : nullptr, is_2p);
+    chara = make_chara_from_player_data(pd ? &*pd : nullptr); // 2P stands below 1P, facing the same way
     if (pd) {
         chara->set_don_colors(pd->chara_color_1, pd->chara_color_2, pd->chara_color_3);
         chara->apply_face(pd->chara_face_index);

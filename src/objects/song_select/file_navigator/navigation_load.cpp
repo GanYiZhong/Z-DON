@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <random>
 #include <ranges>
+#include <set>
 #include <type_traits>
 #include <utility>
 
+#include "../../../libs/encoding.h"
 #include "../../../libs/file/filesystem.h"
 #include "../../../libs/file/scores.h"
 #include "../../../libs/gfx/text.h"
@@ -96,6 +99,7 @@ class NavigationLoad {
     std::string player_1;
     std::string current_search;
     bool hide_dan;
+    bool hide_collections;
     bool waiwai;
     bool waiwai_box;
     bool is_2p;
@@ -160,9 +164,31 @@ class NavigationLoad {
     void parse_song_list(const fs::path& path, const BoxDef& box_def, bool inline_mode);
     void load_current_directory_async(const fs::path& path);
     std::vector<fs::path> find_new_songs(const fs::path& path) const;
+    // folders a collection draws songs from: its parent, or every root when it sits at one (the roots list as one)
+    std::vector<fs::path> collection_scope(const fs::path& path) const {
+        const fs::path parent = path.parent_path();
+        return std::ranges::contains(root_paths, parent) ? root_paths : std::vector<fs::path>{parent};
+    }
+    // the folder beside the collection that holds song_path; empty if none or the collection itself
+    fs::path collection_sibling(const fs::path& song_path, const fs::path& path) const {
+        for (const fs::path& base : collection_scope(path)) {
+            fs::path rel = song_path.lexically_relative(base);
+            if (!rel.empty() && rel.begin()->string() != "..") {
+                fs::path sibling = base / *rel.begin();
+                return sibling == path ? fs::path{} : sibling;
+            }
+        }
+        return {};
+    }
     void load_collection_new(const fs::path& path, const BoxDef& box_def);
     void load_collection_difficulty(const fs::path& path, const BoxDef& box_def, int course, int level, int order = 1);
-    void load_from_song_list(const fs::path& path, const BoxDef& box_def, bool mark_favorite);
+    void load_from_song_list(const fs::path& path, const fs::path& list_folder, const BoxDef& box_def,
+                             bool mark_favorite, const std::optional<std::set<fs::path>>& scope = std::nullopt,
+                             int max_songs = INT_MAX);
+    fs::path resolve_song_entry(const SongListEntry& entry) const { return ::resolve_song_entry(*index, entry); }
+    std::optional<std::set<fs::path>> surrounding_songs(const fs::path& path) {
+        return ::surrounding_songs(path, root_paths, *index, folder_scanner, abort_loading);
+    }
     void load_collection_recommended(const fs::path& path, const BoxDef& box_def);
     void load_collection_ai_assigned(const fs::path& path, const BoxDef& box_def);
     void load_collection_search(const fs::path& path, const BoxDef& box_def);
@@ -187,9 +213,10 @@ public:
         : index(request.index), request(request), emit(std::move(emit)), cancellation_token(stop),
           cancellation(stop, [this] { abort_loading = true; }), root_paths(request.roots), language(request.language),
           player_1(request.player_1), current_search(request.search), hide_dan(request.hide_dan),
-          waiwai(request.waiwai), waiwai_box(request.waiwai_box), is_2p(request.is_2p),
-          ai_assigned(request.ai_assigned), reloading_roots(request.kind == LoadRequest::Kind::ROOTS),
-          inline_back_def(request.back_def), diff_sort_filter(request.difficulty), folder_scanner(stop) {}
+          hide_collections(request.hide_collections), waiwai(request.waiwai), waiwai_box(request.waiwai_box),
+          is_2p(request.is_2p), ai_assigned(request.ai_assigned),
+          reloading_roots(request.kind == LoadRequest::Kind::ROOTS), inline_back_def(request.back_def),
+          diff_sort_filter(request.difficulty), folder_scanner(stop) {}
 
     void run() {
         if (request.kind == LoadRequest::Kind::SUMMARIES) {
@@ -259,6 +286,30 @@ private:
     }
 };
 
+fs::path resolve_song_entry(const SongIndex& index, const SongListEntry& entry) {
+    fs::path final_path;
+    // Hash is the primary reference. If several songs share it, title and
+    // subtitle disambiguate only among candidates with that same hash.
+    if (auto found = scores_manager.get_path_by_hash(entry.hash)) {
+        final_path = *found;
+    }
+    if (!entry.title.empty() || !entry.subtitle.empty()) {
+        auto by_title = index.find_exact_title(entry.title, entry.subtitle);
+        if (!by_title) {
+            by_title = index.find_song_by_title(entry.title, entry.subtitle);
+        }
+        if (by_title && scores_manager.get_single_hash(*by_title) == entry.hash) {
+            final_path = *by_title;
+        }
+    }
+    if (final_path.empty()) {
+        if (auto song_path_opt = index.find_song_by_title(entry.title, entry.subtitle)) {
+            final_path = *song_path_opt;
+        }
+    }
+    return final_path;
+}
+
 void NavigationLoad::parse_song_list(const fs::path& path, const BoxDef& box_def, bool inline_mode) {
     auto snapshot = read_song_list_snapshot(path);
     const auto& entries = snapshot.entries;
@@ -269,25 +320,7 @@ void NavigationLoad::parse_song_list(const fs::path& path, const BoxDef& box_def
     // Resolve every entry first so the songs can be parsed in parallel
     std::vector<fs::path> resolved(entries.size());
     for (size_t i = 0; i < entries.size() && !abort_loading; i++) {
-        const auto& entry = entries[i];
-        fs::path& final_path = resolved[i];
-
-        // Hash is the primary reference. If several songs share it, title and
-        // subtitle disambiguate only among candidates with that same hash.
-        if (auto found = scores_manager.get_path_by_hash(entry.hash)) {
-            final_path = *found;
-        }
-        if (!entry.title.empty() || !entry.subtitle.empty()) {
-            if (auto by_title = index->find_song_by_title(entry.title, entry.subtitle);
-                by_title && scores_manager.get_single_hash(*by_title) == entry.hash) {
-                final_path = *by_title;
-            }
-        }
-        if (final_path.empty()) {
-            if (auto song_path_opt = index->find_song_by_title(entry.title, entry.subtitle)) {
-                final_path = *song_path_opt;
-            }
-        }
+        resolved[i] = resolve_song_entry(entries[i]);
     }
     std::vector<fs::path> to_parse;
     for (const fs::path& p : resolved) {
@@ -309,7 +342,9 @@ void NavigationLoad::parse_song_list(const fs::path& path, const BoxDef& box_def
         SongParser parser = take_parser(preparsed, final_path);
         const auto& titles = parser.metadata.title;
         const auto& subtitles = parser.metadata.subtitle;
-        const std::string title = titles.contains("en") ? titles.at("en") : titles.begin()->second;
+        const std::string title = !parser.metadata.audio_tagged_title.empty() ? parser.metadata.audio_tagged_title
+                                  : titles.contains("en")                     ? titles.at("en")
+                                                                              : titles.begin()->second;
         const std::string subtitle = subtitles.contains("en") ? subtitles.at("en") : subtitles.begin()->second;
         const std::string correct_hash = scores_manager.get_single_hash(final_path);
         out_entries.push_back({correct_hash, title, subtitle});
@@ -472,6 +507,9 @@ void NavigationLoad::load_current_directory_async(const fs::path& path) {
                     if (hide_dan && entry_box_def.genre_index == GenreIndex::DAN) {
                         continue;
                     }
+                    if (hide_collections && !entry_box_def.collection.empty()) {
+                        continue;
+                    }
                     if (entry_box_def.genre_index == GenreIndex::TUTORIAL && !fs::exists(curr_path / TUTORIAL_CHART)) {
                         continue; // the tutorial folder only shows while its chart is there
                     }
@@ -540,24 +578,22 @@ void NavigationLoad::load_current_directory_async(const fs::path& path) {
 
 std::vector<fs::path> NavigationLoad::find_new_songs(const fs::path& path) const {
     std::vector<fs::path> hits;
-    const fs::path parent = path.parent_path();
     const auto two_weeks_ago = fs::file_time_type::clock::now() - ch::weeks(2);
-    for (const auto& song_path : index->song_paths_under(parent, &abort_loading)) {
-        if (abort_loading) {
-            break;
+    for (const fs::path& base : collection_scope(path)) {
+        for (const auto& song_path : index->song_paths_under(base, &abort_loading)) {
+            if (abort_loading) {
+                return hits;
+            }
+            if (collection_sibling(song_path, path).empty()) {
+                continue;
+            }
+            std::error_code ec;
+            auto last_write = fs::last_write_time(song_path.parent_path(), ec);
+            if (ec || last_write < two_weeks_ago) {
+                continue;
+            }
+            hits.push_back(song_path);
         }
-
-        fs::path rel = song_path.lexically_relative(parent);
-        fs::path sibling = parent / *rel.begin();
-        if (sibling == path) {
-            continue;
-        }
-        std::error_code ec;
-        auto last_write = fs::last_write_time(song_path.parent_path(), ec);
-        if (ec || last_write < two_weeks_ago) {
-            continue;
-        }
-        hits.push_back(song_path);
     }
     return hits;
 }
@@ -582,7 +618,7 @@ void NavigationLoad::load_collection_new(const fs::path& path, const BoxDef& box
             enqueue_inline_box(make_back_box(parent, &inline_back_def));
         }
         auto song = make_song_box(h, box_def, take_parser(preparsed, h));
-        apply_song_genre(song.get(), parse_box_def(parent / *h.lexically_relative(parent).begin()));
+        apply_song_genre(song.get(), parse_box_def(collection_sibling(h, path)));
         song->fade_in(266);
         enqueue_inline_box(std::move(song));
         songs_added++;
@@ -608,19 +644,24 @@ void NavigationLoad::load_collection_difficulty(const fs::path& path, const BoxD
     }
 
     const fs::path parent = path.parent_path();
+    const auto scope = surrounding_songs(path);
     for (const auto& song_path : index->filter_difficulty(course, level, &abort_loading)) {
         if (abort_loading) {
             break;
         }
 
-        // the song must sit below one of the collection folder's siblings
-        fs::path rel = song_path.lexically_relative(parent);
-        if (rel.empty() || rel.begin()->string() == "..") {
-            continue;
-        }
-        fs::path sibling = parent / *rel.begin();
-        if (sibling == path || !fs::is_directory(sibling)) {
-            continue;
+        fs::path sibling;
+        if (scope) {
+            if (!scope->contains(song_path)) {
+                continue;
+            }
+            sibling = navigation_scan::find_box_def_folder(song_path);
+        } else {
+            // at a root: the song must sit below one of the collection folder's siblings
+            sibling = collection_sibling(song_path, path);
+            if (sibling.empty() || !fs::is_directory(sibling)) {
+                continue;
+            }
         }
 
         bool unmet = false;
@@ -658,17 +699,53 @@ void NavigationLoad::load_collection_difficulty(const fs::path& path, const BoxD
             enqueue_inline_box(make_back_box(parent, &inline_back_def));
         }
         auto song = make_song_box(h.path, box_def, take_parser(preparsed, h.path));
-        apply_song_genre(song.get(), parse_box_def(h.sibling));
+        if (!h.sibling.empty()) {
+            apply_song_genre(song.get(), parse_box_def(h.sibling));
+        }
         song->fade_in(266);
         enqueue_inline_box(std::move(song));
         songs_added++;
     }
 }
 
-void NavigationLoad::load_from_song_list(const fs::path& path, const BoxDef& box_def, bool mark_favorite) {
+std::optional<std::set<fs::path>> surrounding_songs(const fs::path& path, const std::vector<fs::path>& roots,
+                                                    const SongIndex& index, navigation_scan::FolderScanner& scanner,
+                                                    const std::atomic<bool>& abort) {
+    const fs::path parent = path.parent_path();
+    if (std::ranges::contains(roots, parent)) {
+        return std::nullopt;
+    }
+
+    std::set<fs::path> songs;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(parent, fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    for (; !ec && it != end && !abort; it.increment(ec)) {
+        const fs::path& entry = it->path();
+        std::error_code type_ec;
+        if (it->is_directory(type_ec)) {
+            if (scanner.has_def_file(entry) && !parse_navigation_box_def(entry, "").collection.empty()) {
+                it.disable_recursion_pending();
+            }
+        } else if (entry.filename() == "song_list.txt") {
+            for (const auto& song_entry : read_song_list(entry)) {
+                if (fs::path song_path = resolve_song_entry(index, song_entry); !song_path.empty()) {
+                    songs.insert(std::move(song_path));
+                }
+            }
+        } else if (entry.extension() == ".tja" || entry.extension() == ".osu") {
+            songs.insert(entry);
+        }
+    }
+    return songs;
+}
+
+void NavigationLoad::load_from_song_list(const fs::path& path, const fs::path& list_folder, const BoxDef& box_def,
+                                         bool mark_favorite, const std::optional<std::set<fs::path>>& scope,
+                                         int max_songs) {
     int songs_added = 0;
-    for (const auto& entry : read_song_list(path / "song_list.txt")) {
-        if (abort_loading) {
+    for (const auto& entry : read_song_list(list_folder / "song_list.txt")) {
+        if (abort_loading || songs_added >= max_songs) {
             break;
         }
         fs::path song_path;
@@ -681,7 +758,7 @@ void NavigationLoad::load_from_song_list(const fs::path& path, const BoxDef& box
                 song_path = *by_title;
             }
         }
-        if (song_path.empty()) {
+        if (song_path.empty() || (scope && !scope->contains(song_path))) {
             continue;
         }
         if (songs_added > 0 && songs_added % 10 == 0) {
@@ -703,7 +780,9 @@ void NavigationLoad::load_from_song_list(const fs::path& path, const BoxDef& box
 }
 
 void NavigationLoad::load_collection_recommended(const fs::path& path, const BoxDef& box_def) {
-    auto all_songs = index->songs_by_title(&abort_loading);
+    auto scope = surrounding_songs(path);
+    auto all_songs =
+        scope ? std::vector<fs::path>(scope->begin(), scope->end()) : index->songs_by_title(&abort_loading);
 
     std::mt19937 rng(std::random_device{}());
     std::shuffle(all_songs.begin(), all_songs.end(), rng);
@@ -906,7 +985,7 @@ void NavigationLoad::load_songs_inline_async(const fs::path& path, const BoxDef&
 
     if (box_def.collection == "FAVORITE") {
         try {
-            load_from_song_list(path, box_def, true);
+            load_from_song_list(path, path, box_def, true);
         } catch (const std::exception& e) {
             spdlog::error("Error loading favorite collection {}: {}", path.string(), e.what());
             throw;
@@ -916,7 +995,8 @@ void NavigationLoad::load_songs_inline_async(const fs::path& path, const BoxDef&
 
     if (box_def.collection == "RECENT") {
         try {
-            load_from_song_list(path, box_def, false);
+            load_from_song_list(path, request.recent_folder.value_or(path), box_def, false, surrounding_songs(path),
+                                10);
         } catch (const std::exception& e) {
             spdlog::error("Error loading recent collection {}: {}", path.string(), e.what());
             throw;

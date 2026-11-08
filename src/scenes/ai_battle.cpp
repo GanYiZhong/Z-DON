@@ -88,7 +88,7 @@ std::optional<Screens> AISongSelectScreen::update() {
         intro.reset();
         audio.play_sound("bgm", VolumePreset::MUSIC);
         play_call_voice();
-        select_timer = std::make_unique<Timer>(100, current_ms, [this] { player->select_song(); });
+        select_timer = std::make_unique<Timer>(100, current_ms, [this] { on_select_timeout(); });
     }
     return std::nullopt;
 }
@@ -274,6 +274,8 @@ void AIGameScreen::apply_overlay_layout() {
     ai()->hide_lane_badges();
     if (zdon_upai_arena()) {
         ai()->use_upai_lane();
+    } else {
+        ai()->use_ai_lane();
     }
 }
 
@@ -434,7 +436,12 @@ void AIGameScreen::draw() {
     }
     ai()->draw_arcs();
     overlay->draw_finale(ms);
-    draw_overlay();
+    if (const SkinInfo* pos = tex.get_skin_config(SC::AI_GAME_SONG_INFO)) {
+        song_info.draw(pos->x, pos->y);
+        draw_overlay(false);
+    } else {
+        draw_overlay();
+    }
 }
 
 void AIResultScreen::submit_match() {
@@ -516,6 +523,13 @@ std::optional<Screens> AIResultScreen::update() {
         skipped_time = skipped_time > 0 ? skipped_time : now;
         board->begin(network.ai_battle_progress());
         clear_input_buffers();
+        return next;
+    }
+    // the base back-key check is gated on reveal_end_ms(), which is 0 while the board is up
+    if (fade_out && check_key_pressed(global_data.config->keys.back_key)) {
+        quitting = true;
+        start_fade_out();
+        audio.play_sound("don", VolumePreset::SOUND);
         return next;
     }
     const PlayerNum seat = global_data.player_num;

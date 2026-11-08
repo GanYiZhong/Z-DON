@@ -37,6 +37,7 @@ void SongSelectScreen::on_screen_start() {
     dan_transition.reset();
 
     navigator.hide_dan = hides_dan();
+    navigator.hide_collections = guests_only(is_2p_screen());
     navigator.ai_assigned = shows_ai_assigned();
     navigator.is_2p = is_2p_screen();
     navigator.waiwai = is_waiwai_screen();
@@ -52,10 +53,10 @@ void SongSelectScreen::on_screen_start() {
     stats_stop = std::stop_source{};
 
     if (!global_data.config->paths.tja_path.empty()) {
-        stats_future = std::async(std::launch::async,
-                                  [this, path = global_data.config->paths.tja_path[0], stop = stats_stop.get_token()] {
-                                      return navigator.get_statistics(path, stop);
-                                  });
+        stats_future =
+            std::async(std::launch::async, [paths = global_data.config->paths.tja_path, stop = stats_stop.get_token()] {
+                return navigator.get_statistics(paths, stop);
+            });
         fixed_step::wait(stats_future);
     }
 #endif
@@ -66,7 +67,7 @@ void SongSelectScreen::on_screen_start() {
 
     indicator = std::make_unique<Indicator>(Indicator::State::SELECT);
     song_num = std::make_unique<SongNum>(global_data.songs_played + 1);
-    select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { player->select_song(); });
+    select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { on_select_timeout(); });
     diff_select_timer = nullptr;
     join_request_ms = -1.0;
 }
@@ -112,6 +113,7 @@ void SongSelectScreen::select_song(SongBox* song) {
     const auto player_index = static_cast<int>(global_data.player_num);
     SessionData& session_data = global_data.session_data[player_index];
     session_data.selected_song = song->path;
+    session_data.selected_collection = song->collection;
     session_data.selected_difficulty = static_cast<int>(player->selected_difficulty);
     session_data.song_hash = song->hash_for(session_data.selected_difficulty);
     session_data.genre_index = static_cast<int>(song->song_genre_index) - 1;
@@ -123,6 +125,26 @@ void SongSelectScreen::select_song(SongBox* song) {
         game_transition->add_loading_graphic((session_data.selected_song.parent_path() / "Loading.png").string());
     }
     game_transition->start();
+}
+
+void SongSelectScreen::on_select_timeout() {
+    if (state == SongSelectState::BROWSING) {
+        state = player->select_song();
+    }
+}
+
+void SongSelectScreen::on_diff_select_timeout() {
+    auto* item = dynamic_cast<SongBox*>(navigator.get_current_item());
+    if (item == nullptr || game_transition.has_value()) {
+        return;
+    }
+    // the cursor may rest on back/options when time runs out
+    for (SongSelectPlayer* p : {player.get(), second_player()}) {
+        if (p != nullptr && p->selected_difficulty < Difficulty::EASY && !p->curr_diffs.empty()) {
+            p->selected_difficulty = p->curr_diffs.front();
+        }
+    }
+    select_song(item);
 }
 
 void SongSelectScreen::handle_input_browsing(double current_ms) {
@@ -190,12 +212,13 @@ void SongSelectScreen::handle_input_search() {
 }
 
 void SongSelectScreen::poll_song_jump(double current_ms) {
-    static constexpr double SONG_JUMP_POLL_INTERVAL_MS = 3000.0;
+    // Server drops jump requests after 15s (JUMP_TTL in hiroba), keep this below that
+    static constexpr double JUMP_POLL_INTERVAL_MS = 10000.0;
     const std::string& access_code = global_data.config->network.access_code_1;
     if (!access_code.empty() && state == SongSelectState::BROWSING &&
-        current_ms - last_song_jump_poll_ms >= SONG_JUMP_POLL_INTERVAL_MS) {
-        last_song_jump_poll_ms = current_ms;
-        network.poll_song_jump(access_code);
+        current_ms - last_jump_poll_ms >= JUMP_POLL_INTERVAL_MS) {
+        last_jump_poll_ms = current_ms;
+        network.poll_jump(access_code);
     }
 
     if (auto hash = network.take_song_jump_result()) {
@@ -203,15 +226,7 @@ void SongSelectScreen::poll_song_jump(double current_ms) {
     }
 }
 
-std::optional<Screens> SongSelectScreen::poll_replay_jump(double current_ms) {
-    static constexpr double REPLAY_JUMP_POLL_INTERVAL_MS = 3000.0;
-    const std::string& access_code = global_data.config->network.access_code_1;
-    if (!access_code.empty() && state == SongSelectState::BROWSING &&
-        current_ms - last_replay_jump_poll_ms >= REPLAY_JUMP_POLL_INTERVAL_MS) {
-        last_replay_jump_poll_ms = current_ms;
-        network.poll_replay_jump(access_code);
-    }
-
+std::optional<Screens> SongSelectScreen::take_replay_jump() {
     if (auto score_id = network.take_replay_jump_result()) {
         network.request_replay(*score_id);
     }
@@ -358,8 +373,10 @@ void SongSelectScreen::update_diff_sort(double current_time) {
             stats_future.wait();
             cached_stats = stats_future.get();
         }
-        diff_sort_selector.emplace(cached_stats, last_diff_sort.first, last_diff_sort.second, script.get(),
-                                   last_diff_order, is_2p_screen());
+        const auto& scope = navigator.get_diff_sort_scope();
+        diff_sort_selector.emplace(scope ? navigator.get_statistics({}, {}, &*scope) : cached_stats,
+                                   last_diff_sort.first, last_diff_sort.second, script.get(), last_diff_order,
+                                   is_2p_screen());
     }
     if (diff_sort_selector) {
         state = SongSelectState::DIFF_SORTING;
@@ -388,7 +405,7 @@ std::optional<Screens> SongSelectScreen::update() {
     update_diff_sort(current_time);
 
     poll_song_jump(current_time);
-    if (auto replay_screen = poll_replay_jump(current_time)) {
+    if (auto replay_screen = take_replay_jump()) {
         return replay_screen;
     }
     if (auto join = poll_second_player_join(current_time)) {
@@ -461,6 +478,8 @@ std::optional<Screens> SongSelectScreen::update() {
         if (state == SongSelectState::SONG_SELECTED) {
             diff_timer_extended = false;
             arm_diff_select_timer(diff_select_seconds(), current_time);
+        } else if (state == SongSelectState::BROWSING) {
+            diff_select_timer.reset();
         } else if (state == SongSelectState::SEARCHING) {
             start_search();
         } else if (state == SongSelectState::DAN_SELECTED) {

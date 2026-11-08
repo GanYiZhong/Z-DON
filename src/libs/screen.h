@@ -7,9 +7,11 @@
 #include <string>
 #include <utility>
 
+#include "../objects/game_over/game_over.h"
 #include "audio/audio.h"
 #include "gfx/texture.h"
 #include "global_data.h"
+#include "input/input.h"
 #include "readahead.h"
 #include "time.h"
 
@@ -125,6 +127,7 @@ public:
 
     virtual Screens on_screen_end(Screens next_screen) {
         screen_init = false;
+        game_over.reset(); // its Lua object holds textures unloaded below
         spdlog::info("{} ended, transitioning to {} screen", screen_name, next_screen);
 
         unload_screen_resources();
@@ -141,10 +144,34 @@ public:
     void _do_draw() {
         if (screen_init) {
             draw();
+            game_over.draw();
         }
     }
 
+    // While the game over plays, the main loop runs this instead of update()
+    bool in_game_over() const { return game_over.active(); }
+    std::optional<Screens> update_game_over() {
+        game_over.update(get_current_ms());
+        if (game_over.is_finished()) {
+            return on_screen_end(Screens::TITLE);
+        }
+        return std::nullopt;
+    }
+
 protected:
+    GameOverOverlay game_over;
+
+    // Game over plays over the screen that ends the credit; a guests-only credit gets the GAME_OVER screen's ad
+    static bool game_over_overlay() { return !global_data.guest_credit; }
+
+    std::optional<Screens> end_or_game_over(Screens next_screen) {
+        if (next_screen == Screens::GAME_OVER && game_over_overlay()) {
+            game_over.start();
+            return std::nullopt;
+        }
+        return on_screen_end(next_screen);
+    }
+
     // Z-DON predecode: what the screen most likely shown next needs, decoded while this one idles (the textures
     // after the result screens come from the prefill, texture_lazy.h; a song's screens start theirs when a song
     // is chosen and after its last note)
@@ -173,6 +200,8 @@ protected:
                 readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
                 on_screen_start();
                 tex.end_predecode(); // Z-DON: the predecoded images the screen did not need
+                // hits made during the previous screen's fade-out or this load must not act here
+                clear_input_buffers();
                 g_frame_ms = get_current_ms();
                 spdlog::info("{} initialized", screen_name);
                 predecode_next(screen_name);

@@ -28,13 +28,7 @@
 #include <vector>
 
 #include "../gfx/color_utils.h"
-
-enum class InputLogType {
-    KAT_L = 0,
-    DON_L = 1,
-    DON_R = 2,
-    KAT_R = 3
-};
+#include "../judge.h"
 
 struct RemoteScore {
     std::string hash;
@@ -65,7 +59,7 @@ struct ReplayData {
     bool ok = false;
     std::string hash;
     int difficulty = 0;
-    std::map<double, int> input_log;
+    std::vector<std::pair<double, int>> input_log;
     PlayerData player_data;
 };
 
@@ -83,9 +77,11 @@ struct KinotakeSeat {
     int assist = 1;    // highest costume rate seen
     bool duet = false;
 };
-// Kinotake costumes (cos index): wearing one doubles the play's points
-constexpr int KINOTAKE_COSTUME_KINOKO = 105;
-constexpr int KINOTAKE_COSTUME_TAKENOKO = 106;
+// Kinotake costumes (cos index): wearing one doubles the play's points. The package scan's, then the team's ちびどん.
+// Returns the team the costume belongs to, -1 for none.
+constexpr int kinotake_costume_team(int cos_index) {
+    return cos_index == 101 || cos_index == 105 ? 0 : cos_index == 102 || cos_index == 106 ? 1 : -1;
+}
 
 struct KinotakeTally {
     KinotakeSeat seat[2];
@@ -113,8 +109,8 @@ struct DonSeat {
 
 struct MedalSeat {
     bool answered = false;
-    int now = 0; // balance before this credit
-    int add = 0;
+    int now = 0; // balance before the first claim since the last reset
+    int add = 0; // every claim since then
     int max = 0;
     bool daily = false, weekly = false, monthly = false;
 };
@@ -153,10 +149,11 @@ struct AIBattleStatus {
     int next_reward_wins = -1;
 };
 struct ShopGood {
-    int type = -1; // 2 dress, 3 head, 4 body, 5 puchichara
+    int type = -1; // 2 dress, 3 head, 4 body, 5 puchichara, 6 title
     int id = -1;
     int cost = 0;
     bool owned = false;
+    std::string name; // titles only: the skin has no names for them
 };
 struct ShopSeat {
     bool answered = false;
@@ -191,9 +188,11 @@ public:
     std::vector<std::string> active_campaigns() const;
 
     std::string register_user(const std::string& username, const std::string& idm = "");
+    std::string map_to_json(const InputLog& log);
     void submit_score(const std::string& hash, int difficulty, const std::string& access_code, const Score& score,
-                      const std::map<double, InputLogType>& input_log, int64_t played_at,
-                      const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index);
+                      const InputLog& input_log, int64_t played_at, const std::string& modifiers_json,
+                      bool chara_is_costume, int chara_cos_index, const std::string& source_folder = "", int gauge = -1,
+                      const std::optional<JudgeParams>& judge_params = std::nullopt);
 
     void clear_import_flag(const std::string& access_code);
 
@@ -209,10 +208,9 @@ public:
     bool probing() const { return probing_; }
     void update_costume(const std::string& access_code, int head_index, int body_index, int cos_index, bool is_costume);
 
-    void poll_song_jump(const std::string& access_code);
+    // One GET /poll_jump fills both the song and replay jump results
+    void poll_jump(const std::string& access_code);
     std::optional<std::string> take_song_jump_result();
-
-    void poll_replay_jump(const std::string& access_code);
     std::optional<int> take_replay_jump_result();
 
     std::vector<RemoteScore> fetch_scores(const std::string& access_code);
@@ -239,6 +237,7 @@ public:
     const DonSeat& don_seat(int seat) const { return don_seats[seat]; }
     void reset_don_points() { don_seats[0] = {}, don_seats[1] = {}; }
     void submit_medals(int seat, const std::string& access_code);
+    void submit_revive_result(const std::string& access_code, bool success);
     const MedalSeat& medal_seat(int seat) const { return medal_seats[seat]; }
     void reset_medals() { medal_seats[0] = {}, medal_seats[1] = {}; }
     void request_reward_shop(int seat, const std::string& access_code);
@@ -286,13 +285,11 @@ private:
     int kinotake_leader_ = -1;
 #if defined(NETWORK_ENABLED)
     std::optional<cpr::AsyncResponse> pending_heartbeat;
-    static constexpr double HEARTBEAT_INTERVAL_MS = 30000.0;
+    static constexpr double HEARTBEAT_INTERVAL_MS = 120000.0;
     double last_heartbeat_ms = -HEARTBEAT_INTERVAL_MS;
 
-    std::optional<cpr::AsyncResponse> pending_song_jump;
+    std::optional<cpr::AsyncResponse> pending_jump;
     std::optional<std::string> song_jump_result;
-
-    std::optional<cpr::AsyncResponse> pending_replay_jump;
     std::optional<int> replay_jump_result;
 
     std::optional<cpr::AsyncResponse> pending_replay_fetch;
@@ -306,6 +303,7 @@ private:
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_don_points;
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_medals;
     std::vector<cpr::AsyncResponse> pending_ai_battle;
+    std::vector<cpr::AsyncResponse> pending_revive;
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_shop;
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_shop_buy;
 

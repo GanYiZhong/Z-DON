@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <regex>
 #include <spdlog/spdlog.h>
 #include <vector>
 
@@ -620,6 +621,12 @@ static int text_margin(float font_size) {
     return static_cast<int>(std::ceil(font_size * 0.25f));
 }
 
+static int glyph_advance(const Font& font, int glyph_index, float spacing) {
+    const GlyphInfo& g = font.glyphs[glyph_index];
+    return g.advanceX == 0 ? static_cast<int>(font.recs[glyph_index].width + spacing)
+                           : g.advanceX + static_cast<int>(spacing);
+}
+
 static Image text_image(const Font& font, const char* text, float font_size, float spacing, int margin) {
     Vec2 sz = measure_text_ex(font, text, font_size, spacing);
     Image im = gen_image_color(static_cast<int>(sz.x), static_cast<int>(sz.y) + margin * 2, Color::BLANK);
@@ -639,8 +646,7 @@ static Image text_image(const Font& font, const char* text, float font_size, flo
                        font.recs[gi].height};
             image_draw_image_pro(&im, g.image, sr, dr, {0, 0}, 0.0f, Color::WHITE);
         }
-        x += (g.advanceX == 0 ? static_cast<int>(font.recs[gi].width + spacing)
-                              : g.advanceX + static_cast<int>(spacing));
+        x += glyph_advance(font, gi, spacing);
     }
     return im;
 }
@@ -850,11 +856,43 @@ static bool in_rotate_set(const std::string& s) {
     return rotate_set.contains(s);
 }
 
+static std::string parse_color_markup(const std::string& text, std::vector<TextColorSpan>& spans) {
+    if (!text.contains("<c=#")) {
+        return text;
+    }
+    static const std::regex tag("<c=(#(?:[0-9a-fA-F]{3}){1,2})>([\\s\\S]*?)</c>");
+    std::string plain;
+    size_t copied = 0;
+    for (std::sregex_iterator it(text.begin(), text.end(), tag), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        plain.append(text, copied, static_cast<size_t>(m.position()) - copied);
+        const size_t begin = plain.size();
+        plain += m[2].str();
+        spans.push_back({begin, plain.size(), parse_hex_color(m[1].str())});
+        copied = static_cast<size_t>(m.position() + m.length());
+    }
+    plain.append(text, copied);
+    return plain;
+}
+
+std::string strip_text_markup(const std::string& text) {
+    std::vector<TextColorSpan> spans;
+    return parse_color_markup(text, spans);
+}
+
+Color OutlinedText::fill_at(size_t offset, Color base) const {
+    for (const TextColorSpan& span : color_spans) {
+        if (offset >= span.begin && offset < span.end) {
+            return span.color;
+        }
+    }
+    return base;
+}
+
 OutlinedText::OutlinedText(std::string text, int logical_font_size, Color color, Color outline_color, bool is_vertical,
                            float outline_thickness, float logical_spacing, float v_advance,
                            const std::string& font_name)
-    : text(std::move(text)), density(std::max(global_tex.texture_density, 1)),
-      font_size(static_cast<float>(logical_font_size * density)),
+    : density(std::max(global_tex.texture_density, 1)), font_size(static_cast<float>(logical_font_size * density)),
       outline_thickness(outline_thickness * global_tex.screen_scale * static_cast<float>(density)),
       v_advance(v_advance),
       dbg_font((font_name.empty() ? std::string("default") : font_name) + "@" + std::to_string(logical_font_size)) {
@@ -862,6 +900,7 @@ OutlinedText::OutlinedText(std::string text, int logical_font_size, Color color,
     // Z-DON texture density: the text is rasterised at the physical size (x density) and drawn at the logical one
     const int font_size = logical_font_size * density;
     const float spacing = logical_spacing * static_cast<float>(density);
+    this->text = parse_color_markup(text, color_spans);
     auto& manager = named_font_manager(font_name);
     // upstream: a text built before with the same font, size, colours and layout reuses its texture
     if (outlined_text_cache().enabled()) {
@@ -980,13 +1019,30 @@ OutlinedText::BuildData OutlinedText::build_horizontal_text(Color color, Color o
                                     pad * 2 + top_extra,
                                 clear_of(outline_thickness > 0 ? outline_color : color));
 
-    for (int li = 0; li < static_cast<int>(lines.size()); li++) {
+    size_t line_start = 0;
+    for (size_t li = 0; li < lines.size(); li++) {
         float y = pad + top_extra + li * line_advance;
         if (outline_thickness > 0) {
             stamp_outline(&img, worker_font, lines[li].c_str(), {static_cast<float>(pad), y}, font_size, sp,
                           outline_color, outline_thickness);
         }
-        draw_text_clean(&img, worker_font, lines[li].c_str(), {static_cast<float>(pad), y}, font_size, sp, color);
+        if (color_spans.empty()) {
+            draw_text_clean(&img, worker_font, lines[li].c_str(), {static_cast<float>(pad), y}, font_size, sp, color);
+        } else {
+            int x = pad;
+            for (size_t i = 0; i < lines[li].size();) {
+                int n = 0;
+                const int cp = get_codepoint_next(lines[li].c_str() + i, &n);
+                if (n <= 0) {
+                    break;
+                }
+                draw_text_clean(&img, worker_font, lines[li].substr(i, n).c_str(), {static_cast<float>(x), y},
+                                font_size, sp, fill_at(line_start + i, color));
+                x += glyph_advance(worker_font, get_glyph_index(worker_font, cp), sp);
+                i += n;
+            }
+        }
+        line_start += lines[li].size() + 1;
     }
 
     return {img};
@@ -1000,7 +1056,8 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
     struct TextItem {
         std::vector<std::string> chars;
         bool is_hgroup;
-        float width; // total render width
+        float width;   // total render width
+        size_t offset; // of the first char, in `text`
     };
 
     std::vector<std::string> raw_chars;
@@ -1018,7 +1075,8 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
     }
 
     std::vector<TextItem> items;
-    for (int i = 0; i < static_cast<int>(raw_chars.size());) {
+    size_t next_offset = 0;
+    for (size_t i = 0; i < raw_chars.size();) {
         if (is_hgroup_char(raw_chars[i])) {
             int j = i;
             while (j < static_cast<int>(raw_chars.size()) && is_hgroup_char(raw_chars[j])) {
@@ -1028,8 +1086,10 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
             item.is_hgroup = (j - i >= 2);
             item.chars.assign(raw_chars.begin() + i, raw_chars.begin() + j);
             item.width = 0.0f;
+            item.offset = next_offset;
             for (const auto& s : item.chars) {
                 item.width += measure_text_ex(worker_font, s.c_str(), font_size, spacing).x;
+                next_offset += s.size();
             }
             items.push_back(std::move(item));
             i = j;
@@ -1038,6 +1098,8 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
             item.is_hgroup = false;
             item.chars = {raw_chars[i]};
             item.width = measure_text_ex(worker_font, raw_chars[i].c_str(), font_size, spacing).x;
+            item.offset = next_offset;
+            next_offset += raw_chars[i].size();
             items.push_back(std::move(item));
             ++i;
         }
@@ -1087,6 +1149,7 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
             if (item.is_hgroup) {
                 // Chars drawn left-to-right, group centred in max_item_width.
                 float cx = pad + (max_item_width - item.width) / 2.0f;
+                size_t char_offset = item.offset;
                 for (const auto& s : item.chars) {
                     float cw = measure_text_ex(worker_font, s.c_str(), font_size, spacing).x;
                     if (pass == 0) {
@@ -1095,9 +1158,11 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
                                           outline_thickness);
                         }
                     } else {
-                        draw_text_clean(target, worker_font, s.c_str(), {cx, y}, font_size, spacing, color);
+                        draw_text_clean(target, worker_font, s.c_str(), {cx, y}, font_size, spacing,
+                                        fill_at(char_offset, color));
                     }
                     cx += cw;
+                    char_offset += s.size();
                 }
             } else {
                 const auto& s = item.chars[0];
@@ -1119,7 +1184,8 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
                         }
                     } else {
                         draw_text_clean(&tmp, worker_font, s.c_str(),
-                                        {static_cast<float>(pad), static_cast<float>(pad)}, font_size, spacing, color);
+                                        {static_cast<float>(pad), static_cast<float>(pad)}, font_size, spacing,
+                                        fill_at(item.offset, color));
                     }
                     image_rotate_cw(&tmp);
 
@@ -1135,7 +1201,8 @@ OutlinedText::BuildData OutlinedText::build_vertical_text(Color color, Color out
                                           outline_color, outline_thickness);
                         }
                     } else {
-                        draw_text_clean(target, worker_font, s.c_str(), {x, draw_y}, font_size, spacing, color);
+                        draw_text_clean(target, worker_font, s.c_str(), {x, draw_y}, font_size, spacing,
+                                        fill_at(item.offset, color));
                     }
                 }
             }
@@ -1282,84 +1349,4 @@ void unload_named_fonts() {
         }
     }
     named_fonts.clear();
-}
-
-bool is_valid_utf8(std::string_view text) {
-    size_t i = 0;
-    const size_t n = text.size();
-    while (i < n) {
-        const unsigned char c = static_cast<unsigned char>(text[i]);
-        if (c < 0x80) {
-            i++;
-            continue;
-        }
-        int extra;
-        unsigned int cp;
-        if ((c & 0xE0) == 0xC0) {
-            extra = 1;
-            cp = c & 0x1F;
-        } else if ((c & 0xF0) == 0xE0) {
-            extra = 2;
-            cp = c & 0x0F;
-        } else if ((c & 0xF8) == 0xF0) {
-            extra = 3;
-            cp = c & 0x07;
-        } else {
-            return false;
-        }
-        if (i + extra >= n) {
-            return false;
-        }
-        for (int k = 1; k <= extra; k++) {
-            const unsigned char cc = static_cast<unsigned char>(text[i + k]);
-            if ((cc & 0xC0) != 0x80) {
-                return false;
-            }
-            cp = (cp << 6) | (cc & 0x3F);
-        }
-        // overlong forms, surrogates and values past U+10FFFF are not UTF-8
-        if ((extra == 1 && cp < 0x80) || (extra == 2 && cp < 0x800) || (extra == 3 && cp < 0x10000) ||
-            (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
-            return false;
-        }
-        i += extra + 1;
-    }
-    return true;
-}
-
-std::string utf8_from_utf8_or_sjis(std::string_view text) {
-    if (is_valid_utf8(text)) {
-        return std::string(text);
-    }
-#if defined(_WIN32)
-    return win32_utf8_from_sjis(text);
-#elif defined(YATAIDON_HAVE_ICONV)
-    iconv_t cd = iconv_open("UTF-8", "CP932");
-    if (cd == reinterpret_cast<iconv_t>(-1)) {
-        return std::string(text);
-    }
-    std::string out(text.size() * 3 + 4, '\0');
-    char* in_ptr = const_cast<char*>(text.data());
-    size_t in_left = text.size();
-    char* out_ptr = out.data();
-    size_t out_left = out.size();
-    while (in_left > 0) {
-        if (iconv(cd, &in_ptr, &in_left, &out_ptr, &out_left) != static_cast<size_t>(-1)) {
-            break;
-        }
-        // a byte CP932 does not map: keep it as '?' and go on
-        if (out_left == 0) {
-            break;
-        }
-        *out_ptr++ = '?';
-        out_left--;
-        in_ptr++;
-        in_left--;
-    }
-    iconv_close(cd);
-    out.resize(out.size() - out_left);
-    return out;
-#else
-    return std::string(text);
-#endif
 }

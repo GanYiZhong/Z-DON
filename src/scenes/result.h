@@ -22,6 +22,7 @@ protected:
     int zdon_freeze_exit = 0; // Z-DON zdon_end_over_result: 1 = leaving for GAME_OVER with the frame held, 2 = go
     bool zdon_freeze_to_game_over() const;
     bool quitting = false;
+    std::optional<Screens> credit_next; // credit_end_screen() result, chosen once per exit
     bool allow_retry = true;
     AllNetIcon allnet_indicator;
     CoinOverlay coin_overlay;
@@ -46,6 +47,7 @@ protected:
     bool retry_pending() const;
     bool exiting() const;
     void begin_exit();
+    void start_fade_out(); // the game over overlay instead when the credit ends there
 
     virtual double reveal_end_ms();
     void update_input_and_timeout(double current_ms);

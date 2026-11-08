@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(YataiDON VERSION 1.0.6 LANGUAGES C CXX)
+project(YataiDON VERSION 1.0.8 LANGUAGES C CXX)
 
 cmake_policy(SET CMP0002 NEW)  # Logical target names must be globally unique
 cmake_policy(SET CMP0079 NEW)  # Allow target_link_libraries() everywhere
@@ -338,7 +338,7 @@ if(CARD_READER_ENABLED)
   target_compile_definitions(${PROJECT_NAME} PRIVATE CARD_READER_ENABLED)
 endif()
 
-# Shift-JIS charts and box.def files are converted with iconv outside Windows (src/libs/gfx/text.cpp)
+# Shift-JIS charts and box.def files are converted with iconv outside Windows (src/libs/encoding.cpp)
 if(NOT WIN32 AND NOT EMSCRIPTEN)
   find_package(Iconv)
   if(Iconv_FOUND)

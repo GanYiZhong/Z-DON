@@ -1,4 +1,4 @@
-#include "player.h"
+﻿#include "player.h"
 
 #include <algorithm>
 #include <cmath>
@@ -648,7 +648,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
             if (streak_now) {
                 chara->set_tint({0, 0, 0, 255}, 0.35f);
             } else if (gauge_full_now) {
-                chara->set_tint({255, 220, 0, 255}, 0.5f);
+                chara->set_tint({125, 110, 5, 255}, 0.0f);
             } else {
                 chara->set_tint({0, 0, 0, 255}, 0.0f);
             }
@@ -689,7 +689,8 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
 void Player::draw(double ms_from_start, float x, float y) {
     PlayerSoundScope audio_owner(player_num);
     tex.draw_texture(t_lane_background, {.y = y});
-    if (player_num == PlayerNum::AI || (((zdon_ai && zdon_ai_lane_game()) || upai_ai) && t_ai_lane_background)) {
+    if (player_num == PlayerNum::AI || ai_lane ||
+        (((zdon_ai && zdon_ai_lane_game()) || upai_ai) && t_ai_lane_background)) {
         tex.draw_texture(t_ai_lane_background, {.y = y});
     }
     if (branch_indicator.has_value()) {
@@ -757,7 +758,7 @@ void Player::draw(double ms_from_start, float x, float y) {
 void Player::draw_practice(double ms_from_start, float x, float y, bool draw_notes_on) {
     practice_lyric = true;
     tex.draw_texture(t_lane_background, {.y = y});
-    if (player_num == PlayerNum::AI) {
+    if (player_num == PlayerNum::AI || ai_lane) {
         tex.draw_texture(t_ai_lane_background, {.y = y});
     }
     if (branch_indicator.has_value()) {
@@ -1562,6 +1563,9 @@ void Player::check_drumroll(double current_ms, DrumType drum_type, std::optional
     const bool is_big = !other_notes.empty() && other_notes.front().type == NoteType::ROLL_HEAD_L;
     draw_arc_list.emplace_back(NoteType(drum_type), current_ms, arc_player(), is_big, false, 0.0f, 0.0f, rainbow_arc);
     curr_drumroll_count++;
+    if (curr_drumroll_count == 1) {
+        drumroll_counter.reset(); // an equal count left by the last roll would not restart the animations
+    }
     if (!other_notes.empty()) {
         roll_hits[other_notes.front().index] = curr_drumroll_count;
     }
@@ -1840,14 +1844,16 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
 }
 
 void Player::drumroll_counter_manager(double current_ms) {
-    if (is_drumroll && curr_drumroll_count > 0 && drumroll_counter == std::nullopt) {
+    // a roll with no hits yet must not overwrite the previous roll's count, which may still be fading out
+    const bool hit_active_roll = is_drumroll && curr_drumroll_count > 0;
+    if (hit_active_roll && drumroll_counter == std::nullopt) {
         drumroll_counter = DrumrollCounter();
     }
 
     if (drumroll_counter.has_value()) {
-        if (drumroll_counter->is_finished() && !is_drumroll) {
+        if (drumroll_counter->is_finished() && !hit_active_roll) {
             drumroll_counter.reset();
-        } else if (is_drumroll) {
+        } else if (hit_active_roll) {
             drumroll_counter->update(current_ms, curr_drumroll_count);
         } else {
             drumroll_counter->update_animations(current_ms);
@@ -1977,7 +1983,7 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
             } else {
                 log_type = input.side == Side::LEFT ? InputLogType::KAT_L : InputLogType::KAT_R;
             }
-            input_log.insert({ms_from_start, log_type});
+            input_log.emplace_back(ms_from_start, log_type);
             check_note(ms_from_start, input.drum_type, current_ms, background);
         }
     }
@@ -2429,6 +2435,14 @@ void Player::draw_lane_cover(float y) {
     }
 }
 
+void Player::use_ai_lane() {
+    ai_lane = true;
+    show_lane_name = false;
+    if (tex.has_texture("lane/ai_lane_cover")) {
+        lane_cover_tex_id = tex.get_texture("lane/ai_lane_cover");
+    }
+}
+
 void Player::draw_overlays(float y) {
     tex.draw_texture(t_drum, {.y = y});
     if (ending_anim.has_value() && !hide_ending_anim) {
@@ -2468,7 +2482,7 @@ void Player::draw_overlays(float y) {
     int index = is_dan ? 0 : is_2p;
     if (lane_mark && !arena_ai) {
         tex.draw_texture(lane_mark, {.y = y});
-    } else if (!arena_ai) {
+    } else if (!arena_ai && !ai_lane) {
         tex.draw_texture(t_lane_difficulty, {.frame = frame, .y = y, .index = index});
     }
     if (show_lane_badges && !ai_lane) {
@@ -2528,7 +2542,7 @@ void Player::draw_overlays(float y) {
     if (papamama_popup.has_value()) {
         papamama_popup->draw();
     }
-    if (kusudama_counter.has_value()) {
+    if (kusudama_counter.has_value() && kusudama_partner == nullptr) { // shared ones: GameScreen::draw_players
         kusudama_counter->draw();
     }
     // Practice mode draws the lyric itself, after the large drums, so it is not hidden.

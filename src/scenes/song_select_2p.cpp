@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "../libs/input/input.h"
+#include "../libs/network/network.h"
 
 void SongSelect2PScreen::on_screen_start() {
     SongSelectScreen::on_screen_start();
@@ -106,6 +107,7 @@ void SongSelect2PScreen::select_song(SongBox* song) {
     const auto p1_index = static_cast<int>(PlayerNum::P1);
     auto& sd1 = global_data.session_data[p1_index];
     sd1.selected_song = song->path;
+    sd1.selected_collection = song->collection;
     sd1.selected_difficulty = static_cast<int>(player->selected_difficulty);
     sd1.song_hash = song->hash_for(sd1.selected_difficulty);
     sd1.genre_index = std::max(0, static_cast<int>(song->song_genre_index) - 1);
@@ -114,6 +116,7 @@ void SongSelect2PScreen::select_song(SongBox* song) {
     const auto p2_index = static_cast<int>(PlayerNum::P2);
     auto& sd2 = global_data.session_data[p2_index];
     sd2.selected_song = song->path;
+    sd2.selected_collection = song->collection;
     sd2.selected_difficulty = static_cast<int>(player_2->selected_difficulty);
     sd2.song_hash = song->hash_for(sd2.selected_difficulty);
     sd2.genre_index = std::max(0, static_cast<int>(song->song_genre_index) - 1);
@@ -137,6 +140,7 @@ std::optional<Screens> SongSelect2PScreen::update() {
     update_diff_sort(current_time);
 
     poll_song_jump(current_time);
+    network.take_replay_jump_result(); // 2P has no replays; drop it so 1P doesn't start a stale one later
     handle_input(current_time);
 
     player->update(current_time);
@@ -168,7 +172,8 @@ std::optional<Screens> SongSelect2PScreen::update() {
         }
     }
 
-    if (check_key_pressed(global_data.config->keys.back_key) && !game_transition.has_value()) {
+    if (check_key_pressed(global_data.config->keys.back_key) && !game_transition.has_value() &&
+        global_data.config->limits.song_limit <= 0) {
         return on_screen_end(Screens::ENTRY);
     }
 
@@ -191,6 +196,8 @@ std::optional<Screens> SongSelect2PScreen::update() {
             diff_select_timer = std::make_unique<Timer>(60, current_time, [this] { on_diff_timeout(); });
         } else if (state == SongSelectState::SEARCHING) {
             start_search();
+        } else if (state == SongSelectState::BROWSING) {
+            diff_select_timer.reset();
         }
     }
 

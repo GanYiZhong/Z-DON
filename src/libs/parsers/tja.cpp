@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "../../platform/platform.h"
+#include "../encoding.h"
 #include "../fixed_step.h"
 #include "../gfx/sdl_compat.h"
 #include "../gfx/text.h"
@@ -541,6 +542,11 @@ void TJAParser::get_metadata() {
     }
 
     for (auto& [region_code, title] : metadata.title) {
+        const bool audio_tagged = title.contains("-New Audio-") || title.contains("-新曲-") ||
+                                  title.contains("-Old Audio-") || title.contains("-旧曲-");
+        if (audio_tagged && region_code == "en") {
+            metadata.audio_tagged_title = title;
+        }
         if (title.contains("-New Audio-") || title.contains("-新曲-")) {
             replace_all(title, "-New Audio-", "");
             replace_all(title, "-新曲-", "");
@@ -677,10 +683,12 @@ TJAParser::notes_to_position(int diff) {
                 }
                 state.dropped_note = false;
 
-                // Skip consecutive balloon end markers (9)
-                if (item == '9' && !state.curr_note_list->empty()) {
-                    Note* last_note = &state.curr_note_list->back();
-                    if (last_note && last_note->type == NoteType::KUSUDAMA) {
+                // Repeated 9s are one kusudama, even with barlines between them
+                if (item == '9') {
+                    auto notes_back = std::views::reverse(*state.curr_note_list);
+                    auto last_note = std::ranges::find_if(
+                        notes_back, [](const Note& note) { return note.type != NoteType::BARLINE; });
+                    if (last_note != notes_back.end() && last_note->type == NoteType::KUSUDAMA) {
                         current_ms += increment;
                         continue;
                     }
@@ -1565,7 +1573,7 @@ void modifier_inverse(NoteList& notes) {
     }
 }
 
-void modifier_random(NoteList& notes, int value) {
+void modifier_random(NoteList& notes, int value, uint32_t seed) {
     // value: 1 == kimagure, 2 == detarame
 
     if (value == 0 || notes.notes.empty()) {
@@ -1575,12 +1583,14 @@ void modifier_random(NoteList& notes, int value) {
     int percentage = (notes.notes.size() / 5) * value;
     percentage = std::min(percentage, static_cast<int>(notes.notes.size()));
 
-    std::mt19937 gen(fixed_step::seed());
+    std::mt19937 gen(fixed_step::on() ? fixed_step::seed() : seed);
 
     std::vector<int> indices(notes.notes.size());
     // NOLINTNEXTLINE(modernize-use-ranges): std::ranges::iota is missing from the PS5 and iOS standard libraries
     std::iota(indices.begin(), indices.end(), 0);
-    std::ranges::shuffle(indices, gen);
+    for (size_t i = indices.size() - 1; i > 0; --i) {
+        std::swap(indices[i], indices[gen() % (i + 1)]);
+    }
 
     std::vector<int> selected_notes(indices.begin(), indices.begin() + percentage);
 
@@ -1633,7 +1643,7 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
     }
 
     if (modifiers.random > 0) {
-        modifier_random(notes, modifiers.random);
+        modifier_random(notes, modifiers.random, modifiers.seed);
     }
 
     if (modifiers.zdon_subdiff_yono) {
@@ -1642,11 +1652,11 @@ void apply_modifiers(NoteList& notes, const Modifiers& modifiers) {
         modifier_difficulty(notes, modifiers.subdiff);
     }
 
-    if (modifiers.no_kusudama) {
-        for (Note& note : notes.notes) {
-            if (note.type == NoteType::KUSUDAMA) {
-                note.type = NoteType::BALLOON_HEAD;
-            }
+    for (Note& note : notes.notes) {
+        if (note.type == NoteType::KUSUDAMA &&
+            (modifiers.no_kusudama ||
+             (modifiers.shared_kusudamas && !modifiers.shared_kusudamas->contains(std::llround(note.hit_ms))))) {
+            note.type = NoteType::BALLOON_HEAD;
         }
     }
 

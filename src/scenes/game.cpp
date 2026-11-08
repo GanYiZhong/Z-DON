@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <random>
 #include <thread>
 
 #include "../libs/file/filesystem.h"
@@ -106,6 +107,9 @@ Modifiers GameScreen::get_player_modifiers(PlayerNum pn) {
     if (m.equal_speed) {
         m.equal_speed_bpm = (parser && parser->metadata.bpm > 0) ? parser->metadata.bpm : 120.0;
     }
+    if (m.random > 0) {
+        m.seed = std::random_device{}();
+    }
     return m;
 }
 
@@ -204,9 +208,9 @@ void GameScreen::create_players() {
 
     SessionData& replay_session_data = global_data.session_data[player_index];
     if (replay_session_data.replay_input_log.has_value()) {
-        std::map<double, InputLogType> typed_log;
+        InputLog typed_log;
         for (const auto& [ms, type] : *replay_session_data.replay_input_log) {
-            typed_log.emplace(ms, static_cast<InputLogType>(type));
+            typed_log.emplace_back(ms, static_cast<InputLogType>(type));
         }
         players.back()->load_replay(typed_log);
 
@@ -601,20 +605,21 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
             }
             if (!access_code.empty()) {
                 network.submit_score(hash, session_data.selected_difficulty, access_code, score, target->input_log,
-                                     played_at, modifiers_json, pd.chara_is_costume, pd.chara_cos_index);
+                                     played_at, modifiers_json, pd.chara_is_costume, pd.chara_cos_index,
+                                     session_data.selected_collection, static_cast<int>(target->gauge->get_length()),
+                                     target->judge_params());
                 session_data.result_data.submitted = true;
                 const int seat = static_cast<int>(player_num) - 1;
                 if (!run_skipped && (seat == 0 || seat == 1)) {
                     global_data.credit_gauges[seat].push_back(static_cast<int>(target->gauge->get_length()));
                     global_data.credit_titles[seat].push_back(session_data.song_title);
+                    network.submit_medals(seat, access_code);
                 }
                 if (!run_skipped && (seat == 0 || seat == 1) && global_data.kinotake_team[seat] >= 0) {
                     const bool duet = std::ranges::count_if(players, [](const auto& p) {
                                           return p && !p->is_auto_play() && !p->is_replay();
                                       }) == 2;
-                    const bool kinotake_costume =
-                        pd.chara_is_costume && (pd.chara_cos_index == KINOTAKE_COSTUME_KINOKO ||
-                                                pd.chara_cos_index == KINOTAKE_COSTUME_TAKENOKO);
+                    const bool kinotake_costume = pd.chara_is_costume && kinotake_costume_team(pd.chara_cos_index) >= 0;
                     network.submit_kinotake(seat, access_code, global_data.kinotake_team[seat], score.score, duet,
                                             kinotake_costume);
                 }
@@ -1113,6 +1118,10 @@ void GameScreen::draw_players() {
     } else if (players.size() == 2) {
         players[0]->draw(clock.position(), 0, 184 * tex.screen_scale);
         players[1]->draw(clock.position(), 0, tex.get_skin_config(SC::GAME_P2_Y)->y);
+        // the shared kusudama covers both lanes, so it goes over the 2P lane too
+        for (const auto& player : players) {
+            player->draw_shared_kusudama();
+        }
     } else {
         float gap = (tex.screen_height - (players.size() * 176 * tex.screen_scale)) / (players.size() + 1);
         for (int i = 0; i < players.size(); i++) {

@@ -2,6 +2,7 @@
 
 #include "../libs/file/scores.h"
 #include "../libs/input/input.h"
+#include "../libs/network/network.h"
 #include "total_result.h"
 
 void RetryGameScreen::on_screen_start() {
@@ -77,13 +78,19 @@ std::optional<Screens> RetryGameScreen::update() {
     last_ms = current_ms;
 
     if (scene->is_finished()) {
+        const auto& network_config = global_data.config->network;
+        const std::string& access_code =
+            global_data.player_num == PlayerNum::P2 ? network_config.access_code_2 : network_config.access_code_1;
+        if (!access_code.empty()) {
+            network.submit_revive_result(access_code, scene->is_success());
+        }
         if (scene->is_success()) {
             return on_screen_end(select_screen());
         }
         reset_session();
         if (global_data.config->limits.song_limit > 0 &&
             global_data.config->limits.song_limit == global_data.songs_played) {
-            return on_screen_end(begin_total_result());
+            return end_or_game_over(begin_total_result());
         }
         global_data.returned_from_result = true;
         return on_screen_end(select_screen());

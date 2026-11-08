@@ -75,6 +75,9 @@ protected:
     // Z-DON: when the difficulty timer runs out on back / options / neiro, the player gets the song's lowest course;
     // false if the song has none
     static bool pick_course_on_timeout(SongSelectPlayer& p);
+    virtual void on_select_timeout();
+    void on_diff_select_timeout();
+    virtual SongSelectPlayer* second_player() { return nullptr; }
 
     virtual void handle_input(double current_ms);
 
@@ -83,11 +86,11 @@ protected:
     virtual void handle_input_diff_sorting();
     virtual void handle_input_search();
 
+    // Polls /poll_jump; song jumps are applied here, replay jumps are left for take_replay_jump()
     void poll_song_jump(double current_ms);
-    double last_song_jump_poll_ms = -1e9;
+    double last_jump_poll_ms = -1e9;
 
-    std::optional<Screens> poll_replay_jump(double current_ms);
-    double last_replay_jump_poll_ms = -1e9;
+    std::optional<Screens> take_replay_jump();
     std::optional<Screens> start_replay(const ReplayData& replay);
 
     virtual bool allows_second_player_join() { return true; }

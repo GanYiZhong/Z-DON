@@ -18,7 +18,6 @@ static void clear_credit_tally() {
 
 Screens begin_total_result() {
     global_data.songs_played = 0;
-    network.reset_medals();
     network.reset_don_points();
     const std::string* codes[2] = {&global_data.config->network.access_code_1,
                                    &global_data.config->network.access_code_2};
@@ -26,9 +25,6 @@ Screens begin_total_result() {
         global_data.credit_seats[seat] = !global_data.credit_gauges[seat].empty();
         if (!codes[seat]->empty()) {
             network.submit_don_points(seat, *codes[seat], global_data.credit_gauges[seat]);
-            if (global_data.credit_seats[seat]) {
-                network.submit_medals(seat, *codes[seat]);
-            }
         }
     }
     if (!tex.options[SCO::DISABLE_TOTAL_RESULT] && script_manager.has_lua_script("total_result")) {
@@ -44,6 +40,7 @@ static Screens after_total_result() {
         global_data.reward_shop_from_entry = false;
         return Screens::REWARD_SHOP;
     }
+    network.reset_medals();
     return Screens::GAME_OVER;
 }
 
@@ -97,7 +94,7 @@ std::optional<Screens> TotalResultScreen::update() {
         }
         start();
         if (tally->unavailable()) {
-            return on_screen_end(after_total_result());
+            return end_or_game_over(after_total_result());
         }
     }
     tally->update(now);
@@ -115,7 +112,7 @@ std::optional<Screens> TotalResultScreen::update() {
         audio.play_sound("don", VolumePreset::SOUND);
     }
     if (tally->is_done()) {
-        return on_screen_end(after_total_result());
+        return end_or_game_over(after_total_result());
     }
     return std::nullopt;
 }
@@ -125,15 +122,14 @@ void TotalResultScreen::draw() {
         tally->draw();
         const float fade = tally->nameplate_fade();
         if (fade > 0) {
-            auto [nx, ny] = tex.nameplate_xy("total_result");
             auto [cx, cy] = tex.chara_xy("total_result");
             for (int i = 0; i < 2; i++) {
-                const float dx = i == 1 ? 640.0f * tex.screen_scale : 0.0f;
+                auto [nx, ny] = tex.nameplate_xy(i == 1 ? "total_result_2p" : "total_result");
                 if (charas[i]) {
                     charas[i]->draw(cx + (i == 1 ? 610.0f * tex.screen_scale : 0.0f), cy); // panels are 610 apart
                 }
                 if (nameplates[i]) {
-                    nameplates[i]->draw(nx + dx, ny, fade);
+                    nameplates[i]->draw(nx, ny, fade);
                 }
             }
         }

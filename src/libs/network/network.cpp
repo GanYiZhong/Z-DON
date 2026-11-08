@@ -50,6 +50,7 @@ std::string modifiers_to_json(const Modifiers& m) {
     doc.AddMember("inverse", m.inverse, allocator);
     doc.AddMember("random", m.random, allocator);
     doc.AddMember("subdiff", m.subdiff, allocator);
+    doc.AddMember("seed", m.seed, allocator);
 
     rapidjson::StringBuffer buffer;
     rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -417,26 +418,37 @@ static ReplayData parse_replay_response(const cpr::Response& response) {
     if (!doc.HasMember("difficulty") || !doc["difficulty"].IsInt()) {
         return result;
     }
-    if (!doc.HasMember("input_log") || !doc["input_log"].IsObject()) {
+    if (!doc.HasMember("input_log") || !(doc["input_log"].IsObject() || doc["input_log"].IsArray())) {
         return result;
     }
 
     result.hash = doc["hash"].GetString();
     result.difficulty = doc["difficulty"].GetInt();
-    for (auto& m : doc["input_log"].GetObject()) {
-        if (!m.value.IsInt()) {
-            continue;
+    if (doc["input_log"].IsArray()) {
+        for (auto& hit : doc["input_log"].GetArray()) {
+            if (!hit.IsArray() || hit.Size() != 2 || !hit[0].IsNumber() || !hit[1].IsInt()) {
+                spdlog::warn("Replay contains an invalid hit");
+                return {};
+            }
+            result.input_log.emplace_back(hit[0].GetDouble(), hit[1].GetInt());
         }
+    } else { // {"ms": type} from clients before the list format; same-frame hits are already lost
+        for (auto& m : doc["input_log"].GetObject()) {
+            if (!m.value.IsInt()) {
+                continue;
+            }
 
-        rapidjson::Document timestamp;
-        timestamp.Parse<rapidjson::kParseFullPrecisionFlag>(m.name.GetString(), m.name.GetStringLength());
+            rapidjson::Document timestamp;
+            timestamp.Parse<rapidjson::kParseFullPrecisionFlag>(m.name.GetString(), m.name.GetStringLength());
 
-        if (timestamp.HasParseError() || !timestamp.IsNumber()) {
-            spdlog::warn("Replay contains an invalid timestamp");
-            return {};
+            if (timestamp.HasParseError() || !timestamp.IsNumber()) {
+                spdlog::warn("Replay contains an invalid timestamp");
+                return {};
+            }
+
+            result.input_log.emplace_back(timestamp.GetDouble(), m.value.GetInt());
         }
-
-        result.input_log.emplace(timestamp.GetDouble(), m.value.GetInt());
+        std::ranges::stable_sort(result.input_log, {}, &std::pair<double, int>::first);
     }
 
     if (doc.HasMember("username") && doc["username"].IsString()) {
@@ -553,16 +565,33 @@ std::string NetworkClient::register_user(const std::string& username, const std:
     return response.text;
 }
 
-static std::string map_to_json_impl(const std::map<double, InputLogType>& my_map) {
+static std::string judge_params_to_json(const JudgeParams& p) {
     rapidjson::Document doc;
     doc.SetObject();
     rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
+    doc.AddMember("start_delay", p.start_delay, allocator);
+    doc.AddMember("parse_player", p.parse_player, allocator);
+    if (p.audio_end_ms.has_value()) {
+        doc.AddMember("audio_end_ms", *p.audio_end_ms, allocator);
+    }
+    doc.AddMember("dan", p.dan, allocator);
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+    return buffer.GetString();
+}
 
-    for (const auto& pair : my_map) {
-        char keybuf[32];
-        std::snprintf(keybuf, sizeof(keybuf), "%.17g", pair.first);
-        rapidjson::Value key(keybuf, allocator);
-        doc.AddMember(key, static_cast<int>(pair.second), allocator);
+// [[ms, type], ...] in play order
+static std::string map_to_json_impl(const InputLog& log) {
+    rapidjson::Document doc;
+    doc.SetArray();
+    rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
+
+    for (const auto& [ms, type] : log) {
+        rapidjson::Value hit(rapidjson::kArrayType);
+        hit.PushBack(ms, allocator);
+        hit.PushBack(static_cast<int>(type), allocator);
+        doc.PushBack(hit, allocator);
     }
 
     rapidjson::StringBuffer buffer;
@@ -572,9 +601,15 @@ static std::string map_to_json_impl(const std::map<double, InputLogType>& my_map
     return buffer.GetString();
 }
 
+std::string NetworkClient::map_to_json(const InputLog& log) {
+    return map_to_json_impl(log);
+}
+
 void NetworkClient::submit_score(const std::string& hash, int difficulty, const std::string& access_code,
-                                 const Score& score, const std::map<double, InputLogType>& input_log, int64_t played_at,
-                                 const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index) {
+                                 const Score& score, const InputLog& input_log, int64_t played_at,
+                                 const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index,
+                                 const std::string& source_folder, int gauge,
+                                 const std::optional<JudgeParams>& judge_params) {
     if (!network_enabled()) {
         return;
     }
@@ -597,6 +632,15 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
         {"chara_is_costume", chara_is_costume ? "true" : "false"},
         {"chara_cos_index", std::to_string(chara_cos_index)},
     };
+    if (!source_folder.empty()) { // signed only when sent, matching the server
+        params["source_folder"] = source_folder;
+    }
+    if (gauge >= 0) {
+        params["gauge"] = std::to_string(gauge);
+    }
+    if (judge_params.has_value()) {
+        params["judge_params"] = judge_params_to_json(*judge_params);
+    }
     if (pending_score_submit.has_value()) {
         cpr::Response response = pending_score_submit->get();
         pending_score_submit.reset();
@@ -613,21 +657,24 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
     for (const char* k : {"input_log", "played_at", "modifiers", "chara_is_costume", "chara_cos_index"}) {
         form.Add({k, params.at(k)});
     }
+    form.Add({"source_folder", source_folder});
+    form.Add({"gauge", gauge >= 0 ? std::to_string(gauge) : ""});
+    form.Add({"judge_params", judge_params.has_value() ? params["judge_params"] : ""});
     pending_score_submit =
         cpr::PostAsync(cpr::Url{network_url("/submit_score")}, signed_headers("POST", "/submit_score", params), query,
                        form, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 
-void NetworkClient::poll_song_jump(const std::string& access_code) {
+void NetworkClient::poll_jump(const std::string& access_code) {
     if (!network_enabled()) {
         return;
     }
-    if (pending_song_jump.has_value()) {
+    if (pending_jump.has_value()) {
         return;
     }
-    pending_song_jump = cpr::GetAsync(cpr::Url{network_url("/poll_song_jump")},
-                                      signed_headers("GET", "/poll_song_jump", {{"access_code", access_code}}),
-                                      cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+    pending_jump = cpr::GetAsync(cpr::Url{network_url("/poll_jump")},
+                                 signed_headers("GET", "/poll_jump", {{"access_code", access_code}}),
+                                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 
 void NetworkClient::spin_gacha(const std::string& access_code) {
@@ -693,6 +740,17 @@ void NetworkClient::submit_medals(int seat, const std::string& access_code) {
                                                      cpr::Parameters{{"access_code", access_code}},
                                                      cpr::Timeout{5000} NETWORK_CA_OPT));
     reward_shop_pending_count_++;
+}
+
+void NetworkClient::submit_revive_result(const std::string& access_code, bool success) {
+    if (!network_enabled() || !online) {
+        return;
+    }
+    const std::string result = success ? "true" : "false";
+    pending_revive.push_back(cpr::PostAsync(
+        cpr::Url{network_url("/revive_result")},
+        signed_headers("POST", "/revive_result", {{"access_code", access_code}, {"success", result}}),
+        cpr::Parameters{{"access_code", access_code}, {"success", result}}, cpr::Timeout{5000} NETWORK_CA_OPT));
 }
 
 void NetworkClient::submit_ai_battle(const std::string& access_code, const std::string& song_hash, int difficulty,
@@ -820,19 +878,6 @@ std::optional<std::string> NetworkClient::take_song_jump_result() {
     std::optional<std::string> result = std::move(song_jump_result);
     song_jump_result.reset();
     return result;
-}
-
-void NetworkClient::poll_replay_jump(const std::string& access_code) {
-    if (!network_enabled()) {
-        return;
-    }
-    if (pending_replay_jump.has_value()) {
-        return;
-    }
-    pending_replay_jump =
-        cpr::GetAsync(cpr::Url{network_url("/poll_replay_jump")},
-                      signed_headers("GET", "/poll_replay_jump", {{"access_code", access_code}}),
-                      cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 
 std::optional<int> NetworkClient::take_replay_jump_result() {
@@ -1075,6 +1120,17 @@ void NetworkClient::update(double current_ms) {
         }
         it = pending_ai_battle.erase(it);
     }
+    for (auto it = pending_revive.begin(); it != pending_revive.end();) {
+        if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->get();
+        if (response.status_code != 200) {
+            spdlog::warn("Revive result failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_revive.erase(it);
+    }
     for (auto it = pending_medals.begin(); it != pending_medals.end();) {
         if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
@@ -1083,13 +1139,16 @@ void NetworkClient::update(double current_ms) {
         cpr::Response response = it->second.get();
         rapidjson::Document doc;
         if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
-            medal_seats[it->first] = {true,
-                                      json_int(doc, "now", 0),
-                                      json_int(doc, "add", 0),
-                                      json_int(doc, "max", 0),
-                                      json_bool(doc, "daily"),
-                                      json_bool(doc, "weekly"),
-                                      json_bool(doc, "monthly")};
+            MedalSeat& seat = medal_seats[it->first];
+            if (!seat.answered) {
+                seat.now = json_int(doc, "now", 0);
+            }
+            seat.answered = true;
+            seat.add += json_int(doc, "add", 0);
+            seat.max = json_int(doc, "max", 0);
+            seat.daily |= json_bool(doc, "daily");
+            seat.weekly |= json_bool(doc, "weekly");
+            seat.monthly |= json_bool(doc, "monthly");
         } else {
             spdlog::warn("Medal claim failed: HTTP {} - {}", response.status_code, response.text);
         }
@@ -1111,8 +1170,10 @@ void NetworkClient::update(double current_ms) {
             if (doc.HasMember("goods") && doc["goods"].IsArray()) {
                 for (const auto& v : doc["goods"].GetArray()) {
                     if (v.IsObject()) {
-                        seat.goods.push_back({json_int(v, "type", -1), json_int(v, "id", -1), json_int(v, "cost", 0),
-                                              json_bool(v, "owned")});
+                        seat.goods.push_back(
+                            {json_int(v, "type", -1), json_int(v, "id", -1), json_int(v, "cost", 0),
+                             json_bool(v, "owned"),
+                             v.HasMember("name") && v["name"].IsString() ? v["name"].GetString() : ""});
                     }
                 }
             }
@@ -1165,28 +1226,16 @@ void NetworkClient::update(double current_ms) {
         gacha_result = result;
     }
 
-    if (pending_song_jump.has_value() &&
-        pending_song_jump->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        cpr::Response response = pending_song_jump->get();
-        pending_song_jump.reset();
+    if (pending_jump.has_value() && pending_jump->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_jump->get();
+        pending_jump.reset();
 
-        if (response.status_code == 200) {
-            rapidjson::Document doc;
-            if (!doc.Parse(response.text.c_str()).HasParseError() && doc.HasMember("hash") && doc["hash"].IsString()) {
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+            if (doc.HasMember("hash") && doc["hash"].IsString()) {
                 song_jump_result = doc["hash"].GetString();
             }
-        }
-    }
-
-    if (pending_replay_jump.has_value() &&
-        pending_replay_jump->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        cpr::Response response = pending_replay_jump->get();
-        pending_replay_jump.reset();
-
-        if (response.status_code == 200) {
-            rapidjson::Document doc;
-            if (!doc.Parse(response.text.c_str()).HasParseError() && doc.HasMember("score_id") &&
-                doc["score_id"].IsInt()) {
+            if (doc.HasMember("score_id") && doc["score_id"].IsInt()) {
                 replay_jump_result = doc["score_id"].GetInt();
             }
         }
@@ -1241,17 +1290,13 @@ void NetworkClient::shutdown() {
         pending_heartbeat->wait();
         pending_heartbeat.reset();
     }
-    if (pending_song_jump.has_value()) {
-        pending_song_jump->wait();
-        pending_song_jump.reset();
+    if (pending_jump.has_value()) {
+        pending_jump->wait();
+        pending_jump.reset();
     }
     if (pending_gacha.has_value()) {
         pending_gacha->wait();
         pending_gacha.reset();
-    }
-    if (pending_replay_jump.has_value()) {
-        pending_replay_jump->wait();
-        pending_replay_jump.reset();
     }
     if (pending_replay_fetch.has_value()) {
         pending_replay_fetch->wait();
@@ -1286,8 +1331,9 @@ void NetworkClient::start_probe() {}
 std::string NetworkClient::register_user(const std::string&, const std::string&) {
     return "";
 }
-void NetworkClient::submit_score(const std::string&, int, const std::string&, const Score&,
-                                 const std::map<double, InputLogType>&, int64_t, const std::string&, bool, int) {}
+void NetworkClient::submit_score(const std::string&, int, const std::string&, const Score&, const InputLog&, int64_t,
+                                 const std::string&, bool, int, const std::string&, int,
+                                 const std::optional<JudgeParams>&) {}
 void NetworkClient::clear_import_flag(const std::string&) {}
 void NetworkClient::update_username(const std::string&, const std::string&) {}
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string&) {
@@ -1298,13 +1344,14 @@ void NetworkClient::update_costume(const std::string&, int, int, int, bool) {}
 std::vector<RemoteScore> NetworkClient::fetch_scores(const std::string&) {
     return {};
 }
-void NetworkClient::poll_song_jump(const std::string&) {}
+void NetworkClient::poll_jump(const std::string&) {}
 std::optional<std::string> NetworkClient::take_song_jump_result() {
     return std::nullopt;
 }
 void NetworkClient::submit_kinotake(int, const std::string&, int, int, bool, bool) {}
 void NetworkClient::submit_don_points(int, const std::string&, const std::vector<int>&) {}
 void NetworkClient::submit_medals(int, const std::string&) {}
+void NetworkClient::submit_revive_result(const std::string&, bool) {}
 void NetworkClient::submit_ai_battle(const std::string&, const std::string&, int, int, bool, bool, const std::string&) {
 }
 AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string&) {
@@ -1329,7 +1376,6 @@ void NetworkClient::spin_gacha(const std::string&) {
 std::optional<GachaResult> NetworkClient::take_gacha_result() {
     return std::exchange(gacha_result, std::nullopt);
 }
-void NetworkClient::poll_replay_jump(const std::string&) {}
 std::optional<int> NetworkClient::take_replay_jump_result() {
     return std::nullopt;
 }

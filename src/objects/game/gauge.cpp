@@ -1,4 +1,4 @@
-#include "gauge.h"
+﻿#include "gauge.h"
 
 #include <cmath>
 #include <stdexcept>

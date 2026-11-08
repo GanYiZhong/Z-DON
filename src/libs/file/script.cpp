@@ -17,6 +17,7 @@
 #include "../../objects/enums.h"
 #include "../../objects/song_select/file_navigator/box_lua_bindings.h"
 #include "../audio/audio.h"
+#include "../color_shader.h"
 #include "../gfx/text.h"
 #include "../global_data.h"
 #include "../input/input.h"
@@ -879,6 +880,16 @@ void ScriptManager::register_lua_bindings() {
 
     tex.set_function("end_scissor", [] { end_scissor_mode(); });
 
+    // Textures drawn until end_recolor have the colour `from` replaced by `to` ({r, g, b}, 0-255)
+    tex.set_function("begin_recolor", [](std::array<int, 3> from, std::array<int, 3> to) {
+        auto color = [](const std::array<int, 3>& c) {
+            return Color{static_cast<uint8_t>(c[0]), static_cast<uint8_t>(c[1]), static_cast<uint8_t>(c[2]), 255};
+        };
+        begin_shader_mode(*load_color_shader(color(to), color(from)));
+    });
+
+    tex.set_function("end_recolor", [] { end_shader_mode(); });
+
     tex.set_function("get_skin_config", [](const std::string& config_key, sol::this_state state) -> sol::stack_count {
         const SkinInfo* skin_ptr = font_manager.get_text_info(config_key);
         if (!skin_ptr) {
@@ -1086,6 +1097,7 @@ void ScriptManager::register_lua_bindings() {
     tex.set_function("song_limit", [] -> int { return global_data.config->limits.song_limit; });
 
     tex.set_function("last_input_ms", [] -> double { return get_last_input_ms(); });
+    tex.set_function("guest_credit", [] { return global_data.guest_credit; }); // every seat is a guest
 
     tex.set_function("log", [](const std::string& msg) { spdlog::info("[lua] {}", msg); });
 

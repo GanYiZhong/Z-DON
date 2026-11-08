@@ -83,24 +83,7 @@ static std::string search_fold(const std::string& s) {
     return out;
 }
 
-static void replace_all(std::string& str, const std::string& from, const std::string& to) {
-    if (from.empty()) {
-        return;
-    }
-
-    size_t start_pos = 0;
-    while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
-        str.replace(start_pos, from.length(), to);
-        start_pos += to.length();
-    }
-}
-
 static std::string normalize_title(std::string s) {
-    replace_all(s, "-New Audio-", "");
-    replace_all(s, "-新曲-", "");
-    replace_all(s, "-Old Audio-", "");
-    replace_all(s, "-旧曲-", "");
-
     // Keep UTF-8 (bytes >= 0x80) so a Japanese / Chinese title survives; only ASCII
     // punctuation and spaces are dropped. Stripping every non-alnum byte turned every
     // all-CJK title into "", so any two such songs compared equal.
@@ -290,6 +273,11 @@ SongIndex::course_levels_in_subfolders(const fs::path& root, const std::atomic<b
     return songs;
 }
 
+std::array<int, 5> SongIndex::course_levels(const fs::path& path) const {
+    auto it = song_levels.find(path.string());
+    return it == song_levels.end() ? std::array<int, 5>{-1, -1, -1, -1, -1} : it->second;
+}
+
 void SongIndex::build_title_index() {
     // First match in song_files order wins, as with the linear scans this replaced
     title_subtitle_index.clear();
@@ -325,8 +313,8 @@ std::optional<fs::path> SongIndex::find_song_by_title(const std::string& title, 
         // Check if norm_title is inside indexed_title or vice-versa
         if (indexed_title.contains(norm_title) || norm_title.contains(indexed_title)) {
 
-            // Safety: Don't match tiny fragments like "a" or "the"
-            if (norm_title.length() < 3 && indexed_title != norm_title) {
+            // Safety: Don't match tiny fragments like "a" or "the", on either side
+            if (std::min(norm_title.length(), indexed_title.length()) < 3 && indexed_title != norm_title) {
                 continue;
             }
 

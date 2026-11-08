@@ -46,5 +46,6 @@ public:
     ~SongInfo();
 
     void update(double current_ms);
+    void draw(float, float) { draw(); } // merge 09db50f: upstream's Lua song info took a position
     void draw();
 };

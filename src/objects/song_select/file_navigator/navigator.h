@@ -57,6 +57,7 @@ private:
     bool genre_box_defs_built = false;
     std::map<GenreIndex, BoxDef> genre_box_defs;
     bool built_hide_dan = false;
+    bool built_hide_collections = false;
     bool built_waiwai = false;
     bool built_is_2p = false;
     bool built_ai_assigned = false;
@@ -108,6 +109,7 @@ private:
     std::optional<fs::path> reopen_song_path;
     std::optional<fs::path> restore_cursor_path;
     std::optional<fs::path> open_start_folder;
+    fs::path start_folder; // start_path listing: top of navigation, so it has no back box
 
     std::optional<fs::path> recent_folder_path;
     std::optional<fs::path> favorite_folder_path;
@@ -119,6 +121,8 @@ private:
 
     bool awaiting_diff_sort = false;
     std::optional<std::array<int, 3>> diff_sort_filter;
+    std::optional<std::pair<int, int>> last_diff_sort_result;
+    std::optional<std::set<fs::path>> diff_sort_scope; // nullopt: the box sits at a root
 
     bool vertical_gallery = false;
 
@@ -175,7 +179,8 @@ public:
 
     std::atomic<bool> is_processing{false};
     bool hide_dan = false;
-    bool ai_assigned = false; // AI battle rank 10: show the assigned songs folder
+    bool hide_collections = false; // guests only: no collection folders, favorites or recent
+    bool ai_assigned = false;      // AI battle rank 10: show the assigned songs folder
     bool waiwai = false;
     bool is_2p = false;
     bool inline_streaming = false;
@@ -205,6 +210,7 @@ public:
     std::atomic<bool> song_files_ready{true};
     bool diff_sort_ready() { return awaiting_diff_sort; }
     bool in_inline() const { return is_inline; }
+    const std::optional<std::set<fs::path>>& get_diff_sort_scope() const { return diff_sort_scope; }
     void apply_diff_sort(int course, int level, int order = 1);
     void cancel_diff_sort();
     void load_current_directory(const fs::path path);
@@ -219,7 +225,8 @@ public:
     bool is_directory(BaseBox* item);
     bool is_song(BaseBox* item);
     BaseBox* get_current_item();
-    Statistics get_statistics(const fs::path& path, const std::stop_token& stop = {});
+    Statistics get_statistics(const std::vector<fs::path>& paths, const std::stop_token& stop,
+                              const std::set<fs::path>* scope = nullptr);
 
     std::optional<fs::path> find_song_by_title(const std::string& title, const std::string& subtitle);
 

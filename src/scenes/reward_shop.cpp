@@ -120,11 +120,11 @@ std::optional<Screens> RewardShopScreen::update() {
             return std::nullopt;
         }
         if (!network.shop_seat(0).answered && !network.shop_seat(1).answered) {
-            return on_screen_end(next_screen());
+            return end_or_game_over(next_screen());
         }
         start();
         if (shop->unavailable()) {
-            return on_screen_end(next_screen());
+            return end_or_game_over(next_screen());
         }
     }
     shop->update(now);
@@ -166,7 +166,7 @@ std::optional<Screens> RewardShopScreen::update() {
         }
     }
     if (shop->is_done()) {
-        return on_screen_end(next_screen());
+        return end_or_game_over(next_screen());
     }
     return std::nullopt;
 }
@@ -174,10 +174,10 @@ std::optional<Screens> RewardShopScreen::update() {
 void RewardShopScreen::draw() {
     if (shop) {
         shop->draw();
-        auto [nx, ny] = tex.nameplate_xy("reward_shop");
         for (int i = 0; i < 2; i++) {
             if (nameplates[i]) {
-                nameplates[i]->draw(nx + (i == 1 ? 640.0f * tex.screen_scale : 0.0f), ny, 1.0f);
+                auto [nx, ny] = tex.nameplate_xy(i == 1 ? "reward_shop_2p" : "reward_shop");
+                nameplates[i]->draw(nx, ny, 1.0f);
             }
         }
     }

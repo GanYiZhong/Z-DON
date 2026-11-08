@@ -4,12 +4,15 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <limits>
 #include <map>
 #include <optional>
+#include <regex>
+#include <set>
 #include <span>
 #include <spdlog/spdlog.h>
 #include <string>
@@ -25,6 +28,7 @@ struct Modifiers {
     bool display = false;
     bool inverse = false;
     int random = 0;
+    uint32_t seed = 0;
     int subdiff = 0;
     bool skip = false;
     // Z-DON constant speed (song option): every note moves at equal_speed_bpm (the song's #BPM), straight left,
@@ -36,6 +40,8 @@ struct Modifiers {
     bool zdon_ghost = false; // Z-DON: the player's best play's score at the same moment, shown as +/- (game.cpp)
     bool no_kusudama = false;
     bool zdon_subdiff_yono = false; // Z-DON recording: upstream's earlier simplification (zdon_subdiff_yono.cpp)
+    // 2P: kusudamas only stay where both charts have one (llround(hit_ms)); the rest become balloons
+    std::optional<std::set<long long>> shared_kusudamas;
 };
 
 enum class NoteType : int {
@@ -259,6 +265,7 @@ struct CourseData {
 struct TJAMetadata {
     std::map<std::string, std::string> title = {{"en", ""}};
     std::map<std::string, std::string> subtitle = {{"en", ""}};
+    std::string audio_tagged_title; // en title before -Old/New Audio- is stripped; same-hash variants differ only here
     bool subtitle_full_display = false;
     std::string genre;
     fs::path wave;
@@ -430,7 +437,7 @@ void modifier_moji(NoteList& notes);
 void modifier_speed(NoteList& notes, float value);
 void modifier_display(NoteList& notes);
 void modifier_inverse(NoteList& notes);
-void modifier_random(NoteList& notes, int value);
+void modifier_random(NoteList& notes, int value, uint32_t seed);
 void modifier_difficulty(NoteList& notes, int level);
 void zdon_modifier_difficulty_yono(NoteList& notes, int level);
 void apply_modifiers(NoteList& notes, const Modifiers& modifiers);

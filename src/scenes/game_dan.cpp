@@ -37,6 +37,12 @@ void DanGameScreen::on_screen_start() {
     allnet_indicator = AllNetIcon();
 }
 
+Modifiers DanGameScreen::get_player_modifiers(PlayerNum pn) {
+    Modifiers modifiers = GameScreen::get_player_modifiers(pn);
+    modifiers.no_kusudama = true;
+    return modifiers;
+}
+
 void DanGameScreen::init_dan() {
     SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
 
@@ -465,7 +471,8 @@ void DanGameScreen::save_song_score(DanResultSong& song_res) {
         if (!access_code.empty()) {
             PlayerData pd = scores_manager.get_player_data(player_id).value_or(PlayerData{});
             network.submit_score(hash, entry.difficulty, access_code, score, players[0]->input_log, played_at,
-                                 modifiers_json, pd.chara_is_costume, pd.chara_cos_index);
+                                 modifiers_json, pd.chara_is_costume, pd.chara_cos_index, "", -1,
+                                 players[0]->judge_params());
         }
     }
 }
