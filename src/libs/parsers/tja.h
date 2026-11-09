@@ -400,6 +400,8 @@ private:
     // cached_cmds indices by the command's second character (every command is '#' + a letter...), in
     // cached_cmds order: a line can only start with the commands of its own bucket
     std::array<std::vector<unsigned short>, 256> cmd_buckets;
+    // handlers capture `this`, so a copied or moved parser must not reuse the original's
+    const TJAParser* cached_cmds_owner = nullptr;
 
     void handle_MEASURE(const std::string& value, ParserState& state);
     void handle_SCROLL(const std::string& value, ParserState& state);

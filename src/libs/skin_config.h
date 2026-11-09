@@ -146,12 +146,14 @@ enum class SCO : unsigned int {
     HIDDEN_ONI,
     DISABLE_CAMPAIGNS,
     DISABLE_REWARD_SHOP,
+    AI_WAIT_LOADING_CARD, // the AI battle's chart waits for the loading card
+    AI_NO_SUPPORT_LEVELS, // the AI select plays the chosen chart as it is: no easier support levels
+
     DISABLE_TOTAL_RESULT,
     DISABLE_WAIWAI,
     DISABLE_AI_COMBO_ANNOUNCE, // Z-DON: no combo plate or voice in an AI battle
     AI_SELECT_CHARA_3D,        // Z-DON: the AI select shows the 3D AI Don
     AI_KEEP_PREVIEW,           // Z-DON: the preview plays on after the course is decided
-    AI_WAIT_LOADING_CARD,      // Z-DON: the battle starts when the loading card is gone
     AI_START_VOICE,            // Z-DON: deciding the course plays the AI battle's start voice
     AI_LIST_FADE_IN_PLACE,     // Z-DON: on the AI select the song list fades where it is when a song is decided
     AI_RESULT_REVEAL_AT_ONCE,  // Z-DON: the AI result lands score, judges, rank and crown together
@@ -196,4 +198,5 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"ai_don_under_flames", SCO::AI_DON_UNDER_FLAMES},
     {"ai_game_chara_3d", SCO::AI_GAME_CHARA_3D},
     {"ai_loading_chara_3d", SCO::AI_LOADING_CHARA_3D},
+    {"ai_no_support_levels", SCO::AI_NO_SUPPORT_LEVELS},
 };

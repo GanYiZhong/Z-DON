@@ -8,7 +8,7 @@
 static constexpr int DRUMROLL_COUNTER_FADE_ANIM_ID = 8;
 static constexpr int DRUMROLL_COUNTER_STRETCH_ANIM_ID = 9;
 
-DrumrollCounter::DrumrollCounter() {
+DrumrollCounter::DrumrollCounter(PlayerNum player_num) {
     drumroll_count = 0;
     fade = dynamic_cast<FadeAnimation*>(tex.get_animation(DRUMROLL_COUNTER_FADE_ANIM_ID));
     stretch = dynamic_cast<TextStretchAnimation*>(tex.get_animation(DRUMROLL_COUNTER_STRETCH_ANIM_ID));
@@ -25,6 +25,11 @@ DrumrollCounter::DrumrollCounter() {
     }
     if (tex.has_texture("drumroll_counter/bubble_unfold_ai")) {
         t_unfold_ai = tex.get_texture("drumroll_counter/bubble_unfold_ai");
+    }
+    // upstream's skin script. Z-DON keeps drawing its own opening fan and its AI arena (the script knows neither)
+    if (t_unfold == nullptr && !zdon_ai_arena_game() &&
+        load("DrumrollCounter", "drumroll_counter", static_cast<int>(player_num))) {
+        fn_draw = lua_object["draw"];
     }
 }
 
@@ -52,6 +57,10 @@ void DrumrollCounter::update_animations(double current_ms) {
 }
 
 void DrumrollCounter::draw(float y, bool ai) {
+    if (fn_draw.valid()) {
+        call(fn_draw, "DrumrollCounter:draw", y, drumroll_count, fade->attribute, stretch->attribute);
+        return;
+    }
     // Z-DON: skin_config "zdon_ai_drumroll" {x, y} moves the bubble on the skin's AI stage (Green's AI battle shows
     // it over the arena, next to the clash)
     float x = 0.0f;

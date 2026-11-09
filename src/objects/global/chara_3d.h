@@ -209,6 +209,7 @@ public:
         }
     }
     void use_default_pose(bool mirror);
+    void set_mirror(bool value); // keeps the running animation's place
     void set_frozen(bool value);
     void set_anim_progress(float progress);
     int get_anim_count() const;

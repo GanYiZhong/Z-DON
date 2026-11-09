@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -345,6 +346,7 @@ private:
     TextureObject* t_dan_lane_cover = nullptr;
     TextureObject* t_drum = nullptr;
     TextureObject* t_lane_difficulty = nullptr;
+    std::array<std::unique_ptr<OutlinedText>, 7> lane_course_names;
     TextureObject* t_timer = nullptr;
     TextureObject* t_auto_icon = nullptr;
     TextureObject* t_lane_score_cover = nullptr;
@@ -474,4 +476,5 @@ private:
     void draw_song_timer(double current_ms, float y);
 
     void draw_modifiers(float y);
+    void draw_lane_course_name(int frame, int index, float y);
 };

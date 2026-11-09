@@ -1,9 +1,11 @@
 #pragma once
 
+#include "../../libs/file/script.h"
 #include "../../libs/gfx/texture.h"
+#include "../../libs/global_data.h"
 #include "../../libs/math/animation.h"
 
-class DrumrollCounter {
+class DrumrollCounter : public LuaScript {
 private:
     int drumroll_count;
     FadeAnimation* fade = nullptr;
@@ -18,8 +20,10 @@ private:
     double start_ms = -1.0;
     double now_ms = 0.0;
 
+    sol::protected_function fn_draw;
+
 public:
-    DrumrollCounter();
+    explicit DrumrollCounter(PlayerNum player_num);
 
     void update_count(int count);
 

@@ -665,6 +665,73 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
                        form, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 
+void NetworkClient::submit_dan(const std::string& access_code, const std::string& course_id, const DanResultData& rd,
+                               const std::vector<DanSongEntry>& dan_songs, int arrival) {
+    if (!network_enabled() || !online) {
+        return;
+    }
+    rapidjson::Document doc;
+    doc.SetArray();
+    auto& allocator = doc.GetAllocator();
+    for (std::size_t i = 0; i < rd.songs.size(); i++) {
+        const DanResultSong& song = rd.songs[i];
+        const std::string hash = i < dan_songs.size() ? dan_song_hash(dan_songs[i]) : "";
+        rapidjson::Value entry(rapidjson::kObjectType);
+        entry.AddMember("hash", rapidjson::Value(hash.c_str(), allocator), allocator);
+        entry.AddMember("difficulty", song.selected_difficulty, allocator);
+        entry.AddMember("title", rapidjson::Value(song.song_title.c_str(), allocator), allocator);
+        entry.AddMember("good", song.good, allocator);
+        entry.AddMember("ok", song.ok, allocator);
+        entry.AddMember("bad", song.bad, allocator);
+        entry.AddMember("drumroll", song.drumroll, allocator);
+        entry.AddMember("unreached", song.unreached, allocator);
+        doc.PushBack(entry, allocator);
+    }
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+
+    std::map<std::string, std::string> params{
+        {"access_code", access_code},
+        {"course_id", course_id},
+        {"title", rd.dan_title},
+        {"dan_index", std::to_string(rd.dan_index)},
+        {"dan_index_max", std::to_string(rd.dan_index_max)},
+        {"dan_color", std::to_string(rd.dan_color)},
+        {"dan_rank", std::to_string(rd.dan_rank)},
+        {"is_gaiden", rd.is_gaiden ? "true" : "false"},
+        {"odai_result", std::to_string(rd.odai_result)},
+        {"score", std::to_string(rd.score)},
+        {"max_combo", std::to_string(rd.max_combo)},
+        {"gauge_length", std::format("{}", rd.gauge_length)},
+        {"arrival", std::to_string(arrival)},
+        {"songs", buffer.GetString()},
+        {"played_at", std::to_string(unix_now())},
+    };
+    pending_dan.push_back(cpr::PostAsync(cpr::Url{network_url("/submit_dan")},
+                                         signed_headers("POST", "/submit_dan", params),
+                                         cpr::Parameters{
+                                             {"access_code", params["access_code"]},
+                                             {"course_id", params["course_id"]},
+                                             {"title", params["title"]},
+                                             {"dan_index", params["dan_index"]},
+                                             {"dan_index_max", params["dan_index_max"]},
+                                             {"dan_color", params["dan_color"]},
+                                             {"dan_rank", params["dan_rank"]},
+                                             {"is_gaiden", params["is_gaiden"]},
+                                             {"odai_result", params["odai_result"]},
+                                             {"score", params["score"]},
+                                             {"max_combo", params["max_combo"]},
+                                             {"gauge_length", params["gauge_length"]},
+                                             {"arrival", params["arrival"]},
+                                         },
+                                         cpr::Payload{
+                                             {"songs", params["songs"]},
+                                             {"played_at", params["played_at"]},
+                                         },
+                                         cpr::Timeout{5000} NETWORK_CA_OPT));
+}
+
 void NetworkClient::poll_jump(const std::string& access_code) {
     if (!network_enabled()) {
         return;
@@ -846,7 +913,9 @@ AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string& access_c
 
 OwnedCosmetics NetworkClient::fetch_owned_cosmetics(const std::string& access_code) {
     OwnedCosmetics owned;
-    if (!network_enabled() || !online) {
+    // No server account to read rewards for: offline, local ("0"/"1") and guest play get the whole skin set.
+    if (!network_enabled() || !online || access_code.empty() || access_code == "0" || access_code == "1" ||
+        is_guest_id(access_code)) {
         return owned;
     }
     cpr::Response response = cpr::Get(cpr::Url{network_url("/rewards")}, cpr::Parameters{{"access_code", access_code}},
@@ -1131,6 +1200,17 @@ void NetworkClient::update(double current_ms) {
         }
         it = pending_revive.erase(it);
     }
+    for (auto it = pending_dan.begin(); it != pending_dan.end();) {
+        if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->get();
+        if (response.status_code != 200) {
+            spdlog::warn("Dan submit failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_dan.erase(it);
+    }
     for (auto it = pending_medals.begin(); it != pending_medals.end();) {
         if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
@@ -1334,6 +1414,8 @@ std::string NetworkClient::register_user(const std::string&, const std::string&)
 void NetworkClient::submit_score(const std::string&, int, const std::string&, const Score&, const InputLog&, int64_t,
                                  const std::string&, bool, int, const std::string&, int,
                                  const std::optional<JudgeParams>&) {}
+void NetworkClient::submit_dan(const std::string&, const std::string&, const DanResultData&,
+                               const std::vector<DanSongEntry>&, int) {}
 void NetworkClient::clear_import_flag(const std::string&) {}
 void NetworkClient::update_username(const std::string&, const std::string&) {}
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string&) {

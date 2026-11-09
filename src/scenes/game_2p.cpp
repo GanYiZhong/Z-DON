@@ -190,8 +190,8 @@ std::optional<Screens> Game2PScreen::update() {
             }
         }
 
-        if (skipped && global_data.zdon_ai.active && !global_data.config->general.fast_transitions) {
-            transition_delay = 2800.0; // the skip banner, then the result (as a skipped normal song)
+        if (skipped && !global_data.config->general.fast_transitions) {
+            transition_delay = 2800.0; // the skip banner, then the result
         }
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }
