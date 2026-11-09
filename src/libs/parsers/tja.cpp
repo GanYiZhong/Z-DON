@@ -1041,12 +1041,20 @@ void TJAParser::register_extended_commands(std::map<std::string, CommandHandler>
     };
     // Dan charts in one file (TJAPlayer3): each #NEXTSONG starts the next song with its own audio.
     // Not supported (dan play uses dan.json); the songs are read on as one chart. Every other
-    // command that is not registered (#SENOTECHANGE, #LEVELHOLD, #DIRECTION, #BGAON, ...) is ignored.
+    // command that is not registered (#SENOTECHANGE, #DIRECTION, #BGAON, ...) is ignored.
     registry["#NEXTSONG"] = [this](const std::string&, ParserState&) {
         if (!warned_nextsong) {
             warned_nextsong = true;
             spdlog::warn("#NEXTSONG (dan course in one file) is not supported: {}", file_path.string());
         }
+    };
+    // Z-DON: the route being played stays for the rest of the song. Written inside #N/#E/#M it lands on that
+    // route's timeline, so it only counts for a player on that route.
+    registry["#LEVELHOLD"] = [this](const std::string&, ParserState& s) {
+        TimelineObject hold;
+        hold.start_time = this->current_ms;
+        hold.level_hold = true;
+        s.curr_timeline->push_back(hold);
     };
     registry["#ENABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = true; };
     registry["#DISABLEDORON"] = [](const std::string&, ParserState& s) { s.doron = false; };
@@ -1251,6 +1259,7 @@ void TJAParser::handle_BRANCHSTART(const std::string& value, ParserState& state)
         branch_obj.start_time = this->current_ms - two_measures;
     }
     branch_obj.branch_params = value;
+    branch_obj.branch_decide_ms = this->current_ms - get_ms_per_measure(state.bpm, state.time_signature);
     state.curr_timeline->push_back(branch_obj);
 
     for (auto* branch : {&branch_m, &branch_e, &branch_n}) {

@@ -13,6 +13,7 @@
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
 #include "../../libs/gfx/text.h"
+#include "../../libs/input/early_hit.h"
 #include "../../libs/input/input.h"
 #include "zdon_ai.h"
 
@@ -80,6 +81,7 @@ void Player::apply_replay_appearance(const PlayerData& pd) {
 
 void Player::use_costume(int cos_index) {
     PlayerData pd;
+    pd.chara_is_costume = true;
     pd.chara_cos_index = cos_index;
     chara = make_chara_from_player_data(&pd, false, true);
     chara->set_anim(AnimIndex::DON_NORMAL);
@@ -279,7 +281,7 @@ void Player::dispatch_timeline_entry(double ms, const TimelineObject& entry, int
     static constexpr Handler handlers[] = {&Player::handle_bpmchange, &Player::handle_judgeposition,
                                            &Player::handle_gogotime,  &Player::handle_branch_param,
                                            &Player::handle_lyric,     &Player::handle_camera,
-                                           &Player::handle_section};
+                                           &Player::handle_section,   &Player::handle_level_hold};
     const size_t before = timeline_buffer.size();
     for (Handler h : handlers) {
         (this->*h)(ms, entry, index);
@@ -446,7 +448,9 @@ void Player::evaluate_branch(double current_ms) {
         } else if (branch_condition == "r") {
             branch_r_count = std::max(curr_drumroll_count, branch_r_count);
         }
-        float count = branch_condition == "p" ? branch_p_count : branch_r_count;
+        float count = branch_condition == "p"   ? branch_p_count
+                      : branch_condition == "s" ? static_cast<float>(score - branch_score_base)
+                                                : branch_r_count;
         if (branch_indicator.has_value()) {
             spdlog::info("Branch set to {} based on conditions {}, {}, {}",
                          branch_diff_to_string(branch_indicator->difficulty), count, e_req, m_req);
@@ -454,12 +458,16 @@ void Player::evaluate_branch(double current_ms) {
         BranchDifficulty chosen;
         if (branch_checkpoint_index < branch_history.size()) {
             chosen = branch_history[branch_checkpoint_index];
+        } else if (branch_level_hold) {
+            chosen = branch_route;
+            branch_history.push_back(chosen);
         } else {
             chosen = (count >= e_req && count < m_req && e_req >= 0) ? BranchDifficulty::EXPERT
                      : (count >= m_req)                              ? BranchDifficulty::MASTER
                                                                      : BranchDifficulty::NORMAL;
             branch_history.push_back(chosen);
         }
+        branch_route = chosen;
         branch_checkpoint_index++;
         if (chosen == BranchDifficulty::EXPERT) {
             if (!branch_e.empty()) {
@@ -511,12 +519,19 @@ void Player::evaluate_branch(double current_ms) {
         branch_p_count = 0;
         branch_r_count = 0;
         branch_note_count = 0;
+        branch_score_base = score;
     }
 }
 
 void Player::update(double ms_from_start, double current_ms, std::optional<Background>& background) {
     PlayerSoundScope audio_owner(player_num);
     bg_hook = background.has_value() ? &background.value() : nullptr;
+    if (!zdon_ai && chara && global_data.zdon_ai.active && zdon_ai_arena_game()) {
+        global_data.zdon_ai.don_draw_now = [this] { draw_arena_don(); };
+    }
+    if (zdon_ai && chara && global_data.zdon_ai.active && zdon_ai_arena_game()) {
+        global_data.zdon_ai.ai_draw_now = [this](float x, float y, float s, float r) { draw_arena_ai(x, y, s, r); };
+    }
 
     // Z-DON: a stalled frame (the window dragged: Windows blocks the loop while the song plays on) jumps the
     // clock past notes and rolls. Auto play walks the gap in small steps so it still hits every note on time and
@@ -1020,6 +1035,9 @@ void Player::reset_chart() {
     branch_p_count = 0;
     branch_r_count = 0;
     branch_note_count = 0;
+    branch_score_base = 0;
+    branch_level_hold = false;
+    branch_route = BranchDifficulty::NORMAL;
     branch_checkpoint_index = 0;
 
     // all playable notes including the master branch, in this order (scoring looks at each note's successor)
@@ -1259,7 +1277,13 @@ void Player::handle_branch_param(double ms_from_start, const TimelineObject& tim
                 branch_condition_end_time = ms_from_start;
             }
 
-            if (branch_cond == "r" || branch_cond == "p") {
+            // Z-DON: the speed option moves load_ms, so the same play could branch differently at another speed.
+            // The earlier of the two keeps it fixed and never lets a decided route's notes appear late.
+            if (global_data.config->general.zdon_branch_by_measure && timeline_object.branch_decide_ms.has_value()) {
+                branch_condition_end_time = std::min(branch_condition_end_time, *timeline_object.branch_decide_ms);
+            }
+
+            if (branch_cond == "r" || branch_cond == "p" || branch_cond == "s") {
                 curr_branch_reqs = std::make_tuple(e_req, m_req, branch_condition_end_time);
             }
             spdlog::info(
@@ -1281,6 +1305,15 @@ void Player::handle_section(double ms_from_start, const TimelineObject& timeline
     branch_p_count = 0;
     branch_r_count = 0;
     branch_note_count = 0;
+    branch_score_base = score;
+    consume_timeline_entry(buffer_index);
+}
+
+void Player::handle_level_hold(double ms_from_start, const TimelineObject& timeline_object, int buffer_index) {
+    if (timeline_object.start_time > ms_from_start || !timeline_object.level_hold.has_value()) {
+        return;
+    }
+    branch_level_hold = true;
     consume_timeline_entry(buffer_index);
 }
 
@@ -1538,7 +1571,9 @@ void Player::note_correct(const Note& note, double current_ms) {
             chara->set_anim(AnimIndex::DON_COMBO);
         }
         if (combo % 100 == 0) {
-            combo_announce = ComboAnnounce(combo, current_ms, player_num);
+            if (!global_data.zdon_ai.active || !tex.options[SCO::DISABLE_AI_COMBO_ANNOUNCE]) {
+                combo_announce = ComboAnnounce(combo, current_ms, player_num);
+            }
         }
         max_combo = std::max(max_combo, combo);
         if (combo % 100 == 0 && score_method == ScoreMethod::GEN3) {
@@ -1959,32 +1994,58 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
         return;
     }
 
+    // Z-DON: libs/input/early_hit.h. Off, nothing ticks and the input thread does nothing extra.
+    const auto& general = global_data.config->general;
+    const bool early_sound = general.zdon_early_hitsound;
+    const bool press_time = general.zdon_press_time_judge;
+    const int early_owner = static_cast<int>(player_num);
+    if (early_sound || press_time) {
+        early_hit_tick({.owner = early_owner,
+                        .input_player = input_player,
+                        .sound_player = player_num,
+                        .don = don_hitsound_id,
+                        .kat = kat_hitsound_id,
+                        .play_sound = early_sound});
+    }
+
     struct InputCheck {
         bool (*check_func)(PlayerNum, float*);
         DrumType drum_type;
         Side side;
         SoundId sound;
+        int pad;
     };
 
-    const InputCheck input_checks[] = {InputCheck{is_l_don_pressed, DrumType::DON, Side::LEFT, don_hitsound_id},
-                                       InputCheck{is_r_don_pressed, DrumType::DON, Side::RIGHT, don_hitsound_id},
-                                       InputCheck{is_l_kat_pressed, DrumType::KAT, Side::LEFT, kat_hitsound_id},
-                                       InputCheck{is_r_kat_pressed, DrumType::KAT, Side::RIGHT, kat_hitsound_id}};
+    const InputCheck input_checks[] = {
+        InputCheck{is_l_don_pressed, DrumType::DON, Side::LEFT, don_hitsound_id, EARLY_HIT_L_DON},
+        InputCheck{is_r_don_pressed, DrumType::DON, Side::RIGHT, don_hitsound_id, EARLY_HIT_R_DON},
+        InputCheck{is_l_kat_pressed, DrumType::KAT, Side::LEFT, kat_hitsound_id, EARLY_HIT_L_KAT},
+        InputCheck{is_r_kat_pressed, DrumType::KAT, Side::RIGHT, kat_hitsound_id, EARLY_HIT_R_KAT}};
 
     for (const auto& input : input_checks) {
 
         float strength = 1.0f;
         while (input.check_func(input_player, &strength)) {
             spawn_hit_effects(input.drum_type, input.side);
-            play_as(player_num, input.sound, VolumePreset::HITSOUND, strength);
+            const std::optional<double> press_ms =
+                early_sound || press_time ? early_hit_take(early_owner, input.pad) : std::nullopt;
+            if (!early_sound || !press_ms.has_value()) {
+                play_as(player_num, input.sound, VolumePreset::HITSOUND, strength);
+            }
+            // the chart position when the key went down; bounded so a stalled frame can't reach far back
+            double hit_ms = ms_from_start;
+            if (press_time && press_ms.has_value()) {
+                constexpr double kMaxBeforeFrameMs = 50.0, kMaxAfterFrameMs = 20.0;
+                hit_ms -= std::clamp(current_ms - *press_ms, -kMaxAfterFrameMs, kMaxBeforeFrameMs);
+            }
             InputLogType log_type;
             if (input.drum_type == DrumType::DON) {
                 log_type = input.side == Side::LEFT ? InputLogType::DON_L : InputLogType::DON_R;
             } else {
                 log_type = input.side == Side::LEFT ? InputLogType::KAT_L : InputLogType::KAT_R;
             }
-            input_log.emplace_back(ms_from_start, log_type);
-            check_note(ms_from_start, input.drum_type, current_ms, background);
+            input_log.emplace_back(hit_ms, log_type);
+            check_note(hit_ms, input.drum_type, current_ms, background);
         }
     }
 }
@@ -2412,22 +2473,37 @@ void Player::draw_arcs() {
     }
 }
 
+// the skin's arena asked for the player's Don (tex.ai_draw_don): stood in it, turned towards the AI
+void Player::draw_arena_don() {
+    auto& b = global_data.zdon_ai;
+    const Chara3DConfig& cfg = tex.chara_3d_config;
+    chara->set_rotation(cfg.rot_x, b.don_rot, cfg.rot_z);
+    chara->set_draw_scale(b.don_scale);
+    // skin_config zdon_ai_no_puchi (Green; direct feed Tl7g8XXXvAM: the top band shows the drum Don and its costume
+    // only, no puchi / avatar beside it; Nijiiro sets x 0)
+    const auto np = tex.skin_config_by_name.find("zdon_ai_no_puchi");
+    chara->set_puchi_hidden(np != tex.skin_config_by_name.end() && np->second.x != 0.0f);
+    chara->draw(b.don_x, b.don_y);
+    chara->set_puchi_hidden(false);
+    b.don_show = false;
+}
+
+// the skin's arena asked for the AI (tex.ai_draw_rival): the AI lane's Don stood in it, without a puchi
+void Player::draw_arena_ai(float x, float y, float scale, float rot_y) {
+    const Chara3DConfig& cfg = tex.chara_3d_config;
+    chara->set_rotation(cfg.rot_x, rot_y, cfg.rot_z);
+    chara->set_draw_scale(scale);
+    chara->set_puchi_hidden(true);
+    chara->draw(x, y);
+    chara->set_puchi_hidden(false);
+}
+
 void Player::draw_lane_cover(float y) {
     if (!stage_chara && (!is_balloon || (balloon_idle && !balloon_counter.has_value())) && !zdon_ai_arena_game()) {
         auto [cx, cy] = tex.chara_xy(is_2p ? "game_p2" : "game_p1");
         chara->draw(cx, y + cy, 1.0f);
     } else if (auto& b = global_data.zdon_ai; !zdon_ai && b.don_show && chara && zdon_ai_arena_game()) {
-        // the skin's arena asked for the player's Don (tex.ai_draw_don): stood in it, turned towards the AI
-        const Chara3DConfig& cfg = tex.chara_3d_config;
-        chara->set_rotation(cfg.rot_x, b.don_rot, cfg.rot_z);
-        chara->set_draw_scale(b.don_scale);
-        // skin_config zdon_ai_no_puchi (Green; direct feed Tl7g8XXXvAM: the top band shows the drum Don and its costume
-        // only, no puchi / avatar beside it; Nijiiro sets x 0)
-        const auto np = tex.skin_config_by_name.find("zdon_ai_no_puchi");
-        chara->set_puchi_hidden(np != tex.skin_config_by_name.end() && np->second.x != 0.0f);
-        chara->draw(b.don_x, b.don_y);
-        chara->set_puchi_hidden(false);
-        b.don_show = false;
+        draw_arena_don();
     }
     tex.draw_texture(lane_cover_tex_id, {.y = y});
     if (is_dan) {
@@ -2525,6 +2601,11 @@ void Player::draw_overlays(float y) {
         }
         if (!stage_chara && (!balloon_idle || balloon_counter.has_value())) {
             auto [cx, cy] = tex.chara_xy("game_balloon");
+            if (zdon_ai_arena_game()) { // the same model stands in the arena, smaller and turned
+                const Chara3DConfig& cfg = tex.chara_3d_config;
+                chara->set_rotation(cfg.rot_x, cfg.rot_y, cfg.rot_z);
+                chara->set_draw_scale(1.0f);
+            }
             chara->draw(cx, y + cy + rig_2p_y, 1.0f);
         }
     }

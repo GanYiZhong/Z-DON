@@ -40,6 +40,8 @@ public:
     std::unique_ptr<ScoreHistory> score_history;
     double box_opened_at = 0.0;
     FadeAnimation* diff_fade_in;
+    bool diff_fade_prestarted = false;
+    void prestart_diff_fade(); // the board's fade runs from now, enter_box comes later
     bool is_ura = false;
     bool oni_locked = false; // hidden_oni skin option: the oni slot stays hidden until opened
     GenreIndex song_genre_index = GenreIndex::DEFAULT;

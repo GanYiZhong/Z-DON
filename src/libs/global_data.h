@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -327,6 +328,7 @@ struct GlobalData {
         int live_p = 0, live_ai = 0;              // the current section's points so far
         std::array<int, 4> judge_p{}, judge_ai{}; // good, ok, bad, drumroll hits so far (score boards)
         bool finished = false;
+        bool skipped = false; // the player used the skip: no end cut-in, straight to the result
         double finished_at_ms =
             0;            // wall clock (get_current_ms) when finished turned true: the skin's cut-in starts then
         bool won = false; // finished: the player won the match
@@ -335,6 +337,9 @@ struct GlobalData {
         // (degrees about the vertical axis). The player's lane draws it, then clears don_show
         bool don_show = false;
         float don_x = 0, don_y = 0, don_scale = 1, don_rot = 0;
+        std::function<void()> don_draw_now; // screen option ai_don_under_flames: draws it at the skin's call
+        std::function<void(float, float, float, float)> ai_draw_now; // ai_game_chara_3d: x, y, scale, rot_y of the AI
+        bool hold_ready_cue = false; // screen option ai_wait_loading_card: the loading card is still up
     } zdon_ai;
     int zdon_ai_condition = 0; // the session's AI condition 1..5; 0 = roll it at the next AI song select
     // the AI battles of this credit (the play-all summary): title, the player's score / judges / cleared, won,

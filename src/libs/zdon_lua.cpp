@@ -186,6 +186,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
         t["total_p"] = total_p;
         t["total_ai"] = total_ai;
         t["finished"] = b.finished;
+        t["skipped"] = b.skipped;
         if (b.finished) {
             t["result"] = b.won ? "win" : "lose";
             t["new_best"] = b.new_best;
@@ -277,7 +278,31 @@ void register_zdon_lua_bindings(sol::table& tex) {
         b.don_y = y;
         b.don_scale = scale.value_or(1.0f);
         b.don_rot = rot.value_or(0.0f);
+        if (b.don_show && b.don_draw_now && script_manager.tex.options[SCO::AI_DON_UNDER_FLAMES]) {
+            b.don_draw_now(); // at the call, so what the skin draws next (the clash flames) lies over it
+        }
     });
+
+    // tex.ai_draw_rival(x, y, scale, rot_y) -> bool: screen option ai_game_chara_3d, the arena's AI as the 3D AI Don at
+    // the call (feet at x, y, 1080p px); false = nothing drawn (the skin keeps its 2D AI)
+    tex.set_function("ai_draw_rival",
+                     [](float x, float y, sol::optional<float> scale, sol::optional<float> rot) -> bool {
+                         auto& b = global_data.zdon_ai;
+                         if (!b.active || !b.ai_draw_now || !script_manager.tex.options[SCO::AI_GAME_CHARA_3D]) {
+                             return false;
+                         }
+                         b.ai_draw_now(x, y, scale.value_or(1.0f), rot.value_or(0.0f));
+                         return true;
+                     });
+
+    // tex.ai_vs_chara_load() / ai_vs_chara_draw(side, x, y, scale, rot_y) / ai_vs_chara_release(): the loading VS
+    // window's 3D Dons (side 0 = the player, 1 = the AI; screen option ai_loading_chara_3d)
+    tex.set_function("ai_vs_chara_load", [] { zdon_ai_vs_chara_load(); });
+    tex.set_function("ai_vs_chara_draw",
+                     [](int side, float x, float y, sol::optional<float> scale, sol::optional<float> rot) {
+                         zdon_ai_vs_chara_draw(side, x, y, scale.value_or(1.0f), rot.value_or(0.0f));
+                     });
+    tex.set_function("ai_vs_chara_release", [] { zdon_ai_vs_chara_release(); });
 
     // tex.set_screen_desaturate(amount): 0..1, call it every frame it should apply. The next frame renders through a
     // render target and a grayscale shader (libs/density.cpp); never called = no target, no shader, no cost

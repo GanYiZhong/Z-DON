@@ -1308,6 +1308,7 @@ static int game_main(int argc, char* argv[]) {
 
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
 
+    zdon_composited_fullscreen = global_data.config->video.zdon_composited_fullscreen;
 #if !defined(__EMSCRIPTEN__) && !defined(YATAIDON_PLATFORM_IOS)
     if ((flags & ray::FLAG_WINDOW_HIDDEN) &&
         (global_data.config->video.borderless || global_data.config->video.fullscreen)) {

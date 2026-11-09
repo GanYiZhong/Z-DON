@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "../objects/game/zdon_ai.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/debug_menu.h"
 #include "../objects/song_select/file_navigator/navigator.h"
@@ -132,6 +133,7 @@ void unload_skin() {
     tex.unload_textures();
     global_tex.unload_textures();
     texture_retain::clear(); // before the GL context goes (shutdown) or the skin changes
+    zdon_ai_vs_chara_release();
     chara3d_clear_part_pool();
     // the practice session's timer is a Lua object: release it while its Lua state is alive (it outlives
     // the screens; a quit from practice mode freed it in the static destructors, after lua_close)

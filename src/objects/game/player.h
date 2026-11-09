@@ -213,6 +213,8 @@ public:
     void draw_lyric(float y); // practice scene draws it after the large drums
 
     void draw_overlays(float y);
+    void draw_arena_don();
+    void draw_arena_ai(float x, float y, float scale, float rot_y);
     void draw_lane_cover(float y);
 
 protected:
@@ -311,6 +313,9 @@ private:
     float branch_p_count;
     int branch_r_count;
     int branch_note_count;
+    int branch_score_base = 0;                                // Z-DON: score at the last reset, for "s" branches
+    bool branch_level_hold = false;                           // Z-DON: #LEVELHOLD passed
+    BranchDifficulty branch_route = BranchDifficulty::NORMAL; // Z-DON: the route being played
 
     size_t branch_checkpoint_index = 0;
     std::string branch_condition;
@@ -423,6 +428,7 @@ private:
     void update_camera(double ms_from_start);
     std::vector<TimelineObject> camera_eases; // running #CAM*START..END events (P1 only)
     void handle_section(double ms_from_start, const TimelineObject& timeline_object, int buffer_index);
+    void handle_level_hold(double ms_from_start, const TimelineObject& timeline_object, int buffer_index);
 
     void play_note_manager(double current_ms, std::optional<Background>& background);
 

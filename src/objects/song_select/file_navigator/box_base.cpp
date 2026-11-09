@@ -100,8 +100,8 @@ void BaseBox::fade_in(float delay) {
     fade->start();
 }
 
-void BaseBox::fade_out() {
-    fade = std::make_unique<FadeAnimation>(166);
+void BaseBox::fade_out(float duration) {
+    fade = std::make_unique<FadeAnimation>(duration);
     fade->start();
 }
 

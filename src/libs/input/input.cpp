@@ -27,6 +27,7 @@
 #include "../test_mode.h"
 #include "../time.h"
 #include "../zdon_os.h"
+#include "early_hit.h"
 #include "ime_ui.h"
 #include "spdlog/spdlog.h"
 
@@ -582,6 +583,127 @@ void poll_touch_once() {
 
 // Scan all keyboard keys once and push press/release events.
 // Used by the polling thread on desktop and called directly per-frame on web.
+// Z-DON: the hit sound and press time on this thread (early_hit.h)
+namespace {
+    constexpr double kEarlyHitStaleMs = 100.0;   // a lane that has not ticked for this long is paused or gone
+    constexpr double kEarlyHitPendingMs = 250.0; // a press nobody claimed by then went elsewhere (a menu)
+    constexpr size_t kEarlyHitMaxPending = 16;
+
+    struct EarlyHitKey {
+        int vkey;
+        int pad;
+    };
+    struct EarlyHitOwner {
+        double last_tick_ms = -1e18;
+        PlayerNum sound_player = PlayerNum::ALL;
+        SoundId don = kNoSound;
+        SoundId kat = kNoSound;
+        bool play_sound = false;
+        std::vector<EarlyHitKey> keys;
+        std::array<std::deque<double>, EARLY_HIT_PAD_COUNT> pending;
+    };
+    std::mutex early_hit_mutex;
+    std::array<EarlyHitOwner, 8> early_hit_owners; // by PlayerNum, so P1's bindings are tried before P2's
+    std::atomic<double> early_hit_last_tick{-1e18};
+
+    void early_hit_add_keys(EarlyHitOwner& owner, int pad, const std::vector<int>& keys,
+                            const std::vector<int>& buttons, int slot, bool separate) {
+        for (int key : keys) {
+            if (key != 0) {
+                owner.keys.push_back({key, pad});
+            }
+        }
+        for (int button : buttons) {
+            owner.keys.push_back({separate ? pad_slot_key(slot, button) : GAMEPAD_VKEY_BASE + button, pad});
+        }
+    }
+
+    void early_hit_rebuild_keys(EarlyHitOwner& owner, PlayerNum input_player) {
+        owner.keys.clear();
+        const auto& c = *global_data.config;
+        const bool separate = separate_players();
+        if (input_player == PlayerNum::P1 || input_player == PlayerNum::ALL) {
+            early_hit_add_keys(owner, EARLY_HIT_L_DON, c.keys_1p.left_don, c.gamepad_1p.left_don, 0, separate);
+            early_hit_add_keys(owner, EARLY_HIT_R_DON, c.keys_1p.right_don, c.gamepad_1p.right_don, 0, separate);
+            early_hit_add_keys(owner, EARLY_HIT_L_KAT, c.keys_1p.left_kat, c.gamepad_1p.left_kat, 0, separate);
+            early_hit_add_keys(owner, EARLY_HIT_R_KAT, c.keys_1p.right_kat, c.gamepad_1p.right_kat, 0, separate);
+        }
+        if (input_player == PlayerNum::P2 || input_player == PlayerNum::ALL) {
+            early_hit_add_keys(owner, EARLY_HIT_L_DON, c.keys_2p.left_don, c.gamepad_2p.left_don, 1, separate);
+            early_hit_add_keys(owner, EARLY_HIT_R_DON, c.keys_2p.right_don, c.gamepad_2p.right_don, 1, separate);
+            early_hit_add_keys(owner, EARLY_HIT_L_KAT, c.keys_2p.left_kat, c.gamepad_2p.left_kat, 1, separate);
+            early_hit_add_keys(owner, EARLY_HIT_R_KAT, c.keys_2p.right_kat, c.gamepad_2p.right_kat, 1, separate);
+        }
+    }
+
+    // Before the keys reach pressed_keys: a key the game thread can see always has its entry here.
+    void early_hit_on_presses(std::span<const int> pressed) {
+        const double now = get_current_ms();
+        if (pressed.empty() || now - early_hit_last_tick.load(std::memory_order_relaxed) > kEarlyHitStaleMs) {
+            return;
+        }
+        std::scoped_lock lock(early_hit_mutex);
+        for (int vkey : pressed) {
+            for (EarlyHitOwner& owner : early_hit_owners) {
+                if (now - owner.last_tick_ms > kEarlyHitStaleMs) {
+                    continue;
+                }
+                auto key = std::ranges::find(owner.keys, vkey, &EarlyHitKey::vkey);
+                if (key == owner.keys.end()) {
+                    continue;
+                }
+                auto& pending = owner.pending[key->pad];
+                if (pending.size() >= kEarlyHitMaxPending) {
+                    pending.pop_front();
+                }
+                pending.push_back(now);
+                if (owner.play_sound) {
+                    PlayerSoundScope scope(owner.sound_player);
+                    const bool don = key->pad == EARLY_HIT_L_DON || key->pad == EARLY_HIT_R_DON;
+                    audio.play_sound(don ? owner.don : owner.kat, VolumePreset::HITSOUND);
+                }
+                break; // one press, one lane: the game thread's first check consumes it the same way
+            }
+        }
+    }
+} // namespace
+
+void early_hit_tick(const EarlyHitTick& tick) {
+    if (tick.owner < 0 || tick.owner >= std::ssize(early_hit_owners) || !global_data.config) {
+        return;
+    }
+    const double now = get_current_ms();
+    std::scoped_lock lock(early_hit_mutex);
+    EarlyHitOwner& owner = early_hit_owners[tick.owner];
+    if (now - owner.last_tick_ms > kEarlyHitStaleMs) {
+        early_hit_rebuild_keys(owner, tick.input_player);
+    }
+    owner.sound_player = tick.sound_player;
+    owner.don = tick.don;
+    owner.kat = tick.kat;
+    owner.play_sound = tick.play_sound;
+    owner.last_tick_ms = now;
+    early_hit_last_tick.store(now, std::memory_order_relaxed);
+}
+
+std::optional<double> early_hit_take(int owner_index, int pad) {
+    if (owner_index < 0 || owner_index >= std::ssize(early_hit_owners) || pad < 0 || pad >= EARLY_HIT_PAD_COUNT) {
+        return std::nullopt;
+    }
+    const double now = get_current_ms();
+    std::scoped_lock lock(early_hit_mutex);
+    auto& pending = early_hit_owners[owner_index].pending[pad];
+    while (!pending.empty() && now - pending.front() > kEarlyHitPendingMs) {
+        pending.pop_front();
+    }
+    if (pending.empty()) {
+        return std::nullopt;
+    }
+    const double press_ms = pending.front();
+    pending.pop_front();
+    return press_ms;
+}
+
 void poll_keyboard_once() {
     // A modal on-screen keyboard (a console dialog) owns the keys while it is up.
     if (screen_keyboard_started.load(std::memory_order_relaxed)) {
@@ -719,6 +841,8 @@ void poll_keyboard_once() {
     if (!local_pressed.empty()) {
         last_input_ms.store(get_current_ms(), std::memory_order_relaxed);
     }
+
+    early_hit_on_presses(local_pressed);
 
     if (!local_pressed.empty()) {
         std::scoped_lock lock(input_mutex);

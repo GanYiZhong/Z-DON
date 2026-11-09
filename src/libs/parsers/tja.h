@@ -105,8 +105,10 @@ struct TimelineObject {
 
     std::optional<double> bpm;
     std::optional<std::string> branch_params;
+    std::optional<double> branch_decide_ms; // Z-DON: #BRANCHSTART: one measure before the branch's head
     std::optional<bool> gogo_time;
     std::optional<bool> section_reset;
+    std::optional<bool> level_hold; // Z-DON: #LEVELHOLD
 
     std::optional<double> judge_pos_x;
     std::optional<double> judge_pos_y;

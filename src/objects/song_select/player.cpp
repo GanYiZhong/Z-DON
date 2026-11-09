@@ -285,7 +285,12 @@ SongSelectState SongSelectPlayer::select_song() {
                 level_panel_at_ms = get_current_ms() + lp->second.x;
             }
         }
-        navigator.enter_diff_select(card_enter_at_ms >= 0.0);
+        // the AI select's list stays where it is and fades, the decided board with it (arcade capture MBAZD6xA1D8)
+        const bool fade_in_place = silent_start_voice && tex.options[SCO::AI_LIST_FADE_IN_PLACE];
+        if (fade_in_place) {
+            card_enter_at_ms = get_current_ms() + 300.0;
+        }
+        navigator.enter_diff_select(card_enter_at_ms >= 0.0, fade_in_place);
         selected_song = true;
         // the course board opens with voice_select_diff (footage YKjsle7VBCI 61.73 s, 0vjiSUv61i4 45.13 s,
         // Tl7g8XXXvAM 126.80 / 332.89 / 520.11 s)
@@ -525,6 +530,9 @@ void SongSelectPlayer::decide_course() {
         // the AI battle's decide has no start voice (0vjiSUv61i4, 0wD5kkcN5WA, Tl7g8XXXvAM: none of the
         // battles has it, the normal play footage does); the transition still waits the voice's 2 s
         voice_silent_until_ms = get_current_ms() + 2000.0;
+        if (tex.options[SCO::AI_START_VOICE] && audio.has_sound("ai_select_vo_begin")) {
+            audio.play_sound("ai_select_vo_begin", VolumePreset::VOICE);
+        }
     } else if (shared_start_voice.empty()) { // upstream: a shared voice is played by the screen
         audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p", player_num,
                                 VolumePreset::VOICE);

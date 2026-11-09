@@ -34,6 +34,7 @@ private:
     TextureObject* t_song_num_plate = nullptr;
     Shader genre_shader;
     bool genre_shader_loaded = false;
+    bool keep_title = false; // Z-DON: skin_config zdon_song_title_always
 
 public:
     SongInfo() = default;

@@ -170,7 +170,35 @@ void toggle_fullscreen() {
     ray::ToggleFullscreen();
 }
 
+// Z-DON: the window is in the composited borderless mode (gfx.h); the row below the monitor is not part of the screen
+static bool composited_borderless = false;
+static ray::Vector2 composited_saved_pos{};
+static int composited_saved_w = 0;
+static int composited_saved_h = 0;
+
 void toggle_borderless_windowed() {
+#ifdef _WIN32
+    if (composited_borderless) {
+        ray::ClearWindowState(ray::FLAG_WINDOW_UNDECORATED);
+        ray::SetWindowSize(composited_saved_w, composited_saved_h);
+        ray::SetWindowPosition(static_cast<int>(composited_saved_pos.x), static_cast<int>(composited_saved_pos.y));
+        composited_borderless = false;
+        return;
+    }
+    if (zdon_composited_fullscreen && !ray::IsWindowFullscreen() &&
+        !ray::IsWindowState(ray::FLAG_BORDERLESS_WINDOWED_MODE)) {
+        composited_saved_pos = ray::GetWindowPosition();
+        composited_saved_w = ray::GetScreenWidth();
+        composited_saved_h = ray::GetScreenHeight();
+        const int monitor = ray::GetCurrentMonitor();
+        const ray::Vector2 origin = ray::GetMonitorPosition(monitor);
+        ray::SetWindowState(ray::FLAG_WINDOW_UNDECORATED);
+        ray::SetWindowPosition(static_cast<int>(origin.x), static_cast<int>(origin.y));
+        ray::SetWindowSize(ray::GetMonitorWidth(monitor), ray::GetMonitorHeight(monitor) + 1);
+        composited_borderless = true;
+        return;
+    }
+#endif
     ray::ToggleBorderlessWindowed();
 }
 
@@ -191,7 +219,7 @@ int get_screen_width() {
 }
 
 int get_screen_height() {
-    return ray::GetScreenHeight();
+    return ray::GetScreenHeight() - (composited_borderless ? 1 : 0);
 }
 
 int get_render_width() {
@@ -199,7 +227,8 @@ int get_render_width() {
 }
 
 int get_render_height() {
-    return zdon_density::on ? zdon_density::target.texture.height : ray::GetRenderHeight();
+    return zdon_density::on ? zdon_density::target.texture.height
+                            : ray::GetRenderHeight() - (composited_borderless ? 1 : 0);
 }
 
 int get_monitor_refresh_rate() {

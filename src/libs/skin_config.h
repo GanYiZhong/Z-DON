@@ -62,6 +62,7 @@ enum class SC : unsigned int {
     GAME_SONG_INFO_MAX_WIDTH,
     GAME_SONG_INFO_CENTER,
     AI_GAME_SONG_INFO,
+    GAME_AI_DRUMROLL_COUNTER_SCALE,
 };
 
 namespace std {
@@ -73,6 +74,7 @@ namespace std {
 
 const std::unordered_map<std::string, SC> skin_config_map{
     {"screen_fade_ms", SC::SCREEN_FADE_MS},
+    {"game_ai_drumroll_counter_scale", SC::GAME_AI_DRUMROLL_COUNTER_SCALE},
     {"game_dan_exam_info", SC::GAME_DAN_EXAM_INFO},
     {"skip_counter", SC::SKIP_COUNTER},
     {"skip_used_text", SC::SKIP_USED_TEXT},
@@ -146,6 +148,17 @@ enum class SCO : unsigned int {
     DISABLE_REWARD_SHOP,
     DISABLE_TOTAL_RESULT,
     DISABLE_WAIWAI,
+    DISABLE_AI_COMBO_ANNOUNCE, // Z-DON: no combo plate or voice in an AI battle
+    AI_SELECT_CHARA_3D,        // Z-DON: the AI select shows the 3D AI Don
+    AI_KEEP_PREVIEW,           // Z-DON: the preview plays on after the course is decided
+    AI_WAIT_LOADING_CARD,      // Z-DON: the battle starts when the loading card is gone
+    AI_START_VOICE,            // Z-DON: deciding the course plays the AI battle's start voice
+    AI_LIST_FADE_IN_PLACE,     // Z-DON: on the AI select the song list fades where it is when a song is decided
+    AI_RESULT_REVEAL_AT_ONCE,  // Z-DON: the AI result lands score, judges, rank and crown together
+    AI_RESULT_SHORT_BLACK,     // Z-DON: the AI result follows the black cover without waiting for its sound
+    AI_DON_UNDER_FLAMES,       // Z-DON: the arena's Don is drawn when the skin asks, so the skin's flames lie over it
+    AI_GAME_CHARA_3D,          // Z-DON: the arena's AI is the 3D AI Don (tex.ai_draw_rival)
+    AI_LOADING_CHARA_3D,       // Z-DON: the loading VS window shows both 3D Dons (tex.ai_vs_chara_draw)
 };
 
 namespace std {
@@ -172,4 +185,15 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"disable_reward_shop", SCO::DISABLE_REWARD_SHOP},
     {"disable_total_result", SCO::DISABLE_TOTAL_RESULT},
     {"disable_waiwai", SCO::DISABLE_WAIWAI},
+    {"disable_ai_combo_announce", SCO::DISABLE_AI_COMBO_ANNOUNCE},
+    {"ai_select_chara_3d", SCO::AI_SELECT_CHARA_3D},
+    {"ai_keep_preview", SCO::AI_KEEP_PREVIEW},
+    {"ai_wait_loading_card", SCO::AI_WAIT_LOADING_CARD},
+    {"ai_start_voice", SCO::AI_START_VOICE},
+    {"ai_list_fade_in_place", SCO::AI_LIST_FADE_IN_PLACE},
+    {"ai_result_reveal_at_once", SCO::AI_RESULT_REVEAL_AT_ONCE},
+    {"ai_result_short_black", SCO::AI_RESULT_SHORT_BLACK},
+    {"ai_don_under_flames", SCO::AI_DON_UNDER_FLAMES},
+    {"ai_game_chara_3d", SCO::AI_GAME_CHARA_3D},
+    {"ai_loading_chara_3d", SCO::AI_LOADING_CHARA_3D},
 };

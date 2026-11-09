@@ -11,6 +11,7 @@
 #include "../../libs/file/script.h"
 #include "../../libs/gfx/texture.h"
 #include "../../libs/global_data.h"
+#include "ai_match.h"
 #include "player.h"
 
 namespace {
@@ -107,6 +108,7 @@ namespace {
     // loads)
     bool ready_voice_pending = false;
     double ready_voice_at_ms = 0.0;
+    bool ready_start_pending = false; // Nijiiro: the start voice and SE are due, once the loading card is gone
     void ready_voice_cue() {
         const auto rv = tex.skin_config_by_name.find("zdon_ai_ready_voice_ms");
         if (rv != tex.skin_config_by_name.end() && rv->second.x > 0.0f) {
@@ -321,8 +323,9 @@ bool zdon_ai_arena_game() {
     return global_data.zdon_ai.active && zdon_ai_skin_arena();
 }
 
+// skin_config zdon_ai_keep_cabinet (Nijiiro): its own ai_support_menu script is only for YataiDON's AI screens
 bool zdon_ai_upstream() {
-    if (!script_manager.has_lua_script("ai_support_menu")) {
+    if (!script_manager.has_lua_script("ai_support_menu") || tex.skin_config_by_name.contains("zdon_ai_keep_cabinet")) {
         return false;
     }
     // the script index keeps the nearest skin's file, so its path tells whose it is; cached per (script, skin)
@@ -455,8 +458,60 @@ void Player::zdon_ai_manager(double ms_from_start, double current_ms, std::optio
     }
 }
 
+static bool battle_conceded = false;
+
+void zdon_ai_battle_concede() {
+    battle_conceded = true;
+    global_data.zdon_ai.skipped = true;
+}
+
+namespace {
+    std::array<std::unique_ptr<Chara3D>, 2> vs_charas;
+}
+
+void zdon_ai_vs_chara_load() {
+    if (!vs_charas[0]) {
+        const auto pd = scores_manager.get_player_data(get_player_id(PlayerNum::P1));
+        auto don = make_chara_from_player_data(pd ? &*pd : nullptr, false, true);
+        if (pd) {
+            don->set_don_colors(pd->chara_color_1, pd->chara_color_2, pd->chara_color_3);
+            don->apply_face(pd->chara_face_index);
+        } else {
+            don->set_don_colors(chara_default_color_1(PlayerNum::P1), chara_default_color_2(PlayerNum::P1),
+                                {249, 240, 225, 255});
+        }
+        don->set_anim(AnimIndex::DON_NORMAL);
+        vs_charas[0] = std::move(don);
+    }
+    if (!vs_charas[1]) {
+        PlayerData ai = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
+        ai.chara_is_costume = true;
+        ai.chara_cos_index = AI_COSTUME;
+        vs_charas[1] = make_chara_from_player_data(&ai, false, true);
+        vs_charas[1]->set_anim(AnimIndex::DON_NORMAL);
+    }
+}
+
+void zdon_ai_vs_chara_draw(int side, float x, float y, float scale, float rot_y) {
+    zdon_ai_vs_chara_load();
+    Chara3D& c = *vs_charas[side == 0 ? 0 : 1];
+    const Chara3DConfig& cfg = tex.chara_3d_config;
+    c.update(get_current_ms());
+    c.set_rotation(cfg.rot_x, rot_y, cfg.rot_z);
+    c.set_draw_scale(scale);
+    c.set_puchi_hidden(true);
+    c.draw(x, y);
+    c.set_puchi_hidden(false);
+}
+
+void zdon_ai_vs_chara_release() {
+    vs_charas[0].reset();
+    vs_charas[1].reset();
+}
+
 void zdon_ai_battle_begin(int level) {
     auto& b = global_data.zdon_ai;
+    battle_conceded = false;
     std::vector<float> traced = std::move(b.player_offsets); // the player's timing carries over between songs
     b = {};
     end_cue_pending = false;
@@ -464,6 +519,7 @@ void zdon_ai_battle_begin(int level) {
     match_cue_pending = false;
     ready_se_pending = false;
     ready_voice_pending = false;
+    ready_start_pending = false;
     b.active = true;
     b.level = std::clamp(level, 1, 11);
     b.condition = zdon_ai_condition();
@@ -511,6 +567,12 @@ static void make_sections(const std::vector<double>& note_times, const std::vect
 
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai) {
     auto& b = global_data.zdon_ai;
+    if (ready_start_pending && !b.hold_ready_cue) {
+        ready_start_pending = false;
+        ready_voice_cue();
+        ready_se_pending = true;
+        ready_se_at_ms = get_current_ms() + kReadySeLagMs;
+    }
     if (ready_voice_pending && get_current_ms() >= ready_voice_at_ms) {
         ready_voice_pending = false;
         cue("", "ready", 3);
@@ -549,9 +611,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             }
             ready_se_at_ms = get_current_ms() + se_ms;
         } else if (end_hold_ms() > 0) {
-            ready_voice_cue();
-            ready_se_pending = true;
-            ready_se_at_ms = get_current_ms() + kReadySeLagMs;
+            ready_start_pending = true; // the sections are cut behind the loading card, the cues wait for the screen
         } else {
             cue("ready", "ready", 3);
         }
@@ -586,7 +646,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         const int s = b.section;
         b.points_p[s] = b.live_p;
         b.points_ai[s] = b.live_ai;
-        b.winners[s] = b.tug < 9 ? 1 : 0;
+        b.winners[s] = (battle_conceded || b.tug < 9) ? 1 : 0;
         b.crowns[s] = section_crown(b.judge_p[0] - b.base_judge[0], b.judge_p[1] - b.base_judge[1],
                                     b.judge_p[2] - b.base_judge[2]);
         b.base_p = tp;
@@ -602,7 +662,7 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.state = 0;
         b.section++;
         const int n = static_cast<int>(b.winners.size());
-        if (b.section < n) {
+        if (b.section < n && !battle_conceded) {
             cue(b.winners[s] == 0 ? "section_win" : "section_lose", b.winners[s] == 0 ? "section_win" : "section_lose",
                 2);
             // the next section decides the match / gives the AI the match (voice_aienso section_match / ai_reach)
@@ -629,7 +689,9 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
         b.finished_at_ms = get_current_ms() + std::max(0.0, hold_ms);
         const int wins_p = static_cast<int>(std::ranges::count(b.winners, 0));
         b.won = wins_p >= static_cast<int>(b.winners.size()) - wins_p;
-        if (zdon_ai_end_delay_on()) {
+        if (battle_conceded) {
+            // no end cut-in and no cue: the skip banner, then the result
+        } else if (zdon_ai_end_delay_on()) {
             end_cue_pending = true;
             end_cue_won = b.won;
             end_cue_at_ms = get_current_ms() + kEndCueDelayMs;
@@ -645,8 +707,10 @@ void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& 
             cue(b.won ? "song_win" : "song_lose", b.won ? "song_win" : "song_lose", 1);
         }
         // the arcade only records a played match: never auto play (ZDON_AI_RECORD_AUTO=1: tests record anyway)
+        // nor a simplified chart (zdon_ai_support_levels), as upstream's AI battle
         const bool record =
-            (!global_data.force_auto_play && !player.is_auto_play()) || std::getenv("ZDON_AI_RECORD_AUTO");
+            !battle_conceded && player.get_modifiers().subdiff == 0 &&
+            ((!global_data.force_auto_play && !player.is_auto_play()) || std::getenv("ZDON_AI_RECORD_AUTO"));
         if (record) {
             global_data.config->general.zdon_ai_wins += b.won ? 1 : 0;
             save_config(*global_data.config);

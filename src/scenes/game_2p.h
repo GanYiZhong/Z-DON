@@ -5,6 +5,8 @@
 class Game2PScreen : public GameScreen {
 private:
     std::shared_ptr<SongParser> parser_2p;
+    bool ai_card_hold = false; // screen option ai_wait_loading_card: the chart clock waits for the loading card
+    double ai_black_ms = -1.0; // screen option ai_result_short_black: when the cover went fully black
 
     void release_chart_resources() override;
 

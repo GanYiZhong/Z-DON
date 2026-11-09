@@ -116,6 +116,13 @@ bool zdon_ai_stage();
 
 // a new battle at a tuning level (the player's recent timing is kept)
 void zdon_ai_battle_begin(int level);
+// screen option ai_loading_chara_3d: the loading VS window's two 3D Dons (side 0 = the player, 1 = the AI). They live
+// across the song select -> game switch, so the release also runs before the GL context goes
+void zdon_ai_vs_chara_load();
+void zdon_ai_vs_chara_draw(int side, float x, float y, float scale, float rot_y);
+void zdon_ai_vs_chara_release();
 // per frame, after the players updated: on the song's first frame cuts the sections (3, 5 from 200 notes; the cuts
 // fall on bar lines), then closes sections, keeps the tug and the AI's state, and at the end records the result
 void zdon_ai_battle_update(double chart_ms, const Player& player, const Player& ai);
+// the player skipped the song: the sections still open go to the AI and the match is not recorded
+void zdon_ai_battle_concede();

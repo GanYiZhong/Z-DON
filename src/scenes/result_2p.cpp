@@ -35,6 +35,7 @@ void Result2PScreen::on_screen_start() {
     // with the announce at the fade, see zdon_ai_announce_at_fade)
     zdon_bgm_pending = false;
     zdon_total_cue = 0;
+    zdon_reveal_at_ms = 0.0;
     if (global_data.zdon_ai.active && audio.has_sound("ai_bgm")) {
         audio.stop_sound("bgm");
         audio.set_sound_loop("ai_bgm", true);
@@ -91,6 +92,16 @@ std::optional<Screens> Result2PScreen::update() {
     }
     if (fade_in.has_value()) {
         fade_in->update(current_time);
+    }
+    // the arcade's AI result lands everything 2.13 s after the board is up (capture MBAZD6xA1D8: 163.83 -> 165.97)
+    if (global_data.zdon_ai.active && tex.options[SCO::AI_RESULT_REVEAL_AT_ONCE] && fade_in.has_value() &&
+        fade_in->is_finished()) {
+        if (zdon_reveal_at_ms <= 0.0) {
+            zdon_reveal_at_ms = current_time + 2130.0;
+        }
+        if (skipped_time == 0 && current_time >= zdon_reveal_at_ms) {
+            skipped_time = current_time;
+        }
     }
     if (player_1.has_value()) {
         player_1->update(current_time, fade_in.has_value() && fade_in->is_finished(), skipped_time > 0);

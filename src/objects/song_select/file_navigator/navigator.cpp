@@ -3208,9 +3208,21 @@ void Navigator::enter_current_box() {
     }
 }
 
-void Navigator::enter_diff_select(bool defer_box) {
+void Navigator::enter_diff_select(bool defer_box, bool fade_in_place) {
     if (!defer_box) {
         items[open_index]->enter_box();
+    }
+    if (fade_in_place) {
+        for (auto& box : items) {
+            box->fade_out(300.0f);
+        }
+        if (auto* song = dynamic_cast<SongBox*>(items[open_index].get())) {
+            song->prestart_diff_fade(); // the course board's timing does not change with the deferred enter_box
+        }
+        if (genre_bg.has_value()) {
+            genre_bg->fade_out();
+        }
+        return;
     }
     const float duration = 800;
     const float distance = (150 * tex.screen_scale);

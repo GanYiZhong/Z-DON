@@ -299,5 +299,13 @@ void SongBox::draw_score_history() {
 
 void SongBox::enter_box() {
     is_diff_select = true;
+    if (!diff_fade_prestarted) {
+        diff_fade_in->start();
+    }
+    diff_fade_prestarted = false;
+}
+
+void SongBox::prestart_diff_fade() {
     diff_fade_in->start();
+    diff_fade_prestarted = true;
 }

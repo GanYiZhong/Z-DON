@@ -8,6 +8,11 @@
 #include "../../libs/network/network.h"
 #include "../game/zdon_ai.h"
 
+// Z-DON: the AI's half of an AI battle result is silent
+static bool zdon_ai_result_lane(PlayerNum p) {
+    return global_data.zdon_ai.active && p == PlayerNum::P2;
+}
+
 ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     : player_num(player_num), has_2p(has_2p), is_2p(is_2p) {
     PlayerSoundScope audio_owner(player_num);
@@ -172,11 +177,15 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
                 }
             }
             if (changed) {
-                audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+                if (!zdon_ai_result_lane(player_num)) {
+                    audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+                }
             }
             score_delay.value() += 16.67 * 3;
             if (all_done) {
-                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                if (!zdon_ai_result_lane(player_num)) {
+                    audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                }
                 update_index = std::ssize(update_list);
                 rows_done_ms = current_ms;
             }
@@ -200,10 +209,14 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
         int new_num = std::stoi(next_score_str);
         assign_field(field_name, next_score_str);
         if (new_num != curr_num) {
-            audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+            if (!zdon_ai_result_lane(player_num)) {
+                audio.play_player_sound("num_up", player_num, VolumePreset::SOUND);
+            }
         }
         if (score_animator->is_finished) {
-            audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+            if (!zdon_ai_result_lane(player_num)) {
+                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+            }
             score_delay.value() += 750;
             if (update_index == std::ssize(update_list) - 1) {
                 rows_done_ms = current_ms;
@@ -222,7 +235,7 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
     }
     if (!score.empty() && !high_score_sound_played) {
         SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
-        if (sd.result_data.score > sd.result_data.prev_score) {
+        if (sd.result_data.score > sd.result_data.prev_score && !zdon_ai_result_lane(player_num)) {
             audio.play_player_sound("high_score_voice_" + std::to_string(static_cast<int>(player_num)) + "p",
                                     player_num, VolumePreset::VOICE);
             high_score_sound_played = true;

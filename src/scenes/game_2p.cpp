@@ -6,6 +6,7 @@
 
 #include "../libs/input/input.h"
 #include "../libs/math/animation.h"
+#include "../objects/game/ai_match.h"
 #include "../objects/game/zdon_ai.h"
 
 void Game2PScreen::release_chart_resources() {
@@ -49,6 +50,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     global_data.zdon_ai.requested = false;
     ai_music_cut = false;
     ai_ending_pending = false;
+    ai_card_hold = false;
+    ai_black_ms = -1.0;
     if (ai_battle) {
         auto& s1 = global_data.session_data[static_cast<int>(PlayerNum::P1)];
         auto& s2 = global_data.session_data[static_cast<int>(PlayerNum::P2)];
@@ -77,6 +80,7 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     Modifiers mods_1 = get_player_modifiers(PlayerNum::P1);
     Modifiers mods_2 = get_player_modifiers(PlayerNum::P2);
     if (ai_battle) {
+        mods_1.subdiff = global_data.session_data[static_cast<int>(global_data.player_num)].subdiff;
         mods_2 = mods_1; // the same speed / options as the player
         mods_2.auto_play = false;
     }
@@ -92,6 +96,9 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
             zdon_ai_tuning_level(course != parser->metadata.course_data.end() ? course->second.level : 5.0);
         players[1]->enable_zdon_ai(level);
         players[1]->apply_replay_appearance(zdon_ai_player_data(level));
+        if (tex.options[SCO::AI_GAME_CHARA_3D]) { // the AI Don's own colours are in its model
+            players[1]->use_costume(AI_COSTUME);
+        }
         zdon_ai_battle_begin(level);
         global_data.zdon_ai.star = course != parser->metadata.course_data.end() ? course->second.level : 0.0;
     }
@@ -112,11 +119,31 @@ std::optional<Screens> Game2PScreen::update() {
     if (pause_menu.active()) {
         return update_pause_menu(select_screen()); // Z-DON: pause menu (pause_menu.h)
     }
+    // screen option ai_wait_loading_card (Nijiiro): the battle starts when the loading card is gone, not behind it:
+    // the chart clock stands still and nothing typed meanwhile reaches the drums
+    const bool card_up = global_data.zdon_ai.active && tex.options[SCO::AI_WAIT_LOADING_CARD] && transition &&
+                         !transition->is_finished();
+    global_data.zdon_ai.hold_ready_cue = card_up;
+    if (card_up) {
+        if (!ai_card_hold) {
+            ai_card_hold = true;
+            clock.pause(current_time);
+        }
+        clear_input_buffers();
+    } else if (ai_card_hold) {
+        ai_card_hold = false;
+        clear_input_buffers();
+        clock.resume(current_time);
+    }
     clock.update(current_time);
     transition->update(current_time);
     update_gameplay(current_time);
     if (global_data.zdon_ai.active && players.size() == 2) {
-        zdon_ai_battle_update(clock.position(), *players[0], *players[1]);
+        update_skip();
+        if (skipped) { // what was left of the battle goes to the AI, at once
+            zdon_ai_battle_concede();
+        }
+        zdon_ai_battle_update(skipped ? 1e12 : clock.position(), *players[0], *players[1]);
         if (global_data.zdon_ai.finished && get_current_ms() >= global_data.zdon_ai.finished_at_ms && !ai_music_cut &&
             song_music && (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
             audio.stop_sound(
@@ -136,7 +163,15 @@ std::optional<Screens> Game2PScreen::update() {
             ai_cover_held = get_current_ms() < ai_cover_start_ms + it->second.x;
         }
     }
-    if (result_transition.is_finished && !audio.is_sound_playing("result_transition") && !ai_cover_held) {
+    // the arcade's AI result comes 0.67 s after the screen is black (capture MBAZD6xA1D8: 162.83 -> 163.50)
+    bool cover_waits = audio.is_sound_playing("result_transition");
+    if (global_data.zdon_ai.active && tex.options[SCO::AI_RESULT_SHORT_BLACK] && result_transition.is_finished) {
+        if (ai_black_ms < 0.0) {
+            ai_black_ms = current_time;
+        }
+        cover_waits = current_time < ai_black_ms + 670.0;
+    }
+    if (result_transition.is_finished && !cover_waits && !ai_cover_held) {
         return on_screen_end(result_screen());
     }
 
@@ -155,6 +190,9 @@ std::optional<Screens> Game2PScreen::update() {
             }
         }
 
+        if (skipped && global_data.zdon_ai.active && !global_data.config->general.fast_transitions) {
+            transition_delay = 2800.0; // the skip banner, then the result (as a skipped normal song)
+        }
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }
 

@@ -345,6 +345,9 @@ Config get_config() {
     config.general.zdon_hit_timing_show = config_file["general"]["zdon_hit_timing_show"].value_or("half");
     config.general.zdon_sort_filter = config_file["general"]["zdon_sort_filter"].value_or(true);
     config.general.zdon_practice_loop = config_file["general"]["zdon_practice_loop"].value_or(true);
+    config.general.zdon_early_hitsound = config_file["general"]["zdon_early_hitsound"].value_or(false);
+    config.general.zdon_press_time_judge = config_file["general"]["zdon_press_time_judge"].value_or(false);
+    config.general.zdon_branch_by_measure = config_file["general"]["zdon_branch_by_measure"].value_or(false);
     config.general.zdon_coin_mode = config_file["general"]["zdon_coin_mode"].value_or(false);
     config.general.zdon_coin_credits = std::clamp(config_file["general"]["zdon_coin_credits"].value_or(0), 0, 99);
     config.general.zdon_ai_level = std::clamp(config_file["general"]["zdon_ai_level"].value_or(5), 1, 10);
@@ -501,6 +504,7 @@ Config get_config() {
     config.video.target_fps = config_file["video"]["target_fps"].value_or(-1);
     config.video.vsync = config_file["video"]["vsync"].value_or(kDefaultVsync);
     config.video.zdon_texture_compression = config_file["video"]["zdon_texture_compression"].value_or(true);
+    config.video.zdon_composited_fullscreen = config_file["video"]["zdon_composited_fullscreen"].value_or(false);
     platform_load_config(config, config_file);
 
     return config;
@@ -553,6 +557,9 @@ void save_config(const Config& config) {
                                                {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
                                                {"zdon_sort_filter", config.general.zdon_sort_filter},
                                                {"zdon_practice_loop", config.general.zdon_practice_loop},
+                                               {"zdon_early_hitsound", config.general.zdon_early_hitsound},
+                                               {"zdon_press_time_judge", config.general.zdon_press_time_judge},
+                                               {"zdon_branch_by_measure", config.general.zdon_branch_by_measure},
                                                {"zdon_coin_mode", config.general.zdon_coin_mode},
                                                {"zdon_coin_credits", config.general.zdon_coin_credits},
                                                {"zdon_ai_level", config.general.zdon_ai_level},
@@ -646,7 +653,8 @@ void save_config(const Config& config) {
                                              {"borderless", config.video.borderless},
                                              {"target_fps", config.video.target_fps},
                                              {"vsync", config.video.vsync},
-                                             {"zdon_texture_compression", config.video.zdon_texture_compression}});
+                                             {"zdon_texture_compression", config.video.zdon_texture_compression},
+                                             {"zdon_composited_fullscreen", config.video.zdon_composited_fullscreen}});
 
     // main saves at every start (for migrated fields): a file that already holds the same text is
     // left alone (the same text mode read as it is written)

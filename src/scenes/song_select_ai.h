@@ -1,13 +1,17 @@
 #pragma once
 #include <algorithm>
+#include <array>
+#include <optional>
 
 #include "../libs/audio/audio.h"
 #include "../libs/file/scores.h"
 #include "../libs/input/input.h"
+#include "../objects/game/ai_match.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/chara_3d.h"
 #include "../objects/global/nameplate.h"
+#include "../objects/song_select/ai_support_menu.h"
 #include "song_select.h"
 
 // Z-DON AI battle (objects/game/zdon_ai.h): the mode board "AI battle" on the entry screen opens this song
@@ -32,12 +36,72 @@ protected:
     }
     // the game transition (VS window, loading card) is an AI one: the skin asks tex.ai_transition()
     void select_song(SongBox* song) override {
+        if (support_choosing && !support_decided) {
+            return;
+        }
+        const bool simplified = support_choosing && support_cursor < SUPPORT_COUNT[support_course] - 1;
+        global_data.session_data[static_cast<int>(global_data.player_num)].subdiff =
+            simplified ? SUPPORT_FIRST[support_course] + support_cursor : 0;
         global_data.zdon_ai.requested = true;
         if (player && player->in_level_step()) { // a time-up on the level panel
             player->level_select = false;
             zdon_ai_level_panel_close();
         }
         SongSelectScreen::select_song(song);
+    }
+
+    // skin_config zdon_ai_support_levels (SimpleStyle): after the course, the simplified charts of upstream's AI battle
+    // (AISongSelectScreen): Easy has none, and the last column is the chart as written
+    static constexpr std::array<int, 4> SUPPORT_FIRST = {1, 2, 6, 10};
+    static constexpr std::array<int, 4> SUPPORT_COUNT = {1, 4, 4, 4};
+    static constexpr int SUPPORT_SELECT_SECONDS = 10;
+    std::optional<AISupportMenu> support_menu;
+    bool support_choosing = false;
+    bool support_decided = false;
+    int support_cursor = 0;
+    int support_course = 0;
+
+    void handle_input_selecting() override {
+        if (support_choosing) {
+            if (support_decided) {
+                clear_input_buffers();
+                return;
+            }
+            const PlayerNum seat = global_data.player_num;
+            if (is_l_kat_pressed(seat)) {
+                audio.play_player_sound("kat", seat, VolumePreset::SOUND);
+                support_cursor = std::max(support_cursor - 1, 0);
+            } else if (is_r_kat_pressed(seat)) {
+                audio.play_player_sound("kat", seat, VolumePreset::SOUND);
+                support_cursor = std::min(support_cursor + 1, SUPPORT_COUNT[support_course] - 1);
+            } else if (is_l_don_pressed(seat) || is_r_don_pressed(seat)) {
+                audio.play_player_sound("don", seat, VolumePreset::SOUND);
+                support_decided = true;
+            }
+            return;
+        }
+        SongSelectScreen::handle_input_selecting();
+        if (!support_menu || !support_menu->loaded() || state != SongSelectState::SONG_SELECTED ||
+            !player->difficulty_decided()) {
+            return;
+        }
+        const auto course = static_cast<int>(player->selected_difficulty);
+        if (course >= 0 && course < static_cast<int>(SUPPORT_COUNT.size()) && SUPPORT_COUNT[course] > 1) {
+            support_course = course;
+            support_cursor = SUPPORT_COUNT[course] - 1;
+            support_choosing = true;
+            diff_select_timer =
+                std::make_unique<Timer>(SUPPORT_SELECT_SECONDS, get_current_ms(), [this] { support_decided = true; });
+        }
+    }
+
+    void draw_overlays() override {
+        if (support_menu) {
+            support_menu->draw(get_current_ms(), support_choosing ? support_course : -1, support_cursor,
+                               support_choosing, false, static_cast<int>(global_data.player_num),
+                               zdon_ai_condition() - 1);
+        }
+        SongSelectScreen::draw_overlays();
     }
 
     // ai_song_select_all.lua: one timer, 100 s on the song list; the course board keeps what is left, at least
@@ -76,7 +140,8 @@ protected:
     void after_select_timers(double now) override {
         // the cabinet cuts the select music the moment the course is decided (footage Tl7g8XXXvAM 2:12 and
         // 0wD5kkcN5WA 1:44: silence until the loading card's cues); the decide voice goes on alone
-        if (player && player->difficulty_decided()) {
+        // screen option ai_keep_preview (Nijiiro): the music plays on, as in the normal song select
+        if (player && player->difficulty_decided() && !tex.options[SCO::AI_KEEP_PREVIEW]) {
             if (!music_cut) {
                 music_cut = true;
                 if (audio.is_music_stream_valid("preview")) {
@@ -364,7 +429,18 @@ protected:
         }
     }
 
+    // screen option ai_select_chara_3d (Nijiiro): the AI stands on the select as the cabinet's 3D AI Don (costume 171,
+    // as upstream)
+    static bool ai_3d() { return tex.options[SCO::AI_SELECT_CHARA_3D]; }
+
     void draw_extra_players() override {
+        if (ai_3d()) {
+            auto [cx, cy] = tex.chara_xy("song_select_2p");
+            if (ai_chara) {
+                ai_chara->draw(cx, cy, 1.0f);
+            }
+            return;
+        }
         if (zdon_ai_skin_arena()) {
             return; // the skin draws the AI (global/ai_battle.lua)
         }
@@ -386,6 +462,13 @@ public:
         }
         zdon_ai_level_panel_reset();
         zdon_ai_condition(); // rolls the session's condition (its tension) on the first visit
+        support_choosing = false;
+        support_decided = false;
+        support_menu.reset();
+        if (const auto levels = tex.skin_config_by_name.find("zdon_ai_support_levels");
+            levels != tex.skin_config_by_name.end() && levels->second.x != 0.0f) {
+            support_menu.emplace();
+        }
         select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { list_time_up(); });
         seek_steps = 0;
         diff_leave = false;
@@ -423,14 +506,25 @@ public:
             audio.set_sound_loop("ai_bgm", true);
             audio.play_sound("ai_bgm", VolumePreset::MUSIC);
         }
-        const PlayerData pd = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
+        PlayerData pd = zdon_ai_player_data(global_data.config->general.zdon_ai_level);
+        if (ai_3d()) {
+            pd.chara_is_costume = true;
+            pd.chara_cos_index = AI_COSTUME;
+        }
         ai_plate = Nameplate(pd.username, pd.title, PlayerNum::AI, pd.dan, pd.gold, pd.rainbow, pd.title_bg);
         ai_chara = make_chara_from_player_data(&pd, true);
-        ai_chara->set_don_colors(pd.chara_color_1, pd.chara_color_2, pd.chara_color_3);
+        if (!ai_3d()) { // the AI Don's own colours are in its model
+            ai_chara->set_don_colors(pd.chara_color_1, pd.chara_color_2, pd.chara_color_3);
+        }
         ai_chara->set_anim(AnimIndex::DON_SELECT_LOOP);
     }
 
     Screens on_screen_end(Screens next_screen) override {
+        support_menu.reset();
+        // ai_keep_preview: the preview plays through the VS window, but must not run on under the loading card
+        if (audio.is_music_stream_valid("preview")) {
+            audio.stop_music_stream("preview");
+        }
         zdon_ai_arcade_sort_enable(false);
         zdon_ai_board_info_set(false, 0, {});
         return SongSelectScreen::on_screen_end(next_screen);

@@ -93,7 +93,7 @@ public:
     virtual void exit_box();
 
     void fade_in(float delay);
-    void fade_out();
+    void fade_out(float duration = 166.0f);
 
     void move_box(float target_position, float duration, float delay = 0.0f,
                   std::optional<EaseType> ease = EaseType::Cubic);

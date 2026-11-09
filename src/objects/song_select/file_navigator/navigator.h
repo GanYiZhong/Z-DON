@@ -218,7 +218,7 @@ public:
     bool jump_to_song_path(const fs::path& song_path);
     // defer_box (Green AI select, skin key zdon_ai_card_hold_ms): the other boxes leave now, the card widens later
     // through enter_current_box()
-    void enter_diff_select(bool defer_box = false);
+    void enter_diff_select(bool defer_box = false, bool fade_in_place = false);
     void enter_current_box();
     void exit_diff_select();
     float get_diff_fade_in();

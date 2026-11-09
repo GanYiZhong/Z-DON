@@ -50,6 +50,14 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
 
     int font_size = 18 * tex.screen_scale;
     genre_text = std::make_unique<OutlinedText>(genre_label, font_size, Color::WHITE, Color::BLANK, false, 3, 1);
+    // Z-DON: the AI stage's genre pill has black-rimmed lettering, a little smaller (arcade capture MBAZD6xA1D8)
+    if (zdon_ai_stage()) {
+        if (auto it = tex.skin_config_by_name.find("zdon_ai_song_info");
+            it != tex.skin_config_by_name.end() && it->second.height > 0.0f) {
+            genre_text = std::make_unique<OutlinedText>(genre_label, static_cast<int>(16 * tex.screen_scale),
+                                                        Color::WHITE, Color::BLACK, false, 2, 1);
+        }
+    }
 
     GenreIndex genre_bucket = this->genre < 8 ? static_cast<GenreIndex>(this->genre + 1) : GenreIndex::DEFAULT;
     auto color_it = DEFAULT_COLORS.find(genre_bucket);
@@ -63,6 +71,11 @@ SongInfo::SongInfo(const std::string& song_name, const std::string& subtitle, bo
             color_it->second[0].has_value()) {
             target = color_it->second[0].value();
         }
+    }
+
+    // Z-DON: the title stays up; only the plate under it swaps the genre and the song number
+    if (auto it = tex.skin_config_by_name.find("zdon_song_title_always"); it != tex.skin_config_by_name.end()) {
+        keep_title = it->second.x != 0.0f;
     }
 
     genre_shader = load_shader("shader/dummy.vs", "shader/colortransform.fs");
@@ -81,7 +94,7 @@ SongInfo::SongInfo(SongInfo&& other) noexcept
       song_title(std::move(other.song_title)), song_subtitle(std::move(other.song_subtitle)),
       genre_text(std::move(other.genre_text)), song_num(std::move(other.song_num)), song_max(std::move(other.song_max)),
       t_genre(other.t_genre), t_song_num_plate(other.t_song_num_plate), genre_shader(other.genre_shader),
-      genre_shader_loaded(other.genre_shader_loaded) {
+      genre_shader_loaded(other.genre_shader_loaded), keep_title(other.keep_title) {
     other.genre_shader_loaded = false;
 }
 
@@ -104,6 +117,7 @@ SongInfo& SongInfo::operator=(SongInfo&& other) noexcept {
         t_song_num_plate = other.t_song_num_plate;
         genre_shader = other.genre_shader;
         genre_shader_loaded = other.genre_shader_loaded;
+        keep_title = other.keep_title;
         other.genre_shader_loaded = false;
     }
     return *this;
@@ -182,7 +196,7 @@ void SongInfo::draw() {
     if (skin_pill) {
         a_title = std::clamp(1.0f - 2.0f * f, 0.0f, 1.0f);
         a_num = std::clamp(2.0f * f - 1.0f, 0.0f, 1.0f);
-    } else if (on_stage) {
+    } else if (on_stage || keep_title) {
         a_title = 1.0f;
     }
     zdon_ai_set_title_alpha(a_title);

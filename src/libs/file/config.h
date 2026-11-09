@@ -50,7 +50,11 @@ struct GeneralConfig {
     float touch_drum_size = 1.0f;
     bool skin_updater = true;
     bool fast_transitions = false;
-    bool pause_menu = true; // Z-DON: Escape / Space open a pause menu during a song (false: Escape leaves)
+    bool pause_menu = true;             // Z-DON: Escape / Space open a pause menu during a song (false: Escape leaves)
+    bool zdon_early_hitsound = false;   // Z-DON: the input thread plays the hit sound (libs/input/early_hit.h)
+    bool zdon_press_time_judge = false; // Z-DON: judge a hit at the press time rather than the frame's time
+    // Z-DON: a branch is decided one measure before its head at any speed (off: when its first note appears)
+    bool zdon_branch_by_measure = false;
 };
 
 struct LimitsConfig {
@@ -139,6 +143,8 @@ struct VideoConfig {
     int target_fps = 60;
     bool vsync = true;
     bool zdon_texture_compression = true; // Z-DON: skin textures as BC7 (texture_bc7.h)
+    // Z-DON (Windows, raylib): borderless is a window one pixel taller than the monitor, which keeps DWM composing
+    bool zdon_composited_fullscreen = false;
 };
 
 struct Config {

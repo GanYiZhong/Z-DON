@@ -90,6 +90,10 @@ void poll_window_events();
 void disable_exit_key();
 void toggle_fullscreen();
 void toggle_borderless_windowed();
+// Z-DON (video.zdon_composited_fullscreen, set before the first toggle): the raylib backend on Windows makes borderless
+// a window one pixel taller than the monitor, so Windows keeps composing it instead of flipping it directly; the extra
+// row is off-screen and the screen / render size ignore it. Other backends leave borderless as it is.
+inline bool zdon_composited_fullscreen = false;
 bool is_window_fullscreen();
 bool is_window_focused(); // Z-DON: the game pauses when the window loses focus
 void set_window_size(int width, int height);

@@ -84,6 +84,8 @@ void GameScreen::on_screen_start() {
 }
 
 Screens GameScreen::on_screen_end(Screens next_screen) {
+    global_data.zdon_ai.don_draw_now = nullptr; // it points at this screen's player
+    global_data.zdon_ai.ai_draw_now = nullptr;
     unload_song();
     background.reset();
     transition.reset();
@@ -672,7 +674,9 @@ void GameScreen::init_skip() {
         return;
     }
 
-    if (global_data.player_num == PlayerNum::TWO_PLAYER || players.size() > 1) {
+    // Z-DON: an AI battle has one human: the skip is read from the AI's (unplayed) lane, as in a solo play
+    const bool ai_battle = global_data.zdon_ai.active && players.size() == 2;
+    if (!ai_battle && (global_data.player_num == PlayerNum::TWO_PLAYER || players.size() > 1)) {
         return;
     }
 
@@ -696,7 +700,7 @@ void GameScreen::init_skip() {
         return;
     }
 
-    if (!lane_used[p2_index]) {
+    if (ai_battle || !lane_used[p2_index]) {
         skip_lane = PlayerNum::P2;
     } else if (!lane_used[p1_index]) {
         skip_lane = PlayerNum::P1;
@@ -742,7 +746,7 @@ void GameScreen::poll_skip() {
 
     size_t play_hits = 0;
     for (const auto& player : players) {
-        if (player) {
+        if (player && (!global_data.zdon_ai.active || player == players.front())) { // not the AI's own hits
             play_hits += player->input_log.size();
         }
     }
