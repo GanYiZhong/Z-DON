@@ -70,7 +70,7 @@ DEFAULT_CONFIG = {
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
 PROTECTED_INSTALL_DIRS = {"cache", "Songs", "Records", "logs", ".zdon_update_tmp"}
 DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdon_update.bat"]
-BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in every package (the user's choice 2026-11-11)
+BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in the install zip only, not in updates (the user's choice 2026-11-11)
 
 
 def log(msg: str) -> None:
@@ -717,15 +717,19 @@ def collect(src: Path, patterns: list[str], excludes: list[str]) -> list[str]:
     return out
 
 
-def make_zip(root: Path, files: list[str], out: Path) -> None:
+def make_zip(root: Path, files: list[str], out: Path, extra: dict[str, Path] | None = None) -> None:
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for rel in sorted(files):
             z.write(root / rel, rel)
+        for rel, src in sorted((extra or {}).items()):
+            z.write(src, rel)
 
 
-def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> None:
+def publish_tree(sources: dict[str, Path], dest: Path, version: str | None,
+                 package_only: dict[str, Path] | None = None) -> None:
     """Copies sources (relative path -> file) into a fresh folder next to dest, writes its manifest, then swaps it in.
-    With a version (a game channel) the files go under files/ and version.txt sits beside the manifest."""
+    With a version (a game channel) the files go under files/ and version.txt sits beside the manifest.
+    package_only: files only in the first-install zip (not in the manifest, so the game's updater never fetches them)."""
     staging = dest.with_name(dest.name + ".new")
     old = dest.with_name(dest.name + ".old")
     shutil.rmtree(staging, ignore_errors=True)
@@ -740,7 +744,7 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> N
         os.replace(files_root / "checksums.sha256", staging / "checksums.sha256")
         (staging / "version.txt").write_text(version + "\n", encoding="utf-8", newline="\n")
         # the website's first-install download: the same files as one zip
-        make_zip(files_root, list(sources), staging / "package.zip")
+        make_zip(files_root, list(sources), staging / "package.zip", package_only)
     else:
         # a skin: <name>/<branch>.zip beside the branch folder
         tmp_zip = dest.with_name(dest.name + ".zip.new")
@@ -1044,13 +1048,15 @@ def cmd_publish(cfg: dict, args) -> None:
     for name in ("zdon_update.ps1", "zdon_update.bat"):
         if name not in sources and (HERE.parent / name).exists():
             sources[name] = HERE.parent / name
-    # a song ships with the game (from the repo), so a new install has one to play right away
+    # a song in the first-install zip (from the repo), so a new install has one to play right away; not an update
+    # file: the updater never adds it to an install
+    package_only = {}
     for folder in BUNDLED_SONGS:
         root = HERE.parent / folder
         if root.is_dir():
             for f in sorted(root.rglob("*")):
                 if f.is_file():
-                    sources[f.relative_to(HERE.parent).as_posix()] = f
+                    package_only[f.relative_to(HERE.parent).as_posix()] = f
     version = args.version or git_version(HERE.parent)
     dest = cfg["data_dir"] / "update" / args.channel
     # where zdon_update.bat looks when config.toml names no source (a build with a compiled-in server)
@@ -1060,9 +1066,10 @@ def cmd_publish(cfg: dict, args) -> None:
         url_file.parent.mkdir(parents=True, exist_ok=True)
         url_file.write_text(f"{site_url}/update/{args.channel}\n", encoding="utf-8", newline="\n")
         sources["zdon_update.url"] = url_file
-    publish_tree(sources, dest, version)
+    publish_tree(sources, dest, version, package_only)
     size = sum(p.stat().st_size for p in sources.values())
-    print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}")
+    print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}"
+          + (f", the install zip also has {len(package_only)} song file(s)" if package_only else ""))
 
 
 def cmd_publish_skin(cfg: dict, args) -> None:
