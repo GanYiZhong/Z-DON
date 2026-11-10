@@ -20,7 +20,9 @@ std::vector<GlyphInfo> load_font_data(std::span<const unsigned char> data, int f
                                       std::span<const int> codepoints) {
     std::vector<GlyphInfo> glyphs;
     stbtt_fontinfo info{};
-    if (data.empty() || !stbtt_InitFont(&info, data.data(), 0)) {
+    // Z-DON: a font collection (.ttc, as most of the system's CJK fonts are) uses its first font
+    const int offset = data.empty() ? -1 : stbtt_GetFontOffsetForIndex(data.data(), 0);
+    if (offset < 0 || !stbtt_InitFont(&info, data.data(), offset)) {
         spdlog::warn("FONT: Failed to process TTF font data");
         return glyphs;
     }

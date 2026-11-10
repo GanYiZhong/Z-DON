@@ -1232,6 +1232,44 @@ static int dump_chara(const std::string& spec) {
     return 0;
 }
 
+// Z-DON: with no skin yet (a first install), the system's own font for the first-run screens (language, the skin
+// download): the first of these that exists, with a Korean font as the fallback for what it lacks
+static void zdon_skinless_font() {
+    std::vector<fs::path> fonts;
+#ifdef _WIN32
+    const char* windir = std::getenv("WINDIR");
+    const fs::path dir = fs::path(windir ? windir : "C:\\Windows") / "Fonts";
+    for (const char* f :
+         {"msjh.ttc", "msyh.ttc", "YuGothM.ttc", "meiryo.ttc", "malgun.ttf", "segoeui.ttf", "arial.ttf"}) {
+        fonts.push_back(dir / f);
+    }
+    const fs::path korean = dir / "malgun.ttf";
+#else
+    for (const char* f :
+         {"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+          "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", "/System/Library/Fonts/PingFang.ttc",
+          "/System/Library/Fonts/Hiragino Sans GB.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+          "/System/Library/Fonts/Helvetica.ttc"}) {
+        fonts.emplace_back(f);
+    }
+    const fs::path korean;
+#endif
+    std::error_code ec;
+    for (const fs::path& f : fonts) {
+        if (!fs::exists(f, ec)) {
+            continue;
+        }
+        try {
+            font_manager.init(f, f != korean && fs::exists(korean, ec) ? korean : fs::path());
+            spdlog::info("Without a skin: the system font {}", f.filename().string());
+            return;
+        } catch (const std::exception& e) {
+            spdlog::warn("Without a skin: {} ({})", f.string(), e.what());
+        }
+    }
+    spdlog::error("Without a skin: no system font found; the first-run screens have no text");
+}
+
 static int game_main(int argc, char* argv[]) {
 #ifdef _WIN32
     // The CRT's argv is in the ANSI code page: a song path with characters outside it (Japanese on a
@@ -1304,6 +1342,7 @@ static int game_main(int argc, char* argv[]) {
         global_data.skinless = true;
         global_data.needs_onboarding = true;
         initial_screen = Screens::ONBOARDING;
+        zdon_skinless_font(); // the first-run screens draw text before any skin (and its fonts) is here
     }
     if (dump_chara_spec && *dump_chara_spec) {
         std::exit(
