@@ -70,7 +70,8 @@ namespace {
                 spdlog::info("Onboarding: {} skins from {}", out.size(), base);
                 return out;
             }
-            spdlog::warn("Onboarding: no skin list from {} (HTTP {}), using the default list", base, status);
+            spdlog::warn("Onboarding: no skin list from {} (HTTP {})", base, status);
+            return out; // a Z-DON install takes its skins from its own server only
         }
         for (const DefaultSkin& d : kDefaultSkins) {
             out.push_back({d.name, d.url, d.parent});
@@ -146,6 +147,9 @@ void OnboardingScreen::on_screen_start() {
     downloading = download_started = false;
     skinless_start = global_data.skinless;
     error.clear();
+    if (skin_total() == 0) {
+        error = "Cannot reach the server. Check your connection.";
+    }
     // no skin means no drum on screen, so phones pick rows by tapping them instead
     set_touch_drum_enabled(false);
     take_touch_tap();

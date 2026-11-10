@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <optional>
+#include <rapidjson/document.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <unordered_map>
@@ -14,6 +16,7 @@
 #include "../file/filesystem.h"
 #include "../math/sha256.h"
 #include "android_ca.h"
+#include "zdon_update.h"
 
 #if defined(YATAIDON_HAS_HTTP)
 
@@ -451,9 +454,43 @@ bool SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
     return complete;
 }
 
+// Z-DON: with a Z-DON server set (config.toml zdon_server_url or the compiled-in one), every skin is updated
+// from it and only from it: the skins it publishes (/skins/index.json) whatever their .skin-repo says, the
+// rest not at all. Without its list (offline, server down) no skin is updated this pass.
+// Returns false when there is no Z-DON server (the .skin-repo files decide, as upstream).
+static bool zdon_skin_sources(std::unordered_map<std::string, std::pair<std::string, std::string>>& out, bool& listed) {
+    const std::string base = zdon_update::server_base();
+    if (base.empty()) {
+        return false;
+    }
+    listed = false;
+    int status = 0;
+    const std::optional<std::string> body = zdon_update::http_get(base + "/skins/index.json", 8000, &status);
+    rapidjson::Document doc;
+    if (!body || doc.Parse(body->c_str()).HasParseError() || !doc.IsArray()) {
+        spdlog::warn("Skin update: no skin list from {} (HTTP {}), skipping this pass", base, status);
+        return true;
+    }
+    for (const auto& v : doc.GetArray()) {
+        if (v.IsObject() && v.HasMember("name") && v["name"].IsString() && v.HasMember("url") && v["url"].IsString()) {
+            const std::string branch =
+                v.HasMember("branch") && v["branch"].IsString() ? v["branch"].GetString() : std::string("main");
+            out[v["name"].GetString()] = {v["url"].GetString(), branch.empty() ? "main" : branch};
+        }
+    }
+    listed = true;
+    return true;
+}
+
 void SkinUpdater::scan_skins() {
     std::error_code ec;
     if (!fs::exists("Skins", ec)) {
+        return;
+    }
+    std::unordered_map<std::string, std::pair<std::string, std::string>> zdon_sources;
+    bool zdon_listed = false;
+    const bool zdon = zdon_skin_sources(zdon_sources, zdon_listed);
+    if (zdon && !zdon_listed) {
         return;
     }
     for (const auto& entry : fs::directory_iterator("Skins", ec)) {
@@ -475,6 +512,16 @@ void SkinUpdater::scan_skins() {
         }
         if (branch.empty()) {
             branch = "main";
+        }
+        if (zdon) {
+            const auto it = zdon_sources.find(entry.path().filename().string());
+            if (it == zdon_sources.end()) {
+                spdlog::info("Skin update ({}): not published on the Z-DON server, left as it is",
+                             entry.path().filename().string());
+                continue;
+            }
+            repo_url = it->second.first;
+            branch = it->second.second;
         }
 
         update_one_skin(entry.path(), strip_dot_git(repo_url), branch);
