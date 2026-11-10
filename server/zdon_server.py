@@ -199,9 +199,7 @@ def as_bool(v) -> bool:
 
 def new_access_code(store: Store) -> str:
     while True:
-        # 19 digits below 9e18: the game keeps player ids in a 64-bit integer (scores.db players.player_id
-        # INTEGER PRIMARY KEY, max ~9.22e18); a longer code can't be stored there and the player has no name
-        code = str(secrets.randbelow(8 * 10**18) + 10**18)
+        code = str(secrets.randbelow(9 * 10**19) + 10**19)  # 20 digits, as upstream's server
         if not store.one("SELECT 1 FROM users WHERE access_code=?", (code,)):
             return code
 
