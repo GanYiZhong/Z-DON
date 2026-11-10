@@ -9,6 +9,7 @@ private:
     double zdon_bgm_at_ms = 0.0;
     int zdon_total_cue = 0;         // the play-all page: 1 = announce played, 2 = window sound played
     double zdon_reveal_at_ms = 0.0; // screen option ai_result_reveal_at_once: when the board's contents land
+    void draw_online_result();      // Z-DON online battle: who won
 
 protected:
     double reveal_end_ms() override;

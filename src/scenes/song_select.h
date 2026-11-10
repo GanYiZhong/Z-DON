@@ -92,6 +92,9 @@ protected:
 
     std::optional<Screens> take_replay_jump();
     std::optional<Screens> start_replay(const ReplayData& replay);
+    // Z-DON online challenge (zdon_online.h): play this record's chart against it, the record in the 2P lane
+    std::optional<Screens> start_challenge(const ReplayData& replay);
+    bool replay_is_challenge = false; // the replay being fetched is for a challenge (the website's button)
 
     virtual bool allows_second_player_join() { return true; }
     double join_request_ms = -1.0;

@@ -6,11 +6,13 @@
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
 #include "../../libs/network/network.h"
+#include "../../libs/zdon_online.h"
 #include "../game/zdon_ai.h"
 
 // Z-DON: the AI's half of an AI battle result is silent
+// the opponent's board (Z-DON AI battle or online battle): no personal best, no high score voice
 static bool zdon_ai_result_lane(PlayerNum p) {
-    return global_data.zdon_ai.active && p == PlayerNum::P2;
+    return (global_data.zdon_ai.active || zdon_online.active()) && p == PlayerNum::P2;
 }
 
 ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
@@ -20,6 +22,11 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     auto pd = scores_manager.get_player_data(player_id);
     if (global_data.zdon_ai.active && player_num == PlayerNum::P2) {
         pd = zdon_ai_player_data(global_data.zdon_ai.level); // Z-DON AI battle
+    }
+    if (zdon_online.active() && player_num == PlayerNum::P2) { // Z-DON online battle: the opponent, not 2P's profile
+        pd = zdon_online.opponent;
+        global_data.session_data[static_cast<int>(player_num)].result_data.prev_score =
+            global_data.session_data[static_cast<int>(player_num)].result_data.score;
     }
 
     chara = make_chara_from_player_data(pd ? &*pd : nullptr); // 2P stands below 1P, facing the same way

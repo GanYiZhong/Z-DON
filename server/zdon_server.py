@@ -167,6 +167,10 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        try:  # a challenge jump: the game plays against the record instead of watching it
+            self.db.execute("ALTER TABLE jumps ADD COLUMN challenge INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         self.lock = threading.RLock()
 
     def q(self, sql: str, args=()) -> list[sqlite3.Row]:
@@ -273,6 +277,7 @@ class Api:
             ("GET", "/song_ranking"): self.song_ranking,
             ("GET", "/replay"): self.replay,
             ("GET", "/poll_jump"): self.poll_jump,
+            ("GET", "/challenges"): self.challenges,
             ("POST", "/gacha"): self.gacha,
             ("POST", "/kinotake"): self.kinotake,
             ("POST", "/don_points"): self.don_points,
@@ -442,24 +447,37 @@ class Api:
             return 404, {"detail": "no such score"}
         out = {"hash": r["hash"], "difficulty": r["difficulty"], "input_log": json.loads(r["input_log"] or "[]"),
                "username": r["username"], "chara_is_costume": bool(r["chara_is_costume"]),
-               "chara_cos_index": r["chara_cos_index"]}
+               "chara_cos_index": r["chara_cos_index"], "score": r["score"], "modifiers": r["modifiers"] or "{}"}
         for k in ("title", "title_bg", "chara_color_1", "chara_color_2", "chara_color_3", "chara_head_index",
                   "chara_body_index"):
             if r[k] is not None:
                 out[k] = r[k]
         return 200, out
 
+    def challenges(self, p):
+        """Plays someone can be challenged on: each player's best play of the chart that kept its hits."""
+        h, d = p.get("hash", ""), as_int(p.get("difficulty"), -1)
+        limit = max(1, min(50, as_int(p.get("limit"), 20)))
+        rows = self.s.q("""SELECT s.id, s.score, s.crown, u.username FROM scores s JOIN users u USING(access_code)
+                           WHERE s.hash=? AND s.difficulty=? AND length(s.input_log) > 2
+                             AND s.id = (SELECT s2.id FROM scores s2 WHERE s2.access_code = s.access_code
+                                         AND s2.hash = s.hash AND s2.difficulty = s.difficulty
+                                         AND length(s2.input_log) > 2 ORDER BY s2.score DESC, s2.id LIMIT 1)
+                           ORDER BY s.score DESC LIMIT ?""", (h, d, limit))
+        return 200, {"challenges": [{"score_id": r["id"], "username": r["username"], "score": r["score"],
+                                     "crown": r["crown"]} for r in rows]}
+
     def poll_jump(self, p):
         code = p.get("access_code", "")
         with self.s.lock:
-            row = self.s.one("SELECT hash, score_id FROM jumps WHERE access_code=?", (code,))
+            row = self.s.one("SELECT hash, score_id, challenge FROM jumps WHERE access_code=?", (code,))
             self.s.run("DELETE FROM jumps WHERE access_code=?", (code,))
         out = {}
         if row is not None:
             if row["hash"]:
                 out["hash"] = row["hash"]
             if row["score_id"] is not None:
-                out["score_id"] = row["score_id"]
+                out["challenge_id" if row["challenge"] else "score_id"] = row["score_id"]
         return 200, out
 
     def gacha(self, p):
@@ -1007,7 +1025,8 @@ def cmd_jump(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     if not store.one("SELECT 1 FROM users WHERE access_code=?", (args.access_code,)):
         sys.exit("unknown access code")
-    store.run("INSERT OR REPLACE INTO jumps VALUES (?,?,?)", (args.access_code, args.hash, args.score_id))
+    store.run("INSERT OR REPLACE INTO jumps(access_code, hash, score_id, challenge) VALUES (?,?,?,0)",
+              (args.access_code, args.hash, args.score_id))
     print("queued; the game picks it up on its next poll")
 
 

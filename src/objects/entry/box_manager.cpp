@@ -2,7 +2,9 @@
 
 #include "../../libs/gfx/text.h"
 #include "../../libs/global_data.h"
+#include "../../libs/network/zdon_update.h"
 #include "../game/zdon_ai.h"
+#include "../global/zdon_hud.h"
 #include "zdon_outfit_menu.h"
 
 static constexpr int ENTRY_FADE_OUT_ANIM_ID = 9;
@@ -62,6 +64,7 @@ void BoxManager::build_board_list() {
          {std::pair{Screens::PRACTICE_SELECT, "entry_practice"},
           std::pair{Screens::AI_SELECT, "entry_ai_battle"},  // AI battle (no label in the skin: no board)
           std::pair{Screens::RECORD_SELECT, "entry_record"}, // Z-DON recording mode (same)
+          std::pair{Screens::ONLINE_SELECT, "entry_online"}, // Z-DON online battle (built-in label without one)
           std::pair{Screens::ENTRY, "entry_costume"}, std::pair{Screens::REWARD_SHOP, "entry_shop"},
           std::pair{Screens::SETTINGS, "entry_settings"}}) {
         // guests only get the normal game and costumes
@@ -78,7 +81,13 @@ void BoxManager::build_board_list() {
         // YataiDON.cpp picks ZdonAiSongSelectScreen), so the label alone decides, as before.
         // Z-DON keeps its own board order (practice first).
         // like the dan board: a skin that blanks the board's text leaves the board out
-        std::string label = font_manager.get_text_label(sc);
+        // Z-DON online battle: needs a server; a skin without the label gets the built-in one
+        if (screen == Screens::ONLINE_SELECT && zdon_update::server_base().empty()) {
+            continue;
+        }
+        std::string label = screen == Screens::ONLINE_SELECT && font_manager.get_text_info(sc) == nullptr
+                                ? zhud::text("online_mode")
+                                : font_manager.get_text_label(sc);
         if (label.empty()) {
             continue;
         }
@@ -143,7 +152,8 @@ void BoxManager::change_board_list() {
 // practice, the AI battle and recording have no 2P mode: with two players in, their boards are greyed out
 bool BoxManager::is_disabled(int index) const {
     const Screens l = boxes[index]->location;
-    return is_2p && (l == Screens::PRACTICE_SELECT || l == Screens::AI_SELECT || l == Screens::RECORD_SELECT);
+    return is_2p && (l == Screens::PRACTICE_SELECT || l == Screens::AI_SELECT || l == Screens::RECORD_SELECT ||
+                     l == Screens::ONLINE_SELECT);
 }
 
 bool BoxManager::selection_allowed() const {

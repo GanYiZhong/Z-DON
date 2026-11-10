@@ -75,6 +75,7 @@
 #include "scenes/song_select.h"
 #include "scenes/song_select_2p.h"
 #include "scenes/song_select_ai.h"
+#include "scenes/song_select_online.h"
 #include "scenes/song_select_practice.h"
 #include "scenes/song_select_record.h"
 #include "scenes/title.h"
@@ -463,6 +464,7 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<PracticeGameScreen>(screens, except, Screens::GAME_PRACTICE);
     put_screen<PracticeSongSelectScreen>(screens, except, Screens::PRACTICE_SELECT);
     put_screen<RecordSongSelectScreen>(screens, except, Screens::RECORD_SELECT); // Z-DON recording mode
+    put_screen<OnlineSongSelectScreen>(screens, except, Screens::ONLINE_SELECT); // Z-DON online battle
     put_screen<ResultScreen>(screens, except, Screens::RESULT);
     put_screen<Result2PScreen>(screens, except, Screens::RESULT_2P);
     put_screen<DanSelectScreen>(screens, except, Screens::DAN_SELECT);
@@ -822,6 +824,8 @@ static void run_frame() {
                     debug_menu.requested_screen = Screens::AI_SELECT;
                 } else if (name == "record_select") {
                     debug_menu.requested_screen = Screens::RECORD_SELECT;
+                } else if (name == "online_select") {
+                    debug_menu.requested_screen = Screens::ONLINE_SELECT;
                 } else if (name == "settings") {
                     debug_menu.requested_screen = Screens::SETTINGS;
                 } else if (name == "tutorial") {

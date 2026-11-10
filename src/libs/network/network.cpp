@@ -498,6 +498,12 @@ static ReplayData parse_replay_response(const cpr::Response& response) {
     if (doc.HasMember("chara_is_costume") && doc["chara_is_costume"].IsBool()) {
         result.player_data.chara_is_costume = doc["chara_is_costume"].GetBool();
     }
+    if (doc.HasMember("score") && doc["score"].IsInt()) {
+        result.score = doc["score"].GetInt();
+    }
+    if (doc.HasMember("modifiers") && doc["modifiers"].IsString()) {
+        result.modifiers_json = doc["modifiers"].GetString();
+    }
 
     result.ok = true;
     return result;
@@ -988,6 +994,27 @@ std::optional<int> NetworkClient::take_replay_jump_result() {
     return result;
 }
 
+std::optional<int> NetworkClient::take_challenge_jump_result() {
+    return std::exchange(challenge_jump_result, std::nullopt);
+}
+
+void NetworkClient::request_challenges(const std::string& hash, int difficulty) {
+    challenges_result.reset();
+    if (!network_enabled() || !online) {
+        challenges_result = ChallengeList{};
+        return;
+    }
+    const std::string d = std::to_string(difficulty);
+    pending_challenges = cpr::GetAsync(
+        cpr::Url{network_url("/challenges")},
+        signed_headers("GET", "/challenges", {{"hash", hash}, {"difficulty", d}, {"limit", "20"}}),
+        cpr::Parameters{{"hash", hash}, {"difficulty", d}, {"limit", "20"}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+}
+
+std::optional<ChallengeList> NetworkClient::take_challenges() {
+    return std::exchange(challenges_result, std::nullopt);
+}
+
 void NetworkClient::update(double current_ms) {
 #if defined(__ANDROID__)
     if (pending_update_checksum.has_value() &&
@@ -1348,7 +1375,35 @@ void NetworkClient::update(double current_ms) {
             if (doc.HasMember("score_id") && doc["score_id"].IsInt()) {
                 replay_jump_result = doc["score_id"].GetInt();
             }
+            if (doc.HasMember("challenge_id") && doc["challenge_id"].IsInt()) {
+                challenge_jump_result = doc["challenge_id"].GetInt();
+            }
         }
+    }
+
+    if (pending_challenges.has_value() &&
+        pending_challenges->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_challenges->get();
+        pending_challenges.reset();
+        ChallengeList list;
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject() &&
+            doc.HasMember("challenges") && doc["challenges"].IsArray()) {
+            list.ok = true;
+            for (const auto& v : doc["challenges"].GetArray()) {
+                if (v.IsObject() && v.HasMember("score_id") && v["score_id"].IsInt()) {
+                    ChallengeEntry e;
+                    e.score_id = v["score_id"].GetInt();
+                    e.username = v.HasMember("username") && v["username"].IsString() ? v["username"].GetString() : "";
+                    e.score = v.HasMember("score") && v["score"].IsInt() ? v["score"].GetInt() : 0;
+                    e.crown = v.HasMember("crown") && v["crown"].IsInt() ? v["crown"].GetInt() : 0;
+                    list.entries.push_back(std::move(e));
+                }
+            }
+        } else {
+            spdlog::warn("challenges: HTTP {} - {}", response.status_code, response.text);
+        }
+        challenges_result = std::move(list);
     }
 
     if (pending_replay_fetch.has_value() &&
@@ -1490,6 +1545,13 @@ std::optional<GachaResult> NetworkClient::take_gacha_result() {
 }
 std::optional<int> NetworkClient::take_replay_jump_result() {
     return std::nullopt;
+}
+std::optional<int> NetworkClient::take_challenge_jump_result() {
+    return std::nullopt;
+}
+void NetworkClient::request_challenges(const std::string&, int) {}
+std::optional<ChallengeList> NetworkClient::take_challenges() {
+    return ChallengeList{};
 }
 void NetworkClient::request_replay(int) {}
 std::optional<std::vector<RankingEntry>> NetworkClient::song_leaderboard(const std::string&) {

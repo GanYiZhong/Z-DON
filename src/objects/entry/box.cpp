@@ -18,6 +18,8 @@ static const char* mode_key(Screens location) {
         return "entry_practice";
     case Screens::RECORD_SELECT:
         return "entry_record";
+    case Screens::ONLINE_SELECT:
+        return "entry_online";
     case Screens::ENTRY:
         return "entry_costume";
     case Screens::REWARD_SHOP:

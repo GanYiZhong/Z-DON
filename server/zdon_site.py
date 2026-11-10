@@ -202,7 +202,7 @@ class Site:
                 self.page(req, "無效的請求", "<h1>無效的請求</h1><p>請重新整理頁面再試一次。</p>", 403)
                 return
             routes = {"/auth/logout": self.logout, "/me/link": self.link, "/me/unlink": self.unlink,
-                      "/me/rename": self.rename, "/me/jump": self.jump}
+                      "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge}
             fn = routes.get(path)
             if fn is None:
                 self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
@@ -463,15 +463,24 @@ class Site:
         sub = f'<p class="muted">{esc(song["subtitle"])}</p>' if song and song["subtitle"] else ""
         tabs = " ".join(f'<a href="?d={x}">{course_badge(x)}</a>' if x != d else course_badge(x) for x in diffs)
         rows = self.s.q("""SELECT u.username, u.rowid AS pid, MAX(s.score) AS score, MAX(s.crown) AS crown,
-                                  MAX(s.received_at) AS last, COUNT(*) AS plays
+                                  MAX(s.received_at) AS last, COUNT(*) AS plays,
+                                  (SELECT s2.id FROM scores s2 WHERE s2.access_code = s.access_code AND s2.hash = ?
+                                   AND s2.difficulty = ? AND length(s2.input_log) > 2
+                                   ORDER BY s2.score DESC, s2.id LIMIT 1) AS cid
                            FROM scores s JOIN users u USING(access_code) WHERE s.hash=? AND s.difficulty=?
-                           GROUP BY s.access_code ORDER BY score DESC LIMIT 100""", (h, d))
+                           GROUP BY s.access_code ORDER BY score DESC LIMIT 100""", (h, d, h, d))
+        can_challenge = bool(req.sess and self._linked(req.sess["uid"]))
+        csrf = self._csrf(req.sess) if req.sess else ""
         table = ['<table><tr><th class="num">#</th><th>玩家</th><th class="num">分數</th><th></th>'
-                 '<th class="num">遊玩</th><th>最後</th></tr>']
+                 '<th class="num">遊玩</th><th>最後</th>' + ('<th></th>' if can_challenge else '') + '</tr>']
         for i, r in enumerate(rows, 1):
             table.append(f'<tr><td class="num">{i}</td><td><a href="/player/{r["pid"]}">{esc(r["username"])}</a></td>'
                          f'<td class="num">{r["score"]:,}</td><td>{crown_badge(r["crown"])}</td>'
-                         f'<td class="num">{r["plays"]}</td><td class="small muted">{when(r["last"])}</td></tr>')
+                         f'<td class="num">{r["plays"]}</td><td class="small muted">{when(r["last"])}</td>' +
+                         ((f'<td><form method="post" action="/me/challenge"><input type="hidden" name="csrf" '
+                           f'value="{csrf}"><input type="hidden" name="score_id" value="{r["cid"]}">'
+                           f'<button class="btn small sec">挑戰</button></form></td>' if r["cid"] else '<td></td>')
+                          if can_challenge else '') + '</tr>')
         table.append("</table>")
         jump = ""
         if req.sess and self._linked(req.sess["uid"]):
@@ -577,6 +586,18 @@ value="{esc(r["username"])}"> <button class="btn small sec">改名</button></for
         self.s.run("UPDATE users SET username=? WHERE access_code=?", (name, code))
         self.me(req, {}, "已改名；遊戲下次登入時會套用。")
 
+    def challenge(self, req, form):
+        sid = int(form.get("score_id", "0") or 0) if str(form.get("score_id", "")).isdigit() else 0
+        linked = self._linked(req.sess["uid"])
+        row = self.s.one("SELECT id FROM scores WHERE id=? AND length(input_log) > 2", (sid,)) if sid else None
+        if not linked or row is None:
+            self.me(req, {}, "無法挑戰這筆紀錄。", True)
+            return
+        for r in linked:
+            self.s.run("INSERT OR REPLACE INTO jumps(access_code, hash, score_id, challenge) VALUES (?,?,?,1)",
+                       (r["access_code"], None, sid))
+        self.me(req, {}, "已送出挑戰；遊戲在選曲畫面會開始這場對戰。")
+
     def jump(self, req, form):
         h = form.get("hash", "")
         linked = self._linked(req.sess["uid"])
@@ -584,5 +605,6 @@ value="{esc(r["username"])}"> <button class="btn small sec">改名</button></for
             self.me(req, {}, "請先綁定遊戲帳號。", True)
             return
         for r in linked:
-            self.s.run("INSERT OR REPLACE INTO jumps VALUES (?,?,?)", (r["access_code"], h, None))
+            self.s.run("INSERT OR REPLACE INTO jumps(access_code, hash, score_id, challenge) VALUES (?,?,?,0)",
+                       (r["access_code"], h, None))
         self.me(req, {}, "已送出；遊戲在選曲畫面會跳到這首歌。")

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 
+#include "../libs/zdon_online.h"
+#include "../objects/global/zdon_hud.h"
+
 void Result2PScreen::on_screen_start() {
     ResultScreen::on_screen_start();
     allow_retry = false;
@@ -138,6 +141,9 @@ std::optional<Screens> Result2PScreen::update() {
             }
             global_data.returned_from_result = true;
             // Z-DON AI battle: back to the AI song select
+            if (zdon_online.active()) { // Z-DON online battle: back to the online mode
+                return on_screen_end(Screens::ONLINE_SELECT);
+            }
             return on_screen_end(global_data.zdon_ai.active ? Screens::AI_SELECT : Screens::SONG_SELECT_2P);
         }
     }
@@ -155,5 +161,30 @@ void Result2PScreen::draw() {
     if (player_2.has_value()) {
         player_2->draw();
     }
+    draw_online_result();
     draw_overlay();
+}
+
+// Z-DON online battle: who won, one line between the song title and the boards (the higher score wins)
+void Result2PScreen::draw_online_result() {
+    if (!zdon_online.active()) {
+        return;
+    }
+    const int mine = global_data.session_data[static_cast<int>(PlayerNum::P1)].result_data.score;
+    const int theirs = global_data.session_data[static_cast<int>(PlayerNum::P2)].result_data.score;
+    const char* key = mine > theirs ? "online_win" : mine < theirs ? "online_lose" : "online_draw";
+    const Color color = mine > theirs   ? Color{255, 214, 90, 255}
+                        : mine < theirs ? Color{150, 190, 255, 255}
+                                        : Color{230, 230, 230, 255};
+    const float u = tex.screen_width / 1920.0f;
+    OutlinedText& head = zhud::label(zhud::text(key), 32, color);
+    OutlinedText& sub = zhud::label(zhud::text("online_vs", zdon_online.opponent.username), 24);
+    const float gap = 28 * u;
+    const float w = head.width + gap + sub.width + 48 * u;
+    const float h = std::max(head.height, sub.height) + 10 * u;
+    const float x = (tex.screen_width - w) / 2.0f;
+    const float y = 118 * u;
+    zhud::panel(x, y, w, h, 0.88f, fade(color, 0.8f));
+    head.draw({.x = x + 24 * u, .y = y + (h - head.height) / 2.0f});
+    sub.draw({.x = x + 24 * u + head.width + gap, .y = y + (h - sub.height) / 2.0f});
 }

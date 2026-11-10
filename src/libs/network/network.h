@@ -61,6 +61,20 @@ struct ReplayData {
     int difficulty = 0;
     std::vector<std::pair<double, int>> input_log;
     PlayerData player_data;
+    int score = 0;              // Z-DON: the play's score (a challenge's target)
+    std::string modifiers_json; // Z-DON: its options (random / inverse / seed / subdiff rebuild its chart)
+};
+
+// Z-DON online challenge: someone's play of a chart that kept its hits
+struct ChallengeEntry {
+    int score_id = 0;
+    std::string username;
+    int score = 0;
+    int crown = 0;
+};
+struct ChallengeList {
+    bool ok = false; // the server answered
+    std::vector<ChallengeEntry> entries;
 };
 
 struct GachaResult {
@@ -214,6 +228,11 @@ public:
     void poll_jump(const std::string& access_code);
     std::optional<std::string> take_song_jump_result();
     std::optional<int> take_replay_jump_result();
+    std::optional<int> take_challenge_jump_result(); // Z-DON: the website's "challenge" (a score id to play against)
+
+    // Z-DON online challenge: the plays of a chart someone can be challenged on (non-blocking)
+    void request_challenges(const std::string& hash, int difficulty);
+    std::optional<ChallengeList> take_challenges();
 
     std::vector<RemoteScore> fetch_scores(const std::string& access_code);
     void request_replay(int score_id);
@@ -293,6 +312,9 @@ private:
     std::optional<cpr::AsyncResponse> pending_jump;
     std::optional<std::string> song_jump_result;
     std::optional<int> replay_jump_result;
+    std::optional<int> challenge_jump_result;
+    std::optional<cpr::AsyncResponse> pending_challenges;
+    std::optional<ChallengeList> challenges_result;
 
     std::optional<cpr::AsyncResponse> pending_replay_fetch;
     std::optional<ReplayData> replay_fetch_result;

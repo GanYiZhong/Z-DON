@@ -6,6 +6,7 @@
 
 #include "../libs/input/input.h"
 #include "../libs/math/animation.h"
+#include "../libs/zdon_online.h"
 #include "../objects/game/ai_match.h"
 #include "../objects/game/zdon_ai.h"
 
@@ -52,7 +53,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     ai_ending_pending = false;
     ai_card_hold = false;
     ai_black_ms = -1.0;
-    if (ai_battle) {
+    const bool online = zdon_online.active(); // Z-DON online battle: 2P plays the opponent's hits
+    if (ai_battle || online) {
         auto& s1 = global_data.session_data[static_cast<int>(PlayerNum::P1)];
         auto& s2 = global_data.session_data[static_cast<int>(PlayerNum::P2)];
         s2.selected_song = s1.selected_song;
@@ -84,11 +86,26 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         mods_2 = mods_1; // the same speed / options as the player
         mods_2.auto_play = false;
     }
+    if (online) {
+        // the player's options on both lanes (as an AI battle), but the opponent's chart options: its hits only
+        // fit the notes it saw
+        mods_2 = mods_1;
+        mods_2.auto_play = false;
+        mods_2.zdon_sudden_death = 0;
+        mods_2.inverse = zdon_online.inverse;
+        mods_2.random = zdon_online.random;
+        mods_2.seed = zdon_online.seed;
+        mods_2.subdiff = zdon_online.subdiff;
+    }
     mods_1.shared_kusudamas = shared;
     mods_2.shared_kusudamas = shared;
 
     players.push_back(std::make_unique<Player>(parser, PlayerNum::P1, diff_1, false, mods_1));
     players.push_back(std::make_unique<Player>(parser_2p, PlayerNum::P2, diff_2, true, mods_2));
+    if (online) {
+        players[1]->apply_replay_appearance(zdon_online.opponent);
+        players[1]->load_replay(zdon_online.opponent_log);
+    }
     if (ai_battle) {
         // the arcade tunes its AI by the course's star level (ai_tuninginfo levels 1..11)
         const auto course = parser->metadata.course_data.find(diff_1);

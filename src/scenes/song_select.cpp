@@ -5,12 +5,14 @@
 #include "../libs/fixed_step.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../libs/zdon_online.h"
 #include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/practice_timer.h"
 
 void SongSelectScreen::on_screen_start() {
     Screen::on_screen_start();
     global_data.zdon_ai.active = false; // Z-DON: an AI battle ends at the song select
+    zdon_online.reset();                // and an online battle
     audio.set_sound_volume("ura_switch", 0.25f);
     audio.set_sound_volume("add_favorite", 3.0f);
     SongBox::reset_bgm_slot();
@@ -228,12 +230,48 @@ void SongSelectScreen::poll_song_jump(double current_ms) {
 
 std::optional<Screens> SongSelectScreen::take_replay_jump() {
     if (auto score_id = network.take_replay_jump_result()) {
+        replay_is_challenge = false;
+        network.request_replay(*score_id);
+    }
+    if (auto score_id = network.take_challenge_jump_result()) { // Z-DON: the website's "challenge"
+        replay_is_challenge = true;
         network.request_replay(*score_id);
     }
     if (auto replay = network.take_replay_result()) {
-        return start_replay(*replay);
+        const bool challenge = std::exchange(replay_is_challenge, false);
+        return challenge ? start_challenge(*replay) : start_replay(*replay);
     }
     return std::nullopt;
+}
+
+std::optional<Screens> SongSelectScreen::start_challenge(const ReplayData& replay) {
+    if (!replay.ok || replay.input_log.empty()) {
+        spdlog::error("Challenge: the record could not be fetched or kept no hits");
+        return std::nullopt;
+    }
+    auto song_path = scores_manager.get_path_by_diff_hash(replay.hash);
+    if (!song_path.has_value()) {
+        spdlog::error("Challenge: chart {} not found in local library", replay.hash);
+        return std::nullopt;
+    }
+    for (PlayerNum p : {PlayerNum::P1, global_data.player_num}) {
+        SessionData& s = global_data.session_data[static_cast<int>(p)];
+        s.selected_song = *song_path;
+        s.selected_difficulty = replay.difficulty;
+        s.song_hash = replay.hash;
+        s.subdiff = 0;
+    }
+    zdon_online.reset();
+    zdon_online.mode = ZdonOnline::Mode::CHALLENGE;
+    zdon_online.opponent = replay.player_data;
+    zdon_online.opponent_score = replay.score;
+    zdon_online.read_modifiers(replay.modifiers_json);
+    zdon_online.opponent_log.reserve(replay.input_log.size());
+    for (const auto& [ms, type] : replay.input_log) {
+        zdon_online.opponent_log.emplace_back(ms, static_cast<InputLogType>(std::clamp(type, 0, 3)));
+    }
+    spdlog::info("Challenge: {} ({}), {} hits", replay.player_data.username, replay.score, replay.input_log.size());
+    return on_screen_end(Screens::GAME_2P);
 }
 
 std::optional<Screens> SongSelectScreen::start_replay(const ReplayData& replay) {
