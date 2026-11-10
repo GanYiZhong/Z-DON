@@ -2443,6 +2443,13 @@ void Player::draw_notes(double current_ms, float y) {
         if (!pos) {
             continue;
         }
+        // Z-DON online opponent: a don / ka nearing the judge circle goes away; its judgment shows when the hit comes
+        if (zdon_stream && note.type >= NoteType::DON && note.type <= NoteType::KAT_L &&
+            (note.hit_ms <= current_ms ||
+             std::abs(pos->first - (get_position_x(note, note.hit_ms) + judge_x)) < t_notes_9->width * 0.6f)) {
+            note_positions[slot] = std::nullopt;
+            continue;
+        }
         visible_notes.push_back({&note, *pos});
     }
 
