@@ -12,18 +12,25 @@ Flow (every call carries the player's access_code; the game signs them like the 
     POST /match/sync   code from hits pos score combo since
                                   -> the opponent's hits from `since`, its position and score (~10 a second in play)
     POST /match/finish code score good ok bad drumroll max_combo
+A guest without the host's chart asks for it (ready has_song=0 want=1: state "transfer"); the host's game zips the
+song's folder and sends it, the guest's downloads it and checks the chart's hash before adding it to its library:
+    POST /match/upload       code hash name sha256 (+ the zip as the body)     the host
+    POST /match/upload_fail  code                                             the host could not send it
+    GET  /match/download     code                    -> the zip                the guest
 The round starts when the guest is ready (the host is ready by picking); each game starts on its own. The opponent's
 lane scrolls with the local music and judges the opponent's hits as they arrive; it counts notes as missed only up to
 the opponent's reported position (`pos`, sent with every hit before it).
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import threading
 import time
 
 ROOM_IDLE_S = 30.0      # a player not heard from for this long has left
 ROOM_MAX_HITS = 20000   # per player per round
+SONG_UPLOAD_MAX = 90 * 1024 * 1024  # a song sent to the guest (under Cloudflare's 100 MB request limit)
 
 
 def now() -> float:
@@ -58,6 +65,7 @@ class Room:
         self.state = "waiting"          # waiting (no guest) / choosing / song / playing / finished
         self.song: dict | None = None   # hash, title, difficulty (the host's)
         self.round = 0
+        self.transfer: dict | None = None   # the song being sent to the guest: hash, name, data
 
     def side(self, access_code: str) -> tuple[Side | None, Side | None]:
         if self.host.code == access_code:
@@ -94,6 +102,7 @@ class Matches:
                 return
         r.state = "waiting"
         r.song = None
+        r.transfer = None
         r.host.reset_round()
 
     def _new_code(self) -> str:
@@ -178,6 +187,9 @@ class Matches:
                 return 404, {"detail": "no_room"}
             out = {"code": r.code, "state": r.state, "role": "host" if me is r.host else "guest", "round": r.round,
                    "song": r.song, "you": {"ready": me.ready, "difficulty": me.difficulty}}
+            if r.state == "transfer":
+                out["transfer"] = {"ready": r.transfer is not None,
+                                   "size": len(r.transfer["data"]) if r.transfer else 0}
             if opp:
                 out["opponent"] = {**opp.profile, "has_song": opp.has_song, "difficulty": opp.difficulty,
                                    "ready": opp.ready, "mods": opp.mods}
@@ -196,6 +208,7 @@ class Matches:
                       "difficulty": int(p.get("difficulty", "3") or 3)}
             r.host.reset_round()
             opp.reset_round()
+            r.transfer = None
             r.host.difficulty = r.song["difficulty"]
             r.host.mods = p.get("mods", "")[:500]
             r.host.ready = True
@@ -206,12 +219,18 @@ class Matches:
     def ready(self, p):
         with self.lock:
             r, me, opp = self._room(p)
-            if not r or not me or me is r.host or r.state != "song":
+            if not r or not me or me is r.host or r.state not in ("song", "transfer"):
                 return 409, {"detail": "not_now"}
             me.has_song = p.get("has_song") in ("1", "true")
             if not me.has_song:
-                r.state = "choosing"    # the host picks again
+                if p.get("want") in ("1", "true") and r.state == "song":
+                    r.state = "transfer"    # the host sends it
+                    r.transfer = None
+                else:
+                    r.state = "choosing"    # the host picks again
+                    r.transfer = None
                 return 200, {"ok": True}
+            r.transfer = None
             me.difficulty = int(p.get("difficulty", "3") or 3)
             me.mods = p.get("mods", "")[:500]
             me.ready = True
@@ -239,6 +258,33 @@ class Matches:
             else:
                 out.update(hits="", total=0, pos=None, score=0, combo=0, final=None, left=True)
             return 200, out
+
+    def upload(self, p, body: bytes):
+        with self.lock:
+            r, me, _ = self._room(p)
+            if not r or me is not r.host or r.state != "transfer" or not r.song:
+                return 409, {"detail": "not_now"}
+            if p.get("hash") != r.song["hash"]:
+                return 409, {"detail": "other_song"}
+            if not body or len(body) > SONG_UPLOAD_MAX or hashlib.sha256(body).hexdigest() != p.get("sha256", ""):
+                return 400, {"detail": "bad_body"}
+            r.transfer = {"hash": r.song["hash"], "name": p.get("name", "")[:120], "data": body}
+            return 200, {"ok": True}
+
+    def upload_fail(self, p):
+        with self.lock:
+            r, me, opp = self._room(p)
+            if r and me is r.host and r.state == "transfer":
+                r.state = "choosing"    # the host picks again (the guest's has_song stays false)
+                r.transfer = None
+        return 200, {"ok": True}
+
+    def download(self, p):
+        with self.lock:
+            r, me, _ = self._room(p)
+            if not r or not me or me is r.host or r.state != "transfer" or not r.transfer:
+                return 409, {"detail": "not_now"}
+            return 200, r.transfer["data"]
 
     def finish(self, p):
         with self.lock:

@@ -381,4 +381,10 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   自動演奏時打擊也記進 input_log（log_auto_hits）以便兩個實例對打測試。
 - 實測：兩個遊戲實例（第二個在沙盒，Skins／Songs 用 junction）自動配對→選歌→對打→結算，
   兩邊的對手譜面結果與對手自己的完全相同（良 429、連打 43、1003870）。
+- 2026-11-11 使用者：Flashlight／隱藏只套自己的譜面（mods_2 關掉）；客人不再用簡化的難度視窗，選曲游標跳到房主的歌
+  （Navigator::jump_to_song），用一般難度選擇（含選項）決定後送 ready，選到別首會提醒並跳回；跳不過去（合集資料夾）才用舊視窗。
+  缺歌：客人 ready has_song=0 want=1 → 房間 transfer → 房主 zdon_pack_song（資料夾只有這張譜時整個資料夾，否則譜面＋WAVE＋BGMOVIE，
+  不壓縮的 zip）→ signed_upload（參數放 query 簽名、sha256 驗內容）→ 客人下載、zdon_install_song 解到 `<tja_path[0]>/Z-DON Online/<名稱>`，
+  有一個難度的雜湊等於房主的才 add_path_binding，並用 LibraryIndex::note_changed 讓選曲改讀磁碟（啟動時的索引沒有新資料夾）。
+  實測：2P 的歌曲庫只有教學，收到「1・2・3」後跳過去、自己選魔王，兩邊結果一致（良 429、1003870）。
 - 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。

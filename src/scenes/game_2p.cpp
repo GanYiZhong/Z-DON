@@ -105,6 +105,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         mods_2.random = zdon_online.random;
         mods_2.seed = zdon_online.seed;
         mods_2.subdiff = zdon_online.subdiff;
+        mods_2.zdon_flashlight = false; // my own handicaps stay on my lane
+        mods_2.zdon_fade = 0;
     }
     mods_1.shared_kusudamas = shared;
     mods_2.shared_kusudamas = shared;

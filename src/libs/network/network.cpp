@@ -1016,7 +1016,7 @@ std::optional<ChallengeList> NetworkClient::take_challenges() {
 }
 
 int NetworkClient::signed_request(const std::string& method, const std::string& path,
-                                  const std::map<std::string, std::string>& params) {
+                                  const std::map<std::string, std::string>& params, int timeout_ms) {
     if (!network_enabled()) {
         return -1;
     }
@@ -1032,11 +1032,28 @@ int NetworkClient::signed_request(const std::string& method, const std::string& 
     }
     if (method == "GET") {
         pending_signed.emplace(ticket, cpr::GetAsync(cpr::Url{network_url(path)}, signed_headers(method, path, params),
-                                                     query, cpr::Timeout{5000} NETWORK_CA_OPT));
+                                                     query, cpr::Timeout{timeout_ms} NETWORK_CA_OPT));
     } else {
         pending_signed.emplace(ticket, cpr::PostAsync(cpr::Url{network_url(path)}, signed_headers(method, path, params),
-                                                      form, cpr::Timeout{5000} NETWORK_CA_OPT));
+                                                      form, cpr::Timeout{timeout_ms} NETWORK_CA_OPT));
     }
+    return ticket;
+}
+
+int NetworkClient::signed_upload(const std::string& path, const std::map<std::string, std::string>& params,
+                                 std::string body, int timeout_ms) {
+    if (!network_enabled()) {
+        return -1;
+    }
+    const int ticket = next_signed_ticket++;
+    cpr::Parameters query;
+    for (const auto& [k, v] : params) {
+        query.Add({k, v});
+    }
+    cpr::Header headers = signed_headers("POST", path, params);
+    headers["Content-Type"] = "application/octet-stream";
+    pending_signed.emplace(ticket, cpr::PostAsync(cpr::Url{network_url(path)}, headers, query,
+                                                  cpr::Body{std::move(body)}, cpr::Timeout{timeout_ms} NETWORK_CA_OPT));
     return ticket;
 }
 
@@ -1603,7 +1620,11 @@ std::optional<int> NetworkClient::take_challenge_jump_result() {
     return std::nullopt;
 }
 void NetworkClient::request_challenges(const std::string&, int) {}
-int NetworkClient::signed_request(const std::string&, const std::string&, const std::map<std::string, std::string>&) {
+int NetworkClient::signed_request(const std::string&, const std::string&, const std::map<std::string, std::string>&,
+                                  int) {
+    return -1;
+}
+int NetworkClient::signed_upload(const std::string&, const std::map<std::string, std::string>&, std::string, int) {
     return -1;
 }
 std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int) {

@@ -233,7 +233,10 @@ public:
     // Z-DON: a signed request to the server, answered later (non-blocking). GET sends params in the query, POST as a
     // form. Returns a ticket (-1 when offline); take_signed gives (HTTP status, body) once it is answered.
     int signed_request(const std::string& method, const std::string& path,
-                       const std::map<std::string, std::string>& params);
+                       const std::map<std::string, std::string>& params, int timeout_ms = 5000);
+    // a POST with `body` (bytes) as the request body, the params in the query (signed); answered like signed_request
+    int signed_upload(const std::string& path, const std::map<std::string, std::string>& params, std::string body,
+                      int timeout_ms);
     std::optional<std::pair<long, std::string>> take_signed(int ticket);
     void forget_signed(int ticket); // no longer wanted (its answer is dropped)
 

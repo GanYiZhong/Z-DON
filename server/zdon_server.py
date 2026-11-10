@@ -38,7 +38,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from zdon_match import Matches  # noqa: E402
+from zdon_match import SONG_UPLOAD_MAX, Matches  # noqa: E402
 from zdon_site import Site  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -289,6 +289,9 @@ class Api:
             ("POST", "/match/ready"): self.matches.ready,
             ("POST", "/match/sync"): self.matches.sync,
             ("POST", "/match/finish"): self.matches.finish,
+            ("POST", "/match/upload"): self.matches.upload,
+            ("POST", "/match/upload_fail"): self.matches.upload_fail,
+            ("GET", "/match/download"): self.matches.download,
             ("POST", "/gacha"): self.gacha,
             ("POST", "/kinotake"): self.kinotake,
             ("POST", "/don_points"): self.don_points,
@@ -303,7 +306,9 @@ class Api:
         }
 
     # each handler: (params) -> (status, json-able | str)
-    def handle(self, method: str, path: str, params: dict[str, str], headers):
+    BODY = {("POST", "/match/upload")}     # routes that get the raw request body (signed by its sha256 in params)
+
+    def handle(self, method: str, path: str, params: dict[str, str], headers, body: bytes = b""):
         fn = self.routes.get((method, path))
         if fn is None:
             return None
@@ -313,6 +318,8 @@ class Api:
                                    self.nonces)
             if not ok:
                 return 401, {"detail": f"bad request signature ({why})"}
+        if (method, path) in self.BODY:
+            return fn(params, body)
         return fn(params)
 
     def _user(self, p) -> sqlite3.Row | None:
@@ -799,19 +806,25 @@ def make_handler(cfg: dict, api: Api, site):
                 self.wfile.write(body)
 
         def _json(self, status: int, obj):
-            if isinstance(obj, str):
+            if isinstance(obj, bytes):          # a file (a live battle's song)
+                self._send(status, obj, "application/octet-stream")
+            elif isinstance(obj, str):
                 self._send(status, obj.encode(), "text/plain; charset=utf-8")
             else:
                 self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
         def _params(self, url) -> dict[str, str] | None:
             params = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query, keep_blank_values=True).items()}
+            self.raw_body = b""
             if self.command == "POST":
                 length = as_int(self.headers.get("Content-Length"), 0)
-                if length > max_body:
+                limit = SONG_UPLOAD_MAX if url.path.rstrip("/") == "/match/upload" else max_body
+                if length > limit:
                     return None
                 raw = self.rfile.read(length) if length > 0 else b""
                 ctype = self.headers.get("Content-Type", "")
+                if "application/octet-stream" in ctype:
+                    self.raw_body = raw
                 if raw and "application/x-www-form-urlencoded" in ctype:
                     form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
                     params.update({k: v[-1] for k, v in form.items()})
@@ -938,7 +951,8 @@ def make_handler(cfg: dict, api: Api, site):
                 self._json(413, {"detail": "body too large or malformed"})
                 return
             try:
-                res = api.handle("GET" if self.command == "HEAD" else self.command, path, params, self.headers)
+                res = api.handle("GET" if self.command == "HEAD" else self.command, path, params, self.headers,
+                                 self.raw_body)
             except Exception as e:  # noqa: BLE001 - one bad request must not take the server down
                 log(f"error in {self.command} {path}: {e!r}")
                 self._json(500, {"detail": "server error"})

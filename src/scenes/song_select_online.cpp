@@ -8,6 +8,7 @@
 
 #include "../libs/audio/audio.h"
 #include "../libs/input/input.h"
+#include "../libs/math/sha256.h"
 #include "../libs/zdon_online.h"
 #include "../objects/global/zdon_hud.h"
 
@@ -55,6 +56,8 @@ Screens OnlineSongSelectScreen::on_screen_end(Screens next_screen) {
 }
 
 void OnlineSongSelectScreen::leave_room() {
+    guest_choosing = false;
+    transfer_started = false;
     if (!room.empty()) {
         const int t = network.signed_request("POST", "/match/leave", {{"access_code", my_code()}, {"code", room}});
         (void)t; // fire and forget: an answer nobody takes is dropped with the next ones
@@ -81,6 +84,16 @@ void OnlineSongSelectScreen::select_song(SongBox* box) {
     scores_manager.save_player_data(player->player_data);
     difficulty = static_cast<int>(player->selected_difficulty);
     title = box->text_name;
+    if (!room.empty() && !host) { // the guest: its course (and options) of the host's song
+        const auto want = scores_manager.get_path_by_diff_hash(song_hash);
+        if (!guest_choosing || !want || *want != box->path) {
+            guest_rejump = guest_choosing;
+            show_notice(zhud::text("online_guest_wrong_song", song_title), Modal::None);
+            return;
+        }
+        guest_ready(difficulty);
+        return;
+    }
     if (!room.empty()) { // the host's pick for the room
         song_hash = box->hash_for(difficulty);
         song_title = title;
@@ -162,12 +175,22 @@ void OnlineSongSelectScreen::on_room_state(const std::string& body) {
         opp_difficulty = o.HasMember("difficulty") && o["difficulty"].IsInt() ? o["difficulty"].GetInt() : -1;
         opp_mods = str(o, "mods");
     }
+    transfer_ready = doc.HasMember("transfer") && doc["transfer"].IsObject() && doc["transfer"].HasMember("ready") &&
+                     doc["transfer"]["ready"].IsBool() && doc["transfer"]["ready"].GetBool();
     if (doc.HasMember("song") && doc["song"].IsObject()) {
         song_hash = str(doc["song"], "hash");
         song_title = str(doc["song"], "title");
         song_difficulty = doc["song"].HasMember("difficulty") && doc["song"]["difficulty"].IsInt()
                               ? doc["song"]["difficulty"].GetInt()
                               : 3;
+    }
+    if (room_state != "transfer" && transfer_started && !pack_job.valid() && !install_job.valid() &&
+        transfer_request < 0) {
+        transfer_started = false; // done (or given up): a later round may send again
+        if (!host && room_state == "choosing") {
+            show_notice(zhud::text("online_transfer_failed"), Modal::Room);
+            return;
+        }
     }
     if (!prev_opp.empty() && opp_name.empty()) { // the opponent left: wait for the next one
         host_waiting_guest = false;
@@ -185,27 +208,117 @@ void OnlineSongSelectScreen::on_room_state(const std::string& body) {
             close_modal();
         }
     }
-    // the guest: the host picked a song
-    if (!host && room_state == "song" && modal == Modal::Room) {
-        courses.clear();
+    // the guest: the host picked a song (go to it), or the host is sending it
+    if (!host && room_state == "song" && modal == Modal::Room && !transfer_started) {
+        if (scores_manager.get_path_by_diff_hash(song_hash)) {
+            guest_go_to_song();
+        } else { // not in this library: the host's game sends it
+            request = network.signed_request(
+                "POST", "/match/ready",
+                {{"access_code", my_code()}, {"code", room}, {"has_song", "false"}, {"want", "1"}});
+            transfer_started = true;
+            transfer_ready = false;
+        }
+    }
+    // the host: the guest asked for the song
+    if (host && room_state == "transfer" && !transfer_started) {
+        transfer_started = true;
         if (auto path = scores_manager.get_path_by_diff_hash(song_hash)) {
-            const auto hashes = scores_manager.get_hashes(*path);
-            for (int d = 0; d < static_cast<int>(hashes.size()); ++d) {
-                if (!hashes[d].empty()) {
-                    courses.push_back(d);
-                }
+            pack_job = std::async(std::launch::async, [p = *path] { return zdon_pack_song(p); });
+        } else {
+            transfer_request =
+                network.signed_request("POST", "/match/upload_fail", {{"access_code", my_code()}, {"code", room}});
+        }
+    }
+}
+
+void OnlineSongSelectScreen::guest_go_to_song() {
+    close_modal();
+    if (navigator.jump_to_song(song_hash)) {
+        guest_choosing = true;
+        return;
+    }
+    // the song select can't show it (a collection folder, ...): the course window
+    courses.clear();
+    if (auto path = scores_manager.get_path_by_diff_hash(song_hash)) {
+        const auto hashes = scores_manager.get_hashes(*path);
+        for (int d = 0; d < static_cast<int>(hashes.size()); ++d) {
+            if (!hashes[d].empty()) {
+                courses.push_back(d);
             }
         }
-        if (courses.empty()) { // not in this library: the host picks again
+    }
+    if (courses.empty()) {
+        courses.push_back(std::clamp(song_difficulty, 0, 4));
+    }
+    auto it = std::ranges::find(courses, song_difficulty);
+    course_cursor = it != courses.end() ? static_cast<int>(it - courses.begin()) : static_cast<int>(courses.size()) - 1;
+    modal = Modal::GuestPick;
+}
+
+void OnlineSongSelectScreen::guest_ready(int course) {
+    guest_choosing = false;
+    guest_difficulty = course;
+    request = network.signed_request("POST", "/match/ready",
+                                     {{"access_code", my_code()},
+                                      {"code", room},
+                                      {"has_song", "true"},
+                                      {"difficulty", std::to_string(course)},
+                                      {"mods", my_mods_json()}});
+    modal = Modal::Room;
+}
+
+// the song going from the host's game to the guest's (through the server)
+void OnlineSongSelectScreen::update_transfer() {
+    auto ready = [](auto& job) {
+        return job.valid() && job.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    };
+    if (ready(pack_job)) { // the host: zipped, send it
+        ZdonSongPack pack = pack_job.get();
+        if (pack.zip.empty() || room.empty()) {
+            transfer_request =
+                network.signed_request("POST", "/match/upload_fail", {{"access_code", my_code()}, {"code", room}});
+        } else {
+            const std::string sha = crypto::to_hex(crypto::sha256(pack.zip));
+            transfer_request = network.signed_upload(
+                "/match/upload",
+                {{"access_code", my_code()}, {"code", room}, {"hash", song_hash}, {"name", pack.name}, {"sha256", sha}},
+                std::move(pack.zip), 300000);
+        }
+    }
+    if (transfer_request >= 0) {
+        if (auto r = network.take_signed(transfer_request)) {
+            transfer_request = -1;
+            if (host && r->first != 200 && room_state == "transfer") { // the upload failed: the host picks again
+                spdlog::warn("Online battle: sending the song failed ({})", r->first);
+                transfer_request =
+                    network.signed_request("POST", "/match/upload_fail", {{"access_code", my_code()}, {"code", room}});
+            } else if (!host && r->first == 200 && !r->second.empty()) { // the guest: unpack and check it
+                install_job =
+                    std::async(std::launch::async, [zip = std::move(r->second), h = song_hash,
+                                                    t = song_title]() mutable { return zdon_install_song(zip, t, h); });
+            } else if (!host) {
+                transfer_started = false; // try the download again with the next state
+            }
+        }
+    }
+    // the guest: the server has it: fetch it
+    if (!host && transfer_started && transfer_ready && transfer_request < 0 && !install_job.valid() &&
+        room_state == "transfer") {
+        transfer_request =
+            network.signed_request("GET", "/match/download", {{"access_code", my_code()}, {"code", room}}, 300000);
+        transfer_ready = false;
+    }
+    if (ready(install_job)) {
+        const ZdonSongInstall got = install_job.get();
+        transfer_started = false;
+        if (got.chart && room_state == "transfer" && modal == Modal::Room) {
+            guest_go_to_song();
+        } else if (!got.chart) { // not the host's chart after all: the host picks again
             request = network.signed_request("POST", "/match/ready",
                                              {{"access_code", my_code()}, {"code", room}, {"has_song", "false"}});
-            show_notice(zhud::text("online_missing_song", song_title), Modal::Room);
-            return;
+            show_notice(zhud::text("online_transfer_bad", song_title), Modal::Room);
         }
-        auto it = std::ranges::find(courses, song_difficulty);
-        course_cursor =
-            it != courses.end() ? static_cast<int>(it - courses.begin()) : static_cast<int>(courses.size()) - 1;
-        modal = Modal::GuestPick;
     }
 }
 
@@ -216,7 +329,7 @@ std::optional<Screens> OnlineSongSelectScreen::start_live() {
         return std::nullopt;
     }
     const auto hashes = scores_manager.get_hashes(*path);
-    const int mine = host ? song_difficulty : courses.empty() ? song_difficulty : courses[course_cursor];
+    const int mine = host ? song_difficulty : guest_difficulty >= 0 ? guest_difficulty : song_difficulty;
     const int theirs = std::clamp(opp_difficulty >= 0 ? opp_difficulty : song_difficulty, 0, 4);
     auto& s1 = global_data.session_data[static_cast<int>(PlayerNum::P1)];
     auto& s2 = global_data.session_data[static_cast<int>(PlayerNum::P2)];
@@ -325,18 +438,14 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
             audio.play_sound("kat", VolumePreset::SOUND);
         } else if (don) {
             audio.play_sound("don", VolumePreset::SOUND);
-            request = network.signed_request("POST", "/match/ready",
-                                             {{"access_code", my_code()},
-                                              {"code", room},
-                                              {"has_song", "true"},
-                                              {"difficulty", std::to_string(courses[course_cursor])},
-                                              {"mods", my_mods_json()}});
-            modal = Modal::Room;
+            guest_ready(courses[course_cursor]);
         }
         break;
     case Modal::Notice:
         if (don || l_kat || r_kat || cancel) {
-            if (notice_back == Modal::None) {
+            if (std::exchange(guest_rejump, false) && !room.empty() && room_state != "choosing") {
+                guest_go_to_song(); // back at the host's song
+            } else if (notice_back == Modal::None) {
                 close_modal();
             } else {
                 modal = notice_back;
@@ -392,6 +501,7 @@ std::optional<Screens> OnlineSongSelectScreen::update() {
         request = -1; // song / ready: the room state tells what came of it
     }
     poll_room(now);
+    update_transfer();
     // both ready: go (the host after its pick, the guest after its course)
     if (!room.empty() && room_state == "playing" && room_round != started_round && !opp_name.empty() &&
         (modal == Modal::Room || modal == Modal::None)) {
@@ -404,14 +514,22 @@ std::optional<Screens> OnlineSongSelectScreen::update() {
         (opp_name.empty() || (room_state != "choosing" && room_state != "finished"))) {
         modal = Modal::Room;
     }
+    // the guest choosing at the host's song while the host left or picks again: back to the room window
+    if (!room.empty() && !host && modal == Modal::None &&
+        (opp_name.empty() || (room_state != "song" && room_state != "transfer"))) {
+        close_modal();
+        guest_choosing = false;
+        modal = Modal::Room;
+    }
     if (modal != Modal::None) {
         auto next = update_modal();
         clear_input_buffers(); // the song select behind the window gets none of it
         if (next) {
             return next;
         }
-    } else if (!room.empty() && check_key_pressed(global_data.config->keys.back_key)) {
-        leave_room(); // the host leaves the room instead of the screen
+    } else if (!room.empty() && state == SongSelectState::BROWSING &&
+               check_key_pressed(global_data.config->keys.back_key)) {
+        leave_room(); // leaves the room instead of the screen (in the course window it closes that)
         modal = Modal::Menu;
         clear_input_buffers();
     }
@@ -422,6 +540,9 @@ void OnlineSongSelectScreen::draw_live_tag(float u) {
     std::string text = zhud::text("online_mode");
     if (!room.empty()) {
         text = zhud::text("online_room_tag", room, opp_name.empty() ? "-" : opp_name);
+    }
+    if (guest_choosing && modal == Modal::None) {
+        text = zhud::text("online_guest_choose", opp_name, song_title);
     }
     OutlinedText& tag = zhud::label(text, 26, kBlue);
     const float tw = tag.width + 28 * u;
@@ -505,6 +626,11 @@ void OnlineSongSelectScreen::draw_modal() {
         std::vector<std::string> lines{zhud::text("online_room_title", room)};
         if (opp_name.empty()) {
             lines.push_back(zhud::text("online_wait_opp"));
+        } else if (room_state == "transfer") {
+            lines.push_back(zhud::text("online_vs", opp_name));
+            lines.push_back(song_title);
+            lines.push_back(host ? zhud::text("online_transfer_send", opp_name)
+                                 : zhud::text("online_transfer_wait", opp_name));
         } else if (room_state == "song" || host_waiting_guest) {
             lines.push_back(zhud::text("online_vs", opp_name));
             lines.push_back(host ? zhud::text("online_wait_guest", opp_name) : zhud::text("online_wait_start"));

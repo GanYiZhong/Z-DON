@@ -26,8 +26,21 @@ std::wstring LibraryIndex::key(const fs::path& dir) {
 }
 
 const LibraryIndex::Dir* LibraryIndex::find(const fs::path& dir) const {
-    auto it = by_path_.find(key(dir));
+    const std::wstring k = key(dir);
+    if (any_changed_.load(std::memory_order_acquire)) {
+        std::scoped_lock lock(written_mutex_);
+        if (changed_.contains(k)) {
+            return nullptr;
+        }
+    }
+    auto it = by_path_.find(k);
     return it != by_path_.end() ? &dirs_[it->second] : nullptr;
+}
+
+void LibraryIndex::note_changed(const fs::path& dir) const {
+    std::scoped_lock lock(written_mutex_);
+    changed_.insert(key(dir));
+    any_changed_.store(true, std::memory_order_release);
 }
 
 int32_t LibraryIndex::add_dir(const fs::path& path, std::vector<Entry> entries) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cwchar>
 #include <filesystem>
@@ -39,6 +40,10 @@ public:
     const Dir* find(const fs::path& dir) const;
     const Dir* child(const Entry& entry) const { return entry.dir >= 0 ? &dirs_[entry.dir] : nullptr; }
 
+    // Z-DON: `dir` changed after the walk (a song added to it): find() no longer answers for it, so it is read
+    // from the disk
+    void note_changed(const fs::path& dir) const;
+
     // true if a song_list.txt was written into `dir` after the walk (it is not in the listing)
     bool song_list_written(const fs::path& dir) const;
     void note_song_list_written(const fs::path& dir) const;
@@ -55,6 +60,8 @@ private:
     std::unordered_map<std::wstring, int32_t> by_path_;
     mutable std::mutex written_mutex_;
     mutable std::unordered_set<std::wstring> written_;
+    mutable std::unordered_set<std::wstring> changed_; // under written_mutex_
+    mutable std::atomic<bool> any_changed_{false};
 };
 
 // the index of the last walk the loading screen published, or nullptr
