@@ -12,8 +12,9 @@ Flow (every call carries the player's access_code; the game signs them like the 
     POST /match/sync   code from hits pos score combo since
                                   -> the opponent's hits from `since`, its position and score (~10 a second in play)
     POST /match/finish code score good ok bad drumroll max_combo
-The round starts when the guest is ready (the host is ready by picking); each game starts on its own and the
-opponent's lane follows the opponent's reported position, a moment behind, so the two needn't start together.
+The round starts when the guest is ready (the host is ready by picking); each game starts on its own. The opponent's
+lane scrolls with the local music and judges the opponent's hits as they arrive; it counts notes as missed only up to
+the opponent's reported position (`pos`, sent with every hit before it).
 """
 from __future__ import annotations
 

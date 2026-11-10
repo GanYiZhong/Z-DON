@@ -600,7 +600,12 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     }
     zdon_auto_last_ms = ms_from_start;
 
-    note_manager(ms_from_start, background);
+    if (zdon_stream) { // judged only as far as the opponent's hits have come; drawn at the music's time
+        play_note_manager(zdon_judge_ms(ms_from_start), background);
+        draw_note_manager(ms_from_start);
+    } else {
+        note_manager(ms_from_start, background);
+    }
     combo_display.update(current_ms, combo);
     if (combo_announce.has_value()) {
         combo_announce->update(current_ms);
@@ -736,7 +741,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     }
 
     if (is_branch) {
-        evaluate_branch(ms_from_start);
+        evaluate_branch(zdon_stream ? zdon_judge_ms(ms_from_start) : ms_from_start);
     }
     // Z-DON sudden death: the first 不可 (option 1) or 可 / 不可 (option 2) of the run; the AI lane never has it
     if (modifiers.zdon_sudden_death > 0 && !zdon_ai && !skipped_run && !sudden_failed &&
@@ -1513,6 +1518,14 @@ void Player::update_camera(double ms_from_start) {
     std::erase_if(camera_eases, [&](const TimelineObject& t) { return ms_from_start >= t.end_time; });
 }
 
+double Player::zdon_judge_ms(double ms_from_start) const {
+    double t = std::min(ms_from_start, zdon_judge_limit_ms);
+    if (replay_cursor < replay_log.size()) { // a hit not played yet: nothing past it is missed before it
+        t = std::min(t, replay_log[replay_cursor].first);
+    }
+    return t;
+}
+
 void Player::play_note_manager(double current_ms, std::optional<Background>& background) {
     const double miss_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
     for (std::deque<Note>* lane : {&don_notes, &kat_notes}) {
@@ -2068,7 +2081,16 @@ void Player::handle_input(double ms_from_start, double current_ms, std::optional
                 (log_type == InputLogType::DON_L || log_type == InputLogType::DON_R) ? DrumType::DON : DrumType::KAT;
             Side side = (log_type == InputLogType::DON_L || log_type == InputLogType::KAT_L) ? Side::LEFT : Side::RIGHT;
             spawn_hit_effects(drum_type, side);
-            play_as(player_num, drum_type == DrumType::DON ? don_hitsound_id : kat_hitsound_id, VolumePreset::HITSOUND);
+            if (!zdon_silent_replay) {
+                play_as(player_num, drum_type == DrumType::DON ? don_hitsound_id : kat_hitsound_id,
+                        VolumePreset::HITSOUND);
+            }
+            if (zdon_stream) { // the misses and branches before this hit first, as if it were played now
+                play_note_manager(log_ms, background);
+                if (is_branch) {
+                    evaluate_branch(log_ms);
+                }
+            }
             check_note(log_ms, drum_type, current_ms, background);
             ++replay_cursor;
         }

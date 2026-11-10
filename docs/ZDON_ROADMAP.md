@@ -375,7 +375,9 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   簡化譜）照對手的，速度等顯示選項照自己的。結算橫幅（RESULT_2P）、2P 成績板顯示對手且不算個人最佳。`zdon_online.h`。
 - 挑戰：GET /challenges、/replay 多回 score／modifiers、網站「挑戰」按鈕（jumps.challenge → poll_jump challenge_id）。
 - 即時：`server/zdon_match.py`（create／quick／join／state／song／ready／sync／finish／leave）。Game2PScreen 的
-  lane_position(1) 跟著對手回報的 chart ms 晚 1 秒（單調不倒退），hold_song_end 等對手的譜面打完（最多 20 秒）。
+  2P 譜面跟音樂同步捲動（2026-11-11 使用者：晚一秒不行），Player::zdon_stream：打擊一到就判定（先把它之前的漏打處理掉），
+  漏打／分歧只推進到對手回報的位置（那之前的打擊都已送到）和下一個未處理的打擊；對手結束或離開就全部結算。
+  hold_song_end 等對手的最終成績（最多 20 秒）。對手的打擊不出聲（挑戰也是，zdon_silent_replay）。
   自動演奏時打擊也記進 input_log（log_auto_hits）以便兩個實例對打測試。
 - 實測：兩個遊戲實例（第二個在沙盒，Skins／Songs 用 junction）自動配對→選歌→對打→結算，
   兩邊的對手譜面結果與對手自己的完全相同（良 429、連打 43、1003870）。

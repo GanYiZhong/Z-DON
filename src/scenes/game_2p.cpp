@@ -69,7 +69,6 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     }
     live_ticket = live_finish_ticket = -1;
     live_last_sync = -1e9;
-    live_lane_ms = -1e18;
     live_hold_since = -1.0;
     parser = std::make_shared<SongParser>(song, delay, PlayerNum::P1);
     parser_2p = std::make_shared<SongParser>(song, delay, PlayerNum::P2);
@@ -116,6 +115,11 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         players[1]->apply_replay_appearance(zdon_online.opponent);
         players[1]->load_replay(zdon_online.opponent_log); // live: empty, the hits come in as they are played
         players[0]->log_auto_hits = zdon_online.live() && mods_1.auto_play;
+        players[1]->zdon_silent_replay = true; // the opponent's hits make no sound here
+        if (zdon_online.live()) {              // scrolls with the music, judged as the hits come in
+            players[1]->zdon_stream = true;
+            players[1]->zdon_judge_limit_ms = -1e18;
+        }
     }
     if (ai_battle) {
         // the arcade tunes its AI by the course's star level (ai_tuninginfo levels 1..11)
@@ -264,23 +268,17 @@ bool Game2PScreen::pause_menu_allowed() const {
     return !zdon_online.live(); // the opponent can't wait
 }
 
-double Game2PScreen::lane_position(size_t index) const {
-    if (index != 1 || !zdon_online.live()) {
-        return clock.position();
-    }
-    if (zdon_online.opp_pos < -1e17) {
-        return 0.0; // nothing heard yet: before the chart
-    }
-    live_lane_ms = std::max(live_lane_ms, zdon_online.opp_clock(live_now));
-    return live_lane_ms;
+// both lanes scroll with the music; the opponent's is judged as its hits come in (Player::zdon_stream)
+double Game2PScreen::lane_position(size_t /*index*/) const {
+    return clock.position();
 }
 
 bool Game2PScreen::hold_song_end() {
     if (!zdon_online.live() || zdon_online.opp_left || players.size() < 2) {
         return false;
     }
-    if (zdon_online.opp_final && lane_position(1) >= players[1]->end_time) {
-        return false; // the opponent finished and its lane has played everything
+    if (zdon_online.opp_final) {
+        return false; // the opponent finished: every hit it played has come (the limit is lifted)
     }
     if (live_hold_since < 0.0) {
         live_hold_since = live_now;
@@ -338,6 +336,11 @@ void Game2PScreen::live_update(double current_ms) {
             }
         }
     }
+    // the opponent's lane misses notes only as far as its reported position (all its hits before it are here);
+    // finished or gone: everything left is decided
+    players[1]->zdon_judge_limit_ms = (zdon_online.opp_final || zdon_online.opp_left) ? 1e18
+                                      : zdon_online.opp_pos < -1e17                   ? -1e18
+                                                                                      : zdon_online.opp_pos;
     if (live_ticket < 0 && current_ms - live_last_sync >= 100.0) {
         const InputLog& log = players[0]->input_log;
         std::string hits;

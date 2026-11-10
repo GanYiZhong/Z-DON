@@ -159,6 +159,13 @@ public:
         replay_active = true;
     }
     bool log_auto_hits = false; // Z-DON online battle: auto play's hits go to input_log too (sent to the opponent)
+    // Z-DON online battle (live): this lane scrolls with the music but plays the opponent's hits as they arrive:
+    // notes are only missed (and branches decided) up to zdon_judge_limit_ms, the opponent's last reported chart
+    // position (every hit before it has arrived), and each arriving hit first catches the misses up to its own time
+    bool zdon_stream = false;
+    double zdon_judge_limit_ms = 1e18;
+    bool zdon_silent_replay = false; // Z-DON online battle: the opponent's hits make no sound here
+    double zdon_judge_ms(double ms_from_start) const;
     void apply_replay_appearance(const PlayerData& pd);
     void use_costume(int cos_index);
     bool is_skip_enabled() const { return modifiers.skip; }
