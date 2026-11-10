@@ -933,6 +933,7 @@ def make_handler(cfg: dict, api: Api, site):
             self.send_header("Content-Type", "application/zip")
             self.send_header("Content-Length", str(path.stat().st_size))
             self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quoted}")
+            self.send_header("Cache-Control", "no-cache")  # Cloudflare would keep serving an old build
             self.end_headers()
             if self.command != "HEAD":
                 with open(path, "rb") as f:

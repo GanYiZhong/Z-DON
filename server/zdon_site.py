@@ -379,10 +379,12 @@ class Site:
         ch.sort(key=lambda c: (c[0] != "windows", c[0]))
         name, version, path = ch[0]
         size = (path / "package.zip").stat().st_size / 1e6
-        others = "".join(f' <a href="/download/{esc(n)}.zip">{esc(n)}</a>' for n, _, _ in ch[1:])
+        # the version in the link: a cache in between never hands out an older build under the same address
+        others = "".join(f' <a href="/download/{esc(n)}.zip?v={esc(urllib.parse.quote(v))}">{esc(n)}</a>'
+                         for n, v, _ in ch[1:])
         body = f"""<div class="card hero" style="text-align:center;padding:2.2em 1.3em">
 <h1 style="margin-bottom:.3em">下載 Z-DON</h1>
-<p><a class="btn" style="font-size:1.25em;padding:.7em 2.2em" href="/download/{esc(name)}.zip">下載（Windows）</a></p>
+<p><a class="btn" style="font-size:1.25em;padding:.7em 2.2em" href="/download/{esc(name)}.zip?v={esc(urllib.parse.quote(version))}">下載（Windows）</a></p>
 <p class="small muted">{esc(self.version_label(version, path))} 版・{size:.0f} MB</p></div>
 <div class="card"><ol style="margin:.2em 0;padding-left:1.4em;line-height:2">
 <li>把下載的 zip 解壓縮到任何資料夾</li>
