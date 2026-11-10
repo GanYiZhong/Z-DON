@@ -57,25 +57,13 @@ namespace zdon_update {
         }
 
         std::string source_url() {
-            const auto& net = global_data.config->network;
-            std::string url = net.zdon_update_url;
-            if (url.empty() && !net.zdon_server_url.empty()) {
-                url = net.zdon_server_url;
-                while (!url.empty() && url.back() == '/') {
-                    url.pop_back();
+            std::string url = global_data.config->network.zdon_update_url;
+            if (url.empty()) {
+                url = server_base();
+                if (!url.empty()) {
+                    url += "/update/windows";
                 }
-                url += "/update/windows";
             }
-#if defined(NETWORK_URL)
-            // a build with a compiled-in server updates from it
-            if (url.empty() && sizeof(NETWORK_URL) > 1) {
-                url = NETWORK_URL;
-                while (!url.empty() && url.back() == '/') {
-                    url.pop_back();
-                }
-                url += "/update/windows";
-            }
-#endif
             while (!url.empty() && url.back() == '/') {
                 url.pop_back();
             }
@@ -237,6 +225,36 @@ namespace zdon_update {
 #else
         return false;
 #endif
+    }
+
+    std::string server_base() {
+        std::string url = global_data.config ? global_data.config->network.zdon_server_url : "";
+#if defined(NETWORK_URL)
+        if (url.empty()) {
+            url = NETWORK_URL;
+        }
+#endif
+        while (!url.empty() && url.back() == '/') {
+            url.pop_back();
+        }
+        return url;
+    }
+
+    std::optional<std::string> http_get(const std::string& url, int timeout_ms, int* status) {
+#if defined(YATAIDON_HAS_HTTP)
+        cpr::Response r = cpr::Get(cpr::Url{url}, cpr::Timeout{timeout_ms});
+        if (status) {
+            *status = static_cast<int>(r.status_code);
+        }
+        if (r.status_code == 200 && r.error.code == cpr::ErrorCode::OK) {
+            return std::move(r.text);
+        }
+#else
+        if (status) {
+            *status = 0;
+        }
+#endif
+        return std::nullopt;
     }
 
     void shutdown() {

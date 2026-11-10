@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../file/filesystem.h"
 #include "../math/sha256.h"
 #include "android_ca.h"
 
@@ -252,6 +253,38 @@ bool SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
 
     auto media_url = [&](const std::string& rel_path) { return repo_url + "/media/branch/" + branch + "/" + rel_path; };
 
+    // Z-DON: a skin installed from nothing comes as one archive first. Thousands of small files at one round trip
+    // each are what makes a first install slow; the manifest pass below still checks every file against its
+    // checksum and fetches whatever differs, so a missing, stale or partial archive only costs time.
+    if (std::error_code ec; !fs::exists(skin_dir / "Graphics", ec)) {
+        const fs::path archive = temp_dir(skin_dir) / "archive.zip";
+        fs::create_directories(archive.parent_path(), ec);
+        set_current_file("archive/" + branch + ".zip");
+        bool downloaded = false;
+        {
+            std::ofstream out(archive, std::ios::binary | std::ios::trunc);
+            cpr::Session s;
+            init_session(s);
+            s.SetUrl(cpr::Url{repo_url + "/archive/" + branch + ".zip"});
+            s.SetTimeout(cpr::Timeout{3600000});
+            s.SetConnectTimeout(cpr::ConnectTimeout{5000});
+            const cpr::Response r = s.Download(out);
+            out.close();
+            downloaded = fetched(r) && out.good();
+            if (!downloaded) {
+                spdlog::info("Skin install ({}): no archive (HTTP {}), fetching file by file",
+                             skin_dir.filename().string(), r.status_code);
+            }
+        }
+        if (downloaded && !zdon_extract_zip(archive, skin_dir)) {
+            spdlog::warn("Skin install ({}): the archive extracted only in part", skin_dir.filename().string());
+        } else if (downloaded) {
+            spdlog::info("Skin install ({}): extracted the archive, checking it", skin_dir.filename().string());
+        }
+        fs::remove_all(temp_dir(skin_dir), ec);
+        set_current_file({});
+    }
+
     // a whole manifest or nothing: files it doesn't list get removed below, so a truncated
     // one would delete everything past the cut (and the last line must be complete)
     cpr::Response checksums = get_url(*session, raw_url("checksums.sha256"), 60000, 5000);
@@ -369,7 +402,7 @@ bool SkinUpdater::update_one_skin(const std::filesystem::path& skin_dir, const s
         }
     };
     {
-        constexpr size_t kConnections = 16;
+        constexpr size_t kConnections = 32; // Z-DON: 16 -> 32, a home server behind a tunnel answers slowly
         std::vector<std::thread> pool;
         const size_t n = std::min(kConnections, jobs.size());
         pool.reserve(n);

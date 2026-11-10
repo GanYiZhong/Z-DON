@@ -698,12 +698,47 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> N
 # HTTP
 
 
+def skin_index(data: Path, base: str) -> list[dict]:
+    out = []
+    root = data / "skins"
+    if not root.is_dir():
+        return out
+    for skin in sorted(p for p in root.iterdir() if p.is_dir()):
+        meta_file = skin / "meta.json"
+        meta = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.is_file() else {}
+        branch = meta.get("branch", "main")
+        if not (skin / branch / "checksums.sha256").is_file():
+            continue
+        out.append({"name": skin.name, "url": f"{base}/skins/{urllib.parse.quote(skin.name)}", "branch": branch,
+                    "parent": meta.get("parent", ""), "files": meta.get("files", 0), "size": meta.get("size", 0)})
+    # parents before their children, so a player picking a child also sees what it needs first
+    names = {e["name"] for e in out}
+    ordered, placed = [], set()
+    while len(ordered) < len(out):
+        progressed = False
+        for e in out:
+            if e["name"] not in placed and (not e["parent"] or e["parent"] in placed or e["parent"] not in names):
+                ordered.append(e)
+                placed.add(e["name"])
+                progressed = True
+        if not progressed:
+            ordered += [e for e in out if e["name"] not in placed]
+            break
+    return ordered
+
+
+def site_base(handler) -> str:
+    url = str(handler.server_cfg["site"].get("url", "")).rstrip("/")
+    return url or f"http://{handler.headers.get('Host', '127.0.0.1')}"
+
+
 def make_handler(cfg: dict, api: Api, site):
     data: Path = cfg["data_dir"]
     max_body = int(cfg["max_body_mb"]) * 1024 * 1024
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ZDONServer/1"
+        server_cfg = cfg
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *args):
@@ -766,6 +801,17 @@ def make_handler(cfg: dict, api: Api, site):
             if path.startswith("/update/"):
                 self._file(safe_join(data / "update", path[len("/update/"):]))
                 return True
+            # /skins/index.json: every published skin, for the game's first-run skin list
+            if path == "/skins/index.json":
+                self._json(200, skin_index(data, site_base(self)))
+                return True
+            # /skins/<name>/archive/<branch>.zip: the whole skin, for a first install
+            if path.startswith("/skins/"):
+                parts = path[len("/skins/"):].split("/")
+                if len(parts) == 3 and parts[1] == "archive" and parts[2].endswith(".zip"):
+                    root = safe_join(data / "skins", urllib.parse.unquote(parts[0]))
+                    self._file(safe_join(root, urllib.parse.unquote(parts[2])) if root else None)
+                    return True
             # /skins/<name>/(raw|media)/branch/<branch>/<rel>  (the layout the skin updater asks for)
             if path.startswith("/skins/"):
                 parts = path[len("/skins/"):].split("/", 4)
@@ -873,6 +919,9 @@ def cmd_serve(cfg: dict, args) -> None:
     api = Api(cfg, store)
     site = Site(cfg, store, api.nonces)
     host, port = args.host or cfg["host"], args.port or int(cfg["port"])
+    # On Windows SO_REUSEADDR lets a second server bind a port another one still holds (and the old one keeps
+    # answering), so a restart that overlaps would silently serve stale code: bind exclusively there.
+    ThreadingHTTPServer.allow_reuse_address = os.name != "nt"
     httpd = ThreadingHTTPServer((host, port), make_handler(cfg, api, site))
     httpd.daemon_threads = True
     log(f"Z-DON server on http://{host}:{port}  (data: {cfg['data_dir']})")
@@ -930,7 +979,18 @@ def cmd_publish_skin(cfg: dict, args) -> None:
     dest = cfg["data_dir"] / "skins" / name / args.branch
     dest.parent.mkdir(parents=True, exist_ok=True)
     publish_tree({rel: src / rel for rel in files}, dest, None)
-    print(f"published skin {name} ({args.branch}): {len(files)} files")
+    # the skin it inherits from (Graphics/skin_config.json "parent"), for the game's first-run list
+    parent = args.parent
+    if parent is None:
+        try:
+            conf = json.loads((src / "Graphics" / "skin_config.json").read_text(encoding="utf-8-sig"))
+            parent = conf.get("parent") or (conf.get("screen") or {}).get("parent", "")
+        except (OSError, ValueError, AttributeError):
+            parent = ""
+    meta = {"branch": args.branch, "parent": parent or "", "files": len(files),
+            "size": sum((src / f).stat().st_size for f in files), "published": int(time.time())}
+    (dest.parent / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    print(f"published skin {name} ({args.branch}): {len(files)} files, parent {parent or '(none)'}")
     print(f"in the game's Skins/{src.name}/.skin-repo put:\n  http://<this host>:{cfg['port']}/skins/{name}\n"
           f"  {args.branch}")
 
@@ -975,6 +1035,7 @@ def main(argv=None) -> None:
     s.add_argument("src")
     s.add_argument("--name")
     s.add_argument("--branch", default="main")
+    s.add_argument("--parent", help="the skin it inherits from (default: Graphics/skin_config.json)")
     sub.add_parser("users", help="list players and their access codes")
     s = sub.add_parser("jump", help="send a player's game to a song or a replay")
     s.add_argument("access_code")

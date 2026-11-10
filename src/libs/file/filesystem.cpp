@@ -1,11 +1,12 @@
 #include "filesystem.h"
 
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/stringbuffer.h>
+
 #include "../library_index.h"
 #include "../test_mode.h"
 #include "../zdon_os.h"
 #include "miniz.h" // IWYU pragma: keep
-#include <rapidjson/prettywriter.h>
-#include <rapidjson/stringbuffer.h>
 #ifdef SUPPORT_FUMEN
 #include "../optional/gen3.h"
 #include "../optional/gen4.h"
@@ -305,6 +306,72 @@ static bool extract_zip_entries(mz_zip_archive& zip, const fs::path& base_dir, c
             all_ok = false;
         }
     }
+    return all_ok;
+}
+
+bool zdon_extract_zip(const fs::path& zip_path, const fs::path& dir) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const fs::path canonical_dir = fs::canonical(dir, ec);
+    if (ec) {
+        return false;
+    }
+    // read from the file (a skin archive can be close to a gigabyte); the caller's path is ASCII
+    mz_zip_archive zip = {};
+    if (!mz_zip_reader_init_file(&zip, zip_path.string().c_str(), 0)) {
+        spdlog::warn("zdon_extract_zip: cannot open {}", zip_path.string());
+        return false;
+    }
+    const int count = static_cast<int>(mz_zip_reader_get_num_files(&zip));
+    std::vector<std::string> names(count);
+    std::string top; // the one top folder every entry shares, if any
+    bool one_top = count > 0;
+    for (int i = 0; i < count; i++) {
+        mz_zip_archive_file_stat stat;
+        if (mz_zip_reader_file_stat(&zip, i, &stat)) {
+            names[i] = stat.m_filename;
+        }
+        const size_t slash = names[i].find('/');
+        const std::string first = slash == std::string::npos ? "" : names[i].substr(0, slash + 1);
+        if (first.empty() || (!top.empty() && first != top)) {
+            one_top = false;
+        }
+        top = first;
+    }
+    bool all_ok = true;
+    for (int i = 0; i < count; i++) {
+        if (mz_zip_reader_is_file_a_directory(&zip, i) || names[i].empty()) {
+            continue;
+        }
+        const std::string name = one_top ? names[i].substr(top.size()) : names[i];
+        if (name.empty()) {
+            continue;
+        }
+        const fs::path out = (dir / fs::path(std::u8string(name.begin(), name.end()))).lexically_normal();
+        const fs::path rel = out.lexically_relative(dir);
+        if (rel.empty() || *rel.begin() == ".." || out.is_absolute() != dir.is_absolute()) {
+            spdlog::warn("zdon_extract_zip: skipping unsafe entry {}", names[i]);
+            all_ok = false;
+            continue;
+        }
+        fs::create_directories(out.parent_path(), ec);
+        const fs::path parent = fs::canonical(out.parent_path(), ec);
+        const fs::path parent_rel = parent.lexically_relative(canonical_dir);
+        if (ec || parent_rel.empty() || *parent_rel.begin() == "..") {
+            all_ok = false;
+            continue;
+        }
+        std::ofstream f(out, std::ios::binary | std::ios::trunc);
+        const auto write = [](void* opaque, mz_uint64, const void* buf, size_t n) -> size_t {
+            auto* file = static_cast<std::ofstream*>(opaque);
+            file->write(static_cast<const char*>(buf), static_cast<std::streamsize>(n));
+            return *file ? n : 0;
+        };
+        const bool extracted = mz_zip_reader_extract_to_callback(&zip, i, write, &f, 0) != 0;
+        f.close();
+        all_ok = all_ok && extracted && static_cast<bool>(f);
+    }
+    mz_zip_reader_end(&zip);
     return all_ok;
 }
 

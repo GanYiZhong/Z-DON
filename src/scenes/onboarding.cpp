@@ -1,6 +1,11 @@
 #include "onboarding.h"
 
 #include <algorithm>
+#include <cctype>
+#include <rapidjson/document.h>
+#include <spdlog/spdlog.h>
+#include <string>
+#include <vector>
 
 #include "../libs/file/filesystem.h"
 #include "../libs/gfx/camera_utils.h"
@@ -8,14 +13,22 @@
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
 #include "../libs/network/skin_updater.h"
+#include "../libs/network/zdon_update.h"
 
 namespace {
     struct SkinEntry {
+        std::string name;
+        std::string url;
+        std::string parent; // "" for none
+        std::string branch = "main";
+    };
+    // upstream's list, used when no Z-DON server is set (or it can't be reached)
+    struct DefaultSkin {
         const char* name;
         const char* url;
-        const char* parent; // "" for none
+        const char* parent;
     };
-    constexpr SkinEntry kSkins[] = {
+    constexpr DefaultSkin kDefaultSkins[] = {
         {"PyTaikoGreen", "https://ese.tjadataba.se/Yonokid/PyTaikoGreen", ""},
         {"YataiDON14", "https://ese.tjadataba.se/GanYiZhong/YataiDON14", "PyTaikoGreen"},
         {"YataiDON8", "https://ese.tjadataba.se/GanYiZhong/YataiDON8", "YataiDON14"},
@@ -23,7 +36,56 @@ namespace {
         {"YataiDONNijiiro", "https://ese.tjadataba.se/Yonokid/YataiDONNijiiro", "PyTaikoGreen"},
         {"YataiDONRed", "https://ese.tjadataba.se/Yonokid/YataiDONRed", "PyTaikoGreen"},
     };
-    constexpr int kSkinCount = static_cast<int>(std::size(kSkins));
+
+    bool safe_skin_name(const std::string& name) {
+        return !name.empty() && name.size() <= 64 && std::ranges::all_of(name, [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
+        });
+    }
+
+    // Z-DON: the skins the Z-DON server publishes (<server>/skins/index.json), so a player gets every skin,
+    // and its later updates, from that server; upstream's list when there is no server or no answer
+    std::vector<SkinEntry> load_skins() {
+        std::vector<SkinEntry> out;
+        if (const std::string base = zdon_update::server_base(); !base.empty()) {
+            int status = 0;
+            const std::optional<std::string> body = zdon_update::http_get(base + "/skins/index.json", 4000, &status);
+            rapidjson::Document doc;
+            if (body && !doc.Parse(body->c_str()).HasParseError() && doc.IsArray()) {
+                for (const auto& v : doc.GetArray()) {
+                    const auto text = [&v](const char* key) -> std::string {
+                        return v.IsObject() && v.HasMember(key) && v[key].IsString() ? v[key].GetString() : "";
+                    };
+                    SkinEntry e{text("name"), text("url"), text("parent"), text("branch")};
+                    if (e.branch.empty()) {
+                        e.branch = "main";
+                    }
+                    if (safe_skin_name(e.name) && e.url.starts_with("http") &&
+                        (e.parent.empty() || safe_skin_name(e.parent))) {
+                        out.push_back(std::move(e));
+                    }
+                }
+            }
+            if (!out.empty()) {
+                spdlog::info("Onboarding: {} skins from {}", out.size(), base);
+                return out;
+            }
+            spdlog::warn("Onboarding: no skin list from {} (HTTP {}), using the default list", base, status);
+        }
+        for (const DefaultSkin& d : kDefaultSkins) {
+            out.push_back({d.name, d.url, d.parent});
+        }
+        return out;
+    }
+
+    const std::vector<SkinEntry>& skins() {
+        static const std::vector<SkinEntry> list = load_skins();
+        return list;
+    }
+
+    int skin_total() {
+        return static_cast<int>(skins().size());
+    }
 
     struct LanguageEntry {
         const char* code;
@@ -32,8 +94,8 @@ namespace {
     constexpr LanguageEntry kLanguages[] = {{"en", "English"}, {"ja", "日本語"}, {"zh", "中文"}, {"ko", "한국어"}};
 
     int index_of(const std::string& name) {
-        for (int i = 0; i < kSkinCount; i++) {
-            if (name == kSkins[i].name) {
+        for (int i = 0; i < skin_total(); i++) {
+            if (name == skins()[i].name) {
                 return i;
             }
         }
@@ -41,7 +103,7 @@ namespace {
     }
 
     int parent_of(int skin) {
-        return index_of(kSkins[skin].parent);
+        return index_of(skins()[skin].parent);
     }
 
     bool has_ancestor(int skin, int ancestor) {
@@ -55,11 +117,11 @@ namespace {
 } // namespace
 
 int OnboardingScreen::skin_count() const {
-    return kSkinCount;
+    return skin_total();
 }
 
 int OnboardingScreen::required_by(int skin) const {
-    for (int i = 0; i < kSkinCount; i++) {
+    for (int i = 0; i < skin_total(); i++) {
         if (selected[i] && has_ancestor(i, skin)) {
             return i;
         }
@@ -69,10 +131,10 @@ int OnboardingScreen::required_by(int skin) const {
 
 void OnboardingScreen::on_screen_start() {
     // no Screen::on_screen_start(): there are no textures/sounds for this screen
-    selected.assign(kSkinCount, false);
-    installed.assign(kSkinCount, false);
-    for (int i = 0; i < kSkinCount; i++) {
-        installed[i] = fs::exists(fs::path("Skins") / kSkins[i].name / "Graphics");
+    selected.assign(skin_total(), false);
+    installed.assign(skin_total(), false);
+    for (int i = 0; i < skin_total(); i++) {
+        installed[i] = fs::exists(fs::path("Skins") / skins()[i].name / "Graphics");
     }
     const int current = index_of(global_data.config->paths.skin.string());
     if (current >= 0) {
@@ -95,7 +157,7 @@ void OnboardingScreen::toggle_skin(int skin) {
     if (selected[skin]) {
         const int child = required_by(skin);
         if (child >= 0) {
-            error = std::string(kSkins[skin].name) + " is required by " + kSkins[child].name;
+            error = std::string(skins()[skin].name) + " is required by " + skins()[child].name;
             return;
         }
         selected[skin] = false;
@@ -121,7 +183,7 @@ void OnboardingScreen::begin_download() {
         return;
     }
     if (!SkinUpdater::available()) {
-        for (int i = 0; i < kSkinCount; ++i) {
+        for (int i = 0; i < skin_total(); ++i) {
             if (selected[i] && !installed[i]) {
                 error = "Install selected skins in " + fs::absolute("Skins").string() + " first";
                 return;
@@ -142,10 +204,10 @@ bool OnboardingScreen::apply() {
 
     // active skin: the one already configured if it is a leaf, else the first leaf
     auto usable = [&](int i) {
-        return selected[i] && required_by(i) < 0 && fs::exists(fs::path("Skins") / kSkins[i].name / "Graphics");
+        return selected[i] && required_by(i) < 0 && fs::exists(fs::path("Skins") / skins()[i].name / "Graphics");
     };
     int active = -1;
-    for (int i = 0; i < kSkinCount && active < 0; i++) {
+    for (int i = 0; i < skin_total() && active < 0; i++) {
         if (usable(i)) {
             active = i;
         }
@@ -157,7 +219,7 @@ bool OnboardingScreen::apply() {
     cfg.network.online_play = online;
     cfg.general.language = language;
     if (active >= 0) {
-        cfg.paths.skin = kSkins[active].name;
+        cfg.paths.skin = skins()[active].name;
     }
 
     if (global_data.skinless || cfg.paths.skin.string() != before || language != before_language) {
@@ -185,7 +247,7 @@ void OnboardingScreen::handle_tap(Vec2 tap) {
     const Camera2D camera = compute_camera2d(tex.screen_width, tex.screen_height);
     const float y = get_screen_to_world_2d(pixel, camera).y * 720.0f / tex.screen_height; // draw()'s coordinates
 
-    if (y >= 165 && y < 165 + kSkinCount * 42) {
+    if (y >= 165 && y < 165 + skin_total() * 42) {
         row = static_cast<int>((y - 165) / 42);
         toggle_skin(row);
     } else if (y >= 420 && y < 470) {
@@ -220,9 +282,9 @@ std::optional<Screens> OnboardingScreen::update() {
                 return std::nullopt;
             }
             std::vector<SkinUpdater::Request> requests;
-            for (int i = 0; i < kSkinCount; i++) {
+            for (int i = 0; i < skin_total(); i++) {
                 if (selected[i] && !installed[i]) {
-                    requests.push_back({kSkins[i].name, kSkins[i].url});
+                    requests.push_back({skins()[i].name, skins()[i].url, skins()[i].branch});
                 }
             }
             skin_updater.download(std::move(requests));
@@ -252,7 +314,7 @@ std::optional<Screens> OnboardingScreen::update() {
     }
 
     // Up/Down (arrows or D-pad) move between rows; the drum-only scheme below still works
-    const int rows = kSkinCount + 3;
+    const int rows = skin_total() + 3;
     if (key_pressed(SDL_SCANCODE_UP) || check_key_pressed(10000 + 1)) {
         row = (row + rows - 1) % rows;
         return std::nullopt;
@@ -269,7 +331,7 @@ std::optional<Screens> OnboardingScreen::update() {
         } else if (menu_confirm_pressed()) {
             if (row == continue_row()) {
                 begin_download();
-            } else if (row < kSkinCount) {
+            } else if (row < skin_total()) {
                 toggle_skin(row);
             } else if (row == language_row()) {
                 cycle_language();
@@ -287,7 +349,7 @@ std::optional<Screens> OnboardingScreen::update() {
             row++;
         }
     } else if (menu_left_pressed() || menu_right_pressed()) {
-        if (row < kSkinCount) {
+        if (row < skin_total()) {
             toggle_skin(row);
         } else if (row == language_row()) {
             cycle_language();
@@ -327,14 +389,14 @@ void OnboardingScreen::draw() {
     }
 
     draw_line("Pick your skins", 125 * s, static_cast<int>(26 * s), Color::GRAY);
-    for (int i = 0; i < kSkinCount; i++) {
-        std::string line = std::string(selected[i] ? "[x] " : "[ ] ") + kSkins[i].name;
+    for (int i = 0; i < skin_total(); i++) {
+        std::string line = std::string(selected[i] ? "[x] " : "[ ] ") + skins()[i].name;
         if (installed[i]) {
             line += "  (installed)";
         }
         const int child = selected[i] ? required_by(i) : -1;
         if (child >= 0) {
-            line += "  (needed by " + std::string(kSkins[child].name) + ")";
+            line += "  (needed by " + std::string(skins()[child].name) + ")";
         }
         Color c = i == row ? Color::YELLOW : (selected[i] ? Color::WHITE : Color::LIGHTGRAY);
         draw_line(line, (165 + i * 42) * s, static_cast<int>(28 * s), c);

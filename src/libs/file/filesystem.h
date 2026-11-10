@@ -16,6 +16,10 @@ namespace fs = std::filesystem;
 void set_working_directory_to_executable();
 
 void extract_osz(const fs::path& osz_path);
+// Z-DON: extracts every file of `zip_path` under `dir` (entry names are UTF-8; ones that would leave `dir`
+// are skipped). When every entry sits in one top folder (a Gitea archive), that folder is dropped.
+// False when the archive can't be opened or any entry failed.
+bool zdon_extract_zip(const fs::path& zip_path, const fs::path& dir);
 
 void ensure_skin_extracted(const std::string& skin_name);
 
