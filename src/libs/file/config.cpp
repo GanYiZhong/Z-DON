@@ -417,8 +417,14 @@ Config get_config() {
         }
     }
 
+    // Z-DON: a build with a compiled-in server (NETWORK_URL) plays online out of the box
+#if defined(NETWORK_URL)
+    constexpr bool kCompiledServer = sizeof(NETWORK_URL) > 1;
+#else
+    constexpr bool kCompiledServer = false;
+#endif
     config.network.online_play =
-        config_file["network"]["online_play"].value_or(config_file["general"]["online_play"].value_or(false));
+        config_file["network"]["online_play"].value_or(config_file["general"]["online_play"].value_or(kCompiledServer));
     config.network.sync_scores =
         config_file["network"]["sync_scores"].value_or(config_file["general"]["sync_scores_on_launch"].value_or(false));
     config.network.auto_login = config_file["network"]["auto_login"].value_or(true);

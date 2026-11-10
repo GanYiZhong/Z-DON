@@ -908,6 +908,13 @@ def cmd_publish(cfg: dict, args) -> None:
             sources[name] = HERE.parent / name
     version = args.version or git_version(HERE.parent)
     dest = cfg["data_dir"] / "update" / args.channel
+    # where zdon_update.bat looks when config.toml names no source (a build with a compiled-in server)
+    site_url = str(cfg["site"].get("url", "")).rstrip("/")
+    if site_url:
+        url_file = cfg["data_dir"] / f".zdon_update_{args.channel}.url"
+        url_file.parent.mkdir(parents=True, exist_ok=True)
+        url_file.write_text(f"{site_url}/update/{args.channel}\n", encoding="utf-8", newline="\n")
+        sources["zdon_update.url"] = url_file
     publish_tree(sources, dest, version)
     size = sum(p.stat().st_size for p in sources.values())
     print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}")

@@ -1,7 +1,8 @@
 # Z-DON updater: brings this install up to date from a Z-DON server (server/zdon_server.py publish),
 # downloading only the files whose checksum changed.
 #
-# Source: -Url, else config.toml [network] zdon_update_url, else zdon_server_url + "/update/windows".
+# Source: -Url, else config.toml [network] zdon_update_url, else zdon_server_url + "/update/windows",
+# else zdon_update.url (the channel this install was published to).
 # Server layout: <url>/version.txt, <url>/checksums.sha256 ("<sha256>  <path>" lines), <url>/files/<path>
 #
 #   zdon_update.bat                      update now (the game must be closed)
@@ -125,6 +126,11 @@ try {
     if ($Url -eq "") {
         $server = Read-ConfigValue "zdon_server_url"
         if ($server -ne "") { $Url = $server.TrimEnd('/') + "/update/windows" }
+    }
+    if ($Url -eq "") {
+        # written by the server's publish step: the channel this install came from
+        $urlFile = Join-Path $InstallDir "zdon_update.url"
+        if (Test-Path -LiteralPath $urlFile) { $Url = [IO.File]::ReadAllText($urlFile, $Utf8).Trim() }
     }
     if ($Url -eq "") {
         Fail "no update source: set zdon_update_url or zdon_server_url under [network] in config.toml, or pass -Url" 2

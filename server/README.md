@@ -138,3 +138,22 @@ powershell -ExecutionPolicy Bypass -File server\install_autostart.ps1
 會在工作排程器建立「Z-DON server」：開機就跑（不必登入）、當掉一分鐘後自動重啟。移除：
 `Unregister-ScheduledTask -TaskName "Z-DON server" -Confirm:$false`。cloudflared 用 `cloudflared service install`
 裝成服務即可（TaikoForge 的 DEPLOY.md 已經有）。
+
+## 金鑰（tools/zdon_keygen.py）
+
+```bat
+python tools\zdon_keygen.py              rem 產生缺少的金鑰（已有的不會覆寫）
+python tools\zdon_keygen.py --show       rem 只印指紋，比對各處是否一致
+python tools\zdon_keygen.py --rotate auth  rem 換遊戲簽章 key（要重新建置並發布新版）
+python tools\zdon_keygen.py --rotate sso   rem 換單一登入密鑰（TaikoForge 也要換）
+```
+
+每把 key 256 位元：作業系統 CSPRNG＋CPU 時序抖動＋本機識別（MachineGuid 等）＋時間等混成熵池，
+以 SHA3-512／BLAKE2b／SHA-512 三種雜湊壓縮、HKDF-SHA512 依用途分開導出，最後再和一份 CSPRNG 亂數 XOR。
+寫入（都不進 git，舊檔留 `.bak-時間`）：`.env`（編進遊戲的 `NETWORK_URL`／`NETWORK_AUTH_KEY`）、
+`server/zdon_server.toml`、`server/zdon_secrets_taikoforge.env`（給 TaikoForge 的兩行環境變數）。
+
+編了 key 的版本：`online_play` 預設開啟、更新來源預設 `NETWORK_URL/update/windows`；
+config.toml 只填 `zdon_server_url` 不填 key 時沿用內建 key（方便連測試伺服器）。
+換 `.env` 之後要 `cmake -U NETWORK_URL -U NETWORK_AUTH_KEY .` 再建置（CMake 會快取舊值）。
+key 編進 exe 只是混淆，擋得住隨手亂打 API 的腳本，擋不住有心人拆 exe；真正的防線是伺服器端。

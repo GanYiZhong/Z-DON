@@ -66,6 +66,16 @@ namespace zdon_update {
                 }
                 url += "/update/windows";
             }
+#if defined(NETWORK_URL)
+            // a build with a compiled-in server updates from it
+            if (url.empty() && sizeof(NETWORK_URL) > 1) {
+                url = NETWORK_URL;
+                while (!url.empty() && url.back() == '/') {
+                    url.pop_back();
+                }
+                url += "/update/windows";
+            }
+#endif
             while (!url.empty() && url.back() == '/') {
                 url.pop_back();
             }
@@ -207,6 +217,10 @@ namespace zdon_update {
         }
         std::wstring cmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script.wstring() +
                            L"\" -WaitPid " + std::to_wstring(GetCurrentProcessId()) + L" -Restart -PauseOnError";
+        // the source this check used (a compiled-in server isn't in config.toml for the script to find)
+        if (const std::string url = source_url(); !url.empty()) {
+            cmd += L" -Url \"" + fs::path(std::u8string(url.begin(), url.end())).wstring() + L"\"";
+        }
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};

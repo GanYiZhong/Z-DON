@@ -122,8 +122,10 @@ namespace {
     };
 
     std::string secret_key() {
-        // Z-DON: a self-hosted server's key from config.toml, when its URL is set there
-        if (global_data.config && !global_data.config->network.zdon_server_url.empty()) {
+        // Z-DON: a key in config.toml beside a server URL there; without one, the compiled-in key
+        // (a test server run with the same key as the public one needs only its URL)
+        if (global_data.config && !global_data.config->network.zdon_server_url.empty() &&
+            !global_data.config->network.zdon_server_key.empty()) {
             return global_data.config->network.zdon_server_key;
         }
         static constexpr ObfuscatedString obfuscated_key(NETWORK_AUTH_KEY);
