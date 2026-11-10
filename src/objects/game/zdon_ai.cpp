@@ -393,6 +393,16 @@ std::vector<double> Player::zdon_note_times() const {
     for (const Note& n : kat_notes) {
         times.push_back(n.hit_ms);
     }
+    // a branched chart: the queues hold the common notes only (each branch section is merged in when the song
+    // reaches it), so the note count and the last note come from the master branch as well (as upstream's AI
+    // battle counts them); a section already merged is in the queues and gone from branch_m
+    for (const NoteList& section : branch_m) {
+        for (const Note& n : section.notes) {
+            if (n.type >= NoteType::DON && n.type <= NoteType::KAT_L) {
+                times.push_back(n.hit_ms);
+            }
+        }
+    }
     std::ranges::sort(times);
     return times;
 }
@@ -402,6 +412,13 @@ std::vector<double> Player::zdon_bar_times() const {
     times.reserve(barlines.size());
     for (const Note& n : barlines) {
         times.push_back(n.hit_ms);
+    }
+    for (const NoteList& section : branch_m) { // the bar lines inside branch sections (master's)
+        for (const Note& n : section.notes) {
+            if (n.type == NoteType::BARLINE) {
+                times.push_back(n.hit_ms);
+            }
+        }
     }
     std::ranges::sort(times);
     return times;

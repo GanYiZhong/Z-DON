@@ -2619,7 +2619,10 @@ void Player::draw_overlays(float y) {
     if (combo_announce.has_value()) {
         combo_announce->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
     }
-    const bool arena_ai = (zdon_ai && zdon_ai_arena_game()) || upai_ai; // Z-DON: the skin draws the AI lane's plate
+    // Z-DON: in an arena the skin draws the AI lane's plate; skin_config "zdon_ai_arena_plate" (SimpleStyle, which
+    // inherits Nijiiro's arena but has no arena plate of its own) leaves it to the engine
+    const bool arena_ai =
+        (zdon_ai && zdon_ai_arena_game() && !tex.skin_config_by_name.contains("zdon_ai_arena_plate")) || upai_ai;
     const bool ai_lane = (zdon_ai && zdon_ai_lane_game()) || upai_ai;
     if (show_lane_badges && !ai_lane) {
         tex.draw_texture(lane_icon_tex_id, {.y = y, .index = is_2p});
