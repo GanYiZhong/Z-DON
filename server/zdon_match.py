@@ -18,6 +18,11 @@ Flow (every call carries the player's access_code; the game signs them like the 
                   new hits (pushed the moment they arrive), {"t":"a","have"} my hits it holds,
                   {"t":"f","final"} the opponent finished, {"t":"l"} the opponent left
     `t0` is the sender's wall clock (ms) at chart ms 0: the receiving game logs how late the hits arrived.
+    Start: each game holds its song until both have loaded it: {"t":"loaded"} (or sync loaded=1); once both have,
+    the server sends {"t":"go","at"} to both: "at" is the server's wall clock (ms) to start at, a moment ahead; each
+    game knows its clock's difference from the server's ({"t":"ping","c"} -> {"t":"pong","c","s"}), so both start
+    at the same instant (with a direct connection the host also tells the guest the time on the guest's own clock).
+    Polling: sync answers "go": true and the game starts at once.
     Direct connection: hello carries the round's "p2p" key; a game sends {"t":"cand","c":[addresses]} (its UDP
     addresses: local, IPv6, and the public one a STUN server saw) and the server passes them to the opponent. The
     games then try to reach each other over UDP (zdon_p2p.cpp) and send the hits both ways, taking whichever
@@ -40,6 +45,15 @@ import threading
 import time
 
 ROOM_IDLE_S = 30.0      # a player not heard from for this long has left
+GO_AHEAD_MS = 800.0     # the start time sent with "go": this far ahead (more than either game's way to the server)
+
+
+def wall_ms() -> float:
+    return time.time() * 1000.0
+
+
+def go_message() -> str:
+    return json.dumps({"t": "go", "at": wall_ms() + GO_AHEAD_MS})
 ROOM_MAX_HITS = 20000   # per player per round
 SONG_UPLOAD_MAX = 90 * 1024 * 1024  # a song sent to the guest (under Cloudflare's 100 MB request limit)
 
@@ -68,6 +82,7 @@ class Side:
         self.final = None               # dict once finished
         self.t0 = None                  # the player's wall clock (ms) at chart ms 0
         self.cand = None                # the player's UDP addresses for a direct connection (list of "ip:port")
+        self.loaded = False             # its game has the song loaded and waits to start
 
 
 class Room:
@@ -266,7 +281,13 @@ class Matches:
             if start == len(me.hits) and len(me.hits) + len(hits) <= ROOM_MAX_HITS:
                 me.hits.extend(hits)    # a resend of hits already here (a lost answer) is ignored
             self._take(me, p)
-            out = {"have": len(me.hits), "state": r.state, "round": r.round}
+            go = None
+            if p.get("loaded") in ("1", "true"):
+                go = self._loaded(me, opp)
+                if go and opp and opp.ws:
+                    opp.ws.send_text(go_message())
+            out = {"have": len(me.hits), "state": r.state, "round": r.round,
+                   "go": bool(go) if go is not None else (me.loaded and (opp is None or opp.loaded))}
             if opp:
                 since = int(p.get("since", "0") or 0)
                 out.update(hits=",".join(opp.hits[since:]), total=len(opp.hits), pos=opp.pos, score=opp.score,
@@ -274,6 +295,12 @@ class Matches:
             else:
                 out.update(hits="", total=0, pos=None, score=0, combo=0, final=None, left=True)
             return 200, out
+
+    @staticmethod
+    def _loaded(me: Side, opp: Side | None) -> bool:
+        """This side's game has loaded the song; True once both have (or the opponent is gone): start."""
+        me.loaded = True
+        return opp is None or opp.loaded
 
     @staticmethod
     def _take(me: Side, p) -> list[str]:
@@ -303,7 +330,8 @@ class Matches:
                 me.ws.close()
             me.ws = conn
             since = int(p.get("since", "0") or 0)
-            hello = {"t": "hello", "have": len(me.hits), "p2p": r.p2p}
+            hello = {"t": "hello", "have": len(me.hits), "p2p": r.p2p,
+                     "go": me.loaded and (opp is None or opp.loaded)}
             first = None
             cand = None
             if opp:
@@ -329,6 +357,19 @@ class Matches:
                 try:
                     msg = json.loads(text)
                 except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get("t") == "loaded":
+                    with self.lock:
+                        r2 = self.rooms.get(r.code)
+                        _, o2 = r2.side(me.code) if r2 else (None, None)
+                        go = self._loaded(me, o2)
+                        to = [conn] + ([o2.ws] if o2 and o2.ws else []) if go else []
+                    msg_go = go_message()
+                    for c in to:
+                        c.send_text(msg_go)
+                    continue
+                if isinstance(msg, dict) and msg.get("t") == "ping":
+                    conn.send_text(json.dumps({"t": "pong", "c": msg.get("c"), "s": wall_ms()}))
                     continue
                 if isinstance(msg, dict) and msg.get("t") == "cand" and isinstance(msg.get("c"), list):
                     cand = [str(c)[:64] for c in msg["c"][:16]]

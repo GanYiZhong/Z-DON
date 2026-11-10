@@ -41,6 +41,7 @@ struct ZdonOnline {
         int score = 0, good = 0, ok = 0, bad = 0, drumroll = 0, max_combo = 0;
     };
     std::optional<Final> opp_final;
+    bool go = false; // both games have the song loaded: start (the server's "go")
 
     bool active() const { return mode != Mode::NONE; }
     bool live() const { return mode == Mode::LIVE; }

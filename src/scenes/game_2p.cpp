@@ -16,6 +16,10 @@
 #include "../objects/game/zdon_ai.h"
 #include "../objects/global/zdon_hud.h"
 
+static double wall_ms() {
+    return std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 void Game2PScreen::release_chart_resources() {
     parser_2p.reset();
 }
@@ -73,6 +77,14 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     live_last_sync = -1e9;
     live_hold_since = -1.0;
     live_ws.reset();
+    live_wait_go = zdon_online.live();
+    live_go_hold = live_loaded_sent = false;
+    live_go_at = live_start_local = -1.0;
+    live_srv_off = live_peer_off = 0.0;
+    live_srv_rtt = live_peer_rtt = 1e9;
+    live_pings = live_peer_pings = live_start_sent = 0;
+    live_ping_last = live_peer_ping_last = -1e9;
+    live_start_how.clear();
     live_ws_off = live_ws_used = false;
     live_ws_next = 0;
     live_ws_last = -1e9;
@@ -180,6 +192,37 @@ std::optional<Screens> Game2PScreen::update() {
         ai_card_hold = false;
         clear_input_buffers();
         clock.resume(current_time);
+    }
+    // Z-DON live battle: the song starts when both games have loaded it (at most 20 s for an opponent that doesn't)
+    if (live_wait_go) {
+        if (!live_go_hold) {
+            live_go_hold = true;
+            live_wait_since = current_time;
+            clock.pause(current_time);
+        }
+        clear_input_buffers();
+        // the start: the exact time when known (the host's, on my clock), else the server's on its clock, else at
+        // once (polling, or no clock difference measured)
+        const double now_w = wall_ms();
+        bool due = false;
+        if (live_start_local >= 0.0) {
+            due = now_w >= live_start_local;
+        } else if (live_go_at >= 0.0) {
+            due = live_srv_rtt < 1e8 ? now_w + live_srv_off >= live_go_at : true;
+            if (live_start_how.empty()) {
+                live_start_how = live_srv_rtt < 1e8 ? std::format("the server's clock, ping {:.0f} ms", live_srv_rtt)
+                                                    : "at once (no clock difference)";
+            }
+        } else if (zdon_online.go) {
+            due = true;
+            live_start_how = "at once (polling)";
+        }
+        if (due || zdon_online.opp_left || current_time - live_wait_since > 20000.0) {
+            spdlog::info("Online battle: start ({}, after {:.0f} ms)", due ? live_start_how : std::string("no answer"),
+                         current_time - live_wait_since);
+            live_wait_go = live_go_hold = false;
+            clock.resume(current_time);
+        }
     }
     clock.update(current_time);
     transition->update(current_time);
@@ -304,10 +347,6 @@ static std::string live_code() {
     return global_data.config->network.access_code_1;
 }
 
-static double wall_ms() {
-    return std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
-}
-
 // a /match/sync answer, or one WebSocket message (zdon_match.py): the opponent's hits, position and end
 void Game2PScreen::live_take(const std::string& body, bool direct) {
     rapidjson::Document doc;
@@ -318,6 +357,9 @@ void Game2PScreen::live_take(const std::string& body, bool direct) {
         return doc.HasMember(k) && doc[k].IsNumber() ? std::optional(doc[k].GetDouble()) : std::nullopt;
     };
     const std::string t = doc.HasMember("t") && doc["t"].IsString() ? doc["t"].GetString() : "";
+    if (t == "hello" && doc.HasMember("go") && doc["go"].IsBool() && doc["go"].GetBool()) {
+        zdon_online.go = true;
+    }
     if (t == "hello" || t == "a") { // the WebSocket: how many of my hits the server holds
         if (auto have = num("have")) {
             zdon_online.sent = static_cast<size_t>(*have);
@@ -353,6 +395,49 @@ void Game2PScreen::live_take(const std::string& body, bool direct) {
     if (t == "l") {
         zdon_online.opp_left = true;
         return;
+    }
+    if (t == "pong") { // the server's clock (the shortest round trip measures it best)
+        if (auto c = num("c"), sv = num("s"); c && sv) {
+            const double now = wall_ms();
+            if (now - *c < live_srv_rtt) {
+                live_srv_rtt = now - *c;
+                live_srv_off = *sv - (*c + now) / 2.0;
+            }
+        }
+        return;
+    }
+    if (direct && t == "ping") { // the host measuring my clock
+        if (auto c = num("c"); c && live_p2p) {
+            live_p2p->send(std::format(R"({{"t":"ppong","c":{:.3f},"p":{:.3f}}})", *c, wall_ms()));
+        }
+        return;
+    }
+    if (direct && t == "ppong") {
+        if (auto c = num("c"), pv = num("p"); c && pv) {
+            const double now = wall_ms();
+            if (now - *c < live_peer_rtt) {
+                live_peer_rtt = now - *c;
+                live_peer_off = *pv - (*c + now) / 2.0;
+            }
+        }
+        return;
+    }
+    if (direct && t == "start") { // the host's start time, on my clock
+        if (auto at = num("at"); at && !zdon_online.host && live_wait_go) {
+            live_start_local = *at;
+            live_start_how =
+                std::format("the host's time over the direct connection, ping {:.1f} ms", num("rtt").value_or(0.0));
+        }
+        return;
+    }
+    if (t == "go" || (doc.HasMember("go") && doc["go"].IsBool() && doc["go"].GetBool())) {
+        zdon_online.go = true;
+        if (auto at = num("at"); at && t == "go") {
+            live_go_at = *at;
+        }
+        if (t == "go") {
+            return;
+        }
     }
     if (t.empty()) { // polling: my hits it holds, and whether the opponent is still here
         if (auto have = num("have")) {
@@ -465,6 +550,34 @@ void Game2PScreen::live_update(double current_ms) {
             live_take(*m);
         }
     }
+    if (ws_open && live_wait_go && live_pings < 8 && current_ms - live_ping_last >= 25.0) {
+        live_ws->send(std::format(R"({{"t":"ping","c":{:.3f}}})", wall_ms()));
+        ++live_pings;
+        live_ping_last = current_ms;
+    }
+    if (ws_open && !live_loaded_sent && live_pings >= 4) { // the clock is being measured first
+        live_ws->send(R"({"t":"loaded"})");
+        live_loaded_sent = true;
+    }
+    const bool direct_up = live_p2p && live_p2p->connected();
+    if (direct_up && zdon_online.host && live_wait_go && live_peer_pings < 12 &&
+        current_ms - live_peer_ping_last >= 20.0) {
+        live_p2p->send(std::format(R"({{"t":"ping","c":{:.3f}}})", wall_ms()));
+        ++live_peer_pings;
+        live_peer_ping_last = current_ms;
+    }
+    // the host: once the server's start time is known, it is mine on my clock and the guest's on its own
+    if (zdon_online.host && live_wait_go && live_go_at >= 0.0 && live_srv_rtt < 1e8) {
+        if (live_start_local < 0.0) {
+            live_start_local = live_go_at - live_srv_off;
+            live_start_how = std::format("the server's clock, ping {:.0f} ms", live_srv_rtt);
+        }
+        if (direct_up && live_peer_rtt < 1e8 && live_start_sent < 3) {
+            live_p2p->send(std::format(R"({{"t":"start","at":{:.3f},"rtt":{:.2f}}})", live_start_local + live_peer_off,
+                                       live_peer_rtt));
+            ++live_start_sent;
+        }
+    }
     if (live_p2p) {
         while (auto m = live_p2p->poll()) {
             live_take(*m, true);
@@ -542,6 +655,7 @@ void Game2PScreen::live_update(double current_ms) {
                                               {"score", std::to_string(players[0]->get_score())},
                                               {"combo", std::to_string(players[0]->get_combo())},
                                               {"t0", std::format("{:.1f}", t0)},
+                                              {"loaded", "1"},
                                               {"since", std::to_string(zdon_online.received)}});
         live_last_sync = current_ms;
     }
@@ -601,7 +715,7 @@ void Game2PScreen::draw_live_overlay() {
     std::string line;
     if (zdon_online.opp_left) {
         line = zhud::text("online_opp_left");
-    } else if (zdon_online.opp_pos < -1e17) {
+    } else if (live_wait_go || zdon_online.opp_pos < -1e17) {
         line = zhud::text("online_opp_waiting");
     } else if (live_hold_since >= 0.0) {
         line = zhud::text("online_wait_finish");

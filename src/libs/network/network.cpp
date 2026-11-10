@@ -238,7 +238,8 @@ void NetworkClient::check_heartbeat() {
         return;
     }
     pending_heartbeat = cpr::GetAsync(cpr::Url{network_url("/health")}, signed_headers("GET", "/health", {}),
-                                      cpr::Timeout{2000} NETWORK_CA_OPT);
+                                      cpr::Timeout{5000} NETWORK_CA_OPT); // Z-DON: 2 s was short for a first TLS
+                                                                          // connection through Cloudflare
 }
 
 void NetworkClient::update_username(const std::string& access_code, const std::string& username) {
@@ -1165,7 +1166,9 @@ void NetworkClient::update(double current_ms) {
         probing_ = false;
         return;
     }
-    if (current_ms - last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
+    // Z-DON: while offline it asks again every few seconds (a first check that timed out kept online play
+    // "unreachable" for two minutes)
+    if (current_ms - last_heartbeat_ms >= (online ? HEARTBEAT_INTERVAL_MS : 5000.0)) {
         last_heartbeat_ms = current_ms;
         check_heartbeat();
     }
