@@ -813,7 +813,7 @@ void Player::draw(double ms_from_start, float x, float y) {
         int win_w = get_render_width();
         begin_scissor_mode(scissor_x, 0, win_w - scissor_x, get_render_height());
         draw_notes(ms_from_start, y);
-        if (modifiers.zdon_flashlight && !zdon_ai) {
+        if (modifiers.zdon_flashlight) { // the AI lane too: an AI battle gives it the player's options
             draw_zdon_flashlight(ms_from_start, y);
         }
         end_scissor_mode();
