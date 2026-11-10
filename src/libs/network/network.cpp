@@ -122,6 +122,10 @@ namespace {
     };
 
     std::string secret_key() {
+        // Z-DON: a self-hosted server's key from config.toml, when its URL is set there
+        if (global_data.config && !global_data.config->network.zdon_server_url.empty()) {
+            return global_data.config->network.zdon_server_key;
+        }
         static constexpr ObfuscatedString obfuscated_key(NETWORK_AUTH_KEY);
         static const std::string key = obfuscated_key.decode();
         return key;
@@ -194,16 +198,24 @@ namespace {
 
 } // namespace
 
+// Z-DON: config.toml [network] zdon_server_url, else the compiled-in server (none in a plain Z-DON build)
+static std::string server_base() {
+    if (global_data.config && !global_data.config->network.zdon_server_url.empty()) {
+        return global_data.config->network.zdon_server_url;
+    }
+    return NETWORK_URL;
+}
+
 static bool network_enabled() {
     // YATAIDON_FIXED_STEP_MS: offline, so the frames do not depend on a server's answer or timing
     if (fixed_step::on()) {
         return false;
     }
-    return global_data.config && global_data.config->network.online_play;
+    return global_data.config && global_data.config->network.online_play && !server_base().empty();
 }
 
 static std::string network_url(const std::string& endpoint) {
-    std::string base = NETWORK_URL;
+    std::string base = server_base();
     while (!base.empty() && base.back() == '/') {
         base.pop_back();
     }

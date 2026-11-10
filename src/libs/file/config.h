@@ -77,6 +77,12 @@ struct NetworkConfig {
     bool sync_scores = false;
     bool auto_login = false;
     bool guest_mode = false; // seats joined without a card play as guests: nothing is saved
+    // Z-DON: a self-hosted server (server/zdon_server.py); empty = the compiled-in one, if any
+    std::string zdon_server_url;
+    std::string zdon_server_key;
+    // where zdon_update.ps1 and the in-game check look for releases; empty = <zdon_server_url>/update/windows
+    std::string zdon_update_url;
+    bool zdon_update_check = true;
 };
 
 struct PathsConfig {

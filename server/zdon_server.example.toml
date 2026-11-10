@@ -1,0 +1,39 @@
+# Z-DON server settings. Copy to zdon_server.toml (same folder) and edit.
+
+host = "0.0.0.0"      # 0.0.0.0 = every network interface; 127.0.0.1 = this PC only
+port = 8730
+
+# The key requests are signed with. Put the same text in each game's config.toml:
+#   [network]
+#   zdon_server_url = "http://<this PC>:8730"
+#   zdon_server_key = "<the same key>"
+# Empty = requests aren't checked (fine on a home LAN; set one before opening the port to the internet).
+# The environment variable ZDON_SERVER_KEY overrides this.
+auth_key = ""
+
+data_dir = "zdon_data"          # SQLite database and published files (relative to this file)
+signature_window_s = 300        # how far a game's clock may be off
+
+# Games older than this are shown as outdated (empty = never)
+min_client_version = ""
+
+# Events. Off by default: they change what the game shows.
+tournament = false              # the gacha needs it
+campaigns = []                  # campaign ids the skin knows
+kinotake = false                # Kinoko/Takenoko team totals in /health
+gacha_puchichara = []           # puchichara ids the gacha draws from
+
+# true = every costume is unlocked for everyone (as offline); false = only those bought or won
+force_unlock = true
+
+[medals]
+per_play = 1
+daily_bonus = 3
+max = 9999
+
+# Reward shop lineup, one block per good:
+# [[shop]]
+# type = 4        # 2 dress, 3 head, 4 body, 5 puchichara, 6 title
+# id = 12
+# cost = 30
+# name = ""       # titles only

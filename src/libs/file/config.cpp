@@ -423,6 +423,10 @@ Config get_config() {
         config_file["network"]["sync_scores"].value_or(config_file["general"]["sync_scores_on_launch"].value_or(false));
     config.network.auto_login = config_file["network"]["auto_login"].value_or(true);
     config.network.guest_mode = config_file["network"]["guest_mode"].value_or(false);
+    config.network.zdon_server_url = config_file["network"]["zdon_server_url"].value_or("");
+    config.network.zdon_server_key = config_file["network"]["zdon_server_key"].value_or("");
+    config.network.zdon_update_url = config_file["network"]["zdon_update_url"].value_or("");
+    config.network.zdon_update_check = config_file["network"]["zdon_update_check"].value_or(true);
 
     config.card_reader.enabled = config_file["card_reader"]["enabled"].value_or(false);
 
@@ -588,7 +592,11 @@ void save_config(const Config& config) {
                                     {"online_play", config.network.online_play},
                                     {"sync_scores", config.network.sync_scores},
                                     {"auto_login", config.network.auto_login},
-                                    {"guest_mode", config.network.guest_mode}});
+                                    {"guest_mode", config.network.guest_mode},
+                                    {"zdon_server_url", config.network.zdon_server_url},
+                                    {"zdon_server_key", config.network.zdon_server_key},
+                                    {"zdon_update_url", config.network.zdon_update_url},
+                                    {"zdon_update_check", config.network.zdon_update_check}});
 
     config_table.insert("card_reader", toml::table{{"enabled", config.card_reader.enabled}});
 

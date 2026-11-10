@@ -25,6 +25,7 @@
 #include "libs/math/animation.h"
 #include "libs/network/network.h"
 #include "libs/network/skin_updater.h"
+#include "libs/network/zdon_update.h"
 #include "libs/parsers/song_parser.h"
 #include "libs/profiler.h"
 #include "libs/raylib_ns.h" // Z-DON: rlgl draw counters, hidden-window and vsync hint calls
@@ -50,6 +51,7 @@
 
 #include "objects/global/debug_menu.h"
 #include "objects/global/fps_counter.h"
+#include "objects/global/zdon_hud.h"
 #include "scenes/ai_battle.h"
 #include "scenes/campaign.h"
 #include "scenes/dan_result.h"
@@ -113,6 +115,29 @@ static void draw_skin_update_status() {
         Font file_font = font_manager.get_font(st.current_file, size);
         draw_text_ex(file_font, st.current_file.c_str(), Vec2{x, y}, static_cast<float>(size), 1.0f, Color::WHITE);
     }
+}
+
+// Z-DON: a newer release on the self-hosted server is offered on the title and entry screens; F9 hands over to
+// zdon_update.ps1, which waits for the game to close, updates the changed files and starts it again
+static bool g_quit_for_update = false;
+
+static bool zdon_update_offered(Screens screen) {
+    return (screen == Screens::TITLE || screen == Screens::ENTRY) && zdon_update::status().available;
+}
+
+static void draw_zdon_update_notice(Screens screen) {
+    if (!zdon_update_offered(screen)) {
+        return;
+    }
+    const zdon_update::Status st = zdon_update::status();
+    const float s = tex.screen_scale;
+    OutlinedText& t = zhud::label(zhud::text("update_available", st.version, std::to_string(st.files)), 26);
+    const float w = t.width + 40 * s;
+    const float h = t.height + 16 * s;
+    const float x = (tex.screen_width - w) / 2.0f;
+    const float y = 24 * s;
+    zhud::panel(x, y, w, h, 0.86f, Color{255, 200, 60, 200});
+    t.draw({.x = x + 20 * s, .y = y + 8 * s});
 }
 
 [[noreturn]] static void exit_now(int code) {
@@ -960,6 +985,7 @@ static void run_frame() {
         }
 
         draw_skin_update_status();
+        draw_zdon_update_notice(L.current_screen);
 
         debug_menu.draw();
     }
@@ -989,6 +1015,14 @@ static void run_frame() {
             swap_screen_buffer();
         }
         frame_spike_present(present_start);
+    }
+
+    if (zdon_update_offered(L.current_screen) && key_pressed(SDL_SCANCODE_F9)) {
+        if (zdon_update::launch_updater()) {
+            g_quit_for_update = true;
+        } else {
+            zhud::toast(zhud::text("update_failed"));
+        }
     }
 
     if (key_pressed(SDL_SCANCODE_F12)) {
@@ -1313,6 +1347,7 @@ static int game_main(int argc, char* argv[]) {
     if (global_data.config->general.skin_updater && !fixed_step::on()) {
         skin_updater.start();
     }
+    zdon_update::start_check();
 
     platform_initialize_after_window();
 
@@ -1375,7 +1410,7 @@ static int game_main(int argc, char* argv[]) {
 #endif
     start_midi_input(global_data.config->midi);
 
-    while (!window_should_close() && !g_dump_screen_done) {
+    while (!window_should_close() && !g_dump_screen_done && !g_quit_for_update) {
         process_midi_events();
 
         // Consume buffered quit-key presses while editing to prevent a delayed game exit after the field closes.
@@ -1393,6 +1428,7 @@ static int game_main(int argc, char* argv[]) {
     }
     network.shutdown();
     skin_updater.shutdown();
+    zdon_update::shutdown();
     shutdown_sdl_joysticks();
     delete g_loop;
     g_loop = nullptr;

@@ -54,3 +54,8 @@ YataiDON.wasm
 /platform/switch/build*/
 /platform/switch/dist/
 /platform/switch/**/__pycache__/
+
+# Z-DON self-hosted server: its data and settings (the key)
+server/zdon_data/
+server/zdon_server.toml
+server/__pycache__/

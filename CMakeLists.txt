@@ -62,6 +62,13 @@ if(NETWORK_URL AND NETWORK_AUTH_KEY AND NOT EMSCRIPTEN)
 else()
   set(NETWORK_ENABLED OFF)
 endif()
+# Z-DON: the online code is built without a compiled-in server too; config.toml [network] zdon_server_url /
+# zdon_server_key point it at a self-hosted one (server/zdon_server.py). The card reader stays tied to a
+# compiled-in server, as upstream.
+set(ZDON_NETWORK_CODE ${NETWORK_ENABLED})
+if(NOT EMSCRIPTEN AND NOT APPLE_IOS AND NOT ANDROID)
+  set(ZDON_NETWORK_CODE ON)
+endif()
 
 set(DATATABLE_SEED "${_env_DATATABLE_SEED}" CACHE STRING "Decryption seed for the gen 4 datatable")
 set(FUMEN_SEED "${_env_FUMEN_SEED}" CACHE STRING "Decryption seed for gen 4 fumen")
@@ -236,6 +243,15 @@ if(WIN32)
       message(WARNING "Runtime DLL not found: ${_rtdll}")
     endif()
   endforeach()
+
+  # Z-DON: the updater the game hands over to (F9 on a new release) sits beside the executable
+  foreach(_zdon_updater zdon_update.ps1 zdon_update.bat)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+              COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                  "${CMAKE_SOURCE_DIR}/${_zdon_updater}"
+                  "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+          )
+  endforeach()
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -347,7 +363,7 @@ if(NOT WIN32 AND NOT EMSCRIPTEN)
   endif()
 endif()
 
-if(NETWORK_ENABLED)
+if(ZDON_NETWORK_CODE)
   target_compile_definitions(${PROJECT_NAME} PRIVATE
     NETWORK_ENABLED
     NETWORK_URL="${NETWORK_URL}"
@@ -418,7 +434,7 @@ message(STATUS "Project: ${PROJECT_NAME}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Platform: ${CMAKE_SYSTEM_NAME}")
-message(STATUS "Network: ${NETWORK_ENABLED}")
+message(STATUS "Network: ${NETWORK_ENABLED} (online code: ${ZDON_NETWORK_CODE})")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT WIN32 AND NOT ANDROID AND NOT IOS)
   message(STATUS "Sanitizers: AddressSanitizer, LeakSanitizer, UndefinedBehaviorSanitizer")
 endif()

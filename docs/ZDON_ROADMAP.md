@@ -355,3 +355,16 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - TJA `COMPAT:`（OpenTaiko 的名字 jiro1 / jiro2 / tmg / tjap3 / oos）：沒寫或 oos、tjap3 = 原本的行為。jiro1：`#BPMCHANGE` 與含 BPM 變化的小節結尾，把距上次變化的時間取整到 ms；jiro1/jiro2：`#DELAY` 取整到 ms；jiro1/jiro2 有 BALLOONEXP/MAS 沒有 BALLOONNOR 時 BALLOON 當三條分歧共用。tmg、方向／#SUDDEN 垂直分量等 OpenTaiko 其他差異沒有做。測試鉤子 `ZDON_CHART_DUMP=<檔>`（TJA 與 osu 都會把解析後的音符時間附加寫入）。
 - MIDI：上游已有 libremidi 輸入（`[midi]` device／notes→手把按鈕），只能手改 config。Z-DON 在設定畫面自動加「MIDI」分頁（不改 skin 範本）：MIDI 裝置（偵測到的輸入埠，選了立刻切換）、學習對應（咚開始，依序在 MIDI 鼓敲 1P 左咔、左咚、右咚、右咔；對到該角色的第一個手把按鈕，沒有就從 32 往下找沒用到的號碼加進 `[gamepad_1p]`）。MIDI 監聽改成需要時才啟動（設定了裝置或打開設定畫面）。測試鉤子 `YATAIDON_FAKE_MIDI="<ms>:<note>[:<vel>],..."`。實機 MIDI 鼓未測（這台沒有裝置）。
 - osu!（上游已有 OsuParser，一個資料夾＝一個資料夾格，每個 .osu 一首歌）：難度名稱（Kantan／Futsuu／Muzukashii／Oni／Inner Oni、Easy／Normal／Hard／Ura、日中文）決定難度格，看不出就依 OD；等級＝1＋每秒咚咔數×1.1（★1–10）；spinner 氣球數＝長度×OD 對應每秒 3／5／7.5 下×1.65（osu!lazer swell）；kiai＝GOGO。同一首歌的多個 .osu 還是各自一首（合併成一首多難度要改選曲導航，沒做）。
+
+## 2026-11-10 自架伺服器＋差量更新（使用者：「增強 updater 跟 server，我未來要在這台電腦上架設」）
+
+- `server/zdon_server.py`（只用 Python 標準函式庫）：遊戲線上 API（照 network.cpp 的請求格式與 HMAC 簽章；
+  客戶端簽了沒送的空 idm、送了沒簽的空 source_folder/gauge/judge_params 都要容忍）、更新頻道
+  `/update/<頻道>/{version.txt,checksums.sha256,files/…}`、skin（skin updater 的 `raw/branch` 版面）、狀態頁。
+  活動類端點（獎牌、AI 對戰段位、きのたけ、ドンポイント、商店）是簡化規則，只讓畫面有回應。說明在 `server/README.md`。
+- 客戶端：桌面版一律編入線上程式碼（`ZDON_NETWORK_CODE`；讀卡機仍跟著編譯時伺服器），`config.toml [network]`
+  `zdon_server_url`/`zdon_server_key` 優先於編譯時的 NETWORK_URL/KEY；沒設＝跟以前一樣離線。
+- 更新：`zdon_update.ps1/.bat` 逐檔 SHA-256 差量（大小＋修改時間快取雜湊、暫存資料夾驗證後才換上、
+  只移除前一版清單裡有而新版沒有的檔案、絕不碰 config/scores/cache/Songs/Records）。
+  遊戲啟動時背景檢查（`zdon_update_check`），標題／登入畫面顯示新版，F9 交給更新程式並關閉遊戲、更新完自動重開。
+  上游的 update.ps1 仍指向 yonokid 的 GitHub release（會換成上游版），Z-DON 不發布它。

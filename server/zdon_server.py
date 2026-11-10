@@ -1,0 +1,950 @@
+#!/usr/bin/env python3
+"""Z-DON self-hosted server: the game's online API, update distribution and skin hosting in one process.
+
+Only the Python standard library (3.11+) is needed. Data lives in one folder (SQLite + published files).
+
+    python zdon_server.py serve   [--config zdon_server.toml]
+    python zdon_server.py publish <install dir> [--channel windows] [--version V] [--with-skins]
+    python zdon_server.py publish-skin <skin dir> [--name NAME] [--branch main]
+    python zdon_server.py users | jump <access code> (--hash H | --score-id N) | rename <access code> <name>
+
+See server/README.md.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fnmatch
+import hashlib
+import hmac
+import html
+import json
+import mimetypes
+import os
+import random
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+import tomllib
+import urllib.parse
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+DEFAULT_CONFIG = {
+    "host": "0.0.0.0",
+    "port": 8730,
+    # the key the game signs requests with (config.toml [network] zdon_server_key); empty = no signature check
+    "auth_key": "",
+    "data_dir": "zdon_data",
+    "signature_window_s": 300,
+    "min_client_version": "",
+    "tournament": False,
+    "campaigns": [],
+    # owned-cosmetic lists: true = every costume is unlocked for everyone (the offline behaviour)
+    "force_unlock": True,
+    "kinotake": False,
+    "gacha_puchichara": [],
+    "medals": {"per_play": 1, "daily_bonus": 3, "max": 9999},
+    # [[shop]] type = 2 dress / 3 head / 4 body / 5 puchichara / 6 title, id, cost, name (titles)
+    "shop": [],
+    "max_body_mb": 32,
+}
+
+PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
+PROTECTED_INSTALL_DIRS = {"cache", "Songs", "Records", "logs", ".zdon_update_tmp"}
+DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdon_update.bat"]
+
+
+def log(msg: str) -> None:
+    print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# config / storage
+
+
+def load_config(path: Path | None) -> dict:
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+    if path is None:
+        path = HERE / "zdon_server.toml"
+    if path.exists():
+        with open(path, "rb") as f:
+            user = tomllib.load(f)
+        for k, v in user.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+        cfg["_config_path"] = str(path)
+    path = path.resolve()
+    data_dir = Path(cfg["data_dir"])
+    if not data_dir.is_absolute():
+        data_dir = (path.parent if path.exists() else HERE) / data_dir
+    cfg["data_dir"] = data_dir
+    env_key = os.environ.get("ZDON_SERVER_KEY")
+    if env_key:
+        cfg["auth_key"] = env_key
+    return cfg
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    access_code TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    idm TEXT UNIQUE,
+    title TEXT,
+    title_bg INTEGER,
+    chara_color_1 TEXT, chara_color_2 TEXT, chara_color_3 TEXT,
+    chara_head_index INTEGER, chara_body_index INTEGER, chara_cos_index INTEGER, chara_is_costume INTEGER,
+    puchichara INTEGER,
+    import_requested INTEGER NOT NULL DEFAULT 0,
+    medals INTEGER NOT NULL DEFAULT 0,
+    medal_day TEXT,
+    ai_tokens INTEGER NOT NULL DEFAULT 0,
+    ai_wins INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    access_code TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    difficulty INTEGER NOT NULL,
+    score INTEGER, good INTEGER, ok INTEGER, bad INTEGER, drumroll INTEGER, max_combo INTEGER,
+    crown INTEGER, rank INTEGER,
+    input_log TEXT, played_at INTEGER, modifiers TEXT,
+    chara_is_costume INTEGER, chara_cos_index INTEGER,
+    source_folder TEXT, gauge INTEGER, judge_params TEXT,
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS scores_by_song ON scores(hash, difficulty, score);
+CREATE INDEX IF NOT EXISTS scores_by_user ON scores(access_code, hash, difficulty);
+CREATE TABLE IF NOT EXISTS dan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    access_code TEXT NOT NULL, course_id TEXT, title TEXT,
+    dan_index INTEGER, dan_index_max INTEGER, dan_color INTEGER, dan_rank INTEGER, is_gaiden INTEGER,
+    odai_result INTEGER, score INTEGER, max_combo INTEGER, gauge_length REAL, arrival INTEGER,
+    songs TEXT, played_at INTEGER, received_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jumps (
+    access_code TEXT PRIMARY KEY, hash TEXT, score_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS kinotake (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    access_code TEXT NOT NULL, team INTEGER, base INTEGER, total INTEGER, day TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS owned (
+    access_code TEXT NOT NULL, type INTEGER NOT NULL, id INTEGER NOT NULL,
+    PRIMARY KEY (access_code, type, id)
+);
+CREATE TABLE IF NOT EXISTS revives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, access_code TEXT, success INTEGER, at INTEGER
+);
+"""
+
+
+class Store:
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=NORMAL")
+        self.db.executescript(SCHEMA)
+        self.lock = threading.RLock()
+
+    def q(self, sql: str, args=()) -> list[sqlite3.Row]:
+        with self.lock:
+            return self.db.execute(sql, args).fetchall()
+
+    def one(self, sql: str, args=()) -> sqlite3.Row | None:
+        rows = self.q(sql, args)
+        return rows[0] if rows else None
+
+    def run(self, sql: str, args=()) -> int:
+        with self.lock:
+            return self.db.execute(sql, args).lastrowid
+
+
+def today() -> str:
+    return dt.date.today().isoformat()
+
+
+def as_int(v, default=0) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def as_bool(v) -> bool:
+    return str(v).lower() in ("1", "true", "yes", "on")
+
+
+def new_access_code(store: Store) -> str:
+    while True:
+        code = str(secrets.randbelow(9 * 10**19) + 10**19)  # 20 digits
+        if not store.one("SELECT 1 FROM users WHERE access_code=?", (code,)):
+            return code
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# request signing (src/libs/network/network.cpp signed_headers)
+
+
+class Nonces:
+    def __init__(self, window: int):
+        self.window = window
+        self.seen: dict[str, float] = {}
+        self.lock = threading.Lock()
+
+    def fresh(self, nonce: str) -> bool:
+        now = time.time()
+        with self.lock:
+            if len(self.seen) > 50000:
+                self.seen = {n: t for n, t in self.seen.items() if now - t < 2 * self.window}
+            if nonce in self.seen:
+                return False
+            self.seen[nonce] = now
+            return True
+
+
+def canonical(method: str, path: str, params: dict[str, str], ts: str, nonce: str) -> bytes:
+    body = "".join(f"{k}={params[k]}&" for k in sorted(params, key=lambda s: s.encode()))
+    return f"{method}\n{path}\n{body}\n{ts}\n{nonce}".encode()
+
+
+def signature_ok(key: str, method: str, path: str, params: dict[str, str], headers, window: int, nonces: Nonces):
+    ts, nonce, sig = headers.get("X-Timestamp"), headers.get("X-Nonce"), headers.get("X-Signature")
+    if not ts or not nonce or not sig:
+        return False, "unsigned"
+    if abs(time.time() - as_int(ts, 0)) > window:
+        return False, "clock"
+    # The client signs some keys it does not send (an empty idm) and sends some it does not sign (empty
+    # source_folder / gauge / judge_params): try the received set, without its empty values, and with idm added.
+    candidates = [params, {k: v for k, v in params.items() if v != ""}]
+    if "idm" not in params:
+        candidates.append({**params, "idm": ""})
+    for p in candidates:
+        want = hmac.new(key.encode(), canonical(method, path, p, ts, nonce), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(want, sig.lower()):
+            if not nonces.fresh(nonce):
+                return False, "replayed"
+            return True, ""
+    return False, "signature"
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# the game API
+
+
+class Api:
+    UNSIGNED = {("GET", "/reward_shop"), ("GET", "/ai_battle"), ("GET", "/rewards")}
+
+    def __init__(self, cfg: dict, store: Store):
+        self.cfg = cfg
+        self.s = store
+        self.nonces = Nonces(int(cfg["signature_window_s"]))
+        self.routes = {
+            ("GET", "/health"): self.health,
+            ("GET", "/user"): self.user,
+            ("POST", "/register_user"): self.register_user,
+            ("POST", "/update_username"): self.update_username,
+            ("POST", "/update_costume"): self.update_costume,
+            ("POST", "/clear_import_flag"): self.clear_import_flag,
+            ("POST", "/submit_score"): self.submit_score,
+            ("POST", "/submit_dan"): self.submit_dan,
+            ("GET", "/song_ranking"): self.song_ranking,
+            ("GET", "/replay"): self.replay,
+            ("GET", "/poll_jump"): self.poll_jump,
+            ("POST", "/gacha"): self.gacha,
+            ("POST", "/kinotake"): self.kinotake,
+            ("POST", "/don_points"): self.don_points,
+            ("POST", "/medals"): self.medals,
+            ("POST", "/revive_result"): self.revive_result,
+            ("POST", "/ai_battle"): self.ai_battle_submit,
+            ("GET", "/ai_battle"): self.ai_battle_status,
+            ("GET", "/reward_shop"): self.reward_shop,
+            ("POST", "/reward_shop/buy"): self.reward_shop_buy,
+            ("GET", "/rewards"): self.rewards,
+            ("POST", "/campaign_costume"): self.campaign_costume,
+        }
+
+    # each handler: (params) -> (status, json-able | str)
+    def handle(self, method: str, path: str, params: dict[str, str], headers):
+        fn = self.routes.get((method, path))
+        if fn is None:
+            return None
+        key = self.cfg["auth_key"]
+        if key and (method, path) not in self.UNSIGNED:
+            ok, why = signature_ok(key, method, path, params, headers, int(self.cfg["signature_window_s"]),
+                                   self.nonces)
+            if not ok:
+                return 401, {"detail": f"bad request signature ({why})"}
+        return fn(params)
+
+    def _user(self, p) -> sqlite3.Row | None:
+        code = p.get("access_code", "")
+        return self.s.one("SELECT * FROM users WHERE access_code=?", (code,)) if code else None
+
+    def health(self, p):
+        out = {"status": "ok", "tournament": bool(self.cfg["tournament"]), "campaigns": list(self.cfg["campaigns"])}
+        if self.cfg["min_client_version"]:
+            out["min_client_version"] = str(self.cfg["min_client_version"])
+        if self.cfg["kinotake"]:
+            out["kinotake"] = self._kinotake_today()
+        return 200, out
+
+    def register_user(self, p):
+        username = (p.get("username") or "Player").strip()[:32] or "Player"
+        idm = p.get("idm") or None
+        if idm:
+            row = self.s.one("SELECT access_code FROM users WHERE idm=?", (idm,))
+            if row:
+                return 200, row["access_code"]
+        code = new_access_code(self.s)
+        self.s.run("INSERT INTO users(access_code, username, idm, created_at) VALUES (?,?,?,?)",
+                   (code, username, idm, int(time.time())))
+        log(f"registered {username!r}{' (card)' if idm else ''}")
+        return 200, code
+
+    def user(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        out = {"username": u["username"], "import_requested": bool(u["import_requested"])}
+        for k in ("title", "chara_color_1", "chara_color_2", "chara_color_3"):
+            if u[k] is not None:
+                out[k] = u[k]
+        if u["title_bg"] is not None:
+            out["title_bg"] = u["title_bg"]
+        if u["chara_head_index"] is not None:
+            out.update(chara_head_index=u["chara_head_index"], chara_body_index=u["chara_body_index"],
+                       chara_cos_index=u["chara_cos_index"], chara_is_costume=bool(u["chara_is_costume"]))
+        out["puchichara"] = u["puchichara"]
+        rows = self.s.q(
+            """SELECT s.hash, s.difficulty, s.score, s.good, s.ok, s.bad, s.drumroll, s.max_combo,
+                      b.crown, b.rank
+               FROM scores s
+               JOIN (SELECT hash, difficulty, MAX(score) AS best, MAX(crown) AS crown, MAX(rank) AS rank
+                     FROM scores WHERE access_code=? GROUP BY hash, difficulty) b
+                 ON s.hash=b.hash AND s.difficulty=b.difficulty AND s.score=b.best
+               WHERE s.access_code=? GROUP BY s.hash, s.difficulty""", (u["access_code"], u["access_code"]))
+        out["scores"] = [dict(r) for r in rows]
+        return 200, out
+
+    def update_username(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        name = (p.get("username") or "").strip()[:32]
+        if not name:
+            return 400, {"detail": "empty username"}
+        self.s.run("UPDATE users SET username=? WHERE access_code=?", (name, u["access_code"]))
+        return 200, {"ok": True}
+
+    def update_costume(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        self.s.run("""UPDATE users SET chara_head_index=?, chara_body_index=?, chara_cos_index=?, chara_is_costume=?
+                      WHERE access_code=?""",
+                   (as_int(p.get("chara_head_index")), as_int(p.get("chara_body_index")),
+                    as_int(p.get("chara_cos_index")), int(as_bool(p.get("chara_is_costume"))), u["access_code"]))
+        return 200, {"ok": True}
+
+    def clear_import_flag(self, p):
+        self.s.run("UPDATE users SET import_requested=0 WHERE access_code=?", (p.get("access_code", ""),))
+        return 200, {"ok": True}
+
+    def submit_score(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        if not p.get("hash"):
+            return 400, {"detail": "no hash"}
+        try:
+            log_json = json.dumps(json.loads(p.get("input_log") or "[]"), separators=(",", ":"))
+        except ValueError:
+            return 400, {"detail": "bad input_log"}
+        sid = self.s.run(
+            """INSERT INTO scores(access_code, hash, difficulty, score, good, ok, bad, drumroll, max_combo, crown, rank,
+                                  input_log, played_at, modifiers, chara_is_costume, chara_cos_index, source_folder,
+                                  gauge, judge_params, received_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (u["access_code"], p["hash"], as_int(p.get("difficulty")), as_int(p.get("score")), as_int(p.get("good")),
+             as_int(p.get("ok")), as_int(p.get("bad")), as_int(p.get("drumroll")), as_int(p.get("max_combo")),
+             as_int(p.get("crown")), as_int(p.get("rank")), log_json, as_int(p.get("played_at"), None),
+             p.get("modifiers") or "", int(as_bool(p.get("chara_is_costume"))), as_int(p.get("chara_cos_index")),
+             p.get("source_folder") or None, as_int(p.get("gauge"), None) if p.get("gauge") else None,
+             p.get("judge_params") or None, int(time.time())))
+        log(f"score #{sid}: {u['username']} {p['hash'][:10]} d{p.get('difficulty')} {p.get('score')}")
+        return 200, {"ok": True, "score_id": sid}
+
+    def submit_dan(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        self.s.run(
+            """INSERT INTO dan_results(access_code, course_id, title, dan_index, dan_index_max, dan_color, dan_rank,
+                                       is_gaiden, odai_result, score, max_combo, gauge_length, arrival, songs,
+                                       played_at, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (u["access_code"], p.get("course_id"), p.get("title"), as_int(p.get("dan_index")),
+             as_int(p.get("dan_index_max")), as_int(p.get("dan_color")), as_int(p.get("dan_rank")),
+             int(as_bool(p.get("is_gaiden"))), as_int(p.get("odai_result")), as_int(p.get("score")),
+             as_int(p.get("max_combo")), float(p.get("gauge_length") or 0), as_int(p.get("arrival")),
+             p.get("songs") or "[]", as_int(p.get("played_at")), int(time.time())))
+        return 200, {"ok": True}
+
+    def _ranking(self, song_hash: str, limit: int, difficulty: int | None = None):
+        if difficulty is None:
+            row = self.s.one("SELECT MAX(difficulty) AS d FROM scores WHERE hash=?", (song_hash,))
+            if row is None or row["d"] is None:
+                return None, []
+            difficulty = row["d"]
+        rows = self.s.q("""SELECT u.username, MAX(s.score) AS score FROM scores s JOIN users u USING(access_code)
+                           WHERE s.hash=? AND s.difficulty=? GROUP BY s.access_code
+                           ORDER BY score DESC LIMIT ?""", (song_hash, difficulty, limit))
+        return difficulty, [{"username": r["username"], "score": r["score"]} for r in rows]
+
+    def song_ranking(self, p):
+        difficulty, rows = self._ranking(p.get("hash", ""), max(1, min(100, as_int(p.get("limit"), 3))))
+        if difficulty is None:
+            return 404, {"detail": "no scores for this song"}
+        return 200, {"difficulty": difficulty, "ranking": rows}
+
+    def replay(self, p):
+        r = self.s.one("""SELECT s.*, u.username, u.title, u.title_bg, u.chara_color_1, u.chara_color_2,
+                                 u.chara_color_3, u.chara_head_index, u.chara_body_index
+                          FROM scores s JOIN users u USING(access_code) WHERE s.id=?""", (as_int(p.get("score_id")),))
+        if r is None:
+            return 404, {"detail": "no such score"}
+        out = {"hash": r["hash"], "difficulty": r["difficulty"], "input_log": json.loads(r["input_log"] or "[]"),
+               "username": r["username"], "chara_is_costume": bool(r["chara_is_costume"]),
+               "chara_cos_index": r["chara_cos_index"]}
+        for k in ("title", "title_bg", "chara_color_1", "chara_color_2", "chara_color_3", "chara_head_index",
+                  "chara_body_index"):
+            if r[k] is not None:
+                out[k] = r[k]
+        return 200, out
+
+    def poll_jump(self, p):
+        code = p.get("access_code", "")
+        with self.s.lock:
+            row = self.s.one("SELECT hash, score_id FROM jumps WHERE access_code=?", (code,))
+            self.s.run("DELETE FROM jumps WHERE access_code=?", (code,))
+        out = {}
+        if row is not None:
+            if row["hash"]:
+                out["hash"] = row["hash"]
+            if row["score_id"] is not None:
+                out["score_id"] = row["score_id"]
+        return 200, out
+
+    def gacha(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        if not self.cfg["tournament"]:
+            return 403, {"detail": "not_tournament"}
+        pool = [as_int(x) for x in self.cfg["gacha_puchichara"]]
+        if not pool:
+            return 503, {"detail": "offline_gacha"}
+        pick = random.choice(pool)
+        self.s.run("INSERT OR IGNORE INTO owned VALUES (?,?,?)", (u["access_code"], 5, pick))
+        self.s.run("UPDATE users SET puchichara=? WHERE access_code=?", (pick, u["access_code"]))
+        return 200, {"puchichara": pick}
+
+    def _kinotake_today(self):
+        rows = self.s.q("SELECT team, SUM(total) AS t FROM kinotake WHERE day=? GROUP BY team", (today(),))
+        tot = {r["team"]: r["t"] or 0 for r in rows}
+        return {"kinoko": tot.get(0, 0), "takenoko": tot.get(1, 0)}
+
+    def kinotake(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        team = as_int(p.get("team"), -1)
+        if team not in (0, 1):
+            return 400, {"detail": "bad team"}
+        base = max(0, as_int(p.get("score")))
+        assist = 2 if as_bool(p.get("costume")) else 1
+        total = base * assist
+        self.s.run("INSERT INTO kinotake(access_code, team, base, total, day) VALUES (?,?,?,?,?)",
+                   (u["access_code"], team, base, total, today()))
+        mine = self.s.one("SELECT SUM(total) AS t FROM kinotake WHERE access_code=?", (u["access_code"],))["t"]
+        return 200, {"base": base, "total": total, "mine": mine or 0, "assist_rate": assist, **self._kinotake_today()}
+
+    def don_points(self, p):
+        if self._user(p) is None:
+            return 404, {"detail": "unknown access code"}
+        songs = [max(0, as_int(g)) // 10 for g in (p.get("gauges") or "").split(",") if g.strip()]
+        return 200, {"current": sum(songs), "aim": -1, "songs": songs, "titles": [], "presents": []}
+
+    def medals(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        m = self.cfg["medals"]
+        cap = as_int(m.get("max"), 9999)
+        daily = u["medal_day"] != today()
+        add = as_int(m.get("per_play"), 1) + (as_int(m.get("daily_bonus"), 0) if daily else 0)
+        now = u["medals"]
+        new = min(cap, now + add)
+        self.s.run("UPDATE users SET medals=?, medal_day=? WHERE access_code=?", (new, today(), u["access_code"]))
+        return 200, {"now": now, "add": new - now, "max": cap, "daily": daily, "weekly": False, "monthly": False}
+
+    def revive_result(self, p):
+        self.s.run("INSERT INTO revives(access_code, success, at) VALUES (?,?,?)",
+                   (p.get("access_code"), int(as_bool(p.get("success"))), int(time.time())))
+        return 200, {"ok": True}
+
+    @staticmethod
+    def _ai_rank(tokens: int) -> tuple[int, int]:
+        rank = min(10, tokens // 10)
+        return rank, (-1 if rank >= 10 else (rank + 1) * 10)
+
+    def ai_battle_submit(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        won = as_bool(p.get("won"))
+        tokens_before, wins_before = u["ai_tokens"], u["ai_wins"]
+        tokens_after = tokens_before + (max(1, as_int(p.get("stars"), 1)) if won else 0)
+        wins_after = wins_before + int(won)
+        self.s.run("UPDATE users SET ai_tokens=?, ai_wins=? WHERE access_code=?",
+                   (tokens_after, wins_after, u["access_code"]))
+        rb, nb = self._ai_rank(tokens_before)
+        ra, na = self._ai_rank(tokens_after)
+        return 200, {"rank_before": rb, "rank_after": ra, "tokens_before": tokens_before,
+                     "tokens_after": tokens_after, "next_rank_tokens": nb, "next_rank_after_tokens": na,
+                     "wins_before": wins_before, "wins_after": wins_after, "fulfilled": won,
+                     "first": wins_before == 0 and won, "challenge": as_bool(p.get("assigned")),
+                     "next_reward_wins": -1, "all_rewards": True, "bests": []}
+
+    def ai_battle_status(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        rank, nxt = self._ai_rank(u["ai_tokens"])
+        return 200, {"rank": rank, "tokens": u["ai_tokens"], "next_rank_tokens": nxt, "wins": u["ai_wins"],
+                     "next_reward_wins": -1}
+
+    def _owned(self, code: str, typ: int, item: int) -> bool:
+        return self.s.one("SELECT 1 FROM owned WHERE access_code=? AND type=? AND id=?", (code, typ, item)) is not None
+
+    def reward_shop(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        goods = []
+        for g in self.cfg["shop"]:
+            typ, item = as_int(g.get("type"), -1), as_int(g.get("id"), -1)
+            entry = {"type": typ, "id": item, "cost": as_int(g.get("cost")),
+                     "owned": self._owned(u["access_code"], typ, item)}
+            if g.get("name"):
+                entry["name"] = str(g["name"])
+            goods.append(entry)
+        return 200, {"medals": u["medals"], "max": as_int(self.cfg["medals"].get("max"), 9999), "goods": goods}
+
+    def reward_shop_buy(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        typ, item = as_int(p.get("type"), -1), as_int(p.get("item_id"), -1)
+        good = next((g for g in self.cfg["shop"] if as_int(g.get("type"), -1) == typ and as_int(g.get("id"), -1) == item),
+                    None)
+        if good is None:
+            return 409, {"detail": "lineup"}
+        with self.s.lock:
+            if self._owned(u["access_code"], typ, item):
+                return 409, {"detail": "already"}
+            medals = self.s.one("SELECT medals FROM users WHERE access_code=?", (u["access_code"],))["medals"]
+            cost = as_int(good.get("cost"))
+            if medals < cost:
+                return 409, {"detail": "shortage"}
+            self.s.run("UPDATE users SET medals=? WHERE access_code=?", (medals - cost, u["access_code"]))
+            self.s.run("INSERT INTO owned VALUES (?,?,?)", (u["access_code"], typ, item))
+        return 200, {"medals": medals - cost}
+
+    def rewards(self, p):
+        u = self._user(p)
+        if u is None or self.cfg["force_unlock"]:
+            return 200, {"force_unlock": True}
+        lists = {"costume": 2, "head": 3, "body": 4}
+        out = {"force_unlock": False}
+        for name, typ in lists.items():
+            out[name] = [r["id"] for r in self.s.q("SELECT id FROM owned WHERE access_code=? AND type=?",
+                                                     (u["access_code"], typ))]
+        return 200, out
+
+    def campaign_costume(self, p):
+        u = self._user(p)
+        if u is not None:
+            self.s.run("INSERT OR IGNORE INTO owned VALUES (?,?,?)", (u["access_code"], 2, as_int(p.get("cos"))))
+        return 200, {"ok": True}
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# published files: game updates (update/<channel>/...) and skins (skins/<name>/<branch>/...)
+
+
+def safe_join(root: Path, rel: str) -> Path | None:
+    rel = urllib.parse.unquote(rel)
+    parts = [x for x in rel.replace("\\", "/").split("/") if x not in ("", ".")]
+    if any(x == ".." or ":" in x for x in parts):
+        return None
+    path = root.joinpath(*parts) if parts else root
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    return path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_manifest(root: Path, files: list[str]) -> None:
+    lines = []
+    for rel in sorted(files):
+        lines.append(f"{sha256_file(root / rel)}  {rel}\n")
+    (root / "checksums.sha256").write_text("".join(lines), encoding="utf-8", newline="\n")
+
+
+def collect(src: Path, patterns: list[str], excludes: list[str]) -> list[str]:
+    out = []
+    for p in sorted(src.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(src).as_posix()
+        top = rel.split("/", 1)[0]
+        if rel in PROTECTED_INSTALL_NAMES or top in PROTECTED_INSTALL_DIRS or rel.startswith(".zdon"):
+            continue
+        if any(ch.isspace() for ch in rel):
+            log(f"skipped (whitespace in path; the skin updater can't fetch it): {rel}")
+            continue
+        if not any(fnmatch.fnmatchcase(rel, pat) or (pat.endswith("/**") and rel.startswith(pat[:-2]))
+                   for pat in patterns):
+            continue
+        if any(fnmatch.fnmatchcase(rel, pat) for pat in excludes):
+            continue
+        out.append(rel)
+    return out
+
+
+def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> None:
+    """Copies sources (relative path -> file) into a fresh folder next to dest, writes its manifest, then swaps it in.
+    With a version (a game channel) the files go under files/ and version.txt sits beside the manifest."""
+    staging = dest.with_name(dest.name + ".new")
+    old = dest.with_name(dest.name + ".old")
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(old, ignore_errors=True)
+    files_root = staging / "files" if version is not None else staging
+    for rel, src in sources.items():
+        target = files_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+    write_manifest(files_root, list(sources))
+    if version is not None:
+        os.replace(files_root / "checksums.sha256", staging / "checksums.sha256")
+        (staging / "version.txt").write_text(version + "\n", encoding="utf-8", newline="\n")
+    if dest.exists():
+        os.replace(dest, old)
+    os.replace(staging, dest)
+    shutil.rmtree(old, ignore_errors=True)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# HTTP
+
+
+PAGE = """<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Z-DON server</title><style>
+body{{font-family:system-ui,"Noto Sans TC",sans-serif;margin:2em auto;max-width:960px;padding:0 1em;color:#222}}
+table{{border-collapse:collapse;width:100%;margin:1em 0}}td,th{{border-bottom:1px solid #ddd;padding:.35em .6em;text-align:left}}
+th{{background:#f4f1ea}}code{{background:#f4f1ea;padding:0 .3em}}h2{{margin-top:1.6em}}
+</style><h1>Z-DON server</h1>{body}</html>"""
+
+
+def make_handler(cfg: dict, api: Api):
+    data: Path = cfg["data_dir"]
+    max_body = int(cfg["max_body_mb"]) * 1024 * 1024
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "ZDONServer/1"
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):
+            if os.environ.get("ZDON_SERVER_VERBOSE"):
+                log(f"{self.client_address[0]} {fmt % args}")
+
+        def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None):
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _json(self, status: int, obj):
+            if isinstance(obj, str):
+                self._send(status, obj.encode(), "text/plain; charset=utf-8")
+            else:
+                self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+
+        def _params(self, url) -> dict[str, str] | None:
+            params = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query, keep_blank_values=True).items()}
+            if self.command == "POST":
+                length = as_int(self.headers.get("Content-Length"), 0)
+                if length > max_body:
+                    return None
+                raw = self.rfile.read(length) if length > 0 else b""
+                ctype = self.headers.get("Content-Type", "")
+                if raw and "application/x-www-form-urlencoded" in ctype:
+                    form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
+                    params.update({k: v[-1] for k, v in form.items()})
+                elif raw and "application/json" in ctype:
+                    try:
+                        params.update({k: v if isinstance(v, str) else json.dumps(v)
+                                       for k, v in json.loads(raw).items()})
+                    except (ValueError, AttributeError):
+                        return None
+            return params
+
+        def _file(self, path: Path | None):
+            if path is None or not path.is_file():
+                self._json(404, {"detail": "not found"})
+                return
+            size = path.stat().st_size
+            ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            with open(path, "rb") as f:
+                shutil.copyfileobj(f, self.wfile, 1 << 20)
+
+        def _published(self, path: str) -> bool:
+            # /update/<channel>/(version.txt|checksums.sha256|files/<rel>)
+            if path.startswith("/update/"):
+                self._file(safe_join(data / "update", path[len("/update/"):]))
+                return True
+            # /skins/<name>/(raw|media)/branch/<branch>/<rel>  (the layout the skin updater asks for)
+            if path.startswith("/skins/"):
+                parts = path[len("/skins/"):].split("/", 4)
+                if len(parts) == 5 and parts[1] in ("raw", "media") and parts[2] == "branch":
+                    name, branch, rel = parts[0], parts[3], parts[4]
+                    root = safe_join(data / "skins", f"{urllib.parse.unquote(name)}/{urllib.parse.unquote(branch)}")
+                    self._file(safe_join(root, rel) if root else None)
+                else:
+                    self._json(404, {"detail": "not found"})
+                return True
+            return False
+
+        def _index(self):
+            body = []
+            channels = sorted(p for p in (data / "update").glob("*") if (p / "version.txt").is_file()) \
+                if (data / "update").is_dir() else []
+            if channels:
+                body.append("<h2>更新頻道</h2><table><tr><th>頻道</th><th>版本</th><th>檔案數</th></tr>")
+                for ch in channels:
+                    n = sum(1 for _ in open(ch / "checksums.sha256", encoding="utf-8"))
+                    body.append(f"<tr><td><code>{html.escape(ch.name)}</code></td>"
+                                f"<td>{html.escape((ch / 'version.txt').read_text(encoding='utf-8').strip())}</td>"
+                                f"<td>{n}</td></tr>")
+                body.append("</table>")
+            skins = sorted(p for p in (data / "skins").glob("*/*") if (p / "checksums.sha256").is_file()) \
+                if (data / "skins").is_dir() else []
+            if skins:
+                body.append("<h2>Skin</h2><table><tr><th>Skin</th><th>branch</th><th>.skin-repo 網址</th></tr>")
+                for sk in skins:
+                    url = f"http://{html.escape(self.headers.get('Host', 'HOST'))}/skins/{html.escape(sk.parent.name)}"
+                    body.append(f"<tr><td>{html.escape(sk.parent.name)}</td><td>{html.escape(sk.name)}</td>"
+                                f"<td><code>{url}</code></td></tr>")
+                body.append("</table>")
+            players = api.s.q("""SELECT u.username, COUNT(s.id) AS plays, MAX(s.received_at) AS last
+                                 FROM users u LEFT JOIN scores s USING(access_code)
+                                 GROUP BY u.access_code ORDER BY plays DESC LIMIT 50""")
+            body.append("<h2>玩家</h2><table><tr><th>名稱</th><th>遊玩次數</th><th>最後遊玩</th></tr>")
+            for r in players:
+                last = dt.datetime.fromtimestamp(r["last"]).strftime("%Y-%m-%d %H:%M") if r["last"] else "-"
+                body.append(f"<tr><td>{html.escape(r['username'])}</td><td>{r['plays']}</td><td>{last}</td></tr>")
+            body.append("</table>")
+            recent = api.s.q("""SELECT s.received_at, u.username, s.hash, s.difficulty, s.score, s.crown
+                                FROM scores s JOIN users u USING(access_code) ORDER BY s.id DESC LIMIT 30""")
+            body.append("<h2>最近成績</h2><table><tr><th>時間</th><th>玩家</th><th>譜面</th><th>難度</th>"
+                        "<th>分數</th></tr>")
+            for r in recent:
+                t = dt.datetime.fromtimestamp(r["received_at"]).strftime("%m-%d %H:%M")
+                body.append(f"<tr><td>{t}</td><td>{html.escape(r['username'])}</td>"
+                            f"<td><code>{html.escape(r['hash'][:12])}</code></td><td>{r['difficulty']}</td>"
+                            f"<td>{r['score']}</td></tr>")
+            body.append("</table>")
+            self._send(200, PAGE.format(body="".join(body)).encode(), "text/html; charset=utf-8")
+
+        def _dispatch(self):
+            url = urllib.parse.urlsplit(self.path)
+            path = url.path.rstrip("/") or "/"
+            if self.command in ("GET", "HEAD"):
+                if path == "/":
+                    self._index()
+                    return
+                if self._published(url.path):
+                    return
+            params = self._params(url)
+            if params is None:
+                self._json(413, {"detail": "body too large or malformed"})
+                return
+            try:
+                res = api.handle("GET" if self.command == "HEAD" else self.command, path, params, self.headers)
+            except Exception as e:  # noqa: BLE001 - one bad request must not take the server down
+                log(f"error in {self.command} {path}: {e!r}")
+                self._json(500, {"detail": "server error"})
+                return
+            if res is None:
+                self._json(404, {"detail": "not found"})
+            else:
+                self._json(*res)
+
+        do_GET = do_POST = do_HEAD = _dispatch
+
+    return Handler
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# commands
+
+
+def cmd_serve(cfg: dict, args) -> None:
+    store = Store(cfg["data_dir"] / "zdon.db")
+    api = Api(cfg, store)
+    host, port = args.host or cfg["host"], args.port or int(cfg["port"])
+    httpd = ThreadingHTTPServer((host, port), make_handler(cfg, api))
+    httpd.daemon_threads = True
+    log(f"Z-DON server on http://{host}:{port}  (data: {cfg['data_dir']})")
+    if not cfg["auth_key"]:
+        log("auth_key is empty: requests are not checked (fine on a LAN, not on the internet)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        log("stopped")
+
+
+def git_version(src: Path) -> str:
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    try:
+        rev = subprocess.run(["git", "-C", str(src), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                             timeout=5).stdout.strip()
+        return f"{stamp}-{rev}" if rev else stamp
+    except (OSError, subprocess.SubprocessError):
+        return stamp
+
+
+def cmd_publish(cfg: dict, args) -> None:
+    src = Path(args.src).resolve()
+    if not (src / "YataiDON.exe").exists() and not (src / "YataiDON").exists():
+        sys.exit(f"{src}: no YataiDON executable here")
+    patterns = list(args.include or DEFAULT_PUBLISH)
+    if args.with_skins:
+        patterns.append("Skins/**")
+    sources = {rel: src / rel for rel in collect(src, patterns, args.exclude or [])}
+    # the updater scripts ship from the repo when the install folder has none
+    for name in ("zdon_update.ps1", "zdon_update.bat"):
+        if name not in sources and (HERE.parent / name).exists():
+            sources[name] = HERE.parent / name
+    version = args.version or git_version(HERE.parent)
+    dest = cfg["data_dir"] / "update" / args.channel
+    publish_tree(sources, dest, version)
+    size = sum(p.stat().st_size for p in sources.values())
+    print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}")
+
+
+def cmd_publish_skin(cfg: dict, args) -> None:
+    src = Path(args.src).resolve()
+    if not (src / "skin.json").exists() and not (src / "Graphics").is_dir():
+        sys.exit(f"{src}: doesn't look like a skin folder")
+    name = args.name or src.name
+    files = collect(src, ["*", "**"], [".skin-repo", ".skin-update-tmp/**", "*.bak", ".git/**"])
+    files = [f for f in files if not f.startswith(".git/") and f != "checksums.sha256"]
+    dest = cfg["data_dir"] / "skins" / name / args.branch
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    publish_tree({rel: src / rel for rel in files}, dest, None)
+    print(f"published skin {name} ({args.branch}): {len(files)} files")
+    print(f"in the game's Skins/{src.name}/.skin-repo put:\n  http://<this host>:{cfg['port']}/skins/{name}\n"
+          f"  {args.branch}")
+
+
+def cmd_users(cfg: dict, args) -> None:
+    store = Store(cfg["data_dir"] / "zdon.db")
+    for r in store.q("""SELECT u.access_code, u.username, u.idm IS NOT NULL AS card, COUNT(s.id) AS plays
+                        FROM users u LEFT JOIN scores s USING(access_code) GROUP BY u.access_code
+                        ORDER BY u.created_at"""):
+        print(f"{r['access_code']}  {r['username']:<24} {'card' if r['card'] else '    '}  {r['plays']} plays")
+
+
+def cmd_jump(cfg: dict, args) -> None:
+    store = Store(cfg["data_dir"] / "zdon.db")
+    if not store.one("SELECT 1 FROM users WHERE access_code=?", (args.access_code,)):
+        sys.exit("unknown access code")
+    store.run("INSERT OR REPLACE INTO jumps VALUES (?,?,?)", (args.access_code, args.hash, args.score_id))
+    print("queued; the game picks it up on its next poll")
+
+
+def cmd_rename(cfg: dict, args) -> None:
+    store = Store(cfg["data_dir"] / "zdon.db")
+    store.run("UPDATE users SET username=? WHERE access_code=?", (args.name, args.access_code))
+    print("ok")
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description="Z-DON self-hosted server")
+    ap.add_argument("--config", type=Path, help="zdon_server.toml (default: next to this script)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("serve", help="run the server")
+    s.add_argument("--host")
+    s.add_argument("--port", type=int)
+    s = sub.add_parser("publish", help="publish a game build for the updater")
+    s.add_argument("src", help="install folder (e.g. build/bin)")
+    s.add_argument("--channel", default="windows")
+    s.add_argument("--version")
+    s.add_argument("--with-skins", action="store_true", help="ship Skins/ too (normally the skin updater's job)")
+    s.add_argument("--include", action="append", help=f"glob to publish (repeatable; default {DEFAULT_PUBLISH})")
+    s.add_argument("--exclude", action="append", help="glob to leave out (repeatable)")
+    s = sub.add_parser("publish-skin", help="publish a skin folder for the skin updater")
+    s.add_argument("src")
+    s.add_argument("--name")
+    s.add_argument("--branch", default="main")
+    sub.add_parser("users", help="list players and their access codes")
+    s = sub.add_parser("jump", help="send a player's game to a song or a replay")
+    s.add_argument("access_code")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--hash")
+    g.add_argument("--score-id", type=int)
+    s = sub.add_parser("rename", help="change a player's name")
+    s.add_argument("access_code")
+    s.add_argument("name")
+    args = ap.parse_args(argv)
+    cfg = load_config(args.config)
+    {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "users": cmd_users,
+     "jump": cmd_jump, "rename": cmd_rename}[args.cmd](cfg, args)
+
+
+if __name__ == "__main__":
+    main()
