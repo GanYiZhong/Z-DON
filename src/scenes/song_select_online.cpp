@@ -369,17 +369,20 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
             audio.play_sound("don", VolumePreset::SOUND);
             if (menu_cursor == 0) {
                 close_modal(); // browse: deciding a course lists the challenges
-            } else if (!network.is_online()) {
-                show_notice(zhud::text("online_offline"), Modal::Menu);
             } else if (!account) {
                 show_notice(zhud::text("online_need_account"), Modal::Menu);
             } else if (menu_cursor == 3) {
                 join_code.clear();
                 modal = Modal::JoinInput;
             } else {
+                // tried even when the last connection check failed (a slow first check, or one slow answer, must
+                // not keep online play away): a real failure shows when this one fails
                 request = network.signed_request("POST", menu_cursor == 1 ? "/match/quick" : "/match/create",
-                                                 {{"access_code", my_code()}});
-                modal = Modal::Connecting;
+                                                 {{"access_code", my_code()}}, 10000);
+                modal = request >= 0 ? Modal::Connecting : Modal::Menu;
+                if (request < 0) {
+                    show_notice(zhud::text("online_offline"), Modal::Menu);
+                }
             }
         }
         break;
@@ -397,8 +400,12 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
         if (cancel) {
             modal = Modal::Menu;
         } else if ((don || key_pressed(SDL_SCANCODE_RETURN)) && join_code.size() == 4) {
-            request = network.signed_request("POST", "/match/join", {{"access_code", my_code()}, {"code", join_code}});
+            request =
+                network.signed_request("POST", "/match/join", {{"access_code", my_code()}, {"code", join_code}}, 10000);
             modal = Modal::Connecting;
+            if (request < 0) {
+                show_notice(zhud::text("online_offline"), Modal::Menu);
+            }
         }
         break;
     }

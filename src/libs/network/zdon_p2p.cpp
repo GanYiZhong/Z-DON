@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <format>
 #include <random>
 #include <spdlog/spdlog.h>
 
@@ -44,6 +46,42 @@ namespace {
     constexpr int kKeepAliveMs = 1000;    // once connected (keeps the NAT's mapping open)
     constexpr const char* kStun[] = {"stun.l.google.com", "stun.cloudflare.com"};
     constexpr const char* kStunPort[] = {"19302", "3478"};
+
+    // what kind of address "ip:port" / "[ipv6]:port" is, for the log (the addresses themselves are not logged)
+    const char* addr_kind(const std::string& text) {
+        if (text.starts_with("[")) {
+            return "IPv6";
+        }
+        unsigned a = 0, b = 0;
+        if (std::sscanf(text.c_str(), "%u.%u.", &a, &b) != 2) {
+            return "other";
+        }
+        if (a == 10 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)) {
+            return "LAN";
+        }
+        if (a == 100 && b >= 64 && b <= 127) {
+            return "carrier NAT";
+        }
+        return "public";
+    }
+
+    std::string kinds(const std::vector<std::string>& list) {
+        std::vector<std::pair<std::string, int>> n;
+        for (const std::string& t : list) {
+            const std::string k = addr_kind(t);
+            auto it = std::ranges::find_if(n, [&k](const auto& e) { return e.first == k; });
+            if (it == n.end()) {
+                n.emplace_back(k, 1);
+            } else {
+                ++it->second;
+            }
+        }
+        std::string out;
+        for (const auto& [k, c] : n) {
+            out += std::format("{}{} {}", out.empty() ? "" : ", ", c, k);
+        }
+        return out.empty() ? "none" : out;
+    }
 
     std::string addr_text(const sockaddr_storage& a) {
         char ip[INET6_ADDRSTRLEN] = {};
@@ -297,7 +335,7 @@ void ZdonP2P::run() {
             }
         }
     }
-    spdlog::info("Online battle: direct connection addresses: {}", mine.size());
+    spdlog::info("Online battle: direct connection addresses: {} ({})", mine.size(), kinds(mine));
     {
         std::scoped_lock lock(mutex_);
         local_ = mine;
@@ -315,12 +353,16 @@ void ZdonP2P::run() {
         }
     };
     auto last_probe = Clock::now() - std::chrono::seconds(10);
+    auto probe_since = Clock::now();
+    bool told_none = false;
     std::vector<char> buf(2048);
     while (!stop_) {
         {
             std::scoped_lock lock(mutex_);
             if (remote_new_) {
                 remote_new_ = false;
+                spdlog::info("Online battle: the opponent's addresses: {} ({})", remote_.size(), kinds(remote_));
+                probe_since = Clock::now();
                 targets.clear();
                 for (const std::string& r : remote_) {
                     sockaddr_storage a{};
@@ -335,6 +377,13 @@ void ZdonP2P::run() {
         const int every = peer ? kKeepAliveMs : kProbeMs;
         if (!targets.empty() && now - last_probe >= std::chrono::milliseconds(every)) {
             last_probe = now;
+            if (!peer && !told_none && now - probe_since > std::chrono::seconds(10)) {
+                told_none = true;
+                spdlog::warn(
+                    "Online battle: no direct connection: none of the opponent's {} address(es) answered in 10 s "
+                    "(a firewall, or a NAT that doesn't let it through); the server carries the hits",
+                    targets.size());
+            }
             if (peer) {
                 send_to(*peer, packet('P', ""));
             } else {
@@ -393,7 +442,8 @@ void ZdonP2P::run() {
                         peer_ = addr_text(from);
                     }
                     connected_ = true;
-                    spdlog::info("Online battle: direct connection to the opponent");
+                    spdlog::info("Online battle: direct connection to the opponent ({} address)",
+                                 addr_kind(addr_text(from)));
                 }
                 if (kind == 'P') {
                     send_to(std::make_pair(from, flen), packet('R', ""));

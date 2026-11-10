@@ -104,7 +104,8 @@ def crown_badge(c) -> str:
 
 
 class Site:
-    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me", "/auth/", "/site.css")
+    # "/me" only as a whole segment: the game's API has /medals
+    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/site.css")
 
     def __init__(self, cfg: dict, store, nonces):
         self.cfg = cfg
@@ -131,7 +132,7 @@ class Site:
         self.session_key = secret.encode()
 
     def handles(self, path: str) -> bool:
-        return path == "/" or path.startswith(self.PREFIXES)
+        return path in ("/", "/me") or path.startswith(self.PREFIXES)
 
     # ------------------------------------------------------------------------------------------------------------
     # sessions (a signed cookie; the server keeps no session table)
