@@ -999,8 +999,8 @@ void GameScreen::update_gameplay(double current_ms) {
         stalls.erase(stalls.begin());
     }
 
-    for (auto& player : players) {
-        player->update(clock.position(), current_ms, background);
+    for (size_t i = 0; i < players.size(); ++i) {
+        players[i]->update(lane_position(i), current_ms, background);
     }
     global_data.zdon_song_pos_ms = clock.position(); // Z-DON: the skin's song progress (zdon_lua.cpp)
     zdon_ghost_update();
@@ -1032,7 +1032,7 @@ std::optional<Screens> GameScreen::update() {
 
     // Z-DON: a course of a stacked recording ends with the longest course (zdon_record.h --record-tracks)
     const double song_end = std::max(players[0]->end_time, zdon_record::sync_end_ms());
-    if (clock.position() >= song_end) {
+    if (clock.position() >= song_end && !hold_song_end()) {
         // Z-DON: skin_config "zdon_result_delay" {x = ms} replaces the 8533 ms song end -> result fade delay of a
         // normal (non-AI) play; Nijiiro: direct feeds YKjsle7VBCI (clear 545.28 s, FC 186.46 s) show the fade 7.05 s
         // after the banner's SE, 0.5 s earlier than the default's 7.53 s
@@ -1163,8 +1163,8 @@ void GameScreen::draw_players() {
     if (players.size() == 1) {
         players[0]->draw(clock.position(), 0, 184 * tex.screen_scale);
     } else if (players.size() == 2) {
-        players[0]->draw(clock.position(), 0, 184 * tex.screen_scale);
-        players[1]->draw(clock.position(), 0, tex.get_skin_config(SC::GAME_P2_Y)->y);
+        players[0]->draw(lane_position(0), 0, 184 * tex.screen_scale);
+        players[1]->draw(lane_position(1), 0, tex.get_skin_config(SC::GAME_P2_Y)->y);
         // the shared kusudama covers both lanes, so it goes over the 2P lane too
         for (const auto& player : players) {
             player->draw_shared_kusudama();

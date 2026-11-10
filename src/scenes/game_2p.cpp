@@ -1,14 +1,18 @@
 #include "game_2p.h"
 
 #include <algorithm>
+#include <format>
 #include <iterator>
+#include <rapidjson/document.h>
 #include <set>
 
 #include "../libs/input/input.h"
 #include "../libs/math/animation.h"
+#include "../libs/network/network.h"
 #include "../libs/zdon_online.h"
 #include "../objects/game/ai_match.h"
 #include "../objects/game/zdon_ai.h"
+#include "../objects/global/zdon_hud.h"
 
 void Game2PScreen::release_chart_resources() {
     parser_2p.reset();
@@ -58,9 +62,15 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         auto& s1 = global_data.session_data[static_cast<int>(PlayerNum::P1)];
         auto& s2 = global_data.session_data[static_cast<int>(PlayerNum::P2)];
         s2.selected_song = s1.selected_song;
-        s2.selected_difficulty = s1.selected_difficulty;
-        s2.song_hash = s1.song_hash;
+        if (!zdon_online.live()) { // a live opponent picked its own course (the lobby set s2's)
+            s2.selected_difficulty = s1.selected_difficulty;
+            s2.song_hash = s1.song_hash;
+        }
     }
+    live_ticket = live_finish_ticket = -1;
+    live_last_sync = -1e9;
+    live_lane_ms = -1e18;
+    live_hold_since = -1.0;
     parser = std::make_shared<SongParser>(song, delay, PlayerNum::P1);
     parser_2p = std::make_shared<SongParser>(song, delay, PlayerNum::P2);
 
@@ -104,7 +114,8 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     players.push_back(std::make_unique<Player>(parser_2p, PlayerNum::P2, diff_2, true, mods_2));
     if (online) {
         players[1]->apply_replay_appearance(zdon_online.opponent);
-        players[1]->load_replay(zdon_online.opponent_log);
+        players[1]->load_replay(zdon_online.opponent_log); // live: empty, the hits come in as they are played
+        players[0]->log_auto_hits = zdon_online.live() && mods_1.auto_play;
     }
     if (ai_battle) {
         // the arcade tunes its AI by the course's star level (ai_tuninginfo levels 1..11)
@@ -154,6 +165,7 @@ std::optional<Screens> Game2PScreen::update() {
     }
     clock.update(current_time);
     transition->update(current_time);
+    live_update(current_time);
     update_gameplay(current_time);
     zdon_sudden_death_check();
     if (global_data.zdon_ai.active && players.size() == 2) {
@@ -194,7 +206,8 @@ std::optional<Screens> Game2PScreen::update() {
         return on_screen_end(result_screen());
     }
 
-    if (clock.position() >= end_time) {
+    if (clock.position() >= end_time && !hold_song_end()) {
+        live_send_finish();
         double transition_delay = global_data.config->general.fast_transitions ? kFastResultTransitionDelayMs : 8533.34;
         // Z-DON AI battle, skin_config zdon_ai_end_delay (Green): the cabinet holds the battle emblem ~16.5 s after the
         // last note (footage Tl7g8XXXvAM: emblem 265.0, black 277, result bgm + announce 278.6, last note 260.5), so
@@ -215,8 +228,8 @@ std::optional<Screens> Game2PScreen::update() {
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }
 
-    if (check_key_pressed(global_data.config->keys.restart_key)) {
-        restart_song();
+    if (check_key_pressed(global_data.config->keys.restart_key) && !zdon_online.live()) {
+        restart_song(); // not in a live battle: the opponent's song goes on
     }
     if (check_key_pressed(global_data.config->keys.back_key)) {
         if (can_pause()) {
@@ -235,4 +248,177 @@ std::optional<Screens> Game2PScreen::update() {
     }
 
     return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Z-DON online battle (live)
+
+Screens Game2PScreen::select_screen() const {
+    if (zdon_online.active()) {
+        return Screens::ONLINE_SELECT;
+    }
+    return global_data.zdon_ai.active ? Screens::AI_SELECT : Screens::SONG_SELECT_2P;
+}
+
+bool Game2PScreen::pause_menu_allowed() const {
+    return !zdon_online.live(); // the opponent can't wait
+}
+
+double Game2PScreen::lane_position(size_t index) const {
+    if (index != 1 || !zdon_online.live()) {
+        return clock.position();
+    }
+    if (zdon_online.opp_pos < -1e17) {
+        return 0.0; // nothing heard yet: before the chart
+    }
+    live_lane_ms = std::max(live_lane_ms, zdon_online.opp_clock(live_now));
+    return live_lane_ms;
+}
+
+bool Game2PScreen::hold_song_end() {
+    if (!zdon_online.live() || zdon_online.opp_left || players.size() < 2) {
+        return false;
+    }
+    if (zdon_online.opp_final && lane_position(1) >= players[1]->end_time) {
+        return false; // the opponent finished and its lane has played everything
+    }
+    if (live_hold_since < 0.0) {
+        live_hold_since = live_now;
+    }
+    return live_now - live_hold_since < 20000.0; // never longer than this
+}
+
+static std::string live_code() {
+    return global_data.config->network.access_code_1;
+}
+
+void Game2PScreen::live_update(double current_ms) {
+    live_now = current_ms;
+    if (!zdon_online.live() || players.size() < 2) {
+        return;
+    }
+    if (live_ticket >= 0) {
+        if (auto r = network.take_signed(live_ticket)) {
+            live_ticket = -1;
+            rapidjson::Document doc;
+            if (r->first == 200 && !doc.Parse(r->second.c_str()).HasParseError() && doc.IsObject()) {
+                if (doc.HasMember("have") && doc["have"].IsInt()) {
+                    zdon_online.sent = static_cast<size_t>(doc["have"].GetInt());
+                }
+                if (doc.HasMember("hits") && doc["hits"].IsString()) {
+                    const std::string hits = doc["hits"].GetString();
+                    size_t at = 0;
+                    while (at < hits.size()) {
+                        size_t comma = hits.find(',', at);
+                        if (comma == std::string::npos) {
+                            comma = hits.size();
+                        }
+                        const std::string hit = hits.substr(at, comma - at);
+                        const size_t colon = hit.find(':');
+                        if (colon != std::string::npos) {
+                            const double ms = std::atof(hit.c_str());
+                            const int type = std::clamp(std::atoi(hit.c_str() + colon + 1), 0, 3);
+                            players[1]->append_replay(ms, static_cast<InputLogType>(type));
+                            ++zdon_online.received;
+                        }
+                        at = comma + 1;
+                    }
+                }
+                if (doc.HasMember("pos") && doc["pos"].IsNumber()) {
+                    zdon_online.opp_pos = doc["pos"].GetDouble();
+                    zdon_online.opp_pos_at = current_ms;
+                }
+                if (doc.HasMember("final") && doc["final"].IsObject()) {
+                    const auto& f = doc["final"];
+                    auto get = [&f](const char* k) { return f.HasMember(k) && f[k].IsInt() ? f[k].GetInt() : 0; };
+                    zdon_online.opp_final = ZdonOnline::Final{get("score"), get("good"),     get("ok"),
+                                                              get("bad"),   get("drumroll"), get("max_combo")};
+                }
+                zdon_online.opp_left = doc.HasMember("left") && doc["left"].IsBool() && doc["left"].GetBool();
+            }
+        }
+    }
+    if (live_ticket < 0 && current_ms - live_last_sync >= 100.0) {
+        const InputLog& log = players[0]->input_log;
+        std::string hits;
+        for (size_t i = zdon_online.sent; i < log.size(); ++i) {
+            hits += std::format("{}{:.1f}:{}", hits.empty() ? "" : ",", log[i].first, static_cast<int>(log[i].second));
+        }
+        live_ticket = network.signed_request("POST", "/match/sync",
+                                             {{"access_code", live_code()},
+                                              {"code", zdon_online.room},
+                                              {"from", std::to_string(zdon_online.sent)},
+                                              {"hits", hits},
+                                              {"pos", std::format("{:.1f}", clock.position())},
+                                              {"score", std::to_string(players[0]->get_score())},
+                                              {"combo", std::to_string(players[0]->get_combo())},
+                                              {"since", std::to_string(zdon_online.received)}});
+        live_last_sync = current_ms;
+    }
+}
+
+void Game2PScreen::live_send_finish() {
+    if (!zdon_online.live() || live_finish_ticket >= 0 || players.empty()) {
+        return;
+    }
+    const ResultData r = players[0]->get_result_score();
+    live_finish_ticket = network.signed_request("POST", "/match/finish",
+                                                {{"access_code", live_code()},
+                                                 {"code", zdon_online.room},
+                                                 {"score", std::to_string(r.score)},
+                                                 {"good", std::to_string(r.good)},
+                                                 {"ok", std::to_string(r.ok)},
+                                                 {"bad", std::to_string(r.bad)},
+                                                 {"drumroll", std::to_string(r.total_drumroll)},
+                                                 {"max_combo", std::to_string(r.max_combo)}});
+}
+
+Screens Game2PScreen::on_screen_end(Screens next_screen) {
+    if (zdon_online.live()) {
+        live_send_finish();
+        if (live_ticket >= 0) {
+            network.forget_signed(live_ticket);
+            live_ticket = -1;
+        }
+        // the opponent's own count is the one that stands (its lane here may have missed a late hit)
+        if (zdon_online.opp_final) {
+            auto& rd = global_data.session_data[static_cast<int>(PlayerNum::P2)].result_data;
+            rd.score = zdon_online.opp_final->score;
+            rd.good = zdon_online.opp_final->good;
+            rd.ok = zdon_online.opp_final->ok;
+            rd.bad = zdon_online.opp_final->bad;
+            rd.total_drumroll = zdon_online.opp_final->drumroll;
+            rd.max_combo = zdon_online.opp_final->max_combo;
+        }
+    }
+    return GameScreen::on_screen_end(next_screen);
+}
+
+void Game2PScreen::draw() {
+    GameScreen::draw();
+    draw_live_overlay();
+}
+
+// mid-screen: the opponent hasn't started yet, has left, or is still finishing at the song's end
+void Game2PScreen::draw_live_overlay() {
+    if (!zdon_online.live()) {
+        return;
+    }
+    const float u = tex.screen_width / 1920.0f;
+    std::string line;
+    if (zdon_online.opp_left) {
+        line = zhud::text("online_opp_left");
+    } else if (zdon_online.opp_pos < -1e17) {
+        line = zhud::text("online_opp_waiting");
+    } else if (live_hold_since >= 0.0) {
+        line = zhud::text("online_wait_finish");
+    }
+    if (line.empty()) {
+        return;
+    }
+    OutlinedText& t = zhud::label(line, 26, Color{140, 220, 255, 255});
+    const float w = t.width + 40 * u, h = t.height + 16 * u;
+    const float x = (tex.screen_width - w) / 2.0f, y = tex.screen_height * 0.5f - h / 2.0f;
+    zhud::panel(x, y, w, h, 0.85f, Color{140, 220, 255, 200});
+    t.draw({.x = x + 20 * u, .y = y + 8 * u});
 }

@@ -38,6 +38,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zdon_match import Matches  # noqa: E402
 from zdon_site import Site  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -265,6 +266,7 @@ class Api:
         self.cfg = cfg
         self.s = store
         self.nonces = Nonces(int(cfg["signature_window_s"]))
+        self.matches = Matches(self._profile)
         self.routes = {
             ("GET", "/health"): self.health,
             ("GET", "/user"): self.user,
@@ -278,6 +280,15 @@ class Api:
             ("GET", "/replay"): self.replay,
             ("GET", "/poll_jump"): self.poll_jump,
             ("GET", "/challenges"): self.challenges,
+            ("POST", "/match/create"): self.matches.create,
+            ("POST", "/match/quick"): self.matches.quick,
+            ("POST", "/match/join"): self.matches.join,
+            ("POST", "/match/leave"): self.matches.leave,
+            ("GET", "/match/state"): self.matches.state,
+            ("POST", "/match/song"): self.matches.song,
+            ("POST", "/match/ready"): self.matches.ready,
+            ("POST", "/match/sync"): self.matches.sync,
+            ("POST", "/match/finish"): self.matches.finish,
             ("POST", "/gacha"): self.gacha,
             ("POST", "/kinotake"): self.kinotake,
             ("POST", "/don_points"): self.don_points,
@@ -307,6 +318,20 @@ class Api:
     def _user(self, p) -> sqlite3.Row | None:
         code = p.get("access_code", "")
         return self.s.one("SELECT * FROM users WHERE access_code=?", (code,)) if code else None
+
+    def _profile(self, code: str) -> dict | None:
+        """What an opponent's lane shows of this player (live battle)."""
+        u = self.s.one("SELECT * FROM users WHERE access_code=?", (code,)) if code else None
+        if u is None:
+            return None
+        out = {"username": u["username"]}
+        for k in ("title", "title_bg", "chara_color_1", "chara_color_2", "chara_color_3", "chara_head_index",
+                  "chara_body_index", "chara_cos_index"):
+            if u[k] is not None:
+                out[k] = u[k]
+        if u["chara_is_costume"] is not None:
+            out["chara_is_costume"] = bool(u["chara_is_costume"])
+        return out
 
     def health(self, p):
         out = {"status": "ok", "tournament": bool(self.cfg["tournament"]), "campaigns": list(self.cfg["campaigns"])}

@@ -148,6 +148,10 @@ public:
     std::optional<Screens> update() override;
 
     virtual void draw_players();
+    // Z-DON online battle (live): the chart ms lane i plays at (the opponent's lane follows the opponent), and
+    // whether the song's end waits (for the opponent's lane to finish)
+    virtual double lane_position(size_t /*index*/) const { return clock.position(); }
+    virtual bool hold_song_end() { return false; }
 
     void draw_overlay(bool with_song_info = true);
 

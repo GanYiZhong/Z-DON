@@ -230,6 +230,13 @@ public:
     std::optional<int> take_replay_jump_result();
     std::optional<int> take_challenge_jump_result(); // Z-DON: the website's "challenge" (a score id to play against)
 
+    // Z-DON: a signed request to the server, answered later (non-blocking). GET sends params in the query, POST as a
+    // form. Returns a ticket (-1 when offline); take_signed gives (HTTP status, body) once it is answered.
+    int signed_request(const std::string& method, const std::string& path,
+                       const std::map<std::string, std::string>& params);
+    std::optional<std::pair<long, std::string>> take_signed(int ticket);
+    void forget_signed(int ticket); // no longer wanted (its answer is dropped)
+
     // Z-DON online challenge: the plays of a chart someone can be challenged on (non-blocking)
     void request_challenges(const std::string& hash, int difficulty);
     std::optional<ChallengeList> take_challenges();
@@ -314,6 +321,9 @@ private:
     std::optional<int> replay_jump_result;
     std::optional<int> challenge_jump_result;
     std::optional<cpr::AsyncResponse> pending_challenges;
+    std::map<int, cpr::AsyncResponse> pending_signed;
+    std::map<int, std::pair<long, std::string>> done_signed;
+    int next_signed_ticket = 1;
     std::optional<ChallengeList> challenges_result;
 
     std::optional<cpr::AsyncResponse> pending_replay_fetch;

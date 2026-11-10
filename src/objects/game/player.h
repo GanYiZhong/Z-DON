@@ -153,6 +153,12 @@ public:
         replay_cursor = 0;
         replay_active = true;
     }
+    // Z-DON online battle (live): one more of the opponent's hits, in chart order
+    void append_replay(double ms, InputLogType type) {
+        replay_log.emplace_back(ms, type);
+        replay_active = true;
+    }
+    bool log_auto_hits = false; // Z-DON online battle: auto play's hits go to input_log too (sent to the opponent)
     void apply_replay_appearance(const PlayerData& pd);
     void use_costume(int cos_index);
     bool is_skip_enabled() const { return modifiers.skip; }

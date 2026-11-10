@@ -354,6 +354,9 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             if (!zdon_auto_catchup) {
                 play_as(player_num, don_hitsound_id, VolumePreset::HITSOUND);
             }
+            if (log_auto_hits) {
+                input_log.emplace_back(ms_from_start, InputLogType::DON_R);
+            }
             check_note(ms_from_start, hit_type, current_ms, background);
         }
     } else {
@@ -400,6 +403,13 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             if (!zdon_auto_catchup) {
                 play_as(player_num, don_hitsound_id, VolumePreset::HITSOUND);
             }
+            if (log_auto_hits) { // a big note: both sides
+                const double at = judged_ms(don_notes.front());
+                if (don_notes.front().type == NoteType::DON_L) {
+                    input_log.emplace_back(at, InputLogType::DON_L);
+                }
+                input_log.emplace_back(at, InputLogType::DON_R);
+            }
             check_note(judged_ms(don_notes.front()), hit_type, current_ms, background);
             last_note_hit = current_ms;
             if (don_notes.size() == remaining) {
@@ -416,6 +426,13 @@ void Player::autoplay_manager(double ms_from_start, double current_ms, std::opti
             autoplay_hit(hit_type, kat_notes.front().type == NoteType::KAT_L);
             if (!zdon_auto_catchup) {
                 play_as(player_num, kat_hitsound_id, VolumePreset::HITSOUND);
+            }
+            if (log_auto_hits) {
+                const double at = judged_ms(kat_notes.front());
+                if (kat_notes.front().type == NoteType::KAT_L) {
+                    input_log.emplace_back(at, InputLogType::KAT_L);
+                }
+                input_log.emplace_back(at, InputLogType::KAT_R);
             }
             check_note(judged_ms(kat_notes.front()), hit_type, current_ms, background);
             if (kat_notes.size() == remaining) {

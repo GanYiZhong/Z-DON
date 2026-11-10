@@ -368,3 +368,15 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   只移除前一版清單裡有而新版沒有的檔案、絕不碰 config/scores/cache/Songs/Records）。
   遊戲啟動時背景檢查（`zdon_update_check`），標題／登入畫面顯示新版，F9 交給更新程式並關閉遊戲、更新完自動重開。
   上游的 update.ps1 仍指向 yonokid 的 GitHub release（會換成上游版），Z-DON 不發布它。
+
+## 2026-11-10 線上對戰（使用者：挑戰紀錄＋即時對戰，房間代碼＋自動配對，分數高者勝）
+
+- 共通：2P 譜面用重播的路徑（Player::load_replay / append_replay）吃對手的打擊；對手的譜面選項（random／inverse／seed／
+  簡化譜）照對手的，速度等顯示選項照自己的。結算橫幅（RESULT_2P）、2P 成績板顯示對手且不算個人最佳。`zdon_online.h`。
+- 挑戰：GET /challenges、/replay 多回 score／modifiers、網站「挑戰」按鈕（jumps.challenge → poll_jump challenge_id）。
+- 即時：`server/zdon_match.py`（create／quick／join／state／song／ready／sync／finish／leave）。Game2PScreen 的
+  lane_position(1) 跟著對手回報的 chart ms 晚 1 秒（單調不倒退），hold_song_end 等對手的譜面打完（最多 20 秒）。
+  自動演奏時打擊也記進 input_log（log_auto_hits）以便兩個實例對打測試。
+- 實測：兩個遊戲實例（第二個在沙盒，Skins／Songs 用 junction）自動配對→選歌→對打→結算，
+  兩邊的對手譜面結果與對手自己的完全相同（良 429、連打 43、1003870）。
+- 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。

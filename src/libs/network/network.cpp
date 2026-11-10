@@ -1015,6 +1015,49 @@ std::optional<ChallengeList> NetworkClient::take_challenges() {
     return std::exchange(challenges_result, std::nullopt);
 }
 
+int NetworkClient::signed_request(const std::string& method, const std::string& path,
+                                  const std::map<std::string, std::string>& params) {
+    if (!network_enabled()) {
+        return -1;
+    }
+    const int ticket = next_signed_ticket++;
+    cpr::Parameters query;
+    cpr::Payload form{};
+    for (const auto& [k, v] : params) {
+        if (method == "GET") {
+            query.Add({k, v});
+        } else {
+            form.Add({k, v});
+        }
+    }
+    if (method == "GET") {
+        pending_signed.emplace(ticket, cpr::GetAsync(cpr::Url{network_url(path)}, signed_headers(method, path, params),
+                                                     query, cpr::Timeout{5000} NETWORK_CA_OPT));
+    } else {
+        pending_signed.emplace(ticket, cpr::PostAsync(cpr::Url{network_url(path)}, signed_headers(method, path, params),
+                                                      form, cpr::Timeout{5000} NETWORK_CA_OPT));
+    }
+    return ticket;
+}
+
+std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int ticket) {
+    auto it = done_signed.find(ticket);
+    if (it == done_signed.end()) {
+        return std::nullopt;
+    }
+    auto out = std::move(it->second);
+    done_signed.erase(it);
+    return out;
+}
+
+void NetworkClient::forget_signed(int ticket) {
+    done_signed.erase(ticket);
+    if (auto it = pending_signed.find(ticket); it != pending_signed.end()) {
+        it->second.wait(); // short (5 s timeout at most); keeps the request's buffers alive until it ends
+        pending_signed.erase(it);
+    }
+}
+
 void NetworkClient::update(double current_ms) {
 #if defined(__ANDROID__)
     if (pending_update_checksum.has_value() &&
@@ -1381,6 +1424,16 @@ void NetworkClient::update(double current_ms) {
         }
     }
 
+    for (auto it = pending_signed.begin(); it != pending_signed.end();) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response r = it->second.get();
+        done_signed[it->first] = {r.status_code, std::move(r.text)};
+        it = pending_signed.erase(it);
+    }
+
     if (pending_challenges.has_value() &&
         pending_challenges->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         cpr::Response response = pending_challenges->get();
@@ -1550,6 +1603,13 @@ std::optional<int> NetworkClient::take_challenge_jump_result() {
     return std::nullopt;
 }
 void NetworkClient::request_challenges(const std::string&, int) {}
+int NetworkClient::signed_request(const std::string&, const std::string&, const std::map<std::string, std::string>&) {
+    return -1;
+}
+std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int) {
+    return std::nullopt;
+}
+void NetworkClient::forget_signed(int) {}
 std::optional<ChallengeList> NetworkClient::take_challenges() {
     return ChallengeList{};
 }
