@@ -1541,6 +1541,25 @@ void ScoresManager::add_song(const std::array<std::string, 5>& hashes, const std
     sqlite3_clear_bindings(stmt);
 }
 
+std::pair<std::string, std::string> ScoresManager::get_song_title(const std::string& diff_hash) {
+    std::pair<std::string, std::string> out;
+    sqlite3_stmt* stmt = nullptr;
+    const char* query = "SELECT title, subtitle FROM songs WHERE ?1 IN (hash_0, hash_1, hash_2, hash_3, hash_4) "
+                        "LIMIT 1;";
+    if (diff_hash.empty() || sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_text(stmt, 1, diff_hash.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const auto* title = sqlite3_column_text(stmt, 0);
+        const auto* subtitle = sqlite3_column_text(stmt, 1);
+        out.first = title ? reinterpret_cast<const char*>(title) : "";
+        out.second = subtitle ? reinterpret_cast<const char*>(subtitle) : "";
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
 std::optional<PlayerData> ScoresManager::get_player_data(const std::string& player_id) {
     if (is_guest_id(player_id)) {
         auto [it, fresh] = guest_data.try_emplace(player_id);

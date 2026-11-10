@@ -37,3 +37,14 @@ max = 9999
 # id = 12
 # cost = 30
 # name = ""       # titles only
+
+# The website (zdon.taiko.ac). Members are TaikoForge's: "log in" goes through forge.taiko.ac's single sign-on.
+[site]
+url = "https://zdon.taiko.ac"                  # the public address (cookies are Secure when it is https)
+name = "Z-DON"
+sso_url = "https://forge.taiko.ac/sso/zdon"
+# Same text as TaikoForge's TF_SSO_SECRET_ZDON (at least 16 characters). The environment variable
+# ZDON_SSO_SECRET overrides this. Empty = the site works but nobody can log in.
+sso_secret = ""
+forge_url = "https://forge.taiko.ac"
+# session_secret = ""   # signs the login cookie; empty = generated once into data_dir/site_secret.key

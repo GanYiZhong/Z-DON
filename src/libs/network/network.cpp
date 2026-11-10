@@ -653,6 +653,17 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
     if (judge_params.has_value()) {
         params["judge_params"] = judge_params_to_json(*judge_params);
     }
+    // Z-DON: a self-hosted server (zdon.taiko.ac) shows the song's name; upstream's server isn't sent it
+    const bool zdon_server = !global_data.config->network.zdon_server_url.empty();
+    if (zdon_server) {
+        auto [title, subtitle] = scores_manager.get_song_title(hash);
+        if (!title.empty()) {
+            params["zdon_title"] = title;
+        }
+        if (!subtitle.empty()) {
+            params["zdon_subtitle"] = subtitle;
+        }
+    }
     if (pending_score_submit.has_value()) {
         cpr::Response response = pending_score_submit->get();
         pending_score_submit.reset();
@@ -672,6 +683,11 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
     form.Add({"source_folder", source_folder});
     form.Add({"gauge", gauge >= 0 ? std::to_string(gauge) : ""});
     form.Add({"judge_params", judge_params.has_value() ? params["judge_params"] : ""});
+    for (const char* k : {"zdon_title", "zdon_subtitle"}) {
+        if (auto it = params.find(k); it != params.end()) {
+            form.Add({k, it->second});
+        }
+    }
     pending_score_submit =
         cpr::PostAsync(cpr::Url{network_url("/submit_score")}, signed_headers("POST", "/submit_score", params), query,
                        form, cpr::Timeout{5000} NETWORK_CA_OPT);

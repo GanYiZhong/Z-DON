@@ -219,6 +219,8 @@ public:
     std::optional<fs::path> get_path_by_hash(const std::string& single_hash);
     std::optional<fs::path> get_path_by_diff_hash(const std::string& diff_hash);
     void add_song(const std::array<std::string, 5>& hash, const std::string& title, const std::string& subtitle);
+    // Z-DON: the title and subtitle of the song one of whose charts has this hash (empty when unknown)
+    std::pair<std::string, std::string> get_song_title(const std::string& diff_hash);
     // song_cache: path -> entry, current SONG_CACHE_VERSION only
     std::unordered_map<std::string, SongCacheEntry> load_song_cache();
     void store_song_cache(const std::string& path, const SongCacheEntry& entry);

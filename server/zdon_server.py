@@ -31,9 +31,14 @@ import threading
 import time
 import tomllib
 import urllib.parse
+import zipfile
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zdon_site import Site  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 
@@ -55,6 +60,9 @@ DEFAULT_CONFIG = {
     # [[shop]] type = 2 dress / 3 head / 4 body / 5 puchichara / 6 title, id, cost, name (titles)
     "shop": [],
     "max_body_mb": 32,
+    # the website (zdon_site.py); members come from TaikoForge's single sign-on
+    "site": {"url": "", "name": "Z-DON", "sso_url": "", "sso_secret": "", "forge_url": "https://forge.taiko.ac",
+             "session_secret": ""},
 }
 
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
@@ -91,6 +99,8 @@ def load_config(path: Path | None) -> dict:
     env_key = os.environ.get("ZDON_SERVER_KEY")
     if env_key:
         cfg["auth_key"] = env_key
+    if os.environ.get("ZDON_SSO_SECRET"):
+        cfg["site"]["sso_secret"] = os.environ["ZDON_SSO_SECRET"]
     return cfg
 
 
@@ -384,7 +394,12 @@ class Api:
              p.get("modifiers") or "", int(as_bool(p.get("chara_is_costume"))), as_int(p.get("chara_cos_index")),
              p.get("source_folder") or None, as_int(p.get("gauge"), None) if p.get("gauge") else None,
              p.get("judge_params") or None, int(time.time())))
-        log(f"score #{sid}: {u['username']} {p['hash'][:10]} d{p.get('difficulty')} {p.get('score')}")
+        if p.get("zdon_title"):
+            self.s.run("""INSERT INTO songs(hash, title, subtitle, updated_at) VALUES (?,?,?,?)
+                          ON CONFLICT(hash) DO UPDATE SET title=excluded.title, subtitle=excluded.subtitle,
+                          updated_at=excluded.updated_at""",
+                       (p["hash"], p["zdon_title"][:200], (p.get("zdon_subtitle") or "")[:200], int(time.time())))
+        log(f"score #{sid}: {u['username']} {p.get('zdon_title') or p['hash'][:10]} d{p.get('difficulty')} {p.get('score')}")
         return 200, {"ok": True, "score_id": sid}
 
     def submit_dan(self, p):
@@ -644,6 +659,12 @@ def collect(src: Path, patterns: list[str], excludes: list[str]) -> list[str]:
     return out
 
 
+def make_zip(root: Path, files: list[str], out: Path) -> None:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for rel in sorted(files):
+            z.write(root / rel, rel)
+
+
 def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> None:
     """Copies sources (relative path -> file) into a fresh folder next to dest, writes its manifest, then swaps it in.
     With a version (a game channel) the files go under files/ and version.txt sits beside the manifest."""
@@ -660,6 +681,13 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> N
     if version is not None:
         os.replace(files_root / "checksums.sha256", staging / "checksums.sha256")
         (staging / "version.txt").write_text(version + "\n", encoding="utf-8", newline="\n")
+        # the website's first-install download: the same files as one zip
+        make_zip(files_root, list(sources), staging / "package.zip")
+    else:
+        # a skin: <name>/<branch>.zip beside the branch folder
+        tmp_zip = dest.with_name(dest.name + ".zip.new")
+        make_zip(staging, list(sources), tmp_zip)
+        os.replace(tmp_zip, dest.with_name(dest.name + ".zip"))
     if dest.exists():
         os.replace(dest, old)
     os.replace(staging, dest)
@@ -670,15 +698,7 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None) -> N
 # HTTP
 
 
-PAGE = """<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Z-DON server</title><style>
-body{{font-family:system-ui,"Noto Sans TC",sans-serif;margin:2em auto;max-width:960px;padding:0 1em;color:#222}}
-table{{border-collapse:collapse;width:100%;margin:1em 0}}td,th{{border-bottom:1px solid #ddd;padding:.35em .6em;text-align:left}}
-th{{background:#f4f1ea}}code{{background:#f4f1ea;padding:0 .3em}}h2{{margin-top:1.6em}}
-</style><h1>Z-DON server</h1>{body}</html>"""
-
-
-def make_handler(cfg: dict, api: Api):
+def make_handler(cfg: dict, api: Api, site):
     data: Path = cfg["data_dir"]
     max_body = int(cfg["max_body_mb"]) * 1024 * 1024
 
@@ -753,61 +773,77 @@ def make_handler(cfg: dict, api: Api):
                     name, branch, rel = parts[0], parts[3], parts[4]
                     root = safe_join(data / "skins", f"{urllib.parse.unquote(name)}/{urllib.parse.unquote(branch)}")
                     self._file(safe_join(root, rel) if root else None)
-                else:
-                    self._json(404, {"detail": "not found"})
-                return True
+                    return True
+                return False
             return False
 
-        def _index(self):
-            body = []
-            channels = sorted(p for p in (data / "update").glob("*") if (p / "version.txt").is_file()) \
-                if (data / "update").is_dir() else []
-            if channels:
-                body.append("<h2>更新頻道</h2><table><tr><th>頻道</th><th>版本</th><th>檔案數</th></tr>")
-                for ch in channels:
-                    n = sum(1 for _ in open(ch / "checksums.sha256", encoding="utf-8"))
-                    body.append(f"<tr><td><code>{html.escape(ch.name)}</code></td>"
-                                f"<td>{html.escape((ch / 'version.txt').read_text(encoding='utf-8').strip())}</td>"
-                                f"<td>{n}</td></tr>")
-                body.append("</table>")
-            skins = sorted(p for p in (data / "skins").glob("*/*") if (p / "checksums.sha256").is_file()) \
-                if (data / "skins").is_dir() else []
-            if skins:
-                body.append("<h2>Skin</h2><table><tr><th>Skin</th><th>branch</th><th>.skin-repo 網址</th></tr>")
-                for sk in skins:
-                    url = f"http://{html.escape(self.headers.get('Host', 'HOST'))}/skins/{html.escape(sk.parent.name)}"
-                    body.append(f"<tr><td>{html.escape(sk.parent.name)}</td><td>{html.escape(sk.name)}</td>"
-                                f"<td><code>{url}</code></td></tr>")
-                body.append("</table>")
-            players = api.s.q("""SELECT u.username, COUNT(s.id) AS plays, MAX(s.received_at) AS last
-                                 FROM users u LEFT JOIN scores s USING(access_code)
-                                 GROUP BY u.access_code ORDER BY plays DESC LIMIT 50""")
-            body.append("<h2>玩家</h2><table><tr><th>名稱</th><th>遊玩次數</th><th>最後遊玩</th></tr>")
-            for r in players:
-                last = dt.datetime.fromtimestamp(r["last"]).strftime("%Y-%m-%d %H:%M") if r["last"] else "-"
-                body.append(f"<tr><td>{html.escape(r['username'])}</td><td>{r['plays']}</td><td>{last}</td></tr>")
-            body.append("</table>")
-            recent = api.s.q("""SELECT s.received_at, u.username, s.hash, s.difficulty, s.score, s.crown
-                                FROM scores s JOIN users u USING(access_code) ORDER BY s.id DESC LIMIT 30""")
-            body.append("<h2>最近成績</h2><table><tr><th>時間</th><th>玩家</th><th>譜面</th><th>難度</th>"
-                        "<th>分數</th></tr>")
-            for r in recent:
-                t = dt.datetime.fromtimestamp(r["received_at"]).strftime("%m-%d %H:%M")
-                body.append(f"<tr><td>{t}</td><td>{html.escape(r['username'])}</td>"
-                            f"<td><code>{html.escape(r['hash'][:12])}</code></td><td>{r['difficulty']}</td>"
-                            f"<td>{r['score']}</td></tr>")
-            body.append("</table>")
-            self._send(200, PAGE.format(body="".join(body)).encode(), "text/html; charset=utf-8")
+        # --- what zdon_site.Site uses ---
+        sess = None
+        headers_out: list[str] = []
+
+        @property
+        def cookies(self) -> dict[str, str]:
+            jar = SimpleCookie()
+            try:
+                jar.load(self.headers.get("Cookie", ""))
+            except Exception:  # noqa: BLE001 - a malformed cookie header is no cookie
+                return {}
+            return {k: m.value for k, m in jar.items()}
+
+        def form(self) -> dict[str, str]:
+            length = min(as_int(self.headers.get("Content-Length"), 0), 64 * 1024)
+            raw = self.rfile.read(length) if length > 0 else b""
+            return {k: v[-1] for k, v in urllib.parse.parse_qs(raw.decode("utf-8", "replace"),
+                                                                keep_blank_values=True).items()}
+
+        def send(self, status: int, body: bytes, ctype: str, extra: dict | None = None):
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for c in self.headers_out:
+                self.send_header("Set-Cookie", c)
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def send_html(self, status: int, doc: str):
+            self.send(status, doc.encode(), "text/html; charset=utf-8",
+                      {"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"})
+
+        def redirect(self, location: str, cookies: list[str] | None = None):
+            self.headers_out = list(self.headers_out) + list(cookies or [])
+            self.send(303, b"", "text/plain", {"Location": location, "Cache-Control": "no-store"})
+
+        def send_file(self, path: Path, download_name: str):
+            self.headers_out = []
+            quoted = urllib.parse.quote(download_name)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quoted}")
+            self.end_headers()
+            if self.command != "HEAD":
+                with open(path, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile, 1 << 20)
 
         def _dispatch(self):
             url = urllib.parse.urlsplit(self.path)
             path = url.path.rstrip("/") or "/"
-            if self.command in ("GET", "HEAD"):
-                if path == "/":
-                    self._index()
-                    return
-                if self._published(url.path):
-                    return
+            self.headers_out = []
+            if self.command in ("GET", "HEAD") and self._published(url.path):
+                return
+            if site.handles(path) and self.command in ("GET", "HEAD", "POST"):
+                query = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query, keep_blank_values=True).items()}
+                try:
+                    site.handle(self, "GET" if self.command == "HEAD" else self.command, path, query)
+                except Exception as e:  # noqa: BLE001
+                    log(f"site error in {self.command} {path}: {e!r}")
+                    self.headers_out = []
+                    self.send(500, "伺服器錯誤".encode(), "text/plain; charset=utf-8")
+                return
             params = self._params(url)
             if params is None:
                 self._json(413, {"detail": "body too large or malformed"})
@@ -835,8 +871,9 @@ def make_handler(cfg: dict, api: Api):
 def cmd_serve(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     api = Api(cfg, store)
+    site = Site(cfg, store, api.nonces)
     host, port = args.host or cfg["host"], args.port or int(cfg["port"])
-    httpd = ThreadingHTTPServer((host, port), make_handler(cfg, api))
+    httpd = ThreadingHTTPServer((host, port), make_handler(cfg, api, site))
     httpd.daemon_threads = True
     log(f"Z-DON server on http://{host}:{port}  (data: {cfg['data_dir']})")
     if not cfg["auth_key"]:

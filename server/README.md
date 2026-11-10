@@ -7,7 +7,7 @@
 | 遊戲線上 API（帳號、成績、排行、重播、段位、獎牌、AI 對戰…） | `/health`、`/user`、`/submit_score`… | 遊戲（`config.toml` 的 `zdon_server_url`） |
 | 遊戲更新（差量） | `/update/<頻道>/…` | `zdon_update.bat` 與遊戲內 F9 更新 |
 | Skin 更新 | `/skins/<名稱>/raw/branch/<分支>/…` | 遊戲內建的 skin updater（`.skin-repo`） |
-| 狀態頁 | `/` | 瀏覽器：玩家、最近成績、已發布的版本與 skin |
+| 網站 zdon.taiko.ac | `/`、`/download`、`/charts`、`/player/…`、`/me` | 瀏覽器：下載、排行、玩家頁、會員綁定遊戲帳號（`zdon_site.py`） |
 
 資料全部在 `data_dir`（預設 `server/zdon_data/`）：`zdon.db`（SQLite）和發布出去的檔案。備份就是複製這個資料夾。
 
@@ -97,3 +97,44 @@ python server\zdon_server.py jump <access code> --score-id <成績編號> # 或�
 `zdon_server.toml` 裡的 `tournament`、`campaigns`、`kinotake`、`gacha_puchichara`、`[[shop]]` 預設全關或空白；
 這些是簡化版（AI 對戰段位 = 每 10 個星星升一段、獎牌 = 每場 1 枚＋每日首場 3 枚、ドンポイント = 每首 魂量表÷10），
 只為了讓遊戲的對應畫面有回應，不是上游 hiroba 的規則。`force_unlock = true` 時所有服裝都可用（同離線）。
+
+## 網站 zdon.taiko.ac（會員與 TaikoForge 共用）
+
+網站和遊戲 API 是同一個程序、同一個埠。會員是 TaikoForge 的：網站按「登入」會導到
+`forge.taiko.ac/sso/zdon`，在那裡登入（或註冊、收驗證信、忘記密碼），再帶一張 60 秒有效、簽章過的票證回來。
+這裡只記會員的 TaikoForge id 與 email、以及他綁了哪些遊戲帳號。
+
+頁面：首頁（下載、最近遊玩、本月熱門）、下載（每個更新頻道的完整安裝包 zip，`publish` 時自動產生）、
+Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、排行（可搜尋曲名；曲名由遊戲送成績時附上）、
+玩家頁、我的頁面（輸入 access code 綁定遊戲帳號、改名、從排行頁把歌送到遊戲的選曲畫面）。
+
+### 設定
+
+1. TaikoForge 那邊（forge.taiko.ac 的環境變數）：
+   ```
+   TF_SSO_CLIENTS=zdon=https://zdon.taiko.ac/auth/callback
+   TF_SSO_SECRET_ZDON=<openssl rand -hex 32 產生的值>
+   ```
+   改完重啟 TaikoForge。
+2. `zdon_server.toml` 的 `[site]`：`url = "https://zdon.taiko.ac"`、`sso_secret` 填同一個值
+   （或用環境變數 `ZDON_SSO_SECRET`）。
+3. 用 Cloudflare Tunnel 開出去：同一條 tunnel（或新開一條），`config.yml` 的 `ingress` 加
+   ```yaml
+     - hostname: zdon.taiko.ac
+       service: http://127.0.0.1:8730
+   ```
+   放在最後那行 `- service: http_status:404` 之前，然後 `cloudflared tunnel route dns <tunnel 名稱> zdon.taiko.ac`。
+   只靠 tunnel 對外的話，`zdon_server.toml` 的 `host` 改成 `"127.0.0.1"`（區網的遊戲機要直連才留 `0.0.0.0`）。
+4. 遊戲的 `zdon_server_url` 可以直接填 `https://zdon.taiko.ac`。
+
+### 開機自動啟動
+
+系統管理員 PowerShell 執行一次：
+
+```bat
+powershell -ExecutionPolicy Bypass -File server\install_autostart.ps1
+```
+
+會在工作排程器建立「Z-DON server」：開機就跑（不必登入）、當掉一分鐘後自動重啟。移除：
+`Unregister-ScheduledTask -TaskName "Z-DON server" -Confirm:$false`。cloudflared 用 `cloudflared service install`
+裝成服務即可（TaikoForge 的 DEPLOY.md 已經有）。
