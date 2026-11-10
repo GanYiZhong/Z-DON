@@ -292,6 +292,7 @@ class Api:
             ("POST", "/match/sync"): self.matches.sync,
             ("POST", "/match/finish"): self.matches.finish,
             ("POST", "/match/upload"): self.matches.upload,
+            ("POST", "/match/chat"): self.matches.chat,
             ("POST", "/match/upload_fail"): self.matches.upload_fail,
             ("GET", "/match/download"): self.matches.download,
             ("POST", "/gacha"): self.gacha,

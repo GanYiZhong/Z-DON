@@ -403,4 +403,12 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   再改成對時（使用者：80 ms 要改）：WebSocket ping/pong 量和伺服器的時鐘差（取最短來回），go 帶 at（伺服器時間＋800 ms）；
   有直連時房主每 20 ms 經直連 ping 對方 12 次，把開始時間換成對方時鐘送 {"t":"start"}（送 3 次）。實測開始只差 3 ms。
   順便：連線檢查（heartbeat）離線時每 5 秒重試、逾時 2→5 秒（第一次經 Cloudflare 的 TLS 逾時會讓線上對戰卡 2 分鐘）。
+- 2026-11-11 三戰兩勝與聊天：zdon_match.py 的 "host" 改成「選下一首的人」，每首結束（兩邊 final 都到）由 _score_song
+  計分並交換 host/guest；先 2 勝 state="over"（_drop 不再把 over 的房間改回 waiting），兩邊看到後各自 leave。
+  聊天：POST /match/chat、state 的 chat（chat_since），遊戲中走 WebSocket {"t":"chat"}（目前遊戲中不顯示）。
+  驗證：Python 直接呼叫 Matches 模擬多場（先選隨機、輸的人選第二首、1:1 再隨機、2 勝結束）；遊戲畫面用腳本對手發訊息截圖。
+  未驗證：實際用鍵盤打字送出（測試用的假按鍵不產生文字輸入）、比賽結束的提示畫面。
+- 2026-11-11（使用者）：客人收到房主的歌就 jump_to_song 後直接 player->select_song() 進難度選擇，
+  on_diff_select_cancelled 再打開、Esc 吞掉（只能選難度與選項）；線上對戰 mods_1.skip=false、zdon_sudden_death=0；聊天鍵改 Y。
+  驗證：腳本當房主選 Ryuusei，遊戲客人直接進難度選擇，Esc 兩次仍在同一首。
 - 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。

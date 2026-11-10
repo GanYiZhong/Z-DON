@@ -120,6 +120,9 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         mods_2.auto_play = false;
     }
     if (online) {
+        // no skipping the song and no sudden death in an online battle (the user's rule 2026-11-11): both play it out
+        mods_1.skip = false;
+        mods_1.zdon_sudden_death = 0;
         // the player's options on both lanes (as an AI battle), but the opponent's chart options: its hits only
         // fit the notes it saw
         mods_2 = mods_1;

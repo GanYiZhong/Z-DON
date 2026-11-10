@@ -27,6 +27,12 @@ Flow (every call carries the player's access_code; the game signs them like the 
     addresses: local, IPv6, and the public one a STUN server saw) and the server passes them to the opponent. The
     games then try to reach each other over UDP (zdon_p2p.cpp) and send the hits both ways, taking whichever
     comes first; the WebSocket stays the fallback.
+A match is best of three (the user's rules 2026-11-11): "host" is the side that picks the next song. The first
+song's picker is drawn at random; after a song the loser picks; at 1:1 (or after a draw) the picker is drawn again.
+The first to two wins takes the match: the state turns "over" (with the result) and the room closes once both have
+seen it (each leaves).
+Chat: POST /match/chat code text (up to 120 characters, one a second); /match/state answers the messages after
+`chat_since` (the room keeps the last 50), and a game in a song gets {"t":"chat"} on its WebSocket.
 A guest without the host's chart asks for it (ready has_song=0 want=1: state "transfer"); the host's game zips the
 song's folder and sends it, the guest's downloads it and checks the chart's hash before adding it to its library:
     POST /match/upload       code hash name sha256 (+ the zip as the body)     the host
@@ -55,6 +61,10 @@ def wall_ms() -> float:
 def go_message() -> str:
     return json.dumps({"t": "go", "at": wall_ms() + GO_AHEAD_MS})
 ROOM_MAX_HITS = 20000   # per player per round
+CHAT_KEEP = 50          # messages a room keeps
+MATCH_WINS = 2          # best of three
+CHAT_MAX_CHARS = 120
+CHAT_MIN_GAP_S = 1.0    # one message a second per player
 SONG_UPLOAD_MAX = 90 * 1024 * 1024  # a song sent to the guest (under Cloudflare's 100 MB request limit)
 
 
@@ -67,6 +77,7 @@ class Side:
         self.code = code
         self.profile = profile          # username, title, colours: what the opponent's lane shows
         self.seen = now()
+        self.last_chat = 0.0
         self.ws = None                  # the WebSocket of the song being played (zdon_ws.WsConn), if any
         self.reset_round()
 
@@ -96,6 +107,11 @@ class Room:
         self.round = 0
         self.transfer: dict | None = None   # the song being sent to the guest: hash, name, data
         self.p2p = secrets.token_hex(8)     # the round's key for the games' direct UDP packets
+        self.chat: list[dict] = []          # {"id", "from", "text"}
+        self.wins: dict[str, int] = {}      # access code -> songs won in this match
+        self.songs = 0                      # songs finished in this match
+        self.result: dict | None = None     # the match's end: {"winner": code, "wins": {code: n}}
+        self.chat_seq = 0
 
     def side(self, access_code: str) -> tuple[Side | None, Side | None]:
         if self.host.code == access_code:
@@ -133,10 +149,44 @@ class Matches:
             else:
                 self.rooms.pop(r.code, None)
                 return
+        if r.state == "over":           # the match is over: the room closes when the other leaves too
+            return
         r.state = "waiting"
         r.song = None
         r.transfer = None
         r.host.reset_round()
+
+    @staticmethod
+    def _start_match(r: Room):
+        """Two players in the room: a new best-of-three, its first picker drawn at random."""
+        r.wins = {r.host.code: 0, r.guest.code: 0}
+        r.songs = 0
+        r.result = None
+        if secrets.randbelow(2):
+            r.host, r.guest = r.guest, r.host
+
+    @staticmethod
+    def _score_song(r: Room):
+        """Both finals are in: the song's winner, then the match's end or the next picker."""
+        a, b = r.host, r.guest
+        if not a or not b or a.final is None or b.final is None:
+            return
+        r.songs += 1
+        sa, sb = a.final.get("score", 0), b.final.get("score", 0)
+        loser = None
+        if sa != sb:
+            winner, loser = (a, b) if sa > sb else (b, a)
+            r.wins[winner.code] = r.wins.get(winner.code, 0) + 1
+            if r.wins[winner.code] >= MATCH_WINS:
+                r.result = {"winner": winner.code, "wins": dict(r.wins)}
+                r.state = "over"
+                return
+        tied = r.wins.get(a.code, 0) == r.wins.get(b.code, 0)
+        if loser is None or tied:   # a draw, or 1:1 before the deciding song: drawn again
+            if secrets.randbelow(2):
+                r.host, r.guest = r.guest, r.host
+        elif loser is not r.host:   # the loser picks the next song
+            r.host, r.guest = r.guest, r.host
 
     def _new_code(self) -> str:
         while True:
@@ -183,6 +233,7 @@ class Matches:
                 if r.quick and r.guest is None and r.state == "waiting":
                     r.guest = Side(code, prof)
                     r.state = "choosing"
+                    self._start_match(r)
                     return 200, {"code": r.code}
         return self.create(p, quick=True)
 
@@ -203,6 +254,7 @@ class Matches:
             self._leave_all(code)
             r.guest = Side(code, prof)
             r.state = "choosing"
+            self._start_match(r)
             return 200, {"code": r.code}
 
     def leave(self, p):
@@ -220,6 +272,12 @@ class Matches:
                 return 404, {"detail": "no_room"}
             out = {"code": r.code, "state": r.state, "role": "host" if me is r.host else "guest", "round": r.round,
                    "song": r.song, "you": {"ready": me.ready, "difficulty": me.difficulty}}
+            since = int(p.get("chat_since", "0") or 0)
+            out["chat"] = [m for m in r.chat if m["id"] > since]
+            opp_code = opp.code if opp else next((c for c in r.wins if c != me.code), "")
+            out["match"] = {"you": r.wins.get(me.code, 0), "opp": r.wins.get(opp_code, 0), "songs": r.songs,
+                            "over": r.result is not None,
+                            "won": bool(r.result and r.result["winner"] == me.code)}
             if r.state == "transfer":
                 out["transfer"] = {"ready": r.transfer is not None,
                                    "size": len(r.transfer["data"]) if r.transfer else 0}
@@ -408,6 +466,26 @@ class Matches:
                 if me.ws is conn:
                     me.ws = None
 
+    def chat(self, p):
+        text = "".join(ch for ch in (p.get("text") or "") if ch >= " " and ch not in "\x7f").strip()[:CHAT_MAX_CHARS]
+        if not text:
+            return 400, {"detail": "empty"}
+        with self.lock:
+            r, me, opp = self._room(p)
+            if not r or not me:
+                return 404, {"detail": "no_room"}
+            t = now()
+            if t - me.last_chat < CHAT_MIN_GAP_S:
+                return 429, {"detail": "too_fast"}
+            me.last_chat = t
+            r.chat_seq += 1
+            msg = {"id": r.chat_seq, "from": me.profile.get("username", "?"), "text": text}
+            r.chat = (r.chat + [msg])[-CHAT_KEEP:]
+            to = opp.ws if opp and opp.ws else None
+        if to:
+            to.send_text(json.dumps({"t": "chat", **msg}, ensure_ascii=False))
+        return 200, {"ok": True, "id": msg["id"]}
+
     def upload(self, p, body: bytes):
         with self.lock:
             r, me, _ = self._room(p)
@@ -443,6 +521,7 @@ class Matches:
             me.final = {k: int(p.get(k, "0") or 0) for k in ("score", "good", "ok", "bad", "drumroll", "max_combo")}
             if opp is None or opp.final is not None:
                 r.state = "finished"
+                self._score_song(r)
             if opp and opp.ws:
                 opp.ws.send_text(json.dumps({"t": "f", "final": me.final}))
             return 200, {"ok": True}

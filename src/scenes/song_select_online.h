@@ -17,6 +17,11 @@
 //               options; both play at once, the opponent in the 2P lane (Game2PScreen live_*). A guest without
 //               the chart gets it from the host's game (zdon_song_share, checked by its hash). The room stays for
 //               the next song until one leaves.
+//   A match is best of three: the first song's picker is drawn at random, then the loser of a song picks (at 1:1
+//   drawn again); the first to two wins takes it and the room closes.
+//   The guest is put straight into the host's song's course window and can't leave it (course and options only).
+//   Chat: in a room, Y opens a line to type (the system's IME works), Enter sends it, Esc closes it; the room's
+//   messages show bottom left (server/zdon_match.py chat).
 // The higher score wins. Drawn by the engine (zdon_hud), the same in every skin.
 class OnlineSongSelectScreen : public SongSelectScreen {
     enum class Modal {
@@ -70,6 +75,22 @@ class OnlineSongSelectScreen : public SongSelectScreen {
     bool guest_rejump = false;       // the guest picked another song: back to the host's after the notice
     int guest_difficulty = -1;       // the guest's course for this round
 
+    // the best-of-three match (server/zdon_match.py): songs won, and its end
+    int match_you = 0, match_opp = 0, match_songs = 0;
+
+    // chat
+    struct ChatLine {
+        std::string from, text;
+        double at_ms = 0.0; // local ms it came
+    };
+    std::vector<ChatLine> chat_lines;
+    int chat_last_id = 0;
+    bool chat_typing = false;
+    std::string chat_text;
+    int chat_request = -1;
+    void update_chat(double now);
+    void draw_chat(float u);
+
     // sending a song to a guest that hasn't it (the host) / getting it (the guest)
     std::future<ZdonSongPack> pack_job;
     std::future<ZdonSongInstall> install_job;
@@ -96,6 +117,8 @@ protected:
     void select_song(SongBox* box) override;
     bool hides_dan() override { return true; }
     bool allows_second_player_join() override { return false; }
+    // the guest stays in the host's song: backing out of the course window opens it again
+    void on_diff_select_cancelled(double current_ms) override;
 
 public:
     OnlineSongSelectScreen() : SongSelectScreen("song_select") {}
