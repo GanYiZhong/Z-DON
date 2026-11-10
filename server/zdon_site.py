@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import html
 import json
+import re
 import secrets
 import time
 import urllib.parse
@@ -343,7 +344,7 @@ class Site:
     def home(self, req):
         ch = self.channels()
         latest = ch[0] if ch else None
-        dl = (f'<p><a class="btn" href="/download">下載 Z-DON</a> <span class="muted small">最新版 {esc(latest[1])}</span></p>'
+        dl = (f'<p><a class="btn" href="/download">下載 Z-DON</a> <span class="muted small">{esc(self.version_label(latest[1], latest[2]))} 版</span></p>'
               if latest else '<p class="muted">還沒有發布的版本。</p>')
         recent = self.s.q("""SELECT s.received_at, s.hash, s.difficulty, s.score, s.crown, u.username, u.rowid AS pid
                              FROM scores s JOIN users u USING(access_code) ORDER BY s.id DESC LIMIT 12""")
@@ -361,31 +362,35 @@ class Site:
 <div class="card"><h2 style="margin-top:0">本月熱門</h2>{('<table><tr><th>曲目</th><th>難度</th><th class="num">遊玩</th></tr>' + hot_html + '</table>') if hot else '<p class="muted">還沒有成績。</p>'}</div></div>"""
         self.page(req, "首頁", body)
 
+    @staticmethod
+    def version_label(version: str, path: Path) -> str:
+        """20261110-2113-874ef6ef -> 2026/11/10 21:13; anything else as it is."""
+        m = re.match(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})", version)
+        if m:
+            return f"{m[1]}/{m[2]}/{m[3]} {m[4]}:{m[5]}"
+        return version or when(path.stat().st_mtime)
+
     def download(self, req):
-        host = self.public_url or f"http://{req.headers.get('Host', 'HOST')}"
-        parts = ["<h1>下載</h1>"]
-        ch = self.channels()
+        ch = [c for c in self.channels() if (c[2] / "package.zip").is_file()]
         if not ch:
-            parts.append('<p class="muted">還沒有發布的版本。</p>')
-        for name, version, path in ch:
-            zip_path = path / "package.zip"
-            files = sum(1 for _ in open(path / "checksums.sha256", encoding="utf-8"))
-            size = f"{zip_path.stat().st_size / 1e6:.1f} MB" if zip_path.is_file() else ""
-            has_skins = any(line.split(None, 1)[1].startswith("Skins/")
-                            for line in open(path / "checksums.sha256", encoding="utf-8") if line.strip())
-            btn = (f'<a class="btn" href="/download/{esc(name)}.zip">下載 {esc(version)}</a> '
-                   f'<span class="muted small">{size}・{files} 個檔案</span>' if zip_path.is_file() else
-                   '<span class="muted">這個頻道沒有完整安裝包（請用更新程式）。</span>')
-            skin_note = "" if has_skins else '<p class="small muted">這個安裝包不含 Skin，請另外到 <a href="/skins">Skin</a> 下載。</p>'
-            parts.append(f"""<div class="card"><h2 style="margin-top:0">{esc(name)}</h2><p>{btn}</p>{skin_note}
-<p class="small">已經裝好的話，之後的更新：遊戲標題畫面出現新版提示時按 <b>F9</b>，或執行遊戲資料夾裡的
-<code>zdon_update.bat</code>，只會下載有變動的檔案。</p></div>""")
-        parts.append(f"""<h2>連上這個伺服器</h2><p>在遊戲資料夾的 <code>config.toml</code> 的 <code>[network]</code> 加上：</p>
-<pre>online_play = true
-zdon_server_url = '{esc(host)}'
-zdon_server_key = '（向站長索取）'</pre>
-<p class="small muted">之後在遊戲裡輸入名字或刷卡就會建立遊戲帳號；登入本站後可以在「我的頁面」綁定，查看自己的成績。</p>""")
-        self.page(req, "下載", "".join(parts))
+            self.page(req, "下載", '<h1>下載</h1><p class="muted">還沒有可以下載的版本。</p>')
+            return
+        # the main channel first ("windows"), the rest as small links
+        ch.sort(key=lambda c: (c[0] != "windows", c[0]))
+        name, version, path = ch[0]
+        size = (path / "package.zip").stat().st_size / 1e6
+        others = "".join(f' <a href="/download/{esc(n)}.zip">{esc(n)}</a>' for n, _, _ in ch[1:])
+        body = f"""<div class="card hero" style="text-align:center;padding:2.2em 1.3em">
+<h1 style="margin-bottom:.3em">下載 Z-DON</h1>
+<p><a class="btn" style="font-size:1.25em;padding:.7em 2.2em" href="/download/{esc(name)}.zip">下載（Windows）</a></p>
+<p class="small muted">{esc(self.version_label(version, path))} 版・{size:.0f} MB</p></div>
+<div class="card"><ol style="margin:.2em 0;padding-left:1.4em;line-height:2">
+<li>把下載的 zip 解壓縮到任何資料夾</li>
+<li>執行 <b>YataiDON.exe</b></li>
+<li>第一次開啟時選要用的 skin，會自動下載（約 3～5 分鐘）</li>
+</ol></div>
+<p class="small muted" style="text-align:center">之後有新版時，遊戲標題畫面會提示，按 <b>F9</b> 就會自動更新。{('<br>其他版本：' + others) if others else ''}</p>"""
+        self.page(req, "下載", body)
 
     def download_zip(self, req, channel: str):
         for name, version, path in self.channels():
