@@ -1,5 +1,9 @@
 #pragma once
 
+#include <memory>
+#include <vector>
+
+#include "../libs/network/zdon_ws.h"
 #include "game.h"
 
 class Game2PScreen : public GameScreen {
@@ -18,6 +22,15 @@ private:
     double live_last_sync = -1e9;  // local ms of the last sync sent
     double live_now = 0.0;         // this frame's local ms
     double live_hold_since = -1.0; // local ms the song's end started waiting for the opponent
+    // the WebSocket (pushed both ways the moment a hit is played); /match/sync polling without one
+    std::unique_ptr<ZdonWs> live_ws;
+    bool live_ws_off = false;     // none this song (turned off, refused, or dropped): polling
+    bool live_ws_used = false;    // it was open this song (for the log)
+    size_t live_ws_next = 0;      // my next hit to send on it
+    double live_ws_last = -1e9;   // local ms of the last message on it
+    std::vector<double> live_lag; // how late each of the opponent's hits came (ms), for the log
+    void live_take(const std::string& body);
+    void live_log_lag();
     void live_update(double current_ms);
     void live_send_finish();
     void draw_live_overlay();

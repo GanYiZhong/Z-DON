@@ -1057,6 +1057,31 @@ int NetworkClient::signed_upload(const std::string& path, const std::map<std::st
     return ticket;
 }
 
+std::optional<std::pair<std::string, std::vector<std::string>>>
+NetworkClient::signed_ws_target(const std::string& path, const std::map<std::string, std::string>& params) {
+    if (!network_enabled()) {
+        return std::nullopt;
+    }
+    std::string url = network_url(path);
+    if (url.starts_with("https://")) {
+        url = "wss://" + url.substr(8);
+    } else if (url.starts_with("http://")) {
+        url = "ws://" + url.substr(7);
+    } else {
+        return std::nullopt;
+    }
+    char sep = '?';
+    for (const auto& [k, v] : params) {
+        url += sep + std::string(cpr::util::urlEncode(k)) + "=" + std::string(cpr::util::urlEncode(v));
+        sep = '&';
+    }
+    std::vector<std::string> headers;
+    for (const auto& [k, v] : signed_headers("GET", path, params)) {
+        headers.push_back(k + ": " + v);
+    }
+    return std::make_pair(url, headers);
+}
+
 std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int ticket) {
     auto it = done_signed.find(ticket);
     if (it == done_signed.end()) {
@@ -1628,6 +1653,10 @@ int NetworkClient::signed_upload(const std::string&, const std::map<std::string,
     return -1;
 }
 std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int) {
+    return std::nullopt;
+}
+std::optional<std::pair<std::string, std::vector<std::string>>>
+NetworkClient::signed_ws_target(const std::string&, const std::map<std::string, std::string>&) {
     return std::nullopt;
 }
 void NetworkClient::forget_signed(int) {}

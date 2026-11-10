@@ -12,6 +12,12 @@ Flow (every call carries the player's access_code; the game signs them like the 
     POST /match/sync   code from hits pos score combo since
                                   -> the opponent's hits from `since`, its position and score (~10 a second in play)
     POST /match/finish code score good ok bad drumroll max_combo
+    GET  /match/ws     code since    a WebSocket for the song (the game falls back to /match/sync without one):
+        game -> {"t":"s","from","hits","pos","score","combo","t0"}       my new hits and position (as /match/sync)
+        server -> {"t":"hello","have"} once, then {"t":"o","at","hits","pos","score","combo","t0"} the opponent's
+                  new hits (pushed the moment they arrive), {"t":"a","have"} my hits it holds,
+                  {"t":"f","final"} the opponent finished, {"t":"l"} the opponent left
+    `t0` is the sender's wall clock (ms) at chart ms 0: the receiving game logs how late the hits arrived.
 A guest without the host's chart asks for it (ready has_song=0 want=1: state "transfer"); the host's game zips the
 song's folder and sends it, the guest's downloads it and checks the chart's hash before adding it to its library:
     POST /match/upload       code hash name sha256 (+ the zip as the body)     the host
@@ -24,6 +30,7 @@ the opponent's reported position (`pos`, sent with every hit before it).
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import threading
 import time
@@ -42,6 +49,7 @@ class Side:
         self.code = code
         self.profile = profile          # username, title, colours: what the opponent's lane shows
         self.seen = now()
+        self.ws = None                  # the WebSocket of the song being played (zdon_ws.WsConn), if any
         self.reset_round()
 
     def reset_round(self):
@@ -54,6 +62,7 @@ class Side:
         self.score = 0
         self.combo = 0
         self.final = None               # dict once finished
+        self.t0 = None                  # the player's wall clock (ms) at chart ms 0
 
 
 class Room:
@@ -92,6 +101,9 @@ class Matches:
                 self._drop(r, r.host.code)
 
     def _drop(self, r: Room, access_code: str):
+        for side in (r.host, r.guest):  # the one staying hears it at once
+            if side and side.code != access_code and side.ws:
+                side.ws.send_text('{"t":"l"}')
         if r.guest and r.guest.code == access_code:
             r.guest = None
         elif r.host.code == access_code:
@@ -246,18 +258,91 @@ class Matches:
             hits = [h for h in (p.get("hits") or "").split(",") if h]
             if start == len(me.hits) and len(me.hits) + len(hits) <= ROOM_MAX_HITS:
                 me.hits.extend(hits)    # a resend of hits already here (a lost answer) is ignored
-            if p.get("pos"):
-                me.pos = float(p["pos"])
-            me.score = int(p.get("score", "0") or 0)
-            me.combo = int(p.get("combo", "0") or 0)
+            self._take(me, p)
             out = {"have": len(me.hits), "state": r.state, "round": r.round}
             if opp:
                 since = int(p.get("since", "0") or 0)
                 out.update(hits=",".join(opp.hits[since:]), total=len(opp.hits), pos=opp.pos, score=opp.score,
-                           combo=opp.combo, final=opp.final, left=False)
+                           combo=opp.combo, final=opp.final, left=False, t0=opp.t0)
             else:
                 out.update(hits="", total=0, pos=None, score=0, combo=0, final=None, left=True)
             return 200, out
+
+    @staticmethod
+    def _take(me: Side, p) -> list[str]:
+        """A sync's new hits and position (the hits only when they follow on from what is here); the hits added."""
+        start = int(p.get("from", "0") or 0)
+        hits = [h for h in (p.get("hits") or "").split(",") if h]
+        added = []
+        if start == len(me.hits) and len(me.hits) + len(hits) <= ROOM_MAX_HITS:
+            me.hits.extend(hits)    # a resend of hits already here (a lost answer) is ignored
+            added = hits
+        if p.get("pos") not in (None, ""):
+            me.pos = float(p["pos"])
+        me.score = int(p.get("score", "0") or 0)
+        me.combo = int(p.get("combo", "0") or 0)
+        if p.get("t0") not in (None, ""):
+            me.t0 = float(p["t0"])
+        return added
+
+    def ws_session(self, p, conn):
+        """A WebSocket for one song: what this player sends is pushed to the opponent's at once."""
+        with self.lock:
+            r, me, opp = self._room(p)
+            if not r or not me:
+                conn.send_text('{"t":"err","detail":"no_room"}')
+                return
+            if me.ws and me.ws is not conn:
+                me.ws.close()
+            me.ws = conn
+            since = int(p.get("since", "0") or 0)
+            hello = {"t": "hello", "have": len(me.hits)}
+            first = None
+            if opp:
+                first = {"t": "o", "at": since, "hits": ",".join(opp.hits[since:]), "pos": opp.pos,
+                         "score": opp.score, "combo": opp.combo, "t0": opp.t0}
+            gone = opp is None
+            final = opp.final if opp else None
+        conn.send_text(json.dumps(hello))
+        if first:
+            conn.send_text(json.dumps(first))
+        if final:
+            conn.send_text(json.dumps({"t": "f", "final": final}))
+        if gone:
+            conn.send_text('{"t":"l"}')
+        try:
+            while True:
+                text = conn.recv()
+                if text is None:
+                    break
+                try:
+                    msg = json.loads(text)
+                except ValueError:
+                    continue
+                if not isinstance(msg, dict) or msg.get("t") != "s":
+                    continue
+                q = {k: str(v) for k, v in msg.items() if v is not None}
+                with self.lock:
+                    r2 = self.rooms.get(r.code)
+                    me2, opp = r2.side(me.code) if r2 else (None, None)
+                    if me2 is not me:
+                        break       # this player left the room
+                    me.seen = now()
+                    at = len(me.hits)
+                    added = self._take(me, q)
+                    push = None
+                    if opp and opp.ws:
+                        push = (opp.ws, {"t": "o", "at": at if added else len(me.hits), "hits": ",".join(added),
+                                         "pos": me.pos, "score": me.score, "combo": me.combo, "t0": me.t0})
+                    have = len(me.hits)
+                if push:
+                    push[0].send_text(json.dumps(push[1]))
+                took = bool(added) or not q.get("hits")
+                conn.send_text('{"t":"a","have":%d,"took":%s}' % (have, "true" if took else "false"))
+        finally:
+            with self.lock:
+                if me.ws is conn:
+                    me.ws = None
 
     def upload(self, p, body: bytes):
         with self.lock:
@@ -294,4 +379,6 @@ class Matches:
             me.final = {k: int(p.get(k, "0") or 0) for k in ("score", "good", "ok", "bad", "drumroll", "max_combo")}
             if opp is None or opp.final is not None:
                 r.state = "finished"
+            if opp and opp.ws:
+                opp.ws.send_text(json.dumps({"t": "f", "final": me.final}))
             return 200, {"ok": True}

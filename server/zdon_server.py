@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zdon_match import SONG_UPLOAD_MAX, Matches  # noqa: E402
+from zdon_ws import WsConn, accept_key  # noqa: E402
 from zdon_site import Site  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -321,6 +322,12 @@ class Api:
         if (method, path) in self.BODY:
             return fn(params, body)
         return fn(params)
+
+    def signed(self, method: str, path: str, params: dict[str, str], headers) -> tuple[bool, str]:
+        key = self.cfg["auth_key"]
+        if not key:
+            return True, ""
+        return signature_ok(key, method, path, params, headers, int(self.cfg["signature_window_s"]), self.nonces)
 
     def _user(self, p) -> sqlite3.Row | None:
         code = p.get("access_code", "")
@@ -946,6 +953,9 @@ def make_handler(cfg: dict, api: Api, site):
                     self.headers_out = []
                     self.send(500, "伺服器錯誤".encode(), "text/plain; charset=utf-8")
                 return
+            if path == "/match/ws" and self.command == "GET" and "websocket" in self.headers.get("Upgrade", "").lower():
+                self._websocket(url)
+                return
             params = self._params(url)
             if params is None:
                 self._json(413, {"detail": "body too large or malformed"})
@@ -961,6 +971,26 @@ def make_handler(cfg: dict, api: Api, site):
                 self._json(404, {"detail": "not found"})
             else:
                 self._json(*res)
+
+        def _websocket(self, url):
+            params = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query, keep_blank_values=True).items()}
+            ok, why = api.signed("GET", "/match/ws", params, self.headers)
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            if not ok or not key:
+                self._json(401 if not ok else 400, {"detail": why or "no key"})
+                return
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept_key(key))
+            self.end_headers()
+            self.wfile.flush()
+            conn = WsConn(self.connection, self.rfile, self.wfile)
+            try:
+                api.matches.ws_session(params, conn)
+            finally:
+                conn.close()
+                self.close_connection = True
 
         do_GET = do_POST = do_HEAD = _dispatch
 

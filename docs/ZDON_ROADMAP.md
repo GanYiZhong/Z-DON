@@ -387,4 +387,9 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   不壓縮的 zip）→ signed_upload（參數放 query 簽名、sha256 驗內容）→ 客人下載、zdon_install_song 解到 `<tja_path[0]>/Z-DON Online/<名稱>`，
   有一個難度的雜湊等於房主的才 add_path_binding，並用 LibraryIndex::note_changed 讓選曲改讀磁碟（啟動時的索引沒有新資料夾）。
   實測：2P 的歌曲庫只有教學，收到「1・2・3」後跳過去、自己選魔王，兩邊結果一致（良 429、1003870）。
+- 2026-11-11 WebSocket：curl 開 ENABLE_WEBSOCKETS（cmake/deps.cmake），`src/libs/network/zdon_ws.*` 背景執行緒收發；
+  伺服器 `server/zdon_ws.py`（最小 RFC 6455）＋ Matches.ws_session，一收到就推給對手（{"t":"o"}），結束／離開也推。
+  握手簽名照 signed_headers（參數放 query）。連不上或斷線就退回輪詢（ZDON_ONLINE_WS=0 強制輪詢）。
+  每筆打擊帶 t0（送方 chart 0 的牆上時鐘），收方在結束時 log 晚到的平均／中位數／95%／最大值。
+  實測同一台：本機 9 ms vs 輪詢 104–114 ms；經 Cloudflare 300 ms vs 1.4 秒（zdon.taiko.ac 被分到 SJC，連線本身就 130 ms）。
 - 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。

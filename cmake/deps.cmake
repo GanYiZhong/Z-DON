@@ -583,6 +583,9 @@ if(APPLE AND NOT IOS)
   set(USE_APPLE_IDN ON CACHE BOOL "" FORCE)
 endif()
 
+# Z-DON: curl's WebSocket client (curl_ws_*): the live online battle's connection (src/libs/network/zdon_ws.cpp)
+set(ENABLE_WEBSOCKETS ON CACHE BOOL "" FORCE)
+
 if(NOT EMSCRIPTEN)  # no curl/SSL on web; browser build has no cpr users
   FetchContent_Declare(
       cpr

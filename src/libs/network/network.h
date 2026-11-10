@@ -239,6 +239,9 @@ public:
                       int timeout_ms);
     std::optional<std::pair<long, std::string>> take_signed(int ticket);
     void forget_signed(int ticket); // no longer wanted (its answer is dropped)
+    // a signed WebSocket GET: its ws:// / wss:// URL (params in the query) and handshake headers; nullopt offline
+    std::optional<std::pair<std::string, std::vector<std::string>>>
+    signed_ws_target(const std::string& path, const std::map<std::string, std::string>& params);
 
     // Z-DON online challenge: the plays of a chart someone can be challenged on (non-blocking)
     void request_challenges(const std::string& hash, int difficulty);

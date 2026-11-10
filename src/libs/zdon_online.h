@@ -35,6 +35,7 @@ struct ZdonOnline {
     InputLog incoming;       // received, not yet given to the 2P lane
     double opp_pos = -1e18;  // the opponent's chart ms when last heard (all its hits before it have come)
     double opp_pos_at = 0.0; // local ms of that
+    double opp_t0 = 0.0;     // the opponent's wall clock (ms since the epoch) at its chart ms 0 (0 = not heard)
     bool opp_left = false;
     struct Final {
         int score = 0, good = 0, ok = 0, bad = 0, drumroll = 0, max_combo = 0;
