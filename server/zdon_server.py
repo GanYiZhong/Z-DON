@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
 PROTECTED_INSTALL_DIRS = {"cache", "Songs", "Records", "logs", ".zdon_update_tmp"}
 DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdon_update.bat"]
+BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in every package (the user's choice 2026-11-11)
 
 
 def log(msg: str) -> None:
@@ -1043,6 +1044,13 @@ def cmd_publish(cfg: dict, args) -> None:
     for name in ("zdon_update.ps1", "zdon_update.bat"):
         if name not in sources and (HERE.parent / name).exists():
             sources[name] = HERE.parent / name
+    # a song ships with the game (from the repo), so a new install has one to play right away
+    for folder in BUNDLED_SONGS:
+        root = HERE.parent / folder
+        if root.is_dir():
+            for f in sorted(root.rglob("*")):
+                if f.is_file():
+                    sources[f.relative_to(HERE.parent).as_posix()] = f
     version = args.version or git_version(HERE.parent)
     dest = cfg["data_dir"] / "update" / args.channel
     # where zdon_update.bat looks when config.toml names no source (a build with a compiled-in server)

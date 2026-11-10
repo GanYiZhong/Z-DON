@@ -1,7 +1,12 @@
+#include <SDL3/SDL_messagebox.h>
+#include <SDL3/SDL_video.h>
 #include <bit>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
+#include <format>
+#include <spdlog/spdlog.h>
+#include <string>
 
 #include "gfx.h"
 #include "gfx/mesh_bounds.h"
@@ -144,9 +149,38 @@ SDL_Window* main_window() {
     return window;
 }
 
+// Z-DON: the graphics card and its OpenGL in the log; one older than the 3.3 the renderer needs draws nothing (a
+// black window), so the player is told why
+static void zdon_check_opengl() {
+    using GetString = const unsigned char* (*)(unsigned);
+    auto get = reinterpret_cast<GetString>(SDL_GL_GetProcAddress("glGetString"));
+    if (!get) {
+        spdlog::error("OpenGL: no context");
+        return;
+    }
+    auto str = [get](unsigned name) {
+        const unsigned char* s = get(name);
+        return s ? std::string(reinterpret_cast<const char*>(s)) : std::string("?");
+    };
+    const std::string vendor = str(0x1F00), renderer = str(0x1F01), version = str(0x1F02); // GL_VENDOR...
+    spdlog::info("OpenGL: {} ({}), version {}", renderer, vendor, version);
+    int major = 0, minor = 0;
+    if (std::sscanf(version.c_str(), "%d.%d", &major, &minor) == 2 && (major > 3 || (major == 3 && minor >= 3))) {
+        return;
+    }
+    spdlog::error("OpenGL {} is older than the 3.3 this game needs: the screen stays black", version);
+    const std::string text = std::format("顯示卡不支援 OpenGL 3.3，遊戲畫面會是黑的。\n"
+                                         "請安裝或更新顯示卡驅動程式（目前：{}，OpenGL {}）。\n\n"
+                                         "This graphics card's driver has no OpenGL 3.3, so the game draws nothing.\n"
+                                         "Install or update the graphics driver (now: {}, OpenGL {}).",
+                                         renderer, version, renderer, version);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "YataiDON", text.c_str(), window);
+}
+
 void init_window(int width, int height, const char* title) {
     ray::InitWindow(width, height, title);
     window = SDL_GL_GetCurrentWindow(); // raylib's SDL platform keeps its window private
+    zdon_check_opengl();
 }
 
 void close_window() {
