@@ -1033,6 +1033,47 @@ def cmd_recode(cfg: dict, args) -> None:
     print(new)
 
 
+def cmd_import_local(cfg: dict, args) -> None:
+    """Copies a player's plays from a game's scores.db into this server (what the game's own export sends:
+    no input log, so no replays). Plays already here (same chart, difficulty, score and time) are skipped;
+    song titles come along from the file's songs table."""
+    store = Store(cfg["data_dir"] / "zdon.db")
+    if not store.one("SELECT 1 FROM users WHERE access_code=?", (args.access_code,)):
+        sys.exit("unknown access code")
+    src = sqlite3.connect(f"file:{Path(args.scores_db).resolve().as_posix()}?mode=ro", uri=True)
+    src.row_factory = sqlite3.Row
+    player = args.player_id or args.access_code
+    rows = src.execute("""SELECT hash, difficulty, crown, rank, score, good, ok, bad, drumroll, max_combo, played_at,
+                                 modifiers FROM scores WHERE CAST(player_id AS TEXT) = ? AND hash IS NOT NULL
+                                 AND hash != ''""", (player,)).fetchall()
+    titles = {}
+    for r in src.execute("SELECT hash_0, hash_1, hash_2, hash_3, hash_4, title, subtitle FROM songs"):
+        for h in list(r)[:5]:
+            if h:
+                titles.setdefault(h, (r["title"], r["subtitle"]))
+    have = {(r["hash"], r["difficulty"], r["score"], r["played_at"]) for r in store.q(
+        "SELECT hash, difficulty, score, played_at FROM scores WHERE access_code=?", (args.access_code,))}
+    added = skipped = 0
+    now = int(time.time())
+    for r in rows:
+        played = as_int(r["played_at"], None)
+        if (r["hash"], r["difficulty"], r["score"], played) in have:
+            skipped += 1
+            continue
+        store.run("""INSERT INTO scores(access_code, hash, difficulty, score, good, ok, bad, drumroll, max_combo, crown,
+                                        rank, input_log, played_at, modifiers, received_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (args.access_code, r["hash"], r["difficulty"], r["score"], r["good"], r["ok"], r["bad"],
+                   r["drumroll"], r["max_combo"], r["crown"], r["rank"], "[]", played, r["modifiers"] or "",
+                   played or now))
+        added += 1
+        if r["hash"] in titles and titles[r["hash"]][0]:
+            store.run("""INSERT INTO songs(hash, title, subtitle, updated_at) VALUES (?,?,?,?)
+                         ON CONFLICT(hash) DO NOTHING""",
+                      (r["hash"], titles[r["hash"]][0], titles[r["hash"]][1] or "", now))
+    print(f"imported {added} plays, skipped {skipped} already here")
+
+
 def cmd_rename(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     store.run("UPDATE users SET username=? WHERE access_code=?", (args.name, args.access_code))
@@ -1064,6 +1105,10 @@ def main(argv=None) -> None:
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--hash")
     g.add_argument("--score-id", type=int)
+    s = sub.add_parser("import-local", help="copy a player's plays from a game's scores.db")
+    s.add_argument("scores_db")
+    s.add_argument("access_code")
+    s.add_argument("--player-id", help="the player's id in that file (default: the access code)")
     s = sub.add_parser("recode", help="move an account to a new access code (printed); the player puts it in config.toml")
     s.add_argument("access_code")
     s = sub.add_parser("rename", help="change a player's name")
@@ -1072,7 +1117,8 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "users": cmd_users,
-     "jump": cmd_jump, "rename": cmd_rename, "recode": cmd_recode}[args.cmd](cfg, args)
+     "jump": cmd_jump, "rename": cmd_rename, "recode": cmd_recode,
+     "import-local": cmd_import_local}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
