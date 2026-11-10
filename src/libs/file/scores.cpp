@@ -13,67 +13,93 @@
 static void ensure_dan_table(sqlite3* db);
 
 // Z-DON: a database first made before player ids became text still declares players.player_id as INTEGER PRIMARY
-// KEY (the rowid). A server access code (20 digits, past the 64-bit range) can't be stored there, so that player
-// had no row: no name on the nameplate, no settings. Rebuilds the table once from its own definition (columns
-// added since are kept) with player_id TEXT, as the current schema has it; a copy of the database is made first.
-static void zdon_players_id_as_text(sqlite3* db, const fs::path& db_path) {
-    std::string type, create_sql;
+// KEY (the rowid) and scores.player_id as INTEGER. A server access code (20 digits, past the 64-bit range) can't be
+// stored in the first, so that player had no row (no name on the nameplate, no settings), and turns into an
+// inexact REAL in the second. Rebuilds such a table once from its own definition (columns added since are kept)
+// with player_id TEXT, as the current schema has it; the whole database is copied first.
+static bool zdon_column_type_is_integer(sqlite3* db, const char* table) {
+    std::string type;
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT type FROM pragma_table_info('players') WHERE name = 'player_id';", -1, &stmt,
-                           nullptr) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_ROW) {
+    const std::string q = std::string("SELECT type FROM pragma_table_info('") + table + "') WHERE name = 'player_id';";
+    if (sqlite3_prepare_v2(db, q.c_str(), -1, &stmt, nullptr) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
         type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
     }
     sqlite3_finalize(stmt);
     std::ranges::transform(type, type.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    if (type != "INTEGER") {
-        return;
-    }
-    if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'players';", -1, &stmt,
-                           nullptr) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_ROW) {
-        create_sql = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    return type == "INTEGER";
+}
+
+static bool zdon_rebuild_with_text_id(sqlite3* db, const char* table, const std::regex& id_column,
+                                      const char* replacement) {
+    std::string create_sql;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?;", -1, &stmt,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, table, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            create_sql = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        }
     }
     sqlite3_finalize(stmt);
-    static const std::regex id_column(R"(player_id\s+INTEGER\s+PRIMARY\s+KEY(\s+AUTOINCREMENT)?)", std::regex::icase);
-    static const std::regex table_name(R"(^\s*CREATE\s+TABLE\s+("?players"?))", std::regex::icase);
+    const std::regex table_name(std::string(R"(^\s*CREATE\s+TABLE\s+"?)") + table + R"("?\s*\()", std::regex::icase);
     if (!std::regex_search(create_sql, id_column) || !std::regex_search(create_sql, table_name)) {
-        spdlog::warn("ScoresManager: players.player_id is INTEGER but its definition wasn't recognised; left as it is");
+        spdlog::warn("ScoresManager: {}.player_id is INTEGER but its definition wasn't recognised; left as it is",
+                     table);
+        return false;
+    }
+    const std::string tmp = std::string(table) + "_zdon_text";
+    std::string new_sql =
+        std::regex_replace(create_sql, id_column, replacement, std::regex_constants::format_first_only);
+    new_sql =
+        std::regex_replace(new_sql, table_name, "CREATE TABLE " + tmp + "(", std::regex_constants::format_first_only);
+    const std::string sql = "BEGIN; DROP TABLE IF EXISTS " + tmp + "; " + new_sql + "; INSERT INTO " + tmp +
+                            " SELECT * FROM " + table + "; DROP TABLE " + table + "; ALTER TABLE " + tmp +
+                            " RENAME TO " + table + "; COMMIT;";
+    char* err = nullptr;
+    const bool ok = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err) == SQLITE_OK;
+    if (ok) {
+        spdlog::info("ScoresManager: {}.player_id is now TEXT", table);
+    } else {
+        spdlog::error("ScoresManager: fixing {}.player_id failed: {}", table, err ? err : "?");
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    }
+    sqlite3_free(err);
+    return ok;
+}
+
+static void zdon_players_id_as_text(sqlite3* db, const fs::path& db_path) {
+    const bool players = zdon_column_type_is_integer(db, "players");
+    const bool scores = zdon_column_type_is_integer(db, "scores");
+    if (!players && !scores) {
         return;
     }
-    std::string new_sql = std::regex_replace(create_sql, id_column, "player_id TEXT PRIMARY KEY",
-                                             std::regex_constants::format_first_only);
-    new_sql = std::regex_replace(new_sql, table_name, "CREATE TABLE players_zdon_text",
-                                 std::regex_constants::format_first_only);
-
     const std::string backup = db_path.string() + ".bak-before-text-ids";
     std::error_code ec;
     if (!fs::exists(backup, ec)) {
         const std::string vacuum = "VACUUM INTO '" + backup + "';";
         if (sqlite3_exec(db, vacuum.c_str(), nullptr, nullptr, nullptr) != SQLITE_OK) {
-            spdlog::error("ScoresManager: could not back up {} before fixing players.player_id: {}", db_path.string(),
+            spdlog::error("ScoresManager: could not back up {} before fixing player_id: {}", db_path.string(),
                           sqlite3_errmsg(db));
             return;
         }
+        spdlog::info("ScoresManager: copied the database to {} before fixing player_id", backup);
     }
     int foreign_keys = 0;
+    sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, "PRAGMA foreign_keys;", -1, &stmt, nullptr) == SQLITE_OK &&
         sqlite3_step(stmt) == SQLITE_ROW) {
         foreign_keys = sqlite3_column_int(stmt, 0);
     }
     sqlite3_finalize(stmt);
     sqlite3_exec(db, "PRAGMA foreign_keys = OFF;", nullptr, nullptr, nullptr);
-    const std::string sql = "BEGIN; DROP TABLE IF EXISTS players_zdon_text; " + new_sql +
-                            "; INSERT INTO players_zdon_text SELECT * FROM players; DROP TABLE players; "
-                            "ALTER TABLE players_zdon_text RENAME TO players; COMMIT;";
-    char* err = nullptr;
-    if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err) == SQLITE_OK) {
-        spdlog::info("ScoresManager: players.player_id is now TEXT (copy of the old database: {})", backup);
-    } else {
-        spdlog::error("ScoresManager: fixing players.player_id failed: {}", err ? err : "?");
-        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    if (players) {
+        static const std::regex pk(R"(player_id\s+INTEGER\s+PRIMARY\s+KEY(\s+AUTOINCREMENT)?)", std::regex::icase);
+        zdon_rebuild_with_text_id(db, "players", pk, "player_id TEXT PRIMARY KEY");
     }
-    sqlite3_free(err);
+    if (scores) {
+        static const std::regex col(R"(player_id\s+INTEGER\b)", std::regex::icase);
+        zdon_rebuild_with_text_id(db, "scores", col, "player_id TEXT");
+    }
     if (foreign_keys) {
         sqlite3_exec(db, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);
     }
