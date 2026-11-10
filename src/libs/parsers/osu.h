@@ -23,6 +23,7 @@ public:
 
 private:
     double slider_multiplier = 1.4;
+    double overall_difficulty = 5.0; // Z-DON: [Difficulty] OverallDifficulty (balloon hits, unnamed courses)
     // Each timing point: {time_ms, beat_length, meter, effects}
     std::vector<std::array<double, 4>> timing_points;
     // Each hit object: comma-separated fields, kept as strings (positional)

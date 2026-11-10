@@ -158,6 +158,8 @@ public:
     bool is_skip_enabled() const { return modifiers.skip; }
     void cut_to_end(double now, int prev_good = 0, int prev_ok = 0, int prev_bad = 0);
     bool was_skipped() const { return skipped_run; }
+    // Z-DON sudden death: this run had its first 不可 (or 可) under the option; GameScreen ends the chart
+    bool zdon_sudden_failed() const { return sudden_failed; }
     const Modifiers& get_modifiers() const { return modifiers; }
     void set_auto_play(bool value) {
         auto_used = auto_used || value;
@@ -179,6 +181,8 @@ public:
         roll_hits.clear();
         last_reported_score = -1;
         last_reported_gogo = -1;
+        sudden_failed = false;
+        flash_reach = -1.0f;
         if (judge_counter) {
             judge_counter = JudgeCounter();
         }
@@ -232,6 +236,9 @@ private:
     bool is_2p;
     int judgeable_note_count = 0;
     bool skipped_run = false;
+    bool sudden_failed = false; // Z-DON: zdon_sudden_failed
+    float flash_reach = -1.0f;  // Z-DON flashlight: the lit part of the lane, in lane widths (-1 = not drawn yet)
+    double flash_ms = 0.0;      // Z-DON flashlight: the last frame's time, for the reach's easing
     bool replay_active = false;
     InputLog replay_log;
     size_t replay_cursor = 0;
@@ -468,6 +475,7 @@ private:
     void draw_balloon(double current_ms, float y, const Note& head, int current_eighth, bool moji_pass);
 
     void draw_notes(double current_ms, float y);
+    void draw_zdon_flashlight(double current_ms, float y);
     void draw_kusudama_stars(double current_ms, float cx, float cy);
     void draw_tetunagi(double current_ms, const Note& note, float x, float y, int current_eighth);
     void draw_synchro(double current_ms, const Note& note, float cx, float cy, int current_eighth);

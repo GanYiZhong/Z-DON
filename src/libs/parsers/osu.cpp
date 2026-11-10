@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -279,8 +280,66 @@ OsuParser::OsuParser(const fs::path& path) : file_path(path) {
     }
     metadata.bpm = 60000.0 / first_beat_length;
 
-    // One course entry (difficulty 0 = Easy slot, used for all osu songs)
-    metadata.course_data[0] = CourseData{};
+    // Z-DON: the course the beatmap's difficulty name says (osu!taiko's Kantan / Futsuu / Muzukashii / Oni / Inner Oni,
+    // or Easy / Normal / Hard / Ura), else one from the OD; its level from the notes per second
+    if (difficulty.contains("OverallDifficulty")) {
+        try {
+            overall_difficulty = std::clamp(std::stod(difficulty["OverallDifficulty"]), 0.0, 10.0);
+        } catch (const std::exception&) {
+        }
+    }
+    std::string name = difficulty_name;
+    std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    auto has = [&](std::string_view s) { return name.find(s) != std::string::npos; };
+    int course;
+    if (has("inner") || has("ura") || has("裏")) {
+        course = 4;
+    } else if (has("oni") || has("鬼") || has("おに") || has("魔王")) {
+        course = 3;
+    } else if (has("muzukashii") || has("hard") || has("むずかしい") || has("困難")) {
+        course = 2;
+    } else if (has("futsuu") || has("futsu") || has("normal") || has("ふつう") || has("普通")) {
+        course = 1;
+    } else if (has("kantan") || has("easy") || has("かんたん") || has("簡單")) {
+        course = 0;
+    } else {
+        course = overall_difficulty < 3.0 ? 0 : overall_difficulty < 4.5 ? 1 : overall_difficulty < 6.0 ? 2 : 3;
+    }
+    CourseData data;
+    {
+        double first = -1.0;
+        double last = -1.0;
+        int hits = 0;
+        for (const auto& fields : hit_objects_data) {
+            if (fields.size() < 4) {
+                continue;
+            }
+            try {
+                const double t = std::stod(fields[2]);
+                if ((std::stoi(fields[3]) & 1) != 0) {
+                    hits++;
+                }
+                first = first < 0.0 ? t : std::min(first, t);
+                last = std::max(last, t);
+            } catch (const std::exception&) {
+            }
+        }
+        const double seconds = (last - first) / 1000.0;
+        const double nps = seconds > 1.0 ? hits / seconds : 0.0;
+        data.level = std::clamp(std::round(1.0 + (nps * 1.1)), 1.0, 10.0);
+    }
+    metadata.course_data[course] = data;
+}
+
+// osu!'s BeatmapDifficulty.DifficultyRange: the value at OD 0 / 5 / 10
+static double od_range(double od, double min, double mid, double max) {
+    if (od > 5.0) {
+        return mid + ((max - mid) * (od - 5.0) / 5.0);
+    }
+    if (od < 5.0) {
+        return mid - ((mid - min) * (5.0 - od) / 5.0);
+    }
+    return mid;
 }
 
 static Note make_note(NoteType type, double hit_ms, double bpm, double scroll, int index, int moji) {
@@ -403,7 +462,9 @@ NoteList& OsuParser::get_notes() {
             }
 
             Note head = make_note(NoteType::BALLOON_HEAD, note_time, bpm_here, scroll, counter++, 10);
-            head.count = 20;
+            // Z-DON: osu!taiko's swell: duration x (3 / 5 / 7.5 hits a second at OD 0 / 5 / 10) x 1.65
+            head.count = std::max(1, static_cast<int>((end_time - note_time) / 1000.0 *
+                                                      od_range(overall_difficulty, 3.0, 5.0, 7.5) * 1.65));
 
             Note tail = make_note(NoteType::TAIL, end_time, bpm_here, scroll, counter++, 9);
 
@@ -463,6 +524,22 @@ NoteList& OsuParser::get_notes() {
             cached_notes.timeline.push_back(tl);
         }
     }
+    // Z-DON: kiai time (timing point effects bit 0) is GOGO time
+    bool kiai = false;
+    for (const auto& tp : timing_points) {
+        const bool on = (static_cast<int>(tp[3]) & 1) != 0;
+        if (on != kiai) {
+            kiai = on;
+            TimelineObject tl;
+            tl.start_time = tp[0];
+            tl.end_time = tp[0];
+            tl.gogo_time = on;
+            cached_notes.timeline.push_back(tl);
+        }
+    }
+    std::ranges::stable_sort(cached_notes.timeline, [](const TimelineObject& a, const TimelineObject& b) {
+        return a.start_time < b.start_time;
+    });
 
     modifier_moji(cached_notes);
     notes_built = true;
@@ -470,8 +547,28 @@ NoteList& OsuParser::get_notes() {
 }
 
 std::tuple<NoteList, std::deque<NoteList>, std::deque<NoteList>, std::deque<NoteList>>
-OsuParser::notes_to_position(int /*diff*/) {
-    return {get_notes(), {}, {}, {}};
+OsuParser::notes_to_position(int diff) {
+    const NoteList& notes = get_notes();
+    // Z-DON test hook (as TJAParser's): ZDON_CHART_DUMP=<file> appends the notes and the GOGO changes
+    if (const char* dump = std::getenv("ZDON_CHART_DUMP"); dump && *dump) {
+        if (std::ofstream out(dump, std::ios::app); out) {
+            out << std::format("# {} diff {} courses", file_path.filename().string(), diff);
+            for (const auto& [course, data] : metadata.course_data) {
+                out << std::format(" {}:lv{}", course, data.level);
+            }
+            out << "\n";
+            for (const Note& n : notes.notes) {
+                out << std::format("M {} {:.4f} {:.3f} {}\n", static_cast<int>(n.type), n.hit_ms, n.scroll_x,
+                                   n.count.value_or(-1));
+            }
+            for (const TimelineObject& t : notes.timeline) {
+                if (t.gogo_time) {
+                    out << std::format("G {:.4f} {}\n", t.start_time, *t.gogo_time ? 1 : 0);
+                }
+            }
+        }
+    }
+    return {notes, {}, {}, {}};
 }
 
 std::string OsuParser::get_diff_hash(int /*difficulty*/) {

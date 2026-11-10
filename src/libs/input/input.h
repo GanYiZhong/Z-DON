@@ -54,6 +54,15 @@ void submit_gamepad_button_press(int button, float strength = 1.0f);
 void start_midi_input(const MidiConfig& config);
 void process_midi_events();
 void shutdown_midi_input();
+// Z-DON MIDI set-up (settings screen)
+void ensure_midi_listening();               // watches the ports even with no device configured
+std::vector<std::string> midi_port_names(); // the input ports seen so far
+void midi_select_device(const std::string& device);
+bool midi_device_connected();
+void midi_reload_mapping(const MidiConfig& config); // [midi] notes / buttons / channel, applied at once
+void midi_set_learning(bool on);                    // on: the next note-on is kept for midi_take_learned_note
+int midi_take_learned_note();                       // -1 when none
+void dev_inject_midi_note(int note, int velocity);  // dev hook YATAIDON_FAKE_MIDI
 
 double get_last_input_ms();
 

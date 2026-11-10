@@ -721,7 +721,45 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
     if (is_branch) {
         evaluate_branch(ms_from_start);
     }
+    // Z-DON sudden death: the first 不可 (option 1) or 可 / 不可 (option 2) of the run; the AI lane never has it
+    if (modifiers.zdon_sudden_death > 0 && !zdon_ai && !skipped_run && !sudden_failed &&
+        (bad_count > 0 || (modifiers.zdon_sudden_death == 2 && ok_count > 0))) {
+        sudden_failed = true;
+        spdlog::info("Sudden death: player {} out at {:.0f} ms (ok {} bad {})", static_cast<int>(player_num),
+                     ms_from_start, ok_count, bad_count);
+    }
     chara->update(current_ms);
+}
+
+// Z-DON flashlight: the lane is dark beyond a lit stretch right of the judge line, so only the notes about to be hit
+// show. Like osu!'s, the light closes in at 100 and 200 combo and opens again when the combo breaks.
+void Player::draw_zdon_flashlight(double current_ms, float y) {
+    const float target = combo >= 200 ? 0.20f : combo >= 100 ? 0.25f : 0.30f; // in lane widths from the judge line
+    if (flash_reach < 0.0f) {
+        flash_reach = target;
+    } else {
+        const double dt = std::clamp(current_ms - flash_ms, 0.0, 200.0);
+        flash_reach += (target - flash_reach) * static_cast<float>(1.0 - std::exp(-dt / 150.0));
+    }
+    flash_ms = current_ms;
+
+    const float line = JudgePos::X + judge_x;
+    const float lane_w = std::max(1.0f, tex.screen_width - JudgePos::X);
+    const float top = y + static_cast<float>(t_lane_background->y[0]);
+    const float h = static_cast<float>(t_lane_background->y2[0]);
+    const float edge = line + (flash_reach * lane_w);
+    const float band = 0.08f * lane_w; // the soft edge
+    constexpr int kSteps = 16;
+    constexpr float kDark = 250.0f;
+    for (int i = 0; i < kSteps; i++) {
+        const float x0 = edge + (band * static_cast<float>(i) / kSteps);
+        const float a = kDark * static_cast<float>(i + 1) / (kSteps + 1);
+        draw_rectangle(static_cast<int>(x0), static_cast<int>(top), static_cast<int>(std::ceil(band / kSteps)) + 1,
+                       static_cast<int>(h), Color{0, 0, 0, static_cast<unsigned char>(a)});
+    }
+    const float solid = edge + band;
+    draw_rectangle(static_cast<int>(solid), static_cast<int>(top), static_cast<int>(tex.screen_width - solid) + 1,
+                   static_cast<int>(h), Color{0, 0, 0, static_cast<unsigned char>(kDark)});
 }
 
 void Player::draw(double ms_from_start, float x, float y) {
@@ -775,6 +813,9 @@ void Player::draw(double ms_from_start, float x, float y) {
         int win_w = get_render_width();
         begin_scissor_mode(scissor_x, 0, win_w - scissor_x, get_render_height());
         draw_notes(ms_from_start, y);
+        if (modifiers.zdon_flashlight && !zdon_ai) {
+            draw_zdon_flashlight(ms_from_start, y);
+        }
         end_scissor_mode();
     }
 

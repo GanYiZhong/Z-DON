@@ -1649,6 +1649,8 @@ std::optional<PlayerData> ScoresManager::get_player_data(const std::string& play
     p.modifier_equal_speed = get_zdon_option(player_id, "equal_speed") != 0;
     p.modifier_zdon_fade = std::clamp(get_zdon_option(player_id, "fade"), 0, 6);
     p.modifier_ghost = get_zdon_option(player_id, "ghost") != 0;
+    p.modifier_sudden_death = std::clamp(get_zdon_option(player_id, "sudden_death"), 0, 2);
+    p.modifier_flashlight = get_zdon_option(player_id, "flashlight") != 0;
     return p;
 }
 
@@ -1728,6 +1730,8 @@ void ScoresManager::save_player_data(const PlayerData& player) {
     set_zdon_option(player.player_id, "equal_speed", player.modifier_equal_speed ? 1 : 0);
     set_zdon_option(player.player_id, "fade", player.modifier_zdon_fade);
     set_zdon_option(player.player_id, "ghost", player.modifier_ghost ? 1 : 0);
+    set_zdon_option(player.player_id, "sudden_death", player.modifier_sudden_death);
+    set_zdon_option(player.player_id, "flashlight", player.modifier_flashlight ? 1 : 0);
 }
 
 static void ensure_dan_table(sqlite3* db) {

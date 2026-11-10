@@ -858,6 +858,35 @@ static void run_frame() {
             }
         }
         ime_ui_dev_tick(since);
+        // Z-DON dev hook: YATAIDON_FAKE_MIDI="<ms>:<note>[:<velocity>],..." plays MIDI note-ons as a drum would
+        static std::vector<std::array<int, 3>> fake_midi = [] {
+            std::vector<std::array<int, 3>> v;
+            if (const char* e = std::getenv("YATAIDON_FAKE_MIDI")) {
+                std::string f(e);
+                for (size_t pos = 0; pos < f.size();) {
+                    const size_t comma = f.find(',', pos);
+                    const std::string item =
+                        f.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                    std::array<int, 3> m = {0, 0, 100};
+                    std::sscanf(item.c_str(), "%d:%d:%d", &m[0], &m[1], &m[2]);
+                    v.push_back(m);
+                    if (comma == std::string::npos) {
+                        break;
+                    }
+                    pos = comma + 1;
+                }
+            }
+            return v;
+        }();
+        for (auto it = fake_midi.begin(); it != fake_midi.end();) {
+            if (since >= (*it)[0]) {
+                spdlog::info("[devmidi] note {} velocity {} at {:.0f}", (*it)[1], (*it)[2], since);
+                dev_inject_midi_note((*it)[1], (*it)[2]);
+                it = fake_midi.erase(it);
+            } else {
+                ++it;
+            }
+        }
         for (auto it = fake_keys.begin(); it != fake_keys.end();) {
             if (since >= it->first) {
                 spdlog::info("[devkeys] key {} at {:.0f}", it->second, since);

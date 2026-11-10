@@ -33,6 +33,8 @@ struct PlayerData {
     bool modifier_equal_speed = false; // Z-DON: in zdon_player_options (key "equal_speed"), not a players column
     int modifier_zdon_fade = 0;        // Z-DON: zdon_player_options "fade" (Modifiers::zdon_fade)
     bool modifier_ghost = false;       // Z-DON: zdon_player_options "ghost"
+    int modifier_sudden_death = 0;     // Z-DON: zdon_player_options "sudden_death" (Modifiers::zdon_sudden_death)
+    bool modifier_flashlight = false;  // Z-DON: zdon_player_options "flashlight"
     int neiro_index = 0;
     Color chara_color_1 = Color{0x68, 0xBF, 0xC0, 0xFF};
     Color chara_color_2 = Color{0xF9, 0x47, 0x28, 0xFF};
@@ -287,5 +289,7 @@ inline Modifiers player_data_to_modifiers(const PlayerData& pd) {
     m.equal_speed = pd.modifier_equal_speed;
     m.zdon_fade = pd.modifier_zdon_fade;
     m.zdon_ghost = pd.modifier_ghost;
+    m.zdon_sudden_death = pd.modifier_sudden_death;
+    m.zdon_flashlight = pd.modifier_flashlight;
     return m;
 }

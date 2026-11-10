@@ -134,6 +134,10 @@ public:
     void push_skip_state();
     void do_skip();
     void draw_skip();
+    // Z-DON sudden death: a player out under the option has their chart cut there (the rest count as 不可); once
+    // every player is out the song stops, as a skip does but without the skip banner
+    bool zdon_sudden_over = false;
+    void zdon_sudden_death_check();
 
     std::optional<Screens> global_keys();
 

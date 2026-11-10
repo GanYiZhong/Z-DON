@@ -38,6 +38,10 @@ struct Modifiers {
     // Z-DON hidden / sudden (song option): 0 off, 1-3 hidden 25 / 50 / 75 % of the lane, 4-6 sudden 25 / 50 / 75 %
     int zdon_fade = 0;
     bool zdon_ghost = false; // Z-DON: the player's best play's score at the same moment, shown as +/- (game.cpp)
+    // Z-DON sudden death (song option): 0 off, 1 the play ends on the first 不可, 2 on the first 可 or 不可
+    int zdon_sudden_death = 0;
+    // Z-DON flashlight (song option): only the lane near the judge circle shows, closing in at 100 and 200 combo
+    bool zdon_flashlight = false;
     bool no_kusudama = false;
     bool zdon_subdiff_yono = false; // Z-DON recording: upstream's earlier simplification (zdon_subdiff_yono.cpp)
     // 2P: kusudamas only stay where both charts have one (llround(hit_ms)); the rest become balloons
@@ -264,6 +268,17 @@ struct CourseData {
     bool papamama = false;
 };
 
+// Z-DON: the TJA header COMPAT: (OpenTaiko's names) - whose timing rules the chart was written for. NONE (no header)
+// and OOS keep the parser's own behaviour.
+enum class TjaCompat : uint8_t {
+    NONE,
+    OOS,
+    JIRO1,
+    JIRO2,
+    TMG,
+    TJAP3
+};
+
 struct TJAMetadata {
     std::map<std::string, std::string> title = {{"en", ""}};
     std::map<std::string, std::string> subtitle = {{"en", ""}};
@@ -278,6 +293,7 @@ struct TJAMetadata {
     double movieoffset = 0.0f;
     fs::path preimage;
     std::string scene_preset;
+    TjaCompat compat = TjaCompat::NONE; // Z-DON
     std::map<int, CourseData> course_data;
 };
 
@@ -321,7 +337,12 @@ struct ParserState {
     bool start_branch_barline = false;
     double branch_balloon_index = 0;
     std::optional<Note> section_bar;
-    bool dropped_note = false;           // an unsupported note letter was left out since the last note
+    bool dropped_note = false; // an unsupported note letter was left out since the last note
+    // Z-DON COMPAT:jiro1: TaikoJiro 1 truncates the time since the last tempo change to whole ms at a change and at
+    // the end of a measure that had one
+    double compat_last_bpm_ms = 0.0;
+    double start_branch_compat_last_bpm_ms = 0.0;
+    bool compat_bpm_changed = false;
     std::array<bool, 256> warned_note{}; // note characters already warned about
 };
 

@@ -528,6 +528,9 @@ std::vector<std::string> GameScreen::zdon_unsaved_reasons(const Player& player) 
     if (zdon_record::active()) {
         r.emplace_back("record"); // a recording without hits is not a play
     }
+    if (player.zdon_sudden_failed()) {
+        r.emplace_back("sudden_death"); // a run cut short by a miss
+    }
     return r;
 }
 
@@ -665,6 +668,7 @@ void GameScreen::init_skip() {
     skip_last = -1;
     skip_play_hits = 0;
     skipped = false;
+    zdon_sudden_over = false;
     skip_pushed.reset();
     skip_text.reset();
     global_data.live_skip_count = -1;
@@ -812,6 +816,44 @@ void GameScreen::do_skip() {
     }
     for (auto& player : players) {
         if (player) {
+            player->cut_to_end(clock.position());
+        }
+    }
+}
+
+void GameScreen::zdon_sudden_death_check() {
+    if (skipped || zdon_sudden_over || score_saved) {
+        return;
+    }
+    int humans = 0;
+    int out = 0;
+    for (auto& player : players) {
+        if (!player || player->is_zdon_ai()) {
+            continue;
+        }
+        humans++;
+        if (!player->zdon_sudden_failed()) {
+            continue;
+        }
+        out++;
+        if (!player->was_skipped()) { // just went out: its chart stops here
+            player->cut_to_end(clock.position());
+            zhud::toast(zhud::text("sudden_death_out"));
+        }
+    }
+    if (humans == 0 || out < humans) {
+        return;
+    }
+    zdon_sudden_over = true;
+    spdlog::info("Sudden death: the song ends at {} ms", clock.position());
+    if (song_music) {
+        audio.stop_sound(*song_music);
+    }
+    if (movie) {
+        movie->stop();
+    }
+    for (auto& player : players) { // the AI lane too (an AI battle is lost there)
+        if (player && !player->was_skipped()) {
             player->cut_to_end(clock.position());
         }
     }
@@ -981,6 +1023,7 @@ std::optional<Screens> GameScreen::update() {
     transition->update(current_ms);
     update_gameplay(current_ms);
     update_skip();
+    zdon_sudden_death_check();
     result_transition.update(current_ms);
 
     if (result_transition.is_finished && !audio.is_sound_playing("result_transition")) {

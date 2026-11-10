@@ -294,6 +294,13 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "gamepad_2p/right_kat") {
         return &c->gamepad_2p.right_kat;
     }
+    // Z-DON: MIDI (settings' MIDI box)
+    if (path == "midi/device") {
+        return &c->midi.device;
+    }
+    if (path == "midi/notes") {
+        return &c->midi.notes;
+    }
     // audio
     if (path == "audio/device_type") {
         return &c->audio.device_type;

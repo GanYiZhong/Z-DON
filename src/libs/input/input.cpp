@@ -882,6 +882,79 @@ void submit_gamepad_button_press(int button, float strength) {
     pressed_keys.emplace(vkey, std::max(strength, 0.0f));
 }
 
+// Z-DON: the note -> button mapping and the settings screen's learning live outside the port state, so they can
+// change while the port stays open and the YATAIDON_FAKE_MIDI hook works without a device
+namespace {
+    std::mutex midi_map_mutex;
+    std::unordered_map<int, int> midi_note_to_button;
+    int midi_channel = 0; // 1-16, 0 = any
+    std::atomic<bool> midi_learning{false};
+    std::atomic<int> midi_learned_note{-1};
+
+    void midi_note_on(int channel, int note, int velocity) {
+        if (midi_learning.load(std::memory_order_acquire)) {
+            midi_learned_note.store(note, std::memory_order_release); // set-up: kept, not played
+            return;
+        }
+        int button = 0;
+        {
+            std::scoped_lock lock(midi_map_mutex);
+            if (midi_channel != 0 && midi_channel != channel) {
+                return;
+            }
+            const auto mapping = midi_note_to_button.find(note);
+            if (mapping == midi_note_to_button.end()) {
+                return;
+            }
+            button = mapping->second;
+        }
+        constexpr float minimum_strength = 0.5f;
+        constexpr float maximum_strength = 1.15f;
+        constexpr int normal_velocity = 80;
+        const float strength = velocity <= normal_velocity
+                                   ? minimum_strength + ((1.0f - minimum_strength) * static_cast<float>(velocity - 1) /
+                                                         (normal_velocity - 1))
+                                   : 1.0f + ((maximum_strength - 1.0f) *
+                                             static_cast<float>(velocity - normal_velocity) / (127 - normal_velocity));
+        submit_gamepad_button_press(button, strength);
+    }
+} // namespace
+
+void midi_reload_mapping(const MidiConfig& config) {
+    std::unordered_map<int, int> mapping;
+    const std::size_t mapping_count = std::min(config.notes.size(), config.buttons.size());
+    if (config.notes.size() != config.buttons.size()) {
+        spdlog::warn("MIDI notes/buttons have different lengths; using the first {} pairs", mapping_count);
+    }
+    for (std::size_t i = 0; i < mapping_count; ++i) {
+        const int note = config.notes[i];
+        const int button = config.buttons[i];
+        if (note < 0 || note > 127 || button < 1 || button > 32) {
+            spdlog::warn("Skipping invalid MIDI mapping: note {} -> gamepad button {}", note, button);
+            continue;
+        }
+        if (!mapping.emplace(note, button).second) {
+            spdlog::warn("Duplicate MIDI note {} ignored after its first mapping", note);
+        }
+    }
+    std::scoped_lock lock(midi_map_mutex);
+    midi_note_to_button = std::move(mapping);
+    midi_channel = config.channel;
+}
+
+void midi_set_learning(bool on) {
+    midi_learned_note.store(-1, std::memory_order_release);
+    midi_learning.store(on, std::memory_order_release);
+}
+
+int midi_take_learned_note() {
+    return midi_learned_note.exchange(-1, std::memory_order_acq_rel);
+}
+
+void dev_inject_midi_note(int note, int velocity) {
+    midi_note_on(midi_channel == 0 ? 1 : midi_channel, note, velocity);
+}
+
 #if defined(YATAIDON_HAS_MIDI)
 namespace {
 
@@ -892,11 +965,10 @@ namespace {
 
     struct MidiInput {
         std::string device;
-        int channel = 0;
-        std::unordered_map<int, int> note_to_button;
         std::mutex events_mutex;
         std::vector<MidiPortEvent> events;
         std::atomic<bool> events_pending{false};
+        std::vector<libremidi::input_port> known; // Z-DON: every input port seen so far (settings device list)
         std::optional<libremidi::input_port> selected;
         std::unique_ptr<libremidi::midi_in> port;
         std::unique_ptr<libremidi::observer> observer;
@@ -921,7 +993,7 @@ namespace {
     constexpr auto midi_api = libremidi::midi1::default_api();
 #endif
 
-    void midi_message_received(const libremidi::message& message, const MidiInput& state) {
+    void midi_message_received(const libremidi::message& message) {
         if (zdon_test_mode()) {
             return;
         }
@@ -929,24 +1001,7 @@ namespace {
         if (bytes.size() != 3 || (bytes[0] & 0xf0) != 0x90 || bytes[2] == 0) {
             return;
         }
-
-        const int channel = (bytes[0] & 0x0f) + 1;
-        if (state.channel != 0 && state.channel != channel) {
-            return;
-        }
-
-        const auto mapping = state.note_to_button.find(bytes[1]);
-        if (mapping != state.note_to_button.end()) {
-            constexpr float minimum_strength = 0.5f;
-            constexpr float maximum_strength = 1.15f;
-            constexpr int normal_velocity = 80;
-            const float strength =
-                bytes[2] <= normal_velocity
-                    ? minimum_strength + (1.0f - minimum_strength) * (bytes[2] - 1) / (normal_velocity - 1)
-                    : 1.0f + (maximum_strength - 1.0f) * (bytes[2] - normal_velocity) / (127 - normal_velocity);
-
-            submit_gamepad_button_press(mapping->second, strength);
-        }
+        midi_note_on((bytes[0] & 0x0f) + 1, bytes[1], bytes[2]);
     }
 
     // Device notifications can arrive on background threads; open and close ports on the main thread.
@@ -956,10 +1011,74 @@ namespace {
         state.events_pending.store(true, std::memory_order_release);
     }
 
+    bool midi_port_matches(const MidiInput& state, const libremidi::input_port& port) {
+        return !state.device.empty() &&
+               (port.display_name.contains(state.device) || port.device_name.contains(state.device));
+    }
+
+    void open_midi_port(MidiInput& state, const libremidi::input_port& port_info) {
+        libremidi::input_configuration input_config;
+        input_config.on_message = [](const libremidi::message& message) { midi_message_received(message); };
+        input_config.on_error = [](std::string_view error, const libremidi::source_location&) {
+            spdlog::warn("MIDI input: {}", error);
+        };
+        auto port = std::make_unique<libremidi::midi_in>(input_config, libremidi::midi_in_configuration_for(midi_api));
+        const auto error = port->open_port(port_info, "YataiDON MIDI Input");
+        if (error != stdx::error{}) {
+            const auto description = error.message();
+            spdlog::warn("Could not connect MIDI input '{}': {}", port_info.display_name,
+                         std::string_view(description.data(), description.size()));
+            return;
+        }
+        state.selected = port_info;
+        state.port = std::move(port);
+        spdlog::info("MIDI input connected to '{}'", port_info.display_name);
+    }
+
+    // The port watcher; with an empty device it only lists the ports (the settings screen's device list)
+    bool start_midi_listener(const std::string& device) {
+        auto state = std::make_unique<MidiInput>();
+        state->device = device;
+#ifdef _WIN32
+        HRESULT result = RoInitialize(RO_INIT_MULTITHREADED);
+        if (result == RPC_E_CHANGED_MODE) {
+            result = RoInitialize(RO_INIT_SINGLETHREADED);
+        }
+        if (FAILED(result)) {
+            spdlog::warn("Could not initialize Windows MIDI services: {}", static_cast<long>(result));
+            return false;
+        }
+        state->winrt_initialized = true;
+#endif
+        auto* listener = state.get();
+        libremidi::observer_configuration observer_config;
+        observer_config.on_error = [](std::string_view error, const libremidi::source_location&) {
+            spdlog::warn("MIDI device observer: {}", error);
+        };
+        observer_config.input_added = [listener](const libremidi::input_port& port) {
+            queue_midi_port_event(*listener, port, true);
+        };
+        observer_config.input_removed = [listener](const libremidi::input_port& port) {
+            queue_midi_port_event(*listener, port, false);
+        };
+        observer_config.track_virtual = true;
+        observer_config.track_any = true;
+        state->observer =
+            std::make_unique<libremidi::observer>(observer_config, libremidi::observer_configuration_for(midi_api));
+        if (state->observer->get_current_api() != midi_api) {
+            spdlog::warn("MIDI backend is unavailable");
+            return false;
+        }
+        midi_input = std::move(state);
+        process_midi_events();
+        return true;
+    }
+
 } // namespace
 #endif
 
 void start_midi_input(const MidiConfig& config) {
+    midi_reload_mapping(config); // Z-DON: also without a device (the YATAIDON_FAKE_MIDI hook)
     if (config.device.empty()) {
         return;
     }
@@ -968,81 +1087,73 @@ void start_midi_input(const MidiConfig& config) {
         spdlog::warn("MIDI input listener was already started");
         return;
     }
-
-    auto state = std::make_unique<MidiInput>();
-    state->device = config.device;
-    state->channel = config.channel;
-    const std::size_t mapping_count = std::min(config.notes.size(), config.buttons.size());
-
-    if (config.notes.size() != config.buttons.size()) {
-        spdlog::warn("MIDI notes/buttons have different lengths; using the first {} pairs", mapping_count);
-    }
-
-    for (std::size_t i = 0; i < mapping_count; ++i) {
-        const int note = config.notes[i];
-        const int button = config.buttons[i];
-
-        if (note < 0 || note > 127 || button < 1 || button > 32) {
-            spdlog::warn("Skipping invalid MIDI mapping: note {} -> gamepad button {}", note, button);
-            continue;
-        }
-
-        if (!state->note_to_button.emplace(note, button).second) {
-            spdlog::warn("Duplicate MIDI note {} ignored after its first mapping", note);
+    {
+        std::scoped_lock lock(midi_map_mutex);
+        if (midi_note_to_button.empty()) {
+            spdlog::warn("MIDI input is active with no valid note/button mappings");
         }
     }
-
-    if (state->note_to_button.empty()) {
-        spdlog::warn("MIDI input is active with no valid note/button mappings");
-    }
-
-#ifdef _WIN32
-    HRESULT result = RoInitialize(RO_INIT_MULTITHREADED);
-    if (result == RPC_E_CHANGED_MODE) {
-        result = RoInitialize(RO_INIT_SINGLETHREADED);
-    }
-
-    if (FAILED(result)) {
-        spdlog::warn("Could not initialize Windows MIDI services: {}", static_cast<long>(result));
-        return;
-    }
-
-    state->winrt_initialized = true;
-#endif
-    auto* listener = state.get();
-    libremidi::observer_configuration observer_config;
-
-    observer_config.on_error = [](std::string_view error, const libremidi::source_location&) {
-        spdlog::warn("MIDI device observer: {}", error);
-    };
-
-    observer_config.input_added = [listener](const libremidi::input_port& port) {
-        queue_midi_port_event(*listener, port, true);
-    };
-
-    observer_config.input_removed = [listener](const libremidi::input_port& port) {
-        queue_midi_port_event(*listener, port, false);
-    };
-
-    observer_config.track_virtual = true;
-    observer_config.track_any = true;
-
-    state->observer =
-        std::make_unique<libremidi::observer>(observer_config, libremidi::observer_configuration_for(midi_api));
-
-    if (state->observer->get_current_api() != midi_api) {
-        spdlog::warn("MIDI backend is unavailable");
-        return;
-    }
-
-    midi_input = std::move(state);
-    process_midi_events();
-
-    if (!midi_input->port) {
+    if (start_midi_listener(config.device) && !midi_input->port) {
         spdlog::warn("No MIDI input port matches device substring '{}'; waiting for device", config.device);
     }
 #else
     spdlog::warn("MIDI input is not supported on this platform");
+#endif
+}
+
+void ensure_midi_listening() {
+#if defined(YATAIDON_HAS_MIDI)
+    if (!midi_input) {
+        start_midi_listener(global_data.config ? global_data.config->midi.device : std::string());
+    }
+    process_midi_events();
+#endif
+}
+
+std::vector<std::string> midi_port_names() {
+    std::vector<std::string> names;
+#if defined(YATAIDON_HAS_MIDI)
+    if (midi_input) {
+        for (const auto& port : midi_input->known) {
+            if (!std::ranges::contains(names, port.display_name)) {
+                names.push_back(port.display_name);
+            }
+        }
+    }
+#endif
+    return names;
+}
+
+void midi_select_device(const std::string& device) {
+#if defined(YATAIDON_HAS_MIDI)
+    if (!midi_input) {
+        if (device.empty()) {
+            return;
+        }
+        start_midi_listener(device);
+        return;
+    }
+    auto& state = *midi_input;
+    if (state.device == device && (state.port || device.empty())) {
+        return;
+    }
+    state.port.reset();
+    state.selected.reset();
+    state.device = device;
+    for (const auto& port : state.known) {
+        if (midi_port_matches(state, port)) {
+            open_midi_port(state, port);
+            break;
+        }
+    }
+#endif
+}
+
+bool midi_device_connected() {
+#if defined(YATAIDON_HAS_MIDI)
+    return midi_input && midi_input->port;
+#else
+    return false;
 #endif
 }
 
@@ -1059,53 +1170,29 @@ void process_midi_events() {
         events.swap(state.events);
     }
 
+    auto same_port = [](const libremidi::input_port& a, const libremidi::input_port& b) {
+        return a.api == b.api && a.port == b.port && a.port_name == b.port_name;
+    };
     for (const auto& event : events) {
         if (!event.added) {
-            if (state.selected && state.selected->api == event.port.api && state.selected->port == event.port.port &&
-                state.selected->port_name == event.port.port_name) {
+            std::erase_if(state.known, [&](const libremidi::input_port& p) { return same_port(p, event.port); });
+            if (state.selected && same_port(*state.selected, event.port)) {
                 state.port.reset();
                 state.selected.reset();
                 spdlog::info("MIDI input disconnected from '{}'", event.port.display_name);
             }
-
             continue;
         }
 
         spdlog::info("MIDI input available: {}", event.port.display_name);
-
-        if (state.port ||
-            (!event.port.display_name.contains(state.device) && !event.port.device_name.contains(state.device))) {
+        if (std::ranges::none_of(state.known,
+                                 [&](const libremidi::input_port& p) { return same_port(p, event.port); })) {
+            state.known.push_back(event.port);
+        }
+        if (state.port || !midi_port_matches(state, event.port)) {
             continue;
         }
-
-        libremidi::input_configuration input_config;
-
-        input_config.on_message = [&state](const libremidi::message& message) {
-            midi_message_received(message, state);
-        };
-
-        input_config.on_error = [](std::string_view error, const libremidi::source_location&) {
-            spdlog::warn("MIDI input: {}", error);
-        };
-
-        auto port = std::make_unique<libremidi::midi_in>(input_config, libremidi::midi_in_configuration_for(midi_api));
-
-        const auto error = port->open_port(event.port, "YataiDON MIDI Input");
-
-        if (error != stdx::error{}) {
-            const auto description = error.message();
-
-            spdlog::warn("Could not connect MIDI input '{}': {}", event.port.display_name,
-                         std::string_view(description.data(), description.size()));
-
-            continue;
-        }
-
-        state.selected = event.port;
-        state.port = std::move(port);
-
-        spdlog::info("MIDI input connected to '{}' (channel {})", event.port.display_name,
-                     state.channel == 0 ? "any" : std::to_string(state.channel));
+        open_midi_port(state, event.port);
     }
 #endif
 }

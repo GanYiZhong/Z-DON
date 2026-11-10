@@ -17,15 +17,18 @@ DrumrollCounter::DrumrollCounter(PlayerNum player_num) {
     }
     t_bubble = tex.get_texture("drumroll_counter/bubble");
     t_counter = tex.get_texture("drumroll_counter/counter");
-    if (tex.has_texture("drumroll_counter/bubble_unfold")) {
-        t_unfold = tex.get_texture("drumroll_counter/bubble_unfold");
-    }
-    if (tex.has_texture("drumroll_counter/bubble_ai")) {
-        t_bubble_ai = tex.get_texture("drumroll_counter/bubble_ai");
-    }
-    if (tex.has_texture("drumroll_counter/bubble_unfold_ai")) {
-        t_unfold_ai = tex.get_texture("drumroll_counter/bubble_unfold_ai");
-    }
+    // the fan art only with the bubble it belongs to: a child skin that redraws the bubble (SimpleStyle) must not
+    // get its parent's opening fan or teal AI fan, which textures inherit name by name
+    const auto own_art = [this](const char* name) -> TextureObject* {
+        if (!tex.has_texture(name)) {
+            return nullptr;
+        }
+        TextureObject* t = tex.get_texture(name);
+        return (t_bubble == nullptr || t->json_path == t_bubble->json_path) ? t : nullptr;
+    };
+    t_unfold = own_art("drumroll_counter/bubble_unfold");
+    t_bubble_ai = own_art("drumroll_counter/bubble_ai");
+    t_unfold_ai = own_art("drumroll_counter/bubble_unfold_ai");
     // upstream's skin script. Z-DON keeps drawing its own opening fan and its AI arena (the script knows neither)
     if (t_unfold == nullptr && !zdon_ai_arena_game() &&
         load("DrumrollCounter", "drumroll_counter", static_cast<int>(player_num))) {

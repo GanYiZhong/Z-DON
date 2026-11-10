@@ -1,6 +1,7 @@
 #include "option_box.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <map>
@@ -191,6 +192,34 @@ std::string settings_builtin_text(const std::string& key) {
         {"no", {{"en", "No"}, {"ja", "いいえ"}, {"zh", "否"}, {"ko", "아니요"}}},
         {"yes", {{"en", "Yes"}, {"ja", "はい"}, {"zh", "是"}, {"ko", "예"}}},
         {"key_in_use", {{"en", "Already used"}, {"ja", "使用中"}, {"zh", "已被佔用"}, {"ko", "이미 사용 중"}}},
+        {"midi_box", {{"en", "MIDI"}, {"ja", "MIDI"}, {"zh", "MIDI"}, {"ko", "MIDI"}}},
+        {"midi_device", {{"en", "MIDI Device"}, {"ja", "MIDIデバイス"}, {"zh", "MIDI 裝置"}, {"ko", "MIDI 장치"}}},
+        {"midi_device_desc",
+         {{"en", "The MIDI drum to play with (electronic drum, MIDI pad). Off: MIDI is not used."},
+          {"ja", "演奏に使うMIDI機器（電子ドラム、MIDIパッドなど）。オフ：MIDIを使わない。"},
+          {"zh", "用來演奏的 MIDI 裝置（電子鼓、MIDI 打擊墊等）。關閉：不使用 MIDI。"},
+          {"ko", "연주에 쓸 MIDI 기기 (전자 드럼, MIDI 패드 등). 끄기: MIDI를 쓰지 않음."}}},
+        {"midi_off", {{"en", "Off"}, {"ja", "オフ"}, {"zh", "關閉"}, {"ko", "끄기"}}},
+        {"midi_learn", {{"en", "Learn Drum"}, {"ja", "太鼓を覚える"}, {"zh", "學習對應"}, {"ko", "북 학습"}}},
+        {"midi_learn_desc",
+         {{"en", "Don, then hit Player 1's left kat, left don, right don and right kat on the MIDI drum."},
+          {"ja", "ドンのあと、MIDIの太鼓で1Pの左カッ、左ドン、右ドン、右カッの順にたたいてください。"},
+          {"zh", "按咚後，依序在 MIDI 鼓上敲 1P 的左咔、左咚、右咚、右咔。"},
+          {"ko", "쿵을 누른 뒤 MIDI 북으로 1P의 왼쪽 딱, 왼쪽 쿵, 오른쪽 쿵, 오른쪽 딱 순서로 치세요."}}},
+        {"midi_unset", {{"en", "Not set"}, {"ja", "未設定"}, {"zh", "未設定"}, {"ko", "미설정"}}},
+        {"midi_mapped", {{"en", "{0} notes"}, {"ja", "{0}音"}, {"zh", "{0} 個音"}, {"ko", "{0}개 음"}}},
+        {"midi_hit",
+         {{"en", "Hit {0} ({1}/4)"},
+          {"ja", "{0}をたたく ({1}/4)"},
+          {"zh", "敲{0}（{1}/4）"},
+          {"ko", "{0} 치기 ({1}/4)"}}},
+        {"midi_left_kat", {{"en", "left kat"}, {"ja", "左カッ"}, {"zh", "左咔"}, {"ko", "왼쪽 딱"}}},
+        {"midi_left_don", {{"en", "left don"}, {"ja", "左ドン"}, {"zh", "左咚"}, {"ko", "왼쪽 쿵"}}},
+        {"midi_right_don", {{"en", "right don"}, {"ja", "右ドン"}, {"zh", "右咚"}, {"ko", "오른쪽 쿵"}}},
+        {"midi_right_kat", {{"en", "right kat"}, {"ja", "右カッ"}, {"zh", "右咔"}, {"ko", "오른쪽 딱"}}},
+        {"midi_done", {{"en", "Learned"}, {"ja", "設定しました"}, {"zh", "已設定"}, {"ko", "설정 완료"}}},
+        {"midi_no_device",
+         {{"en", "No MIDI device"}, {"ja", "MIDI機器なし"}, {"zh", "未連接 MIDI 裝置"}, {"ko", "MIDI 장치 없음"}}},
     };
     const auto& m = t.at(key);
     auto it = m.find(global_data.config->general.language);
@@ -912,4 +941,150 @@ void ResetBindingsOptionBox::draw() {
     }
     draw_centered(*no_text, 0);
     draw_centered(*yes_text, 1);
+}
+
+// Z-DON: MIDI set-up rows (the MIDI box SettingsScreen adds)
+void MidiDeviceOptionBox::confirm() {
+    StrOptionBox::confirm();
+    if (!is_highlighted) {
+        midi_select_device(global_data.config->midi.device);
+    }
+}
+
+MidiLearnOptionBox::MidiLearnOptionBox(const std::string& name, const std::string& description, const std::string& path)
+    : BaseOptionBox(name, description, path), flicker_fade(make_flicker()) {
+    set_text(idle_text());
+}
+
+MidiLearnOptionBox::~MidiLearnOptionBox() {
+    if (step >= 0) {
+        midi_set_learning(false);
+    }
+}
+
+void MidiLearnOptionBox::set_text(const std::string& s) {
+    if (value_text && s == shown) {
+        return;
+    }
+    shown = s;
+    value_text = std::make_unique<OutlinedText>(s, option_font_size(), Color::WHITE, Color::BLACK, false, 4, -4);
+}
+
+std::string MidiLearnOptionBox::idle_text() const {
+    const MidiConfig& m = global_data.config->midi;
+    const size_t n = std::min(m.notes.size(), m.buttons.size());
+    if (n == 0) {
+        return settings_builtin_text("midi_unset");
+    }
+    std::string s = settings_builtin_text("midi_mapped");
+    if (const size_t at = s.find("{0}"); at != std::string::npos) {
+        s.replace(at, 3, std::to_string(n));
+    }
+    return s;
+}
+
+void MidiLearnOptionBox::confirm() {
+    if (is_highlighted) {
+        ensure_midi_listening();
+        step = 0;
+        midi_set_learning(true);
+    } else if (step >= 0) {
+        step = -1;
+        midi_set_learning(false);
+        set_text(idle_text());
+    }
+}
+
+// The note goes to the role's first controller button; a role without one gets a button no controller role and no
+// other MIDI note uses (from 32 down, away from real pads' low numbers). One note per role: the note's and the
+// button's earlier pairs are dropped.
+void MidiLearnOptionBox::learn(int note) {
+    Config& c = *global_data.config;
+    const std::array<std::vector<int>*, 4> roles = {&c.gamepad_1p.left_kat, &c.gamepad_1p.left_don,
+                                                    &c.gamepad_1p.right_don, &c.gamepad_1p.right_kat};
+    std::vector<int>& role = *roles[step];
+    int button = role.empty() ? 0 : role.front();
+    if (button < 1 || button > 32) {
+        auto used = [&](int b) {
+            for (const GamepadConfig* g : {&c.gamepad_1p, &c.gamepad_2p}) {
+                for (const std::vector<int>* v : {&g->left_kat, &g->left_don, &g->right_don, &g->right_kat}) {
+                    if (std::ranges::contains(*v, b)) {
+                        return true;
+                    }
+                }
+            }
+            return std::ranges::contains(c.midi.buttons, b);
+        };
+        button = 0;
+        for (int b = 32; b >= 1; --b) {
+            if (!used(b)) {
+                button = b;
+                break;
+            }
+        }
+        if (button == 0) {
+            return;
+        }
+        role.insert(role.begin(), button);
+    }
+    std::vector<int>& notes = c.midi.notes;
+    std::vector<int>& buttons = c.midi.buttons;
+    const size_t n = std::min(notes.size(), buttons.size());
+    notes.resize(n);
+    buttons.resize(n);
+    for (size_t i = n; i-- > 0;) {
+        if (notes[i] == note || buttons[i] == button) {
+            notes.erase(notes.begin() + static_cast<std::ptrdiff_t>(i));
+            buttons.erase(buttons.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+    }
+    notes.push_back(note);
+    buttons.push_back(button);
+    midi_reload_mapping(c.midi);
+    spdlog::info("MIDI learn: note {} -> controller button {} (step {})", note, button, step + 1);
+}
+
+void MidiLearnOptionBox::update(double current_time) {
+    flicker_fade->update(current_time);
+    if (!is_highlighted && step >= 0) { // left with the back key
+        step = -1;
+        midi_set_learning(false);
+        set_text(idle_text());
+    }
+    if (message_until > 0.0 && current_time >= message_until) {
+        message_until = 0.0;
+        set_text(idle_text());
+    }
+    if (step < 0) {
+        return;
+    }
+    if (const int note = midi_take_learned_note(); note >= 0) {
+        learn(note);
+        audio.play_sound("don", VolumePreset::SOUND);
+        if (++step >= 4) {
+            step = -1;
+            midi_set_learning(false);
+            is_highlighted = false;
+            capture_done = true;
+            set_text(settings_builtin_text("midi_done"));
+            message_until = current_time + 1500.0;
+            return;
+        }
+    }
+    static constexpr std::array<const char*, 4> role_keys = {"midi_left_kat", "midi_left_don", "midi_right_don",
+                                                             "midi_right_kat"};
+    std::string s = settings_builtin_text("midi_hit");
+    if (const size_t at = s.find("{0}"); at != std::string::npos) {
+        s.replace(at, 3, settings_builtin_text(role_keys[step]));
+    }
+    if (const size_t at = s.find("{1}"); at != std::string::npos) {
+        s.replace(at, 3, std::to_string(step + 1));
+    }
+    // the value box holds one short line: with no port open, say so instead of the prompt (learning still runs)
+    set_text(midi_device_connected() ? s : settings_builtin_text("midi_no_device"));
+}
+
+void MidiLearnOptionBox::draw() {
+    draw_base();
+    draw_value_box(*value_text, *flicker_fade);
 }

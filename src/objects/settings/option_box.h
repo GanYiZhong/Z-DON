@@ -271,6 +271,38 @@ private:
     std::unique_ptr<FadeAnimation> flicker_fade;
 };
 
+// Z-DON: [midi] device: the input ports seen so far, applied when chosen.
+class MidiDeviceOptionBox : public StrOptionBox {
+public:
+    MidiDeviceOptionBox(const std::string& name, const std::string& description, const std::string& path,
+                        const std::map<std::string, std::string>& values)
+        : StrOptionBox(name, description, path, values) {}
+    void confirm() override;
+};
+
+// Z-DON: don starts learning the MIDI drum: hit 1P left kat, left don, right don, right kat in turn; each note is
+// mapped to that role's controller button (one is added to [gamepad_1p] when the role has none).
+class MidiLearnOptionBox : public BaseOptionBox {
+public:
+    MidiLearnOptionBox(const std::string& name, const std::string& description, const std::string& path);
+    ~MidiLearnOptionBox() override;
+
+    void confirm() override;
+    void update(double current_time) override;
+    void draw() override;
+
+private:
+    int step = -1; // -1 idle; 0..3 waiting for left kat, left don, right don, right kat
+    double message_until = 0.0;
+    std::string shown;
+    std::unique_ptr<OutlinedText> value_text;
+    std::unique_ptr<FadeAnimation> flicker_fade;
+
+    void set_text(const std::string& s);
+    std::string idle_text() const;
+    void learn(int note);
+};
+
 // Z-DON: the config.cpp default for a key / controller binding path, if it has one.
 std::optional<std::vector<int>> default_binding(const std::string& path);
 

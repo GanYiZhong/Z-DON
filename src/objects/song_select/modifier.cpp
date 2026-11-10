@@ -23,6 +23,7 @@ static bool PlayerData::* find_bool_modifier(std::string_view name) {
         {"skip", &PlayerData::modifier_skip},
         {"equal_speed", &PlayerData::modifier_equal_speed}, // Z-DON
         {"ghost", &PlayerData::modifier_ghost},             // Z-DON
+        {"flashlight", &PlayerData::modifier_flashlight},   // Z-DON
     };
 
     const auto modifier = std::ranges::find(modifiers, name, &BoolModifier::name);
@@ -51,9 +52,11 @@ ModifierSelector::ModifierSelector(PlayerNum player_num, PlayerData* player) : p
     language = global_data.config->general.language;
 
     mod_names.assign(BASE_MOD_NAMES.begin(), BASE_MOD_NAMES.end());
-    mod_names.emplace_back("equal_speed"); // Z-DON constant speed
-    mod_names.emplace_back("zdon_fade");   // Z-DON hidden / sudden
-    mod_names.emplace_back("ghost");       // Z-DON PB pace
+    mod_names.emplace_back("equal_speed");  // Z-DON constant speed
+    mod_names.emplace_back("zdon_fade");    // Z-DON hidden / sudden
+    mod_names.emplace_back("ghost");        // Z-DON PB pace
+    mod_names.emplace_back("flashlight");   // Z-DON flashlight
+    mod_names.emplace_back("sudden_death"); // Z-DON the play ends on a miss
     if (tex.options[SCO::OPTION_SKIP_ROW]) {
         mod_names.emplace_back("skip");
     }
@@ -203,6 +206,8 @@ void ModifierSelector::step(int dir) {
         player->modifier_random = (player->modifier_random + dir + 3) % 3;
     } else if (mod_name == "zdon_fade") {
         player->modifier_zdon_fade = (player->modifier_zdon_fade + dir + 7) % 7;
+    } else if (mod_name == "sudden_death") {
+        player->modifier_sudden_death = (player->modifier_sudden_death + dir + 3) % 3;
     } else {
         set_bool(current_mod_index, !get_bool(current_mod_index));
     }
@@ -222,8 +227,11 @@ std::string ModifierSelector::row_label(const std::string& n) const {
         return font_manager.get_text_label("modifier_name_" + n);
     }
     // Z-DON rows: the skin's modifier_name_<row>, else built in
-    static const std::pair<const char*, const char*> zdon_rows[] = {
-        {"equal_speed", "equal_speed"}, {"zdon_fade", "fade"}, {"ghost", "ghost"}};
+    static const std::pair<const char*, const char*> zdon_rows[] = {{"equal_speed", "equal_speed"},
+                                                                    {"zdon_fade", "fade"},
+                                                                    {"ghost", "ghost"},
+                                                                    {"flashlight", "flashlight"},
+                                                                    {"sudden_death", "sudden_death"}};
     for (const auto& [row, key] : zdon_rows) {
         if (n == row) {
             std::string s = tex.skin_text(std::string("modifier_name_") + row, language);
@@ -271,6 +279,13 @@ std::vector<ModifierSelector::ModRow> ModifierSelector::lua_rows() {
                                : zhud::text("fade_sudden", std::to_string(25 * (f - 3)));
             r.state = f;
             r.changed = f != 0;
+        } else if (n == "sudden_death") {
+            const int s = player->modifier_sudden_death;
+            r.value = s == 0   ? font_manager.get_text_label("modifier_text_false")
+                      : s == 1 ? zhud::text("sudden_death_bad")
+                               : zhud::text("sudden_death_ok");
+            r.state = s;
+            r.changed = s != 0;
         } else {
             bool v = get_bool(i);
             r.state = v ? 1 : 0;

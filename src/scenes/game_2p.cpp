@@ -138,12 +138,14 @@ std::optional<Screens> Game2PScreen::update() {
     clock.update(current_time);
     transition->update(current_time);
     update_gameplay(current_time);
+    zdon_sudden_death_check();
     if (global_data.zdon_ai.active && players.size() == 2) {
         update_skip();
-        if (skipped) { // what was left of the battle goes to the AI, at once
+        const bool cut_short = skipped || zdon_sudden_over;
+        if (cut_short) { // what was left of the battle goes to the AI, at once
             zdon_ai_battle_concede();
         }
-        zdon_ai_battle_update(skipped ? 1e12 : clock.position(), *players[0], *players[1]);
+        zdon_ai_battle_update(cut_short ? 1e12 : clock.position(), *players[0], *players[1]);
         if (global_data.zdon_ai.finished && get_current_ms() >= global_data.zdon_ai.finished_at_ms && !ai_music_cut &&
             song_music && (tex.skin_config_by_name.contains("zdon_ai_cutin_first") || zdon_ai_end_delay_on())) {
             audio.stop_sound(
@@ -190,8 +192,8 @@ std::optional<Screens> Game2PScreen::update() {
             }
         }
 
-        if (skipped && !global_data.config->general.fast_transitions) {
-            transition_delay = 2800.0; // the skip banner, then the result
+        if ((skipped || zdon_sudden_over) && !global_data.config->general.fast_transitions) {
+            transition_delay = 2800.0; // the skip banner (or the sudden death message), then the result
         }
         end_song(end_time, transition_delay, BackgroundNotification::Disabled);
     }

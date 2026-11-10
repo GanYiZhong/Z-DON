@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <numbers>
@@ -435,6 +436,19 @@ void TJAParser::get_metadata() {
             }
         } else if (item.starts_with("SCENEPRESET")) {
             metadata.scene_preset = split_after_colon(item);
+        } else if (item.starts_with("COMPAT")) { // Z-DON: OpenTaiko's compatibility modes
+            const std::string mode = to_lower(trim(split_after_colon(item)));
+            static const std::pair<std::string_view, TjaCompat> modes[] = {{"oos", TjaCompat::OOS},
+                                                                           {"jiro1", TjaCompat::JIRO1},
+                                                                           {"jiro2", TjaCompat::JIRO2},
+                                                                           {"tmg", TjaCompat::TMG},
+                                                                           {"tjap3", TjaCompat::TJAP3}};
+            const auto* found = std::ranges::find(modes, mode, &std::pair<std::string_view, TjaCompat>::first);
+            if (found != std::end(modes)) {
+                metadata.compat = found->second;
+            } else {
+                spdlog::warn("Unknown COMPAT '{}' in {}", mode, file_path.string());
+            }
         } else if (item.starts_with("COURSE")) {
             std::string course = to_lower(trim(split_after_colon(item)));
 
@@ -539,6 +553,15 @@ void TJAParser::get_metadata() {
         if (it != start_values.end() && it->second.diff == diff) {
             take_chart_values(course, it->second.values);
         }
+        // Z-DON COMPAT:jiro1 / jiro2: BALLOON with BALLOONEXP / BALLOONMAS but no BALLOONNOR is TaikoJiro's common
+        // list for every branch (TJAPlayer3 and OpenTaiko take BALLOON as the normal branch's, as without COMPAT)
+        if ((metadata.compat == TjaCompat::JIRO1 || metadata.compat == TjaCompat::JIRO2) &&
+            course.branch_balloon[0].empty() && !course.balloon.empty() &&
+            (!course.branch_balloon[1].empty() || !course.branch_balloon[2].empty())) {
+            for (auto& list : course.branch_balloon) {
+                list.clear();
+            }
+        }
     }
 
     for (auto& [region_code, title] : metadata.title) {
@@ -597,6 +620,7 @@ TJAParser::notes_to_position(int diff) {
 
     ParserState state;
     state.bpm = metadata.bpm;
+    state.compat_last_bpm_ms = current_ms;
     state.balloons = metadata.course_data[diff].balloon;
     state.route_balloons = metadata.course_data[diff].branch_balloon;
     state.curr_note_list = &master_notes.notes;
@@ -704,9 +728,34 @@ TJAParser::notes_to_position(int diff) {
                 state.curr_note_list->push_back(note);
                 state.index++;
             }
+            // Z-DON COMPAT:jiro1: a measure with a tempo change ends on a whole ms after that change
+            if (metadata.compat == TjaCompat::JIRO1 && state.compat_bpm_changed) {
+                current_ms = state.compat_last_bpm_ms + std::trunc(current_ms - state.compat_last_bpm_ms);
+                state.compat_last_bpm_ms = current_ms;
+                state.compat_bpm_changed = false;
+            }
         }
     }
     master_notes.scroll_type = state.scroll_type;
+    // Z-DON test hook: ZDON_CHART_DUMP=<file> appends every parsed note (route, type, hit ms, bpm, balloon count)
+    if (const char* dump = std::getenv("ZDON_CHART_DUMP"); dump && *dump) {
+        if (std::ofstream out(dump, std::ios::app); out) {
+            out << std::format("# {} diff {} compat {}\n", file_path.filename().string(), diff,
+                               static_cast<int>(metadata.compat));
+            auto write = [&](const char* route, const NoteList& list) {
+                for (const Note& n : list.notes) {
+                    out << std::format("{} {} {:.4f} {:.3f} {}\n", route, static_cast<int>(n.type), n.hit_ms, n.bpm,
+                                       n.count.value_or(-1));
+                }
+            };
+            write("M", master_notes);
+            for (const auto& [route, lists] : {std::pair{"N", &branch_n}, {"E", &branch_e}, {"X", &branch_m}}) {
+                for (const NoteList& l : *lists) {
+                    write(route, l);
+                }
+            }
+        }
+    }
     // the members only live while this runs (reset at the top): handed over, not copied
     return {std::move(master_notes), std::move(branch_m), std::move(branch_e), std::move(branch_n)};
 }
@@ -1177,6 +1226,14 @@ void TJAParser::handle_BPMCHANGE(const std::string& value, ParserState& state) {
         return;
     }
 
+    // Z-DON COMPAT:jiro1: TaikoJiro 1 truncates the time since the last tempo change to whole ms here
+    // (https://note.com/lime_5137/n/n672c0a41495d, as OpenTaiko's CTja)
+    if (metadata.compat == TjaCompat::JIRO1) {
+        this->current_ms = state.compat_last_bpm_ms + std::trunc(this->current_ms - state.compat_last_bpm_ms);
+        state.compat_last_bpm_ms = this->current_ms;
+        state.compat_bpm_changed = true;
+    }
+
     TimelineObject timeline_obj;
     timeline_obj.start_time = this->current_ms;
     timeline_obj.bpm = parsed_bpm;
@@ -1226,6 +1283,9 @@ void TJAParser::handle_DELAY(const std::string& value, ParserState& state) {
         spdlog::warn("Invalid #DELAY value '{}' in {}", value, file_path.string());
         return;
     }
+    if (metadata.compat == TjaCompat::JIRO1 || metadata.compat == TjaCompat::JIRO2) {
+        delay_ms = std::trunc(delay_ms); // Z-DON COMPAT: TaikoJiro delays by whole ms
+    }
     if (delay_ms > 0) {
         // The beat count stands still through a delay (seen with #BMSCROLL / #HBSCROLL)
         add_tempo_point(0.0);
@@ -1246,6 +1306,7 @@ void TJAParser::handle_BARLINEON(const std::string& value, ParserState& state) {
 
 void TJAParser::handle_BRANCHSTART(const std::string& value, ParserState& state) {
     state.start_branch_ms = this->current_ms;
+    state.start_branch_compat_last_bpm_ms = state.compat_last_bpm_ms;
     state.start_branch_bpm = state.bpm;
     state.start_branch_time_sig = state.time_signature;
     state.start_branch_x_scroll = state.scroll_x_modifier;
@@ -1408,6 +1469,8 @@ static void enter_branch(std::deque<NoteList>& branch, int route, ParserState& s
     state.curr_note_list = &branch.back().notes;
     state.curr_timeline = &branch.back().timeline;
     current_ms = state.start_branch_ms;
+    state.compat_last_bpm_ms = state.start_branch_compat_last_bpm_ms;
+    state.compat_bpm_changed = false;
     state.bpm = state.start_branch_bpm;
     state.time_signature = state.start_branch_time_sig;
     state.scroll_x_modifier = state.start_branch_x_scroll;

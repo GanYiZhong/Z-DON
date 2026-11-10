@@ -349,3 +349,9 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - 3D 咚：每次執行第一次建咚要解析 Models/animations.glb（load_model 52 ms 只為了骨骼名稱＋動畫 110 ms），落在登入畫面初始化。骨骼名稱改用 cgltf 直接讀（第一個 skin 的 joints、截 31 字元，同 raylib LoadBoneInfoGLTF；兩個 skin 的 animations/head/body/cos 共 8 次比對全相同），整段不碰 GL，`load_skin` 成功後由 `chara3d_prewarm()` 丟 Background job 先解析；快取改成不解構的 heap 物件（結束時 job 可能還在跑）。啟動→登入畫面就緒 765–829→386–393 ms。
 - 驗證：Nijiiro／SimpleStyle 遊戲 6 格＋選曲 7 格固定步進截圖對上一版（4eae1042）逐位元相同，0 筆讀取失敗、log 無錯誤。
 - 沒做：背景隨機組合提前準備。只改引擎的話不知道 Lua 會選哪組，Nijiiro 候選總量約 686 MB（BC7），學「上次用過的」命中率低；要做得讓 skin 在選歌時就決定（改 Nijiiro）。父 skin 用不到的舞者圖（每首約 30 ms）也是 skin 端的事。
+
+## 2026-11-10 失誤就結束、手電筒、COMPAT:、MIDI 設定、osu! 太鼓譜（參考 OpenTaiko / taiko-web / osu!）
+- 選項面板兩列（存在 `zdon_player_options`：`sudden_death` 0–2、`flashlight`）。「失誤就結束」出不可／出可：Player 判到第一個不可（或可）就標記，GameScreen / Game2PScreen 截斷該玩家的譜（剩下算不可）；所有玩家都出局才停歌（不設上游的 `skipped`，Nijiiro 不會畫「跳略演奏」），2.8 s 後進結算，成績不存（理由「失誤結束」）；AI 那一側不套用，AI 對戰時算 AI 贏。「手電筒」：音符畫完後在判定線右邊 30% 跑道外蓋暗幕（8% 漸層），100／200 連段縮到 25%／20%，斷連段放回（150 ms 緩動），AI 那一側不套用。
+- TJA `COMPAT:`（OpenTaiko 的名字 jiro1 / jiro2 / tmg / tjap3 / oos）：沒寫或 oos、tjap3 = 原本的行為。jiro1：`#BPMCHANGE` 與含 BPM 變化的小節結尾，把距上次變化的時間取整到 ms；jiro1/jiro2：`#DELAY` 取整到 ms；jiro1/jiro2 有 BALLOONEXP/MAS 沒有 BALLOONNOR 時 BALLOON 當三條分歧共用。tmg、方向／#SUDDEN 垂直分量等 OpenTaiko 其他差異沒有做。測試鉤子 `ZDON_CHART_DUMP=<檔>`（TJA 與 osu 都會把解析後的音符時間附加寫入）。
+- MIDI：上游已有 libremidi 輸入（`[midi]` device／notes→手把按鈕），只能手改 config。Z-DON 在設定畫面自動加「MIDI」分頁（不改 skin 範本）：MIDI 裝置（偵測到的輸入埠，選了立刻切換）、學習對應（咚開始，依序在 MIDI 鼓敲 1P 左咔、左咚、右咚、右咔；對到該角色的第一個手把按鈕，沒有就從 32 往下找沒用到的號碼加進 `[gamepad_1p]`）。MIDI 監聽改成需要時才啟動（設定了裝置或打開設定畫面）。測試鉤子 `YATAIDON_FAKE_MIDI="<ms>:<note>[:<vel>],..."`。實機 MIDI 鼓未測（這台沒有裝置）。
+- osu!（上游已有 OsuParser，一個資料夾＝一個資料夾格，每個 .osu 一首歌）：難度名稱（Kantan／Futsuu／Muzukashii／Oni／Inner Oni、Easy／Normal／Hard／Ura、日中文）決定難度格，看不出就依 OD；等級＝1＋每秒咚咔數×1.1（★1–10）；spinner 氣球數＝長度×OD 對應每秒 3／5／7.5 下×1.65（osu!lazer swell）；kiai＝GOGO。同一首歌的多個 .osu 還是各自一首（合併成一首多難度要改選曲導航，沒做）。

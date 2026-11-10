@@ -6,7 +6,55 @@
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../objects/settings/option_box.h"
 #include "../objects/song_select/file_navigator/navigator.h"
+
+#if defined(YATAIDON_HAS_MIDI)
+// Z-DON: the MIDI box (device, learn the drum) is the engine's: skins' templates do not know it. Added before "exit"
+// unless the template already has a "midi" box.
+static void zdon_add_midi_box(rapidjson::Document& tmpl) {
+    if (!tmpl.IsObject() || tmpl.HasMember("midi")) {
+        return;
+    }
+    auto& a = tmpl.GetAllocator();
+    auto text = [&](const std::string& key) {
+        rapidjson::Value v(rapidjson::kObjectType);
+        v.AddMember("en", rapidjson::Value(settings_builtin_text(key).c_str(), a), a);
+        return v;
+    };
+    auto option = [&](const char* path, const char* type, const std::string& name, const std::string& desc) {
+        rapidjson::Value o(rapidjson::kObjectType);
+        o.AddMember("path", rapidjson::Value(path, a), a);
+        o.AddMember("type", rapidjson::Value(type, a), a);
+        o.AddMember("name", text(name), a);
+        o.AddMember("description", text(desc), a);
+        return o;
+    };
+    rapidjson::Value options(rapidjson::kObjectType);
+    options.AddMember("device", option("midi/device", "zdon_mididevice", "midi_device", "midi_device_desc"), a);
+    options.AddMember("learn", option("midi/notes", "zdon_midilearn", "midi_learn", "midi_learn_desc"), a);
+    rapidjson::Value box(rapidjson::kObjectType);
+    box.AddMember("name", text("midi_box"), a);
+    box.AddMember("options", options, a);
+
+    rapidjson::Value rebuilt(rapidjson::kObjectType);
+    bool added = false;
+    for (auto it = tmpl.MemberBegin(); it != tmpl.MemberEnd(); ++it) {
+        if (!added && std::string_view(it->name.GetString()) == "exit") {
+            rebuilt.AddMember("midi", box, a);
+            added = true;
+        }
+        rebuilt.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
+    }
+    if (!added) {
+        rebuilt.AddMember("midi", box, a);
+    }
+    tmpl.SetObject();
+    for (auto it = rebuilt.MemberBegin(); it != rebuilt.MemberEnd(); ++it) {
+        tmpl.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
+    }
+}
+#endif
 
 void SettingsScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -33,7 +81,11 @@ void SettingsScreen::on_screen_start() {
     }
 
     try {
-        box_manager = std::make_unique<SettingsBoxManager>(read_json_file(tmpl_path));
+        rapidjson::Document tmpl = read_json_file(tmpl_path);
+#if defined(YATAIDON_HAS_MIDI)
+        zdon_add_midi_box(tmpl); // Z-DON: a MIDI box before Exit, whatever the skin's template has
+#endif
+        box_manager = std::make_unique<SettingsBoxManager>(tmpl);
     } catch (const std::exception& e) {
         spdlog::error("Failed to load settings template: {}", e.what());
         screen_init = false;

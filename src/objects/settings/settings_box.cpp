@@ -91,6 +91,22 @@ std::unique_ptr<BaseOptionBox> SettingsBox::make_option_box(const rapidjson::Val
     if (type == "float") {
         return std::make_unique<FloatOptionBox>(name, desc, path);
     }
+    // Z-DON: the MIDI box SettingsScreen adds
+    if (type == "zdon_mididevice") {
+        ensure_midi_listening();
+        values_map.clear();
+        values_map[""] = settings_builtin_text("midi_off");
+        for (const std::string& port : midi_port_names()) {
+            values_map[port] = port;
+        }
+        if (const std::string& cur = global_data.config->midi.device; !cur.empty() && !values_map.contains(cur)) {
+            values_map[cur] = cur; // configured, not plugged in now
+        }
+        return std::make_unique<MidiDeviceOptionBox>(name, desc, path, values_map);
+    }
+    if (type == "zdon_midilearn") {
+        return std::make_unique<MidiLearnOptionBox>(name, desc, path);
+    }
     throw std::runtime_error("unknown option type '" + type + "'");
 }
 
