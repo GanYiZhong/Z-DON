@@ -199,7 +199,9 @@ def as_bool(v) -> bool:
 
 def new_access_code(store: Store) -> str:
     while True:
-        code = str(secrets.randbelow(9 * 10**19) + 10**19)  # 20 digits
+        # 19 digits below 9e18: the game keeps player ids in a 64-bit integer (scores.db players.player_id
+        # INTEGER PRIMARY KEY, max ~9.22e18); a longer code can't be stored there and the player has no name
+        code = str(secrets.randbelow(8 * 10**18) + 10**18)
         if not store.one("SELECT 1 FROM users WHERE access_code=?", (code,)):
             return code
 
@@ -1011,6 +1013,28 @@ def cmd_jump(cfg: dict, args) -> None:
     print("queued; the game picks it up on its next poll")
 
 
+ACCESS_CODE_TABLES = ("users", "scores", "dan_results", "jumps", "kinotake", "owned", "revives", "member_links")
+
+
+def cmd_recode(cfg: dict, args) -> None:
+    """Moves an account to a new access code (one the game can store); prints the new code once."""
+    store = Store(cfg["data_dir"] / "zdon.db")
+    if not store.one("SELECT 1 FROM users WHERE access_code=?", (args.access_code,)):
+        sys.exit("unknown access code")
+    new = new_access_code(store)
+    with store.lock:
+        store.db.execute("BEGIN")
+        try:
+            for table in ACCESS_CODE_TABLES:
+                if store.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)):
+                    store.db.execute(f"UPDATE {table} SET access_code=? WHERE access_code=?", (new, args.access_code))
+            store.db.execute("COMMIT")
+        except Exception:
+            store.db.execute("ROLLBACK")
+            raise
+    print(new)
+
+
 def cmd_rename(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     store.run("UPDATE users SET username=? WHERE access_code=?", (args.name, args.access_code))
@@ -1042,13 +1066,15 @@ def main(argv=None) -> None:
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--hash")
     g.add_argument("--score-id", type=int)
+    s = sub.add_parser("recode", help="move an account to a new access code (printed); the player puts it in config.toml")
+    s.add_argument("access_code")
     s = sub.add_parser("rename", help="change a player's name")
     s.add_argument("access_code")
     s.add_argument("name")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "users": cmd_users,
-     "jump": cmd_jump, "rename": cmd_rename}[args.cmd](cfg, args)
+     "jump": cmd_jump, "rename": cmd_rename, "recode": cmd_recode}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
