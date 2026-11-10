@@ -64,6 +64,8 @@ struct Win32DirEntry {
 // Lists `dir` (without "." and "..") in the order the file system returns it.
 // Returns false if the directory cannot be opened.
 bool win32_list_dir(const std::filesystem::path& dir, std::vector<Win32DirEntry>& out);
+// Z-DON: one file's size and last write, in win32_list_dir's units (false when it cannot be read)
+bool win32_file_stat(const std::filesystem::path& path, uint64_t& size, uint64_t& ft_write);
 
 // The path `path` resolves to with every link followed, or an empty string if it cannot be opened.
 std::wstring win32_final_path(const std::filesystem::path& path);

@@ -27,6 +27,9 @@
 #include "../texture_pack.h"
 #include "../texture_retain.h"
 #include "../zdon_os.h"
+#if !defined(_WIN32) && defined(ZDON_POSIX_LIST_DIR)
+#include <sys/stat.h>
+#endif
 #include "text.h"
 
 #ifdef _WIN32
@@ -1739,6 +1742,44 @@ namespace {
         return nullptr;
     }
 
+    // Z-DON: whether the file is still the one the pack copied (a prefill / predecode reads the pack with the pack's
+    // own stats, so a file changed since would come back as its old copy -- and the BC7 cache would then keep those
+    // pixels under the new file's stamp). Same units as the folder listings. Unknown counts as changed.
+    bool file_unchanged(const fs::path& path, uint64_t size, uint64_t mtime) {
+        uint64_t now_size = 0;
+        uint64_t now_mtime = 0;
+#ifdef _WIN32
+        if (!win32_file_stat(path, now_size, now_mtime)) {
+            return false;
+        }
+#elif defined(ZDON_POSIX_LIST_DIR)
+        struct stat st{};
+        if (::stat(path.c_str(), &st) != 0) {
+            return false;
+        }
+#if defined(__APPLE__)
+        const struct timespec& t = st.st_mtimespec;
+#else
+        const struct timespec& t = st.st_mtim;
+#endif
+        constexpr int64_t kUnixEpochIn1601 = 11644473600; // as zdon_os::list_dir
+        now_size = static_cast<uint64_t>(st.st_size);
+        now_mtime = static_cast<uint64_t>((static_cast<int64_t>(t.tv_sec) + kUnixEpochIn1601) * 10000000 +
+                                          static_cast<int64_t>(t.tv_nsec) / 100);
+#else
+        std::error_code ec;
+        now_size = static_cast<uint64_t>(fs::file_size(path, ec));
+        if (ec) {
+            return false;
+        }
+        now_mtime = static_cast<uint64_t>(fs::last_write_time(path, ec).time_since_epoch().count());
+        if (ec) {
+            return false;
+        }
+#endif
+        return now_size == size && now_mtime == mtime;
+    }
+
     void prefill_work(const std::shared_ptr<Prefill>& pf) {
         // dev hook: ZDON_LAZY_PREFILL_SLOW_MS=<ms> waits that long before each image, so a test can leave the
         // result screen while the prefill still runs
@@ -1759,6 +1800,15 @@ namespace {
             }
             const fs::path& path = pf->files[i].source;
             Image img{};
+            if (!file_unchanged(path, pf->files[i].size, pf->files[i].mtime)) {
+                // changed since it was listed / packed: left for the screen's own load, which reads the file
+                std::scoped_lock lock(pf->mutex);
+                if (!pf->taken.load(std::memory_order_relaxed) && ++pf->done == pf->files.size()) {
+                    pf->finished_ms =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf->start).count();
+                }
+                continue;
+            }
             try {
                 img = load_image(path, ImagePrefetch::image_key(path), pf->pack.get());
             } catch (const std::exception& e) {

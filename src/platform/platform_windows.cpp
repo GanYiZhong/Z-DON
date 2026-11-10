@@ -494,6 +494,16 @@ bool win32_list_dir(const std::filesystem::path& dir, std::vector<Win32DirEntry>
     return true;
 }
 
+bool win32_file_stat(const std::filesystem::path& path, uint64_t& size, uint64_t& ft_write) {
+    WIN32_FILE_ATTRIBUTE_DATA d;
+    if (!GetFileAttributesExW(path.wstring().c_str(), GetFileExInfoStandard, &d)) {
+        return false;
+    }
+    size = (static_cast<uint64_t>(d.nFileSizeHigh) << 32) | d.nFileSizeLow;
+    ft_write = (static_cast<uint64_t>(d.ftLastWriteTime.dwHighDateTime) << 32) | d.ftLastWriteTime.dwLowDateTime;
+    return true;
+}
+
 std::wstring win32_final_path(const std::filesystem::path& path) {
     HANDLE h = CreateFileW(path.wstring().c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
