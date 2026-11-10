@@ -48,6 +48,15 @@ void BaseOptionBox::draw_base() const {
     }
     float text_x = t_title->x[0] + (t_title->x2[0] / 2.0f) - (name_text->width / 2.0f);
     float text_y = t_title->y[0] + (t_title->y2[0] / 8.0f);
+    // Z-DON: skin_config "settings_option_name" x (, y): the option name's centre (SimpleStyle: its header box is part
+    // of the background art, not the title image the name is otherwise centred on)
+    if (const auto it = tex.skin_config_by_name.find("settings_option_name");
+        it != tex.skin_config_by_name.end() && it->second.x > 0) {
+        text_x = it->second.x - (name_text->width / 2.0f);
+        if (it->second.y > 0) { // and y: its vertical centre
+            text_y = it->second.y - (name_text->height / 2.0f);
+        }
+    }
     name_text->draw({.x = text_x, .y = text_y});
 
     // Z-DON: skin_config "settings_description" (x, y, font_size, width) overrides the hard-coded
@@ -154,9 +163,13 @@ std::vector<std::string> BaseOptionBox::wrap_description(const Font& font, const
 }
 
 void BaseOptionBox::draw_centered(OutlinedText& text, int index) const {
-    float tx = t_button_on->x[index] + (t_button_on->x2[index] / 2.0f) - (text.width / 2.0f);
-    float ty = t_button_on->y[index] + (t_button_on->y2[index] / 2.0f) - (text.height / 2.0f);
-    text.draw({.x = tx, .y = ty});
+    // Z-DON: a value wider than its button (a long skin name) is scaled down to fit, a small margin each side
+    const float box_w = static_cast<float>(t_button_on->x2[index]);
+    const float max_w = box_w - 24.0f; // layout units, as box_w
+    const float s = (text.width > max_w && max_w > 0.0f) ? max_w / text.width : 1.0f;
+    float tx = t_button_on->x[index] + (box_w / 2.0f) - (text.width * s / 2.0f);
+    float ty = t_button_on->y[index] + (t_button_on->y2[index] / 2.0f) - (text.height * s / 2.0f);
+    text.draw({.scale = s, .x = tx, .y = ty});
 }
 
 void BaseOptionBox::draw_value_box(OutlinedText& text, const FadeAnimation& flicker) const {
