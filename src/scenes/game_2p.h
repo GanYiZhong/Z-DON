@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include "../libs/network/zdon_p2p.h"
 #include "../libs/network/zdon_ws.h"
 #include "game.h"
 
@@ -29,7 +30,16 @@ private:
     size_t live_ws_next = 0;      // my next hit to send on it
     double live_ws_last = -1e9;   // local ms of the last message on it
     std::vector<double> live_lag; // how late each of the opponent's hits came (ms), for the log
-    void live_take(const std::string& body);
+    // a direct UDP connection to the opponent (zdon_p2p.h), next to the WebSocket: hits go both ways, the first in
+    // is taken
+    std::unique_ptr<ZdonP2P> live_p2p;
+    bool live_cand_sent = false; // my addresses went to the server
+    size_t live_p2p_ack = 0;     // my hits the opponent has said it holds (direct)
+    double live_p2p_last = -1e9; // local ms of the last direct message
+    size_t live_p2p_sent = 0;    // my hits sent directly so far
+    int live_first_direct = 0;   // the opponent's hits that came first directly / over the server
+    int live_first_server = 0;
+    void live_take(const std::string& body, bool direct = false);
     void live_log_lag();
     void live_update(double current_ms);
     void live_send_finish();

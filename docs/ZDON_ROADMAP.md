@@ -392,4 +392,9 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   握手簽名照 signed_headers（參數放 query）。連不上或斷線就退回輪詢（ZDON_ONLINE_WS=0 強制輪詢）。
   每筆打擊帶 t0（送方 chart 0 的牆上時鐘），收方在結束時 log 晚到的平均／中位數／95%／最大值。
   實測同一台：本機 9 ms vs 輪詢 104–114 ms；經 Cloudflare 300 ms vs 1.4 秒（zdon.taiko.ac 被分到 SJC，連線本身就 130 ms）。
+- 2026-11-11 直連：`src/libs/network/zdon_p2p.*`，IPv4／IPv6 各一個 UDP socket，STUN（Google、Cloudflare）取公網位址，
+  位址經 WebSocket {"t":"cand"} 交換，雙方每 100 ms 對所有位址送探測（打洞），先回應的就用；封包帶房間這一局的 key。
+  打擊同時走直連和 WebSocket，live_take 依 at 去重、先到先用；直連封包帶 ack，送方每次重送對方還沒確認的（最多 60 個）。
+  位置只在之前的打擊都到齊時才採用，且只往前。ZDON_ONLINE_P2P=0 關閉。實測同一台經 Cloudflare：509 下全部直連先到，平均 8 ms。
+  未驗證：跨網路（不同 NAT）的打洞成功率，要兩位玩家實際試。
 - 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。

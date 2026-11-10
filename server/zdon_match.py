@@ -18,6 +18,10 @@ Flow (every call carries the player's access_code; the game signs them like the 
                   new hits (pushed the moment they arrive), {"t":"a","have"} my hits it holds,
                   {"t":"f","final"} the opponent finished, {"t":"l"} the opponent left
     `t0` is the sender's wall clock (ms) at chart ms 0: the receiving game logs how late the hits arrived.
+    Direct connection: hello carries the round's "p2p" key; a game sends {"t":"cand","c":[addresses]} (its UDP
+    addresses: local, IPv6, and the public one a STUN server saw) and the server passes them to the opponent. The
+    games then try to reach each other over UDP (zdon_p2p.cpp) and send the hits both ways, taking whichever
+    comes first; the WebSocket stays the fallback.
 A guest without the host's chart asks for it (ready has_song=0 want=1: state "transfer"); the host's game zips the
 song's folder and sends it, the guest's downloads it and checks the chart's hash before adding it to its library:
     POST /match/upload       code hash name sha256 (+ the zip as the body)     the host
@@ -63,6 +67,7 @@ class Side:
         self.combo = 0
         self.final = None               # dict once finished
         self.t0 = None                  # the player's wall clock (ms) at chart ms 0
+        self.cand = None                # the player's UDP addresses for a direct connection (list of "ip:port")
 
 
 class Room:
@@ -75,6 +80,7 @@ class Room:
         self.song: dict | None = None   # hash, title, difficulty (the host's)
         self.round = 0
         self.transfer: dict | None = None   # the song being sent to the guest: hash, name, data
+        self.p2p = secrets.token_hex(8)     # the round's key for the games' direct UDP packets
 
     def side(self, access_code: str) -> tuple[Side | None, Side | None]:
         if self.host.code == access_code:
@@ -221,6 +227,7 @@ class Matches:
             r.host.reset_round()
             opp.reset_round()
             r.transfer = None
+            r.p2p = secrets.token_hex(8)
             r.host.difficulty = r.song["difficulty"]
             r.host.mods = p.get("mods", "")[:500]
             r.host.ready = True
@@ -296,16 +303,20 @@ class Matches:
                 me.ws.close()
             me.ws = conn
             since = int(p.get("since", "0") or 0)
-            hello = {"t": "hello", "have": len(me.hits)}
+            hello = {"t": "hello", "have": len(me.hits), "p2p": r.p2p}
             first = None
+            cand = None
             if opp:
                 first = {"t": "o", "at": since, "hits": ",".join(opp.hits[since:]), "pos": opp.pos,
                          "score": opp.score, "combo": opp.combo, "t0": opp.t0}
+                cand = opp.cand
             gone = opp is None
             final = opp.final if opp else None
         conn.send_text(json.dumps(hello))
         if first:
             conn.send_text(json.dumps(first))
+        if cand:
+            conn.send_text(json.dumps({"t": "cand", "c": cand}))
         if final:
             conn.send_text(json.dumps({"t": "f", "final": final}))
         if gone:
@@ -318,6 +329,18 @@ class Matches:
                 try:
                     msg = json.loads(text)
                 except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get("t") == "cand" and isinstance(msg.get("c"), list):
+                    cand = [str(c)[:64] for c in msg["c"][:16]]
+                    with self.lock:
+                        me.cand = cand
+                        to = opp.ws if opp and opp.ws else None
+                        r2 = self.rooms.get(r.code)
+                        if r2:
+                            _, o2 = r2.side(me.code)
+                            to = o2.ws if o2 and o2.ws else None
+                    if to:
+                        to.send_text(json.dumps({"t": "cand", "c": cand}))
                     continue
                 if not isinstance(msg, dict) or msg.get("t") != "s":
                     continue

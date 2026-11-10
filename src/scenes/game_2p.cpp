@@ -77,6 +77,11 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
     live_ws_next = 0;
     live_ws_last = -1e9;
     live_lag.clear();
+    live_p2p.reset();
+    live_cand_sent = false;
+    live_p2p_ack = live_p2p_sent = 0;
+    live_p2p_last = -1e9;
+    live_first_direct = live_first_server = 0;
     parser = std::make_shared<SongParser>(song, delay, PlayerNum::P1);
     parser_2p = std::make_shared<SongParser>(song, delay, PlayerNum::P2);
 
@@ -304,7 +309,7 @@ static double wall_ms() {
 }
 
 // a /match/sync answer, or one WebSocket message (zdon_match.py): the opponent's hits, position and end
-void Game2PScreen::live_take(const std::string& body) {
+void Game2PScreen::live_take(const std::string& body, bool direct) {
     rapidjson::Document doc;
     if (doc.Parse(body.c_str()).HasParseError() || !doc.IsObject()) {
         return;
@@ -321,7 +326,29 @@ void Game2PScreen::live_take(const std::string& body) {
                 live_ws_next = zdon_online.sent; // send again from what it has
             }
         }
+        // the round's key for a direct connection: try one
+        const char* env = std::getenv("ZDON_ONLINE_P2P");
+        if (t == "hello" && !live_p2p && doc.HasMember("p2p") && doc["p2p"].IsString() &&
+            !(env && std::string(env) == "0")) {
+            live_p2p = std::make_unique<ZdonP2P>();
+            live_p2p->start(doc["p2p"].GetString());
+        }
         return;
+    }
+    if (t == "cand") { // the opponent's addresses
+        if (live_p2p && doc.HasMember("c") && doc["c"].IsArray()) {
+            std::vector<std::string> list;
+            for (const auto& c : doc["c"].GetArray()) {
+                if (c.IsString()) {
+                    list.emplace_back(c.GetString());
+                }
+            }
+            live_p2p->add_remote(list);
+        }
+        return;
+    }
+    if (auto ack = num("ack"); ack && direct) {
+        live_p2p_ack = std::max(live_p2p_ack, static_cast<size_t>(*ack));
     }
     if (t == "l") {
         zdon_online.opp_left = true;
@@ -336,6 +363,7 @@ void Game2PScreen::live_take(const std::string& body) {
     if (auto t0 = num("t0")) {
         zdon_online.opp_t0 = *t0;
     }
+    bool complete = true; // every hit up to the message's position is here: its position counts
     if (doc.HasMember("hits") && doc["hits"].IsString()) {
         // the hits from `at` on (polling: from the `since` this side sent, i.e. what it had taken)
         size_t at = num("at") ? static_cast<size_t>(*num("at")) : zdon_online.received;
@@ -360,12 +388,17 @@ void Game2PScreen::live_take(const std::string& body) {
             const int type = std::clamp(std::atoi(hit.c_str() + colon + 1), 0, 3);
             players[1]->append_replay(ms, static_cast<InputLogType>(type));
             ++zdon_online.received;
+            ++(direct ? live_first_direct : live_first_server);
             if (zdon_online.opp_t0 > 0.0) {
                 live_lag.push_back(now - (zdon_online.opp_t0 + ms));
             }
         }
+        complete = at <= zdon_online.received;
+    } else if (auto at = num("at")) {
+        complete = static_cast<size_t>(*at) <= zdon_online.received;
     }
-    if (auto p = num("pos")) {
+    // the two paths can arrive out of order: the position only moves on
+    if (auto p = num("pos"); p && complete && *p > zdon_online.opp_pos) {
         zdon_online.opp_pos = *p;
         zdon_online.opp_pos_at = live_now;
     }
@@ -390,9 +423,9 @@ void Game2PScreen::live_log_lag() {
         sum += x;
     }
     spdlog::info("Online battle: {} opponent hits came {:.0f} ms late on average (median {:.0f}, 95% {:.0f}, max "
-                 "{:.0f}) over {}",
+                 "{:.0f}); first directly {}, over the server ({}) {}",
                  v.size(), sum / static_cast<double>(v.size()), v[v.size() / 2], v[v.size() * 95 / 100], v.back(),
-                 live_ws_used ? "the WebSocket" : "polling");
+                 live_first_direct, live_ws_used ? "WebSocket" : "polling", live_first_server);
     live_lag.clear();
 }
 
@@ -432,6 +465,21 @@ void Game2PScreen::live_update(double current_ms) {
             live_take(*m);
         }
     }
+    if (live_p2p) {
+        while (auto m = live_p2p->poll()) {
+            live_take(*m, true);
+        }
+        if (!live_cand_sent && ws_open) {
+            if (auto cand = live_p2p->candidates()) {
+                std::string list;
+                for (const std::string& c : *cand) {
+                    list += std::format("{}\"{}\"", list.empty() ? "" : ",", c);
+                }
+                live_ws->send(std::format(R"({{"t":"cand","c":[{}]}})", list));
+                live_cand_sent = true;
+            }
+        }
+    }
     if (live_ticket >= 0) {
         if (auto r = network.take_signed(live_ticket)) {
             live_ticket = -1;
@@ -455,6 +503,21 @@ void Game2PScreen::live_update(double current_ms) {
         }
         return hits;
     };
+    if (live_p2p && live_p2p->connected() && (log.size() > live_p2p_sent || current_ms - live_p2p_last >= 50.0)) {
+        // everything the opponent hasn't confirmed (a lost datagram is covered by the next one), up to 60 hits
+        const size_t from = std::min(live_p2p_ack, log.size());
+        const size_t to = std::min(log.size(), from + 60);
+        std::string hits;
+        for (size_t i = from; i < to; ++i) {
+            hits += std::format("{}{:.1f}:{}", hits.empty() ? "" : ",", log[i].first, static_cast<int>(log[i].second));
+        }
+        const std::string tail = to == log.size() ? std::format(R"(,"pos":{:.1f})", pos) : "";
+        live_p2p->send(std::format(R"({{"t":"o","at":{},"hits":"{}","ack":{},"score":{},"combo":{},"t0":{:.1f}{}}})",
+                                   from, hits, zdon_online.received, players[0]->get_score(), players[0]->get_combo(),
+                                   t0, tail));
+        live_p2p_sent = log.size();
+        live_p2p_last = current_ms;
+    }
     if (ws_open) {
         // a new hit goes at once; the position at least every 50 ms
         if (log.size() > live_ws_next || current_ms - live_ws_last >= 50.0) {
@@ -509,6 +572,7 @@ Screens Game2PScreen::on_screen_end(Screens next_screen) {
         }
         live_log_lag();
         live_ws.reset(); // closes it
+        live_p2p.reset();
         // the opponent's own count is the one that stands (its lane here may have missed a late hit)
         if (zdon_online.opp_final) {
             auto& rd = global_data.session_data[static_cast<int>(PlayerNum::P2)].result_data;
