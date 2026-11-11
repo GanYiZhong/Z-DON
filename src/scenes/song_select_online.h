@@ -96,6 +96,9 @@ class OnlineSongSelectScreen : public SongSelectScreen {
     std::vector<ChatLine> chat_lines;
     int chat_last_id = 0;
     bool chat_typing = false;
+    // when the chat or report line last closed: its Enter/Esc can reach the song select a frame late, so keys are
+    // swallowed a moment after (and while that key is still held)
+    double typing_closed_ms = -1e9;
     std::string chat_text;
     int chat_request = -1;
     void update_chat(double now);

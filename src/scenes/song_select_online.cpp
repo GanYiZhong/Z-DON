@@ -566,7 +566,6 @@ void OnlineSongSelectScreen::on_diff_select_cancelled(double /*current_ms*/) {
 
 // Y opens the chat line (in a room, outside the room-code entry); while it is open the keys type, nothing else
 void OnlineSongSelectScreen::update_chat(double now) {
-    (void)now;
     if (credit_request >= 0) {
         if (auto r = network.take_signed(credit_request)) {
             credit_request = -1;
@@ -592,6 +591,7 @@ void OnlineSongSelectScreen::update_chat(double now) {
         const TextEditAction a = poll_text_edit(report_text, [this](int) { return report_text.size() < 600; });
         if (a == TextEditAction::Confirm) {
             report_typing = false;
+            typing_closed_ms = now;
             if (report_text.find_first_not_of(' ') == std::string::npos) {
                 show_notice(zhud::text("online_report_reason"), room.empty() ? Modal::Menu : Modal::Room);
             } else if (report_request < 0) {
@@ -600,6 +600,7 @@ void OnlineSongSelectScreen::update_chat(double now) {
             }
         } else if (a == TextEditAction::Cancel) {
             report_typing = false;
+            typing_closed_ms = now;
         }
         clear_input_buffers();
         return;
@@ -644,8 +645,10 @@ void OnlineSongSelectScreen::update_chat(double now) {
             last_state_ms = -1e9; // ask the room again at once: the message shows sooner
         }
         chat_typing = false;
+        typing_closed_ms = now;
     } else if (a == TextEditAction::Cancel) {
         chat_typing = false;
+        typing_closed_ms = now;
     }
     clear_input_buffers(); // typing reaches nothing else
 }
@@ -653,7 +656,11 @@ void OnlineSongSelectScreen::update_chat(double now) {
 std::optional<Screens> OnlineSongSelectScreen::update() {
     const double now = get_current_ms();
     update_chat(now);
-    if (report_typing) {
+    const double since_typing = now - typing_closed_ms;
+    if (report_typing ||
+        (!chat_typing && (since_typing < 250 ||
+                          (since_typing < 3000 && (key_down(SDL_SCANCODE_RETURN) || key_down(SDL_SCANCODE_ESCAPE)))))) {
+        clear_input_buffers(); // the Enter that sent the line picks no song
         poll_room(now);
         update_transfer();
         return SongSelectScreen::update();
