@@ -657,10 +657,11 @@ std::optional<Screens> OnlineSongSelectScreen::update() {
     const double now = get_current_ms();
     update_chat(now);
     const double since_typing = now - typing_closed_ms;
-    if (report_typing ||
-        (!chat_typing && (since_typing < 250 ||
-                          (since_typing < 3000 && (key_down(SDL_SCANCODE_RETURN) || key_down(SDL_SCANCODE_ESCAPE)))))) {
-        clear_input_buffers(); // the Enter that sent the line picks no song
+    // typing (or just closed the line): the song select behind gets no keys, not even this frame's Enter
+    if (report_typing || chat_typing || since_typing < 250 ||
+        (since_typing < 3000 && (key_down(SDL_SCANCODE_RETURN) || key_down(SDL_SCANCODE_ESCAPE)))) {
+        clear_input_buffers();
+        consume_frame_keys();
         poll_room(now);
         update_transfer();
         return SongSelectScreen::update();
@@ -670,11 +671,6 @@ std::optional<Screens> OnlineSongSelectScreen::update() {
          (state == SongSelectState::SONG_SELECTED && player->selected_difficulty == Difficulty::BACK &&
           (is_l_don_pressed() || is_r_don_pressed())))) {
         clear_input_buffers(); // the guest can't leave the host's song (nor the screen): Esc and "back" do nothing
-    }
-    if (chat_typing) {
-        poll_room(now);
-        update_transfer();
-        return SongSelectScreen::update();
     }
     if (request >= 0 && modal != Modal::Connecting && network.take_signed(request)) {
         request = -1; // song / ready: the room state tells what came of it

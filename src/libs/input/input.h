@@ -26,6 +26,8 @@ void poll_touch_once();
 void poll_input_events();
 bool key_down(int scancode);
 bool key_pressed(int scancode);
+// Z-DON: this frame's key presses are used up (a text box: its Enter, arrows, letters reach nothing else)
+void consume_frame_keys();
 // Next key pressed this frame (scancode), 0 when none left; consumes it.
 int key_pressed_next();
 // Next typed codepoint this frame, 0 when none left; consumes it.

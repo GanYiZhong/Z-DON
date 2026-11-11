@@ -1551,6 +1551,11 @@ bool key_pressed(int scancode) {
     return scancode >= 0 && scancode < SDL_SCANCODE_COUNT && frame.key_pressed.test(scancode);
 }
 
+void consume_frame_keys() {
+    std::scoped_lock lock(frame_mutex);
+    frame.key_pressed.reset();
+}
+
 int key_pressed_next() {
     std::scoped_lock lock(frame_mutex);
     if (frame.key_queue.empty()) {
