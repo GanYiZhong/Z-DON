@@ -61,6 +61,9 @@ private:
     void live_update(double current_ms);
     void live_send_finish();
     void draw_live_overlay();
+    // surrender (the pause key in a live battle): the song ends for both and counts as lost
+    bool live_surrender_prompt = false;
+    void live_end_now(); // the song ends here (a surrender either way)
 
 protected:
     // merge 0ed42ec: upstream's virtual with Z-DON's rule as the base (a Z-DON AI battle goes back to the AI

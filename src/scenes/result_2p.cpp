@@ -176,14 +176,25 @@ void Result2PScreen::draw_online_result() {
     if (left) {
         theirs = -1; // the opponent left before the end: a win
     }
-    const char* key = mine > theirs ? "online_win" : mine < theirs ? "online_lose" : "online_draw";
-    const Color color = mine > theirs   ? Color{255, 214, 90, 255}
-                        : mine < theirs ? Color{150, 190, 255, 255}
-                                        : Color{230, 230, 230, 255};
+    int mine_rank = mine; // a surrender decides the song, whatever the scores
+    if (zdon_online.surrender == 1) {
+        mine_rank = -1;
+        theirs = 0;
+    } else if (zdon_online.surrender == 2) {
+        mine_rank = 1;
+        theirs = 0;
+    }
+    const char* key = mine_rank > theirs ? "online_win" : mine_rank < theirs ? "online_lose" : "online_draw";
+    const Color color = mine_rank > theirs   ? Color{255, 214, 90, 255}
+                        : mine_rank < theirs ? Color{150, 190, 255, 255}
+                                             : Color{230, 230, 230, 255};
     const float u = tex.screen_width / 1920.0f;
     OutlinedText& head = zhud::label(zhud::text(key), 32, color);
-    OutlinedText& sub =
-        zhud::label(left ? zhud::text("online_opp_left") : zhud::text("online_vs", zdon_online.opponent.username), 24);
+    OutlinedText& sub = zhud::label(zdon_online.surrender == 1   ? zhud::text("online_you_surrendered")
+                                    : zdon_online.surrender == 2 ? zhud::text("online_opp_surrendered")
+                                    : left ? zhud::text("online_opp_left")
+                                           : zhud::text("online_vs", zdon_online.opponent.username),
+                                    24);
     const float gap = 28 * u;
     const float w = head.width + gap + sub.width + 48 * u;
     const float h = std::max(head.height, sub.height) + 10 * u;

@@ -37,6 +37,7 @@ void ZdonOnline::start_round(int new_round) {
     opp_t0 = 0.0;
     opp_left = false;
     go = false;
+    surrender = 0;
     opp_final.reset();
 }
 

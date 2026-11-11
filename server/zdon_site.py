@@ -20,6 +20,8 @@ import re
 import secrets
 import time
 import urllib.parse
+
+from zdon_credit import Credit
 from http.cookies import SimpleCookie
 from pathlib import Path
 
@@ -105,7 +107,7 @@ def crown_badge(c) -> str:
 
 class Site:
     # "/me" only as a whole segment: the game's API has /medals
-    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/site.css")
+    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css")
 
     def __init__(self, cfg: dict, store, nonces):
         self.cfg = cfg
@@ -119,6 +121,9 @@ class Site:
         self.sso_secret = str(site.get("sso_secret", ""))
         self.forge_url = str(site.get("forge_url", "https://forge.taiko.ac")).rstrip("/")
         self.name = str(site.get("name", "Z-DON"))
+        # the TaikoForge accounts (uids) that review reports on /admin
+        self.admins = {str(a) for a in site.get("admins", [])}
+        self.credit = Credit(store)
         self.secure = self.public_url.startswith("https://")
         key_file = Path(cfg["data_dir"]) / "site_secret.key"
         secret = str(site.get("session_secret", ""))
@@ -132,7 +137,7 @@ class Site:
         self.session_key = secret.encode()
 
     def handles(self, path: str) -> bool:
-        return path in ("/", "/me") or path.startswith(self.PREFIXES)
+        return path in ("/", "/me", "/admin") or path.startswith(self.PREFIXES)
 
     # ------------------------------------------------------------------------------------------------------------
     # sessions (a signed cookie; the server keeps no session table)
@@ -203,7 +208,8 @@ class Site:
                 self.page(req, "無效的請求", "<h1>無效的請求</h1><p>請重新整理頁面再試一次。</p>", 403)
                 return
             routes = {"/auth/logout": self.logout, "/me/link": self.link, "/me/unlink": self.unlink,
-                      "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge}
+                      "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge,
+                      "/admin/resolve": self.admin_resolve}
             fn = routes.get(path)
             if fn is None:
                 self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
@@ -228,12 +234,70 @@ class Site:
             self.player(req, path[len("/player/"):])
         elif path == "/me":
             self.me(req, query)
+        elif path == "/admin":
+            self.admin(req)
         elif path == "/auth/login":
             self.login(req)
         elif path == "/auth/callback":
             self.callback(req, query)
         else:
             self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
+
+    # ------------------------------------------------------------------------------------------------------------
+    # admin: online battle reports (zdon_credit.py)
+
+    def _is_admin(self, req) -> bool:
+        return bool(req.sess and req.sess.get("uid") in self.admins)
+
+    def _name(self, code: str) -> str:
+        u = self.s.one("SELECT username FROM users WHERE access_code=?", (code,))
+        return u["username"] if u else "(unknown)"
+
+    def admin(self, req, flash: str = "", err: bool = False):
+        if not self._is_admin(req):
+            self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
+            return
+        csrf = self._csrf(req.sess)
+        rows = []
+        for r in self.credit.pending():
+            try:
+                ctx = json.loads(r["context"] or "{}")
+            except ValueError:
+                ctx = {}
+            chat = "".join(f'<div class="small"><b>{esc(m.get("from", ""))}</b>：{esc(m.get("text", ""))}</div>'
+                           for m in ctx.get("chat", [])) or '<div class="small muted">（沒有聊天紀錄）</div>'
+            when = dt.datetime.fromtimestamp(r["created"]).strftime("%Y-%m-%d %H:%M")
+            buttons = "".join(
+                f'<form method="post" action="/admin/resolve" style="display:inline">'
+                f'<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{r["id"]}">'
+                f'<input type="hidden" name="verdict" value="{v}"><button class="btn small{cls}">{label}</button></form> '
+                for v, label, cls in (("accepted", f"成立（{esc(self._name(r['reported']))} -5）", ""),
+                                      ("rejected", "不成立", " sec"),
+                                      ("malicious", f"惡意檢舉（{esc(self._name(r['reporter']))} -5）", " sec")))
+            rows.append(f"""<div class="card"><p><b>#{r["id"]}</b>　{esc(self._name(r["reporter"]))} 檢舉
+<b>{esc(self._name(r["reported"]))}</b>　<span class="muted small">{when}・房間 {esc(ctx.get("room", "-"))}</span></p>
+<p>事由：{esc(r["reason"])}</p><details><summary class="small">當時的聊天紀錄</summary>{chat}</details>
+<p>{buttons}</p></div>""")
+        done = []
+        for r in self.credit.recent(15):
+            verdict = {"accepted": "成立", "rejected": "不成立", "malicious": "惡意檢舉"}.get(r["status"], r["status"])
+            done.append(f'<li class="small">#{r["id"]} {esc(self._name(r["reporter"]))} → '
+                        f'{esc(self._name(r["reported"]))}：{esc(r["reason"])}（{verdict}）</li>')
+        body = (f'<h1>檢舉審核</h1><p class="muted small">成立：被檢舉的人信用分 -5；惡意檢舉：檢舉的人 -5。</p>'
+                + ("".join(rows) or '<p class="muted">沒有待審的檢舉。</p>')
+                + (f'<h2>最近處理的</h2><ul>{"".join(done)}</ul>' if done else ""))
+        self.page(req, "檢舉審核", body, flash=flash, err=err)
+
+    def admin_resolve(self, req, form):
+        if not self._is_admin(req):
+            self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
+            return
+        try:
+            rid = int(form.get("id", "0"))
+        except ValueError:
+            rid = 0
+        ok = self.credit.resolve(rid, form.get("verdict", ""), str(req.sess.get("uid")))
+        self.admin(req, f"#{rid} 已處理" if ok else f"#{rid} 無法處理（可能已處理過）", not ok)
 
     def _post_ok(self, req, form) -> bool:
         if not req.sess or not hmac.compare_digest(form.get("csrf", ""), self._csrf(req.sess)):

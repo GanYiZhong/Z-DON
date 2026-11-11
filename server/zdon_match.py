@@ -31,6 +31,11 @@ A match is best of three (the user's rules 2026-11-11): "host" is the side that 
 song's picker is drawn at random; after a song the loser picks; at 1:1 (or after a draw) the picker is drawn again.
 The first to two wins takes the match: the state turns "over" (with the result) and the room closes once both have
 seen it (each leaves).
+Surrender: POST /match/surrender code (or {"t":"surrender"} on the WebSocket) in a song: the song ends for both, the
+opponent wins it (the opponent's game hears {"t":"surrender"}, or sync "surrender": true).
+Credit (zdon_credit.py): GET /match/me -> {"credit"}; create/join need 60, quick match 80; leaving a match before it
+is decided costs 5, finishing one gives 2. POST /match/report reason: a report on the current (or last, within 30
+minutes) opponent, for an admin to confirm on the site.
 Chat: POST /match/chat code text (up to 120 characters, one a second); /match/state answers the messages after
 `chat_since` (the room keeps the last 50), and a game in a song gets {"t":"chat"} on its WebSocket.
 A guest without the host's chart asks for it (ready has_song=0 want=1: state "transfer"); the host's game zips the
@@ -46,6 +51,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+
+import zdon_credit
 import secrets
 import threading
 import time
@@ -91,6 +98,7 @@ class Side:
         self.score = 0
         self.combo = 0
         self.final = None               # dict once finished
+        self.surrendered = False        # gave this song up
         self.t0 = None                  # the player's wall clock (ms) at chart ms 0
         self.cand = None                # the player's UDP addresses for a direct connection (list of "ip:port")
         self.loaded = False             # its game has the song loaded and waits to start
@@ -111,6 +119,7 @@ class Room:
         self.wins: dict[str, int] = {}      # access code -> songs won in this match
         self.songs = 0                      # songs finished in this match
         self.result: dict | None = None     # the match's end: {"winner": code, "wins": {code: n}}
+        self.scored = False                 # this song's winner is decided (both finals in, or a surrender)
         self.chat_seq = 0
 
     def side(self, access_code: str) -> tuple[Side | None, Side | None]:
@@ -122,10 +131,23 @@ class Room:
 
 
 class Matches:
-    def __init__(self, profile_of):
+    def __init__(self, profile_of, credit: zdon_credit.Credit | None = None):
         self.rooms: dict[str, Room] = {}
         self.lock = threading.Lock()
         self.profile_of = profile_of    # access_code -> dict | None (the users row)
+        self.credit = credit
+        self.last_opp: dict[str, dict] = {}   # access code -> its last opponent {"code", "name", "room", "at", "chat"}
+
+    def _credit(self, code: str) -> int:
+        return self.credit.get(code) if self.credit else zdon_credit.START
+
+    def _credit_add(self, code: str, delta: int, reason: str):
+        if self.credit:
+            self.credit.add(code, delta, reason)
+
+    def _low_credit(self, code: str, need: int):
+        score = self._credit(code)
+        return (403, {"detail": "low_credit", "credit": score, "need": need}) if score < need else None
 
     # ------------------------------------------------------------------------------------------------------------
     def _expire(self):
@@ -138,6 +160,9 @@ class Matches:
                 self._drop(r, r.host.code)
 
     def _drop(self, r: Room, access_code: str):
+        # leaving a match that isn't decided yet (a surrender is not leaving)
+        if r.guest and r.result is None and (r.songs > 0 or r.state in ("song", "transfer", "playing", "finished")):
+            self._credit_add(access_code, -zdon_credit.LEAVE_COST, f"left room {r.code} mid-match")
         for side in (r.host, r.guest):  # the one staying hears it at once
             if side and side.code != access_code and side.ws:
                 side.ws.send_text('{"t":"l"}')
@@ -165,21 +190,31 @@ class Matches:
         if secrets.randbelow(2):
             r.host, r.guest = r.guest, r.host
 
-    @staticmethod
-    def _score_song(r: Room):
-        """Both finals are in: the song's winner, then the match's end or the next picker."""
+    def _score_song(self, r: Room, surrendered: Side | None = None):
+        """The song is decided (both finals in, or one side surrendered): its winner, then the match's end or the next
+        picker."""
         a, b = r.host, r.guest
-        if not a or not b or a.final is None or b.final is None:
+        if r.scored or not a or not b:
             return
+        if surrendered is None and (a.final is None or b.final is None):
+            return
+        r.scored = True
         r.songs += 1
-        sa, sb = a.final.get("score", 0), b.final.get("score", 0)
+        r.state = "finished"
         loser = None
-        if sa != sb:
-            winner, loser = (a, b) if sa > sb else (b, a)
+        if surrendered is not None:
+            winner, loser = (b, a) if surrendered is a else (a, b)
+        else:
+            sa, sb = a.final.get("score", 0), b.final.get("score", 0)
+            if sa != sb:
+                winner, loser = (a, b) if sa > sb else (b, a)
+        if loser is not None:
             r.wins[winner.code] = r.wins.get(winner.code, 0) + 1
             if r.wins[winner.code] >= MATCH_WINS:
                 r.result = {"winner": winner.code, "wins": dict(r.wins)}
                 r.state = "over"
+                for side in (a, b):
+                    self._credit_add(side.code, zdon_credit.MATCH_BONUS, f"finished a match in room {r.code}")
                 return
         tied = r.wins.get(a.code, 0) == r.wins.get(b.code, 0)
         if loser is None or tied:   # a draw, or 1:1 before the deciding song: drawn again
@@ -214,6 +249,8 @@ class Matches:
         prof = self.profile_of(code)
         if not prof:
             return 404, {"detail": "unknown access code"}
+        if low := self._low_credit(code, zdon_credit.QUICK_MIN if quick else zdon_credit.ONLINE_MIN):
+            return low
         with self.lock:
             self._expire()
             self._leave_all(code)
@@ -226,6 +263,8 @@ class Matches:
         prof = self.profile_of(code)
         if not prof:
             return 404, {"detail": "unknown access code"}
+        if low := self._low_credit(code, zdon_credit.QUICK_MIN):
+            return low
         with self.lock:
             self._expire()
             self._leave_all(code)
@@ -242,6 +281,8 @@ class Matches:
         prof = self.profile_of(code)
         if not prof:
             return 404, {"detail": "unknown access code"}
+        if low := self._low_credit(code, zdon_credit.ONLINE_MIN):
+            return low
         with self.lock:
             self._expire()
             r = self.rooms.get(p.get("code", ""))
@@ -283,7 +324,10 @@ class Matches:
                                    "size": len(r.transfer["data"]) if r.transfer else 0}
             if opp:
                 out["opponent"] = {**opp.profile, "has_song": opp.has_song, "difficulty": opp.difficulty,
-                                   "ready": opp.ready, "mods": opp.mods}
+                                   "ready": opp.ready, "mods": opp.mods, "credit": self._credit(opp.code)}
+                self.last_opp[me.code] = {"code": opp.code, "name": opp.profile.get("username", ""), "room": r.code,
+                                          "at": now(), "chat": list(r.chat[-30:])}
+            out["credit"] = self._credit(me.code)
             return 200, out
 
     def song(self, p):
@@ -300,6 +344,7 @@ class Matches:
             r.host.reset_round()
             opp.reset_round()
             r.transfer = None
+            r.scored = False
             r.p2p = secrets.token_hex(8)
             r.host.difficulty = r.song["difficulty"]
             r.host.mods = p.get("mods", "")[:500]
@@ -349,7 +394,7 @@ class Matches:
             if opp:
                 since = int(p.get("since", "0") or 0)
                 out.update(hits=",".join(opp.hits[since:]), total=len(opp.hits), pos=opp.pos, score=opp.score,
-                           combo=opp.combo, final=opp.final, left=False, t0=opp.t0)
+                           combo=opp.combo, final=opp.final, left=False, t0=opp.t0, surrender=opp.surrendered)
             else:
                 out.update(hits="", total=0, pos=None, score=0, combo=0, final=None, left=True)
             return 200, out
@@ -426,6 +471,9 @@ class Matches:
                     for c in to:
                         c.send_text(msg_go)
                     continue
+                if isinstance(msg, dict) and msg.get("t") == "surrender":
+                    self.surrender({"access_code": me.code, "code": r.code})
+                    continue
                 if isinstance(msg, dict) and msg.get("t") == "ping":
                     conn.send_text(json.dumps({"t": "pong", "c": msg.get("c"), "s": wall_ms()}))
                     continue
@@ -465,6 +513,40 @@ class Matches:
             with self.lock:
                 if me.ws is conn:
                     me.ws = None
+
+    def surrender(self, p):
+        with self.lock:
+            r, me, opp = self._room(p)
+            if not r or not me or not opp or r.state != "playing":
+                return 409, {"detail": "not_now"}
+            me.surrendered = True
+            self._score_song(r, surrendered=me)
+            to = opp.ws
+        if to:
+            to.send_text('{"t":"surrender"}')
+        return 200, {"ok": True}
+
+    def me(self, p):
+        code = p.get("access_code", "")
+        if not self.profile_of(code):
+            return 404, {"detail": "unknown access code"}
+        return 200, {"credit": self._credit(code), "quick_min": zdon_credit.QUICK_MIN,
+                     "online_min": zdon_credit.ONLINE_MIN}
+
+    def report(self, p):
+        code = p.get("access_code", "")
+        reason = "".join(ch for ch in (p.get("reason") or "") if ch >= " ").strip()[:300]
+        if len(reason) < 2:
+            return 400, {"detail": "no_reason"}
+        with self.lock:
+            last = self.last_opp.get(code)
+            if not last or now() - last["at"] > 1800 or not self.credit:
+                return 404, {"detail": "no_opponent"}
+            context = {"room": last["room"], "chat": last["chat"]}
+        rid = self.credit.report(code, last["code"], reason, context)
+        if rid is None:
+            return 429, {"detail": "already_reported"}
+        return 200, {"ok": True, "id": rid, "reported": last["name"]}
 
     def chat(self, p):
         text = "".join(ch for ch in (p.get("text") or "") if ch >= " " and ch not in "\x7f").strip()[:CHAT_MAX_CHARS]
@@ -520,7 +602,8 @@ class Matches:
                 return 404, {"detail": "no_room"}
             me.final = {k: int(p.get(k, "0") or 0) for k in ("score", "good", "ok", "bad", "drumroll", "max_combo")}
             if opp is None or opp.final is not None:
-                r.state = "finished"
+                if not r.scored:
+                    r.state = "finished"
                 self._score_song(r)
             if opp and opp.ws:
                 opp.ws.send_text(json.dumps({"t": "f", "final": me.final}))

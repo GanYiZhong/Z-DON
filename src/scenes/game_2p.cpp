@@ -180,6 +180,34 @@ std::optional<Screens> Game2PScreen::update() {
     if (pause_menu.active()) {
         return update_pause_menu(select_screen()); // Z-DON: pause menu (pause_menu.h)
     }
+    // Z-DON live battle: the pause key asks to surrender this song (the song goes on meanwhile)
+    if (zdon_online.live() && !live_wait_go && zdon_online.surrender == 0 && !zdon_sudden_over) {
+        const bool pause_key = check_key_pressed(global_data.config->keys.pause_key);
+        if (live_surrender_prompt) {
+            const bool don = is_l_don_pressed() || is_r_don_pressed();
+            const bool kat = is_l_kat_pressed() || is_r_kat_pressed();
+            if (don) {
+                live_surrender_prompt = false;
+                zdon_online.surrender = 1;
+                if (live_ws && live_ws->state() == ZdonWs::State::Open) {
+                    live_ws->send(R"({"t":"surrender"})");
+                } else {
+                    const int t = network.signed_request(
+                        "POST", "/match/surrender",
+                        {{"access_code", global_data.config->network.access_code_1}, {"code", zdon_online.room}});
+                    (void)t;
+                }
+                spdlog::info("Online battle: surrendered the song at {:.0f} ms", clock.position());
+                live_end_now();
+            } else if (kat || pause_key || check_key_pressed(global_data.config->keys.back_key)) {
+                live_surrender_prompt = false;
+            }
+            clear_input_buffers(); // the prompt's keys play no notes
+        } else if (pause_key) {
+            live_surrender_prompt = true;
+            clear_input_buffers();
+        }
+    }
     // screen option ai_wait_loading_card (Nijiiro): the battle starts when the loading card is gone, not behind it:
     // the chart clock stands still and nothing typed meanwhile reaches the drums
     const bool card_up = global_data.zdon_ai.active && tex.options[SCO::AI_WAIT_LOADING_CARD] && transition &&
@@ -333,8 +361,27 @@ double Game2PScreen::lane_position(size_t /*index*/) const {
     return clock.position();
 }
 
+// the song ends now for both lanes, as sudden death ends it (a surrender, mine or the opponent's)
+void Game2PScreen::live_end_now() {
+    if (zdon_sudden_over) {
+        return;
+    }
+    zdon_sudden_over = true;
+    if (song_music) {
+        audio.stop_sound(*song_music);
+    }
+    if (movie) {
+        movie->stop();
+    }
+    for (auto& player : players) {
+        if (player && !player->was_skipped()) {
+            player->cut_to_end(clock.position());
+        }
+    }
+}
+
 bool Game2PScreen::hold_song_end() {
-    if (!zdon_online.live() || zdon_online.opp_left || players.size() < 2) {
+    if (!zdon_online.live() || zdon_online.opp_left || zdon_online.surrender != 0 || players.size() < 2) {
         return false;
     }
     if (zdon_online.opp_final) {
@@ -398,6 +445,17 @@ void Game2PScreen::live_take(const std::string& body, bool direct) {
     if (t == "l") {
         zdon_online.opp_left = true;
         return;
+    }
+    if (t == "surrender" || (doc.HasMember("surrender") && doc["surrender"].IsBool() && doc["surrender"].GetBool())) {
+        if (zdon_online.surrender == 0) {
+            zdon_online.surrender = 2;
+            spdlog::info("Online battle: the opponent surrendered the song");
+            zhud::toast(zhud::text("online_opp_surrendered"));
+            live_end_now();
+        }
+        if (t == "surrender") {
+            return;
+        }
     }
     if (t == "pong") { // the server's clock (the shortest round trip measures it best)
         if (auto c = num("c"), sv = num("s"); c && sv) {
@@ -716,7 +774,13 @@ void Game2PScreen::draw_live_overlay() {
     }
     const float u = tex.screen_width / 1920.0f;
     std::string line;
-    if (zdon_online.opp_left) {
+    if (live_surrender_prompt) {
+        line = zhud::text("online_surrender_prompt");
+    } else if (zdon_online.surrender == 1) {
+        line = zhud::text("online_you_surrendered");
+    } else if (zdon_online.surrender == 2) {
+        line = zhud::text("online_opp_surrendered");
+    } else if (zdon_online.opp_left) {
         line = zhud::text("online_opp_left");
     } else if (live_wait_go || zdon_online.opp_pos < -1e17) {
         line = zhud::text("online_opp_waiting");

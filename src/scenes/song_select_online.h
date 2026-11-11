@@ -20,6 +20,8 @@
 //   A match is best of three: the first song's picker is drawn at random, then the loser of a song picks (at 1:1
 //   drawn again); the first to two wins takes it and the room closes.
 //   The guest is put straight into the host's song's course window and can't leave it (course and options only).
+//   Credit: shown in the menu; quick match needs 80, any online battle 60. R reports the current (or last)
+//   opponent with a reason, for an admin to confirm.
 //   Chat: in a room, Y opens a line to type (the system's IME works), Enter sends it, Esc closes it; the room's
 //   messages show bottom left (server/zdon_match.py chat).
 // The higher score wins. Drawn by the engine (zdon_hud), the same in every skin.
@@ -77,6 +79,14 @@ class OnlineSongSelectScreen : public SongSelectScreen {
 
     // the best-of-three match (server/zdon_match.py): songs won, and its end
     int match_you = 0, match_opp = 0, match_songs = 0;
+
+    // credit (server/zdon_credit.py) and reports: R in the menu or a room types a reason, Enter sends it
+    int credit = -1; // -1 = not heard yet
+    int credit_request = -1;
+    bool report_typing = false;
+    std::string report_text;
+    int report_request = -1;
+    std::string last_opp_name; // for the report prompt
 
     // chat
     struct ChatLine {

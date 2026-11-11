@@ -38,6 +38,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zdon_credit import Credit  # noqa: E402
 from zdon_match import SONG_UPLOAD_MAX, Matches  # noqa: E402
 from zdon_ws import WsConn, accept_key  # noqa: E402
 from zdon_site import Site  # noqa: E402
@@ -268,7 +269,8 @@ class Api:
         self.cfg = cfg
         self.s = store
         self.nonces = Nonces(int(cfg["signature_window_s"]))
-        self.matches = Matches(self._profile)
+        self.credit = Credit(store)
+        self.matches = Matches(self._profile, self.credit)
         self.routes = {
             ("GET", "/health"): self.health,
             ("GET", "/user"): self.user,
@@ -293,6 +295,9 @@ class Api:
             ("POST", "/match/finish"): self.matches.finish,
             ("POST", "/match/upload"): self.matches.upload,
             ("POST", "/match/chat"): self.matches.chat,
+            ("POST", "/match/surrender"): self.matches.surrender,
+            ("POST", "/match/report"): self.matches.report,
+            ("GET", "/match/me"): self.matches.me,
             ("POST", "/match/upload_fail"): self.matches.upload_fail,
             ("GET", "/match/download"): self.matches.download,
             ("POST", "/gacha"): self.gacha,

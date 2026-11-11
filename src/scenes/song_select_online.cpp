@@ -47,6 +47,7 @@ void OnlineSongSelectScreen::on_screen_start() {
     last_state_ms = -1e9;
     host_waiting_guest = false;
     modal = room.empty() ? Modal::Menu : Modal::Room; // back from a live battle: the room goes on
+    credit_request = network.signed_request("GET", "/match/me", {{"access_code", my_code()}});
 }
 
 Screens OnlineSongSelectScreen::on_screen_end(Screens next_screen) {
@@ -177,6 +178,7 @@ void OnlineSongSelectScreen::on_room_state(const std::string& body) {
         if (doc.HasMember("opponent") && doc["opponent"].IsObject()) {
             who = str(doc["opponent"], "username");
         }
+        last_opp_name = who;
         const std::string text =
             won ? zhud::text("online_match_won", std::format("{} : {}", match_you, match_opp))
                 : zhud::text("online_match_lost", who, std::format("{} : {}", match_you, match_opp));
@@ -197,6 +199,7 @@ void OnlineSongSelectScreen::on_room_state(const std::string& body) {
         o.Accept(w);
         opp_json = buf.GetString();
         opp_name = str(o, "username");
+        last_opp_name = opp_name;
         if (o.HasMember("has_song") && o["has_song"].IsBool()) {
             opp_has_song = o["has_song"].GetBool();
         }
@@ -277,6 +280,12 @@ void OnlineSongSelectScreen::guest_go_to_song() {
     if (navigator.jump_to_song(song_hash)) {
         guest_choosing = true;
         state = player->select_song(); // straight into its course window: the course and options are all to pick
+        // the cursor on the host's course (else this chart's first), not on "back"
+        const auto want = static_cast<Difficulty>(std::clamp(song_difficulty, 0, 4));
+        if (!player->curr_diffs.empty()) {
+            player->selected_difficulty =
+                std::ranges::contains(player->curr_diffs, want) ? want : player->curr_diffs.front();
+        }
         return;
     }
     // the song select can't show it (a collection folder, ...): the course window
@@ -461,10 +470,16 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
                 last_state_ms = -1e9;
                 modal = Modal::Room;
             } else {
-                show_notice(zhud::text(r->first == 404   ? "online_no_room"
-                                       : r->first == 409 ? "online_room_full"
-                                                         : "online_offline"),
-                            Modal::Menu);
+                std::string text = zhud::text(r->first == 404   ? "online_no_room"
+                                              : r->first == 409 ? "online_room_full"
+                                                                : "online_offline");
+                if (r->first == 403 && !doc.HasParseError() && doc.IsObject() && doc.HasMember("need") &&
+                    doc["need"].IsInt() && doc.HasMember("credit") && doc["credit"].IsInt()) {
+                    credit = doc["credit"].GetInt();
+                    text =
+                        zhud::text("online_low_credit", std::to_string(credit), std::to_string(doc["need"].GetInt()));
+                }
+                show_notice(text, Modal::Menu);
             }
         } else if (cancel) {
             modal = Modal::Menu;
@@ -552,6 +567,52 @@ void OnlineSongSelectScreen::on_diff_select_cancelled(double /*current_ms*/) {
 // Y opens the chat line (in a room, outside the room-code entry); while it is open the keys type, nothing else
 void OnlineSongSelectScreen::update_chat(double now) {
     (void)now;
+    if (credit_request >= 0) {
+        if (auto r = network.take_signed(credit_request)) {
+            credit_request = -1;
+            rapidjson::Document doc;
+            if (r->first == 200 && !doc.Parse(r->second.c_str()).HasParseError() && doc.IsObject() &&
+                doc.HasMember("credit") && doc["credit"].IsInt()) {
+                credit = doc["credit"].GetInt();
+            }
+        }
+    }
+    if (report_request >= 0) {
+        if (auto r = network.take_signed(report_request)) {
+            report_request = -1;
+            show_notice(zhud::text(r->first == 200   ? "online_report_sent"
+                                   : r->first == 429 ? "online_report_dup"
+                                   : r->first == 400 ? "online_report_reason"
+                                                     : "online_report_none"),
+                        room.empty() ? Modal::Menu : Modal::Room);
+        }
+    }
+    // R: report the current (or last) opponent, with a reason
+    if (report_typing) {
+        const TextEditAction a = poll_text_edit(report_text, [this](int) { return report_text.size() < 600; });
+        if (a == TextEditAction::Confirm) {
+            report_typing = false;
+            if (report_text.find_first_not_of(' ') == std::string::npos) {
+                show_notice(zhud::text("online_report_reason"), room.empty() ? Modal::Menu : Modal::Room);
+            } else if (report_request < 0) {
+                report_request = network.signed_request("POST", "/match/report",
+                                                        {{"access_code", my_code()}, {"reason", report_text}});
+            }
+        } else if (a == TextEditAction::Cancel) {
+            report_typing = false;
+        }
+        clear_input_buffers();
+        return;
+    }
+    if (!chat_typing && key_pressed(SDL_SCANCODE_R) && !last_opp_name.empty() &&
+        (modal == Modal::Menu || modal == Modal::Room)) {
+        report_typing = true;
+        report_text.clear();
+        std::string drop;
+        poll_text_edit(drop); // the "r" of this press is not the first letter
+        clear_input_buffers();
+        return;
+    }
     if (chat_request >= 0) {
         if (auto r = network.take_signed(chat_request)) {
             chat_request = -1;
@@ -592,8 +653,16 @@ void OnlineSongSelectScreen::update_chat(double now) {
 std::optional<Screens> OnlineSongSelectScreen::update() {
     const double now = get_current_ms();
     update_chat(now);
-    if (guest_choosing && modal == Modal::None && check_key_pressed(global_data.config->keys.back_key)) {
-        clear_input_buffers(); // the guest can't leave the host's song (nor the screen) from here
+    if (report_typing) {
+        poll_room(now);
+        update_transfer();
+        return SongSelectScreen::update();
+    }
+    if (guest_choosing && modal == Modal::None &&
+        (check_key_pressed(global_data.config->keys.back_key) ||
+         (state == SongSelectState::SONG_SELECTED && player->selected_difficulty == Difficulty::BACK &&
+          (is_l_don_pressed() || is_r_don_pressed())))) {
+        clear_input_buffers(); // the guest can't leave the host's song (nor the screen): Esc and "back" do nothing
     }
     if (chat_typing) {
         poll_room(now);
@@ -666,7 +735,7 @@ void OnlineSongSelectScreen::draw() {
 
 // bottom left: the last messages (a message fades out after 20 s, all show again while typing) and the line typed
 void OnlineSongSelectScreen::draw_chat(float u) {
-    if (room.empty()) {
+    if (room.empty() && !report_typing) {
         return;
     }
     const double now = get_current_ms();
@@ -686,6 +755,9 @@ void OnlineSongSelectScreen::draw_chat(float u) {
     OutlinedText* input = nullptr;
     if (chat_typing) {
         input = &zhud::label(zhud::text("online_chat_prompt") + chat_text + "_", 24, kGold);
+    } else if (report_typing) {
+        input = &zhud::label(zhud::text("online_report_prompt", last_opp_name) + report_text + "_", 24,
+                             Color{255, 150, 150, 255});
     }
     if (rows.empty() && !input) {
         return;
@@ -747,7 +819,11 @@ void OnlineSongSelectScreen::draw_modal() {
     switch (modal) {
     case Modal::Menu: {
         const float row_h = 64 * u;
-        OutlinedText& head = zhud::label(zhud::text("online_mode"), 32, kGold);
+        std::string head_text = zhud::text("online_mode");
+        if (credit >= 0) {
+            head_text += "　" + zhud::text("online_credit", std::to_string(credit));
+        }
+        OutlinedText& head = zhud::label(head_text, 32, kGold);
         OutlinedText& hint = zhud::label(zhud::text("online_menu_hint"), 22, Color{200, 200, 200, 255});
         const float h = 30 * u + head.height + 20 * u + kMenuCount * row_h + 10 * u + hint.height + 24 * u;
         const float y0 = (tex.screen_height - h) / 2.0f;

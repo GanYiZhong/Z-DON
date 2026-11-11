@@ -411,4 +411,11 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - 2026-11-11（使用者）：客人收到房主的歌就 jump_to_song 後直接 player->select_song() 進難度選擇，
   on_diff_select_cancelled 再打開、Esc 吞掉（只能選難度與選項）；線上對戰 mods_1.skip=false、zdon_sudden_death=0；聊天鍵改 Y。
   驗證：腳本當房主選 Ryuusei，遊戲客人直接進難度選擇，Esc 兩次仍在同一首。
+- 2026-11-11 信用分／檢舉／投降（使用者）：zdon_credit.py（credit、credit_log、reports 表），Matches 的入口檢查分數、
+  _drop 在比賽中途離開扣分、比賽結束 +2；/match/surrender（或 WebSocket {"t":"surrender"}）直接判這首輸並推給對手，
+  r.scored 防止之後兩邊的 finish 再算一次；網站 /admin 審核（site.admins）。遊戲：暫停鍵＝投降確認，live_end_now 照
+  sudden death 的方式結束；結算橫幅看 zdon_online.surrender；選單顯示信用分、R 寫事由檢舉。客人自動進難度選擇時
+  游標停在房主的難度，游標在「返回」時咚鍵無效（原本退出再打開會讓歌單動畫亂掉）。
+  驗證：Python 用暫存資料庫測投降計分、中途離開扣分、門檻、檢舉與審核；遊戲裡腳本當房主，客人投降→結算顯示你輸了／你投降了。
+  未驗證：網站 /admin 頁面實際登入操作、R 檢舉的打字、信用分在選單的顯示。
 - 已知限制：random 的種子若在遊戲開始時才決定，對手那邊無法重建同一套音符（目前送 seed 0）；舊的匯入成績沒有打擊紀錄不能挑戰。
