@@ -59,6 +59,9 @@ python server\zdon_server.py publish build\bin
 - 版本字串預設是「日期-時間-git 短雜湊」，可用 `--version` 指定。
 - 發布是先寫到暫存資料夾再整個換上，下載到一半的玩家不會拿到混合版本的清單。
 - 多個頻道：`--channel windows-test`，玩家那邊把 `zdon_update_url` 指到 `http://…/update/windows-test`。
+- 內附 skin：`zdon_server.toml` 的 `bundled_skins_dir`（例如 `"build/skins_standalone"`）裡的每個資料夾都放進
+  安裝包的 `Skins/`（只進安裝包，不進更新）。`bash tools/zdon_bundle_simplestyle.sh` 從 `build/bin/Skins` 做出
+  獨立版 YataiDONSimpleStyle（用到的 Nijiiro／Green 檔案放在它的 `_base/`）與它的子 skin YataiDONSimpleStyleDark。
 - GitHub rolling release：`zdon_server.toml` 設了 `[github] release_repo`（例如 `"GanYiZhong/Z-DON"`）時，
   發布 windows 頻道會把同一個安裝包 zip 放到該 repo 的 `rolling` release（`Z-DON-windows.zip`，tag 移到這次建置的
   commit；commit 還沒推上 GitHub 時指向 main，說明裡會註明）。需要已登入、有寫入權限的 `gh`。`--no-github` 這次不更新

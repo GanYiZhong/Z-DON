@@ -12,6 +12,10 @@ port = 8730
 auth_key = ""
 
 data_dir = "zdon_data"          # SQLite database and published files (relative to this file)
+
+# Skins put in the install zip only (not in updates), relative to the repository; every folder in it goes to
+# Skins/. "build/skins_standalone" = standalone SimpleStyle + Dark from tools/zdon_bundle_simplestyle.sh.
+bundled_skins_dir = ""
 signature_window_s = 300        # how far a game's clock may be off
 
 # Games older than this are shown as outdated (empty = never)

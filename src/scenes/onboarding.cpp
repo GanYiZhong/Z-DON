@@ -43,6 +43,26 @@ namespace {
         });
     }
 
+    // the parent an installed skin names in its skin_config.json ("" for none), "-" when it isn't installed
+    std::string local_skin_parent(const std::string& name) {
+        const fs::path cfg = fs::path("Skins") / name / "Graphics" / "skin_config.json";
+        std::error_code ec;
+        if (!fs::is_regular_file(cfg, ec)) {
+            return "-";
+        }
+        try {
+            const rapidjson::Document doc = read_json_file(cfg);
+            if (doc.IsObject() && doc.HasMember("screen") && doc["screen"].IsObject() &&
+                doc["screen"].HasMember("parent") && doc["screen"]["parent"].IsString()) {
+                return doc["screen"]["parent"].GetString();
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Onboarding: {}: {}", cfg.string(), e.what());
+            return "-";
+        }
+        return "";
+    }
+
     // Z-DON: the skins the Z-DON server publishes (<server>/skins/index.json), so a player gets every skin,
     // and its later updates, from that server; upstream's list when there is no server or no answer
     std::vector<SkinEntry> load_skins() {
@@ -64,6 +84,16 @@ namespace {
                         (e.parent.empty() || safe_skin_name(e.parent))) {
                         out.push_back(std::move(e));
                     }
+                }
+            }
+            // a skin installed as a standalone copy (the install zip's: its parents nested in it, or none)
+            // needs none of the parents the server lists for it
+            for (SkinEntry& e : out) {
+                const std::string local = local_skin_parent(e.name);
+                if (!e.parent.empty() && local != "-" && (local.empty() || local.starts_with(e.name + "/"))) {
+                    spdlog::info("Onboarding: {} is installed standalone; its parent {} isn't needed", e.name,
+                                 e.parent);
+                    e.parent.clear();
                 }
             }
             if (!out.empty()) {

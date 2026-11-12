@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     # [[shop]] type = 2 dress / 3 head / 4 body / 5 puchichara / 6 title, id, cost, name (titles)
     "shop": [],
     "max_body_mb": 32,
+    # skins put in the install zip (not in updates), e.g. "build/skins_standalone" from
+    # tools/zdon_bundle_simplestyle.sh: every folder in it goes to Skins/ (relative to the repository)
+    "bundled_skins_dir": "",
     # the website (zdon_site.py); members come from TaikoForge's single sign-on
     "site": {"url": "", "name": "Z-DON", "sso_url": "", "sso_secret": "", "forge_url": "https://forge.taiko.ac",
              "session_secret": ""},
@@ -1110,6 +1113,15 @@ def cmd_publish(cfg: dict, args) -> None:
             for f in sorted(root.rglob("*")):
                 if f.is_file():
                     package_only[f.relative_to(HERE.parent).as_posix()] = f
+    skins_dir = str(cfg.get("bundled_skins_dir") or "")
+    if skins_dir:
+        root = Path(skins_dir) if Path(skins_dir).is_absolute() else HERE.parent / skins_dir
+        if not root.is_dir():
+            sys.exit(f"bundled_skins_dir {root} isn't there (tools/zdon_bundle_simplestyle.sh makes it)")
+        for skin in sorted(p for p in root.iterdir() if p.is_dir()):
+            for f in sorted(skin.rglob("*")):
+                if f.is_file():
+                    package_only[f"Skins/{f.relative_to(root).as_posix()}"] = f
     version = args.version or git_version(HERE.parent)
     dest = cfg["data_dir"] / "update" / args.channel
     # where zdon_update.bat looks when config.toml names no source (a build with a compiled-in server)
@@ -1122,7 +1134,7 @@ def cmd_publish(cfg: dict, args) -> None:
     publish_tree(sources, dest, version, package_only)
     size = sum(p.stat().st_size for p in sources.values())
     print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}"
-          + (f", the install zip also has {len(package_only)} song file(s)" if package_only else ""))
+          + (f", the install zip also has {len(package_only)} song/skin file(s)" if package_only else ""))
     if cfg["github"]["release_repo"] and args.channel == "windows" and not args.no_github:
         from zdon_github import rolling_release
         try:
