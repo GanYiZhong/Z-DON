@@ -8,7 +8,8 @@ English | [繁體中文](README.zh-TW.md)
 YataiDON itself is written by its human contributors; **Z-DON's own changes on top of it are developed entirely by AI**,
 and focus on aggressive performance work, new gameplay features and online play.
 
-- Website and downloads: <https://zdon.taiko.ac>
+- Website: <https://zdon.taiko.ac>
+- Download for Windows: [Z-DON-windows.zip](https://github.com/GanYiZhong/Z-DON/releases/latest/download/Z-DON-windows.zip) (rolling release: always the latest build)
 - Play in the browser (web version): <https://zdon.taiko.ac/play/>
 - License: GPL-3.0 (see [LICENSE](LICENSE)), derived from YataiDON
 
@@ -85,7 +86,9 @@ AudioWorklet for low latency.
 
 ## Installation
 
-1. Download the Windows build from <https://zdon.taiko.ac> and unzip it.
+1. Download [Z-DON-windows.zip](https://github.com/GanYiZhong/Z-DON/releases/latest/download/Z-DON-windows.zip) (or from <https://zdon.taiko.ac>) and unzip it. It is a rolling
+   release: there are no version numbers, the [`rolling`](https://github.com/GanYiZhong/Z-DON/releases/tag/rolling)
+   release is replaced by every new build.
 2. Run `YataiDON.exe` (the executable keeps upstream's name to make merging easier).
 3. Put TJA songs in `Songs`, or set your song folders in the settings. Later updates are one F9 away in the game.
 

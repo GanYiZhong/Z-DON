@@ -48,3 +48,10 @@ sso_url = "https://forge.taiko.ac/sso/zdon"
 sso_secret = ""
 forge_url = "https://forge.taiko.ac"
 # session_secret = ""   # signs the login cookie; empty = generated once into data_dir/site_secret.key
+
+# `publish` (windows channel) also puts the install zip on a GitHub release that is replaced every time (a rolling
+# release; needs the GitHub CLI `gh` logged in with write access). Empty = off. `publish --no-github` skips it once.
+[github]
+release_repo = ""               # e.g. "GanYiZhong/Z-DON"
+tag = "rolling"
+asset = "Z-DON-windows.zip"

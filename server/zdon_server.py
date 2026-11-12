@@ -67,6 +67,8 @@ DEFAULT_CONFIG = {
     # the website (zdon_site.py); members come from TaikoForge's single sign-on
     "site": {"url": "", "name": "Z-DON", "sso_url": "", "sso_secret": "", "forge_url": "https://forge.taiko.ac",
              "session_secret": ""},
+    # publish (windows channel) also puts the install zip on this repository's rolling GitHub release (zdon_github.py)
+    "github": {"release_repo": "", "tag": "rolling", "asset": "Z-DON-windows.zip"},
 }
 
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
@@ -1121,6 +1123,13 @@ def cmd_publish(cfg: dict, args) -> None:
     size = sum(p.stat().st_size for p in sources.values())
     print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}"
           + (f", the install zip also has {len(package_only)} song file(s)" if package_only else ""))
+    if cfg["github"]["release_repo"] and args.channel == "windows" and not args.no_github:
+        from zdon_github import rolling_release
+        try:
+            rolling_release(cfg, dest / "package.zip", version, HERE.parent)
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
+            detail = getattr(e, "stderr", "") or ""
+            sys.exit(f"published, but the GitHub release failed: {e} {detail.strip()}")
 
 
 def cmd_publish_skin(cfg: dict, args) -> None:
@@ -1286,6 +1295,7 @@ def main(argv=None) -> None:
     s.add_argument("--with-skins", action="store_true", help="ship Skins/ too (normally the skin updater's job)")
     s.add_argument("--include", action="append", help=f"glob to publish (repeatable; default {DEFAULT_PUBLISH})")
     s.add_argument("--exclude", action="append", help="glob to leave out (repeatable)")
+    s.add_argument("--no-github", action="store_true", help="don't update the GitHub rolling release this time")
     s = sub.add_parser("publish-skin", help="publish a skin folder for the skin updater")
     s.add_argument("src")
     s.add_argument("--name")

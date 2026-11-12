@@ -7,7 +7,8 @@
 **Z-DON** 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支：一套用 C++ 寫的 TJA 播放器／太鼓模擬器。
 YataiDON 本身由它的貢獻者撰寫；**Z-DON 在它之上的修改完全由 AI 開發**，目標是極致的效能，以及上游沒有的新功能與線上對戰。
 
-- 官網與下載：<https://zdon.taiko.ac>
+- 官網：<https://zdon.taiko.ac>
+- Windows 版下載：[Z-DON-windows.zip](https://github.com/GanYiZhong/Z-DON/releases/latest/download/Z-DON-windows.zip)（rolling release，永遠是最新版）
 - 瀏覽器直接玩（網頁版）：<https://zdon.taiko.ac/play/>
 - 授權：GPL-3.0（見 [LICENSE](LICENSE)），源自 YataiDON
 
@@ -67,7 +68,8 @@ YataiDON 本身由它的貢獻者撰寫；**Z-DON 在它之上的修改完全由
 
 ## 安裝
 
-1. 到 <https://zdon.taiko.ac> 下載 Windows 版並解壓縮。
+1. 下載 [Z-DON-windows.zip](https://github.com/GanYiZhong/Z-DON/releases/latest/download/Z-DON-windows.zip)（或到 <https://zdon.taiko.ac>）並解壓縮。
+   Z-DON 是 rolling release：沒有版本號，每次發布新版都會覆蓋 [`rolling`](https://github.com/GanYiZhong/Z-DON/releases/tag/rolling) 這個 release。
 2. 執行 `YataiDON.exe`（執行檔名稱沿用上游，方便合併）。
 3. 把 TJA 歌曲放進 `Songs`，或在設定裡指定歌曲資料夾。之後的更新在遊戲裡按 F9 就好。
 
