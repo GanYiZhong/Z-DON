@@ -549,8 +549,8 @@ class Site(StatsPages, MePages):
               f'<span class="muted small">{esc(self.version_label(latest[1], latest[2]))} 版</span></p>'
               if latest else (f'<p>{play}</p>' if play else '<p class="muted">還沒有發布的版本。</p>'))
         if play:
-            dl += ('<p class="small muted">遊玩遊戲：直接在瀏覽器裡玩，不用安裝（電腦版 Chrome、Edge 或 Firefox，'
-                   '用鍵盤打）。登入後成績會跟著帳號，也能玩你在 TaikoForge 做的譜面。</p>')
+            dl += ('<p class="small muted">遊玩遊戲：直接在瀏覽器裡玩，不用安裝。電腦用 Chrome、Edge 或 Firefox，'
+                   '以鍵盤打；手機與平板請橫著拿，用觸控大鼓打。登入後成績會跟著帳號，也能玩你在 TaikoForge 做的譜面。</p>')
         recent = self.s.q("""SELECT s.received_at, s.hash, s.difficulty, s.score, s.crown, u.username, u.rowid AS pid
                              FROM scores s JOIN users u USING(access_code) ORDER BY s.id DESC LIMIT 12""")
         stats = self.s.one("SELECT (SELECT COUNT(*) FROM users) AS players, (SELECT COUNT(*) FROM scores) AS plays")
