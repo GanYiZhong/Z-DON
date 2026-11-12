@@ -10,7 +10,7 @@ Z-DON 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支，**完全�
 - 目前同步到上游 master `5dacd26`（2026-11-09，段位成績上傳、難度名稱、語言選擇、連打 Lua；skin 有 `bubble_unfold` 或在 Z-DON AI 舞台時，連打仍由 Z-DON C++ 畫，見 merge 訊息）；前一次 `09db50f`（2026-11-08，訪客模式、獎牌、活動、共用薬玉；上游 e56c73e 的 JudgeCore 判定重構與 Lua song info 沒有採用，Player 維持 Z-DON 版，見 merge 訊息）；前一次 `0ed42ec`（2026-11-06，上游 AI 對戰＋わいわい＋商店＋總結算＋活動＋Switch，見 merge 014454c 訊息與 roadmap「合併上游 0ed42ec」：兩套 AI 對戰並存，skin 有 `ai_support_menu` Lua 走上游的、否則走 Z-DON 的；前一次 `3910153`（2026-11-02，gfx 抽象層＋libs 子資料夾＋教學＋PS5，見 merge fa477c3 訊息）；再前 `29620bd` 2026-10-23，raylib 包裝重構＋輸入改 SDL；前一次 `ef867fb`、再前 `5e1b04d`）。`29620bd` 合併後：測試假按鍵 YATAIDON_FAKE_KEYS 仍收 raylib 鍵碼、在 dev_inject_key 轉成 SDL scancode；上游 cf9dcf9 拿掉 Lua `blend`（additive），畫面比對的背景光暈、煙火、皇冠閃光差異來自這裡。`ef867fb`（2026-10-22）`ef867fb` 合併時響度、skin 更新器、TJA 衝突照使用者決定用上游版（見 roadmap「合併上游 ef867fb」）；`.clang-tidy` 又多了 default-member-init／nullptr／override／else-after-return／redundant-lambda-parameter-list／performance-* 檢查。`bde4201` 合併時的重點：含 f2e1174「PlaybackClock＋歌曲生命週期」重構（`clock.position()` 取代 `ms_from_start`，`unload_song()`/`stop_song_audio()`），以及 `.clang-tidy` 新增的 modernize/readability 檢查。
   合併時 Z-DON 自己的程式也要套上同樣的轉換：`pip install clang-tidy==23.1.3`，用 build 的 `compile_commands.json`（只留 `src/*.cpp`）跑那幾個檢查、`-extra-arg=--target=x86_64-w64-mingw32`；modernize-use-ranges 的自動修正在這環境會留下 `,,`，要手動清。上游自己沒改到的 Windows 專用行（CI 只跑 Linux）保持上游原樣。
 - `yataidon-local` = `D:/GitHubRepos/YataiDON`（wip-all 等本機分支），要搬舊修正時從這裡 cherry-pick。
-- 目前只放本機，沒有 GitHub remote；要建 repo 先問使用者。
+- GitHub：公開 repo https://github.com/GanYiZhong/Z-DON（remote `github`，2026-11-13 建立），只推 `main`；推送照樣要使用者同意。
 - 不從這個 repo 對上游開 PR（上游 PR 照舊走 YataiDON / YataiDON_bm）。
 - 授權維持 GPL-3.0（LICENSE 不動），公開時須註明源自 YataiDON。
 

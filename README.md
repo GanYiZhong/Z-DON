@@ -1,178 +1,152 @@
 # Z-DON
 
-Z-DON is an AI-developed fork of [YataiDON](https://github.com/Yonokid/YataiDON) focused on aggressive performance work and new features. It tracks upstream and stays compatible with YataiDON skins and save data. Licensed under GPL-3.0 like the original.
-
 <img src="/docs/logo.png">
 
-A TJA player and Taiko simulator written in C++ using the [raylib](https://www.raylib.com/) library.
+**Z-DON** 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支：一套用 C++ 寫的 TJA 播放器／太鼓模擬器，
+**完全由 AI 開發**，目標是極致的效能，以及上游沒有的新功能與線上對戰。
 
-![License](https://img.shields.io/github/license/Yonokid/YataiDON)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue)
-[![GitHub Stars](https://img.shields.io/github/stars/Yonokid/YataiDON?style=flat&label=stars)](https://github.com/Yonokid/YataiDON/stargazers)
-[![Discord Members](https://img.shields.io/discord/722513061419810946.svg?label=Discord&logo=discord)](https://discord.gg/XHcVYKW)
-[![Builds](https://github.com/Yonokid/YataiDON/actions/workflows/build-desktop.yml/badge.svg)](https://github.com/Yonokid/YataiDON/actions/workflows/build-desktop.yml)
+*Z-DON is an AI-developed fork of [YataiDON](https://github.com/Yonokid/YataiDON), a TJA player and Taiko simulator
+written in C++. It focuses on aggressive performance work, new gameplay features and online play, while staying
+compatible with YataiDON skins, `scores.db` and `config.toml`. GPL-3.0, like the original.*
 
-## Features
+- 官網與下載：<https://zdon.taiko.ac>
+- 瀏覽器直接玩（網頁版）：<https://zdon.taiko.ac/play/>
+- 授權：GPL-3.0（見 [LICENSE](LICENSE)），源自 YataiDON
 
-- Cross-platform compatibility (Windows, Linux, macOS, Android, iOS, PS5, Switch 1)
-- Controller Support
-- Low latency audio via ASIO or WDM-KS
-- Recursive and Dynamic Song Select Menu
-- Multithreaded Input
-- Multiple chart format support (TJA, Fumen, OSU/OSZ)
-- Background video playback via FFmpeg
-- Skin system with customizable graphics, sounds, and Lua scripting
-- Branches (Normal/Expert/Master difficulty branches)
-- Song search and favorites system
-- Horizontal and vertical song select layout option
-- Multi-language support
-- 3D characters with animations and costume/color customization
-- Online profile sync (scores, title, costume) via a network account
+## 與上游的關係
 
-## Modes
+- 持續合併上游 master，上游的功能（多平台、Lua skin、3D 角色、AI 對戰、商店、段位、教學…）都在。
+- **相容**：YataiDON／ESE 的 skin、`scores.db`、`config.toml` 都能直接用；Z-DON 自己的資料放在另外的表或設定項。
+- 新功能大多可以在 `config.toml` 或環境變數關掉，回到上游行為。
+- 完整的變更紀錄、量測數字與開關在 [docs/ZDON_ROADMAP.md](docs/ZDON_ROADMAP.md)。
 
-- **1 Player**: Single player mode.
-- **2 Player**: Up to 2 players simultaneously.
-- **Dan Dojo**: Challenge mode for back to back songs.
-- **Practice Mode**: Freely scrobble through a song and practice
+## Z-DON 加了什麼
 
-## System Requirements
+### 效能
 
-- **Windows**: Windows 10 or higher
-- **macOS**: Built via CI, largely untested
-- **Linux**: Ubuntu 20.04 or higher (other distributions may work but are untested)
-- **Android**: Android 10 (API 29) or higher
-- **iOS**: iOS 16.3 or higher; install via [TestFlight](https://testflight.apple.com/join/ZzrXBUsb) or build from source with Xcode (see [iOS guide](platform/ios/README.md))
+每一項都用確定性測試（固定時間步的逐位元截圖比對）確認畫面不變，並在實機量過。
 
-## FAQ
+- **載入**：跨畫面預讀、每畫面貼圖打包快取（texpack）、zlib-ng PNG 解碼、BC7 壓縮貼圖快取、
+  貼圖用到時才上傳 GPU、預先準備下一個畫面（predecode）、長音效先解前 2 秒、曲庫只走訪一次。
+  冷硬碟進選曲的貼圖載入約 1.4 s → 0.35 s。
+- **執行時**：無鎖音訊 callback、打擊音複音、輸入執行緒改高解析度計時器（不再空轉一整顆核心）、
+  vblank 對齊限幀、影片以 YUV 平面上傳由 shader 轉色、字型 glyph 快取、Lua 分代 GC、批次繪圖精簡、
+  Windows Release 用 `-O3`＋LTO。
+- **貼圖密度**：skin 可以出 2× 貼圖，在 4K 畫面上清晰繪製（`texture_density`）。
 
-Q: I'm on Windows and my latency is really high!<br>
-A: Change your `device_type` in game settings to `WDM-KS`, `WASAPI`, or `ASIO` if your computer supports it
+### 遊玩
 
-## Installation
+- **暫停選單**：演奏中 Esc／空白鍵暫停，繼續前 3-2-1 倒數；視窗失焦自動暫停。
+- **練習／特訓**：A→B 區段循環、輸入小節號跳轉、固定分歧、每一下的偏差顯示、只用鼓就能操作。
+- **演奏選項**：等速（忽略 BPM／SCROLL 變化）、隱藏／突現、自己最佳的影子、失誤就結束、手電筒。
+- **結算**：判定分布直方圖（平均、標準差、早／晚數）、不保存成績時顯示原因。
+- **選曲**：即時搜尋面板（類型、難度、星級篩選，支援滑鼠）、難度資料夾只列未達成、最近 10 筆成績。
+- **AI 對戰**（Z-DON 版）：AI 依等級與你的偏差調整，分段計分，贏輸自動調整等級。
+- **錄影**：指定歌曲與難度直接輸出 MP4（主選單「錄影模式」或 `tools/record_video.bat`），
+  多難度同框、分段並行、背景佇列。
+- **譜面相容**：TJA `COMPAT:`（jiro1／jiro2）、osu!taiko 譜面直接放進曲庫、MIDI 鼓在設定畫面裡學習對應。
+- 修掉許多上游也有的 bug（巢狀資料夾當機、同名歌曲選錯檔、含假名路徑開不了、練習模式結束當機…）。
 
-### Pre-built Binaries
+### 線上
 
-Download the latest release for your operating system from the [releases page](https://github.com/Yonokid/YataiDON/releases).
+- **自架伺服器** [`server/`](server/README.md)：只用 Python 標準函式庫；遊戲線上 API、差量更新頻道、skin 發佈。
+- **差量更新**：遊戲啟動時檢查，標題畫面按 F9 更新（逐檔 SHA-256，不碰設定、成績、歌曲）。
+- **線上對戰**：房間代碼或自動配對、三戰兩勝輪流選歌、聊天、投降、信用分與檢舉；
+  打擊經 WebSocket 與 UDP 直連（打洞）同時送，雙方對時同時開始；對手缺歌時自動傳送。
+- **挑戰**：用別人的重播打同一張譜。
+- **網站**（zdon.taiko.ac）：下載、歌曲與譜面頁、Rating 排行榜、難易度表、玩家頁（名牌、王冠統計、Best 50、段位）、
+  我的頁面（稱號、名牌、角色外觀、隱私、成績管理與匯出）。
 
-#### Windows
-1. Install the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) from Microsoft
-2. Run `YataiDON.exe`
+### 網頁版
 
-#### Linux
-1. Run `YataiDON.bin`
+用 Emscripten 編成 WebAssembly，在瀏覽器裡玩（<https://zdon.taiko.ac/play/>），音訊走 AudioWorklet 降低延遲。
 
-#### Android
-1. Install `YataiDON-Android.apk` (enable "install from unknown sources" if needed)
+## 系統需求
 
-#### iOS
-1. Install [TestFlight](https://apps.apple.com/app/testflight/id899247664) from the App Store
-2. Join the beta: https://testflight.apple.com/join/ZzrXBUsb
+- **Windows**：Windows 10 以上（主要開發與測試平台）
+- **Linux／macOS／Android／iOS／PS5／Switch**：沿用上游的建置，Z-DON 的改動盡量跨平台，但測試較少
+- **瀏覽器**：支援 WebAssembly 與 AudioWorklet 的新版 Chrome／Edge／Firefox
 
-## Building from Source
+## 安裝
 
-- [Linux](https://github.com/Yonokid/YataiDON/wiki/Linux)
-- [macOS](https://github.com/Yonokid/YataiDON/wiki/Mac-OS)
-- [Windows (MSYS2/MinGW64)](<https://github.com/Yonokid/YataiDON/wiki/Windows-(MSYS2-MingW64)>)
-- [Windows (MSVC)](<https://github.com/Yonokid/YataiDON/wiki/Windows-(MSVC)>) *(page pending)*
-- [Android](https://github.com/Yonokid/YataiDON/wiki/Android)
-- [iOS](platform/ios/README.md)
-- [PS5 homebrew (experimental)](platform/ps5/README.md)
-- [Switch homebrew (experimental)](platform/switch/README.md)
+1. 到 <https://zdon.taiko.ac> 下載 Windows 版並解壓縮。
+2. 執行 `YataiDON.exe`（執行檔名稱沿用上游，方便合併）。
+3. 把 TJA 歌曲放進 `Songs`，或在設定裡指定歌曲資料夾。之後的更新在遊戲裡按 F9 就好。
 
-### Formatting
+延遲高的話，把設定裡的 `device_type` 改成 `WDM-KS`、`WASAPI` 或 `ASIO`。
 
-With `clang-format` installed, run this from the repository root to format C++ sources
-and headers in place using `.clang-format`:
+## 從原始碼建置
 
-```sh
+### Windows（MSYS2 MinGW64）
+
+先照上游的 [Windows (MSYS2/MinGW64)](<https://github.com/Yonokid/YataiDON/wiki/Windows-(MSYS2-MingW64)>) 裝好相依套件，然後：
+
+```bash
+export PATH=/c/msys64/mingw64/bin:$PATH   # 少了這行 gcc 會靜默失敗
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 16
+```
+
+輸出在 `build/bin`。
+
+| CMake 選項 | 預設 | 說明 |
+|---|---|---|
+| `ZDON_LTO` | `ON` | Windows Release 的連結期最佳化（完整連結要幾分鐘；開發時可關，量效能和發佈前要開） |
+| `ZDON_PCH` | `ON` | 預編譯標頭 |
+| `YATAIDON_PROFILER` | `OFF` | 編入 [Tracy](https://github.com/wolfpld/tracy) v0.14.1 客戶端 |
+| `YATAIDON_USE_SDL2` | `OFF` | 改用 SDL2 |
+
+其他平台見上游 wiki：[Linux](https://github.com/Yonokid/YataiDON/wiki/Linux)、
+[macOS](https://github.com/Yonokid/YataiDON/wiki/Mac-OS)、[Android](https://github.com/Yonokid/YataiDON/wiki/Android)、
+[iOS](platform/ios/README.md)、[PS5](platform/ps5/README.md)、[Switch](platform/switch/README.md)。
+
+### 格式與檢查
+
+`src/` 的改動要用 clang-format 23.1.3（與上游 CI 相同）：
+
+```bash
 find src -type f \( -name '*.cpp' -o -name '*.h' \) -exec clang-format -i {} +
 ```
 
-### Linting
+clang-tidy：設定好 `build/` 之後
 
-With `clang-tidy` and `run-clang-tidy` installed, run this from the repository root
-after configuring a build in `build/` to generate `build/compile_commands.json`:
-
-```sh
+```bash
 run-clang-tidy -quiet -j 4 -p build "^$(pwd)/src/"
 ```
 
-## Profiling
+### 開發用的環境變數
 
-Build with `-DYATAIDON_PROFILER=ON` to compile in the [Tracy](https://github.com/wolfpld/tracy) client,
-then run the Tracy profiler GUI of the same version (v0.14.1) and connect to the game. Frames, screen
-update / draw, every Lua callback, texture and chart loading and the
-audio mixer show up as zones; Tracy's sampling also covers functions without a zone (run the game as
-administrator on Windows for call stacks). `tracy-capture -o trace.tracy` records a session to a file that can be attached to an issue.
+- `YATAIDON_TEST=1`：靜音、隱藏視窗、忽略真實輸入，用來跑自動測試。
+- `YATAIDON_FIXED_STEP_MS`＋`YATAIDON_DUMP_FRAMES`：固定時間步，輸出可逐位元比對的截圖。
+- `YATAIDON_FRAME_STATS=1`：每 2 秒記一行幀時間、CPU 與記憶體；`ZDON_FRAME_SPIKE_MS=<ms>` 記下超過門檻的幀。
+- `YATAIDON_FAKE_KEYS`、`YATAIDON_JUMP_SCREEN`、`YATAIDON_FORCE_AUTO`：假按鍵、直接跳到某畫面、強制自動演奏。
 
-The client only listens on localhost, so the GUI has to run on the same machine; configure with
-`-DTRACY_ONLY_LOCALHOST=OFF` to profile over the network (the connection is unauthenticated).
+完整清單與每個效能開關見 [docs/ZDON_ROADMAP.md](docs/ZDON_ROADMAP.md)。
 
-On Linux, call-stack sampling and context switches need root or a lower `kernel.perf_event_paranoid`
-(`sudo sysctl kernel.perf_event_paranoid=1`). Distro packages of the GUI rarely match v0.14.1, so build
-`profiler/` from the v0.14.1 tag. On Wayland, if the GUI crashes at startup with a floating point
-exception, build it with `-DLEGACY=ON` to run through X11.
+## 操作
 
-## Controls
+- 演奏中 **Esc**／**空白鍵**：暫停選單；**F1**：重來
+- 任何畫面 **Esc**：返回
+- 選曲：**空白鍵** 加入最愛、**左右 Ctrl** 一次跳 7 首、**F2** 搜尋、**F5** 重新整理
+- 線上對戰的選單：**Y** 聊天、**R** 檢舉
+- 標題畫面 **F9**：更新到最新版
+- 鼓的按鍵可以在遊戲設定或 `config.toml` 裡改
 
-- Press **F1** during gameplay for quick restart
-- Press **ESC** during any screen to go back
-- Press **Space Bar** during song select to favorite a song
-- Press **Left Control** or **Right Control** to skip songs by 7
-- Press **F5** during song select to refresh
-- Generic drum keybinds can be customized in `config.toml` or through the in-game settings menu
+## 回報問題
 
-## Contributing
+Z-DON 的問題請開在這個 repo 的 [Issues](https://github.com/GanYiZhong/Z-DON/issues)，不要回報到上游；
+上游 YataiDON 本身的問題請到 [YataiDON 的 Issues](https://github.com/Yonokid/YataiDON/issues)。
 
-Contributions are welcome! Please keep in mind:
-- Check the [issues page](https://github.com/Yonokid/YataiDON/issues) for enhancements and bugs before starting work
-- Feel free to open new issues for bugs or feature requests
+## 致謝
 
-## Known Issues
+Z-DON 建立在 [YataiDON](https://github.com/Yonokid/YataiDON) 與它所有貢獻者的成果上：
+IID、mc08、QBaraki、KabanFriends、DragonRatTiger、Komi、sumandrew、WallK、dpkgluci、Ape、chuchy（osu parser）、
+churrochef（vertical scroll）、cainan（3D don chan）、RyutoSetsujin、Nyannurs、fehpizza（logo）、Radix、Thonktheta、
+SomehowScarlet、SunnyDeez。網站的難易度表資料來自 [YataiDON-Syakai](https://github.com/Yonokid/YataiDON-Syakai)。
 
-See the [issues page](https://github.com/Yonokid/YataiDON/issues) or the Discord for current bugs and planned enhancements.
-
-## License
-
-This project is licensed under the terms specified in the LICENSE file.
-
-## Acknowledgments
-
-Dependencies used in the project:
-- [raylib](https://www.raylib.com/) - A simple and easy-to-use library to enjoy videogames programming.
-- [SDL3](https://github.com/libsdl-org/SDL) - Cross-platform development library for audio, input, and graphics.
-- [SQLite](https://www.sqlite.org/) - Self-contained, serverless SQL database engine.
-- [RapidJSON](https://github.com/Tencent/rapidjson) - Fast JSON parser/generator for C++.
-- [toml++](https://github.com/marzer/tomlplusplus) - TOML config file parser and writer for C++.
-- [spdlog](https://github.com/gabime/spdlog) - Fast C++ logging library.
-- [Lua](https://github.com/marovira/lua) - Lightweight, embeddable scripting language.
-- [sol2](https://github.com/ThePhD/sol2) - C++ binding library for Lua.
-- [cpptrace](https://github.com/jeremy-rifkin/cpptrace) - Stacktrace library for C++.
-- [libsndfile](https://github.com/libsndfile/libsndfile) - Library for reading and writing audio files.
-- [libsamplerate](https://github.com/libsndfile/libsamplerate) - Sample rate converter for audio.
-- [FFmpeg](https://ffmpeg.org/) - Complete, cross-platform multimedia framework.
-- [PortAudio](http://www.portaudio.com/) - Cross-platform audio I/O library.
-- [miniz](https://github.com/richgel999/miniz) - Single-file ZIP/DEFLATE library.
-
-People (in no particular order):
-- [IID](https://github.com/IepIweidieng/)
-- [mc08](https://github.com/splitlane/)
-- [QBaraki](https://github.com/QBaraki)
-- [KabanFriends](https://github.com/KabanFriends/)
-- [DragonRatTiger](https://github.com/DragonRatTiger/)
-- [Komi](https://github.com/0auBSQ/)
-- [sumandrew](https://github.com/somepin)
-- [WallK](https://github.com/WallK)
-- [dpkgluci](https://github.com/germe-deb)
-- [Ape](https://github.com/Ape)
-- [chuchy](https://github.com/magickale) (osu parser)
-- [churrochef](github.com/churro-chef) (vertical scroll)
-- [cainan](https://github.com/cainan-c/) (3d don chan)
-- [RyutoSetsujin](https://github.com/RyutoSetsujin/)
-- [Nyannurs](https://github.com/nyannurs) (testing)
-- [fehpizza](https://github.com/fehh44) (logo)
-- Radix (testing)
-- Thonktheta (testing)
-- SomehowScarlet (nix os)
-- SunnyDeez (testing)
+使用的函式庫：[raylib](https://www.raylib.com/)、[SDL3](https://github.com/libsdl-org/SDL)、[SQLite](https://www.sqlite.org/)、
+[RapidJSON](https://github.com/Tencent/rapidjson)、[toml++](https://github.com/marzer/tomlplusplus)、[spdlog](https://github.com/gabime/spdlog)、
+[Lua](https://github.com/marovira/lua)、[sol2](https://github.com/ThePhD/sol2)、[cpptrace](https://github.com/jeremy-rifkin/cpptrace)、
+[libsndfile](https://github.com/libsndfile/libsndfile)、[libsamplerate](https://github.com/libsndfile/libsamplerate)、
+[FFmpeg](https://ffmpeg.org/)、[PortAudio](http://www.portaudio.com/)、[miniz](https://github.com/richgel999/miniz)、
+[zlib-ng](https://github.com/zlib-ng/zlib-ng)、[bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo)、[curl](https://curl.se/)。
