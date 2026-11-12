@@ -99,6 +99,7 @@ class OnlineSongSelectScreen : public SongSelectScreen {
     // when the chat or report line last closed: its Enter/Esc can reach the song select a frame late, so keys are
     // swallowed a moment after (and while that key is still held)
     double typing_closed_ms = -1e9;
+    bool keyboard_shown = false; // set_keyboard_visible: the game knows a line is typed (Q doesn't quit)
     std::string chat_text;
     int chat_request = -1;
     void update_chat(double now);

@@ -54,6 +54,10 @@ Screens OnlineSongSelectScreen::on_screen_end(Screens next_screen) {
     if (next_screen != Screens::GAME_2P && !room.empty()) {
         leave_room();
     }
+    if (keyboard_shown) {
+        keyboard_shown = false;
+        set_keyboard_visible(false);
+    }
     return SongSelectScreen::on_screen_end(next_screen);
 }
 
@@ -656,6 +660,10 @@ void OnlineSongSelectScreen::update_chat(double now) {
 std::optional<Screens> OnlineSongSelectScreen::update() {
     const double now = get_current_ms();
     update_chat(now);
+    if (const bool typing = chat_typing || report_typing; typing != keyboard_shown) {
+        keyboard_shown = typing;
+        set_keyboard_visible(typing); // while it's on, the exit key (Q) and the like are letters
+    }
     const double since_typing = now - typing_closed_ms;
     // typing (or just closed the line): the song select behind gets no keys, not even this frame's Enter
     if (report_typing || chat_typing || since_typing < 250 ||
