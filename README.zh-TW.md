@@ -4,8 +4,8 @@
 
 <img src="docs/logo.png">
 
-**Z-DON** 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支：一套用 C++ 寫的 TJA 播放器／太鼓模擬器，
-**完全由 AI 開發**，目標是極致的效能，以及上游沒有的新功能與線上對戰。
+**Z-DON** 是 [YataiDON](https://github.com/Yonokid/YataiDON) 的分支：一套用 C++ 寫的 TJA 播放器／太鼓模擬器。
+YataiDON 本身由它的貢獻者撰寫；**Z-DON 在它之上的修改完全由 AI 開發**，目標是極致的效能，以及上游沒有的新功能與線上對戰。
 
 - 官網與下載：<https://zdon.taiko.ac>
 - 瀏覽器直接玩（網頁版）：<https://zdon.taiko.ac/play/>

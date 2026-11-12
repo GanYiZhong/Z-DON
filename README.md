@@ -5,7 +5,8 @@ English | [繁體中文](README.zh-TW.md)
 <img src="docs/logo.png">
 
 **Z-DON** is a fork of [YataiDON](https://github.com/Yonokid/YataiDON), a TJA player and Taiko simulator written in C++.
-It is **developed entirely by AI**, and focuses on aggressive performance work, new gameplay features and online play.
+YataiDON itself is written by its human contributors; **Z-DON's own changes on top of it are developed entirely by AI**,
+and focus on aggressive performance work, new gameplay features and online play.
 
 - Website and downloads: <https://zdon.taiko.ac>
 - Play in the browser (web version): <https://zdon.taiko.ac/play/>
