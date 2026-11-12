@@ -5,8 +5,9 @@ sends it back to /auth/callback with a ticket signed with the shared sso_secret 
 This site keeps only the member's TaikoForge id, the email to show them, and which game accounts
 (access codes) they linked.
 
-Pages: home, download (update channels), skins, charts and their rankings, player profiles, my page
-(link a game account, rename it, send a song to the game).
+Pages: home, download (update channels), skins, songs and chart rankings, the rating leaderboard, the difficulty
+tables, player profiles and all their scores (zdon_site_stats.py), my page (link a game account, rename it, send a
+song to the game).
 
 The web version of the game (/play, served by zdon_server.py) logs in the same way: /auth/login?next=/play/
 returns there, then the page asks /auth/game-account for the member's game accounts and may create one with
@@ -26,6 +27,7 @@ import time
 import urllib.parse
 
 from zdon_credit import Credit
+from zdon_site_stats import STATS_CSS, StatsPages
 from http.cookies import SimpleCookie
 from pathlib import Path
 
@@ -78,7 +80,8 @@ pre{background:#f5ede4;padding:.8em 1em;border-radius:8px;overflow:auto}
 input[type=text]{padding:.45em .6em;border:1px solid var(--line);border-radius:6px;font-size:1em;width:16em;max-width:100%}
 .flash{background:#e9f6ec;border:1px solid #bfe3c8;border-radius:8px;padding:.6em 1em}
 .flash.err{background:#fdeceb;border-color:#f3c3bf}footer{color:var(--muted);font-size:.85em;text-align:center;padding:2em}
-"""
+select{padding:.4em .5em;border:1px solid var(--line);border-radius:6px;font-size:1em;background:#fff}
+""" + STATS_CSS
 
 
 def esc(v) -> str:
@@ -109,9 +112,11 @@ def crown_badge(c) -> str:
     return f'<span class="crown {CROWN_CLASS[c]}">{CROWNS[c]}</span>' if c in CROWNS else ""
 
 
-class Site:
-    # "/me" only as a whole segment: the game's API has /medals
-    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css")
+class Site(StatsPages):
+    # "/me" only as a whole segment: the game's API has /medals (and /song_ranking: songs pages are /songs, /song/)
+    PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css",
+                "/song/", "/tables/")
+    PAGES = ("/", "/me", "/admin", "/songs", "/leaderboard", "/tables")
 
     def __init__(self, cfg: dict, store, nonces):
         self.cfg = cfg
@@ -141,7 +146,7 @@ class Site:
         self.session_key = secret.encode()
 
     def handles(self, path: str) -> bool:
-        return path in ("/", "/me", "/admin") or path.startswith(self.PREFIXES)
+        return path in self.PAGES or path.startswith(self.PREFIXES)
 
     # ------------------------------------------------------------------------------------------------------------
     # sessions (a signed cookie; the server keeps no session table)
@@ -192,7 +197,8 @@ class Site:
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} - {esc(self.name)}</title>
 <link rel="stylesheet" href="/site.css"></head><body>
 <header><div class="in"><a class="logo" href="/">Z-<span>DON</span></a><nav><a href="/download">下載</a>
-<a href="/charts">排行</a><a href="/skins">Skin</a></nav><div>{who}</div></div></header>
+<a href="/songs">歌曲</a><a href="/leaderboard">排行</a><a href="/tables">難易度表</a><a href="/skins">Skin</a></nav>
+<div>{who}</div></div></header>
 <main><div class="in">{note}{body}</div></main>
 <footer>Z-DON 源自 <a href="https://github.com/Yonokid/YataiDON">YataiDON</a>（GPL-3.0）・會員由
 <a href="{esc(self.forge_url)}">TaikoForge</a> 提供</footer></body></html>"""
@@ -231,12 +237,22 @@ class Site:
             self.skins(req)
         elif path.startswith("/skins/") and path.endswith(".zip"):
             self.skin_zip(req, path[len("/skins/"):-4])
-        elif path == "/charts":
-            self.charts(req, query)
+        elif path in ("/songs", "/charts"):  # /charts: the old address
+            self.songs(req, query)
+        elif path.startswith("/song/"):
+            self.song(req, path[len("/song/"):])
         elif path.startswith("/chart/"):
             self.chart(req, path[len("/chart/"):], query)
+        elif path == "/leaderboard":
+            self.leaderboard(req, query)
+        elif path == "/tables":
+            self.tables_index(req, query)
+        elif path.startswith("/tables/"):
+            self.table_page(req, path[len("/tables/"):], query)
+        elif path.startswith("/player/") and path.endswith("/scores"):
+            self.player_scores(req, path[len("/player/"):-len("/scores")], query)
         elif path.startswith("/player/"):
-            self.player(req, path[len("/player/"):])
+            self.player_page(req, path[len("/player/"):])
         elif path == "/me":
             self.me(req, query)
         elif path == "/admin":
@@ -466,14 +482,18 @@ class Site:
         hot = self.s.q("""SELECT hash, difficulty, COUNT(*) AS n FROM scores
                           WHERE received_at > ? GROUP BY hash, difficulty ORDER BY n DESC LIMIT 8""",
                        (int(time.time()) - 30 * 86400,))
+        board = "".join(f'<tr><td class="num">{i}</td><td><a href="/player/{r["pid"]}">{esc(r["username"])}</a></td>'
+                        f'<td class="num"><b>{r["rating"]:.2f}</b></td></tr>'
+                        for i, r in enumerate(self.leaderboard_rows()[:5], 1))
         hot_html = "".join(f'<tr><td><a href="/chart/{esc(r["hash"])}?d={r["difficulty"]}">'
                            f'{esc(self.song_name(r["hash"]))}</a></td><td>{course_badge(r["difficulty"])}</td>'
                            f'<td class="num">{r["n"]}</td></tr>' for r in hot)
         body = f"""<div class="card hero"><h1>Z-DON</h1>
 <p>以 YataiDON 為基礎、追求極致效能與新功能的太鼓模擬器。成績與排行在這裡，帳號跟 TaikoForge 共用。</p>{dl}
 <p class="small muted">{stats["players"]} 位玩家・{stats["plays"]} 筆成績</p></div>
-<div class="grid"><div class="card"><h2 style="margin-top:0">最近遊玩</h2>{self._plays_table(recent)}</div>
-<div class="card"><h2 style="margin-top:0">本月熱門</h2>{('<table><tr><th>曲目</th><th>難度</th><th class="num">遊玩</th></tr>' + hot_html + '</table>') if hot else '<p class="muted">還沒有成績。</p>'}</div></div>"""
+<div class="grid"><div class="card"><h2 style="margin-top:0">Rating 排行</h2>{('<table>' + board + '</table><p class="small"><a href="/leaderboard">完整排行 →</a></p>') if board else '<p class="muted">還沒有成績。</p>'}</div>
+<div class="card"><h2 style="margin-top:0">本月熱門</h2>{('<table><tr><th>曲目</th><th>難度</th><th class="num">遊玩</th></tr>' + hot_html + '</table>') if hot else '<p class="muted">還沒有成績。</p>'}</div></div>
+<div class="card"><h2 style="margin-top:0">最近遊玩</h2>{self._plays_table(recent)}</div>"""
         self.page(req, "首頁", body)
 
     @staticmethod
@@ -538,32 +558,6 @@ class Site:
                 return
         self.page(req, "找不到", "<h1>找不到這個 Skin</h1>", 404)
 
-    def charts(self, req, query):
-        q = (query.get("q") or "").strip()
-        args: list = []
-        where = ""
-        if q:
-            where = "WHERE g.title LIKE ? OR g.subtitle LIKE ?"
-            args = [f"%{q}%", f"%{q}%"]
-        rows = self.s.q(f"""SELECT s.hash, s.difficulty, COUNT(DISTINCT s.access_code) AS players, COUNT(*) AS plays,
-                                   MAX(s.score) AS top, MAX(s.received_at) AS last
-                            FROM scores s LEFT JOIN songs g ON g.hash = s.hash {where}
-                            GROUP BY s.hash, s.difficulty ORDER BY last DESC LIMIT 200""", args)
-        body = [f"""<h1>排行</h1><form method="get"><input type="text" name="q" value="{esc(q)}" placeholder="搜尋曲名">
-<button class="btn small sec">搜尋</button></form>"""]
-        if not rows:
-            body.append('<p class="muted">沒有符合的曲目。</p>')
-        else:
-            body.append('<div class="card"><table><tr><th>曲目</th><th>難度</th><th class="num">玩家</th>'
-                        '<th class="num">遊玩</th><th class="num">最高分</th></tr>')
-            for r in rows:
-                body.append(f'<tr><td><a href="/chart/{esc(r["hash"])}?d={r["difficulty"]}">'
-                            f'{esc(self.song_name(r["hash"]))}</a></td><td>{course_badge(r["difficulty"])}</td>'
-                            f'<td class="num">{r["players"]}</td><td class="num">{r["plays"]}</td>'
-                            f'<td class="num">{r["top"]:,}</td></tr>')
-            body.append("</table></div>")
-        self.page(req, "排行", "".join(body))
-
     def chart(self, req, h: str, query):
         h = urllib.parse.unquote(h)
         diffs = [r["difficulty"] for r in self.s.q(
@@ -603,31 +597,11 @@ class Site:
             jump = (f'<form method="post" action="/me/jump"><input type="hidden" name="csrf" value="{self._csrf(req.sess)}">'
                     f'<input type="hidden" name="hash" value="{esc(h)}"><button class="btn small sec">在我的遊戲中開啟這首</button>'
                     f'</form>')
-        self.page(req, title, f"<h1>{esc(title)}</h1>{sub}<p>{tabs}</p>{jump}<div class='card'>{''.join(table)}</div>")
-
-    def player(self, req, pid: str):
-        u = self.s.one("SELECT rowid AS pid, * FROM users WHERE rowid=?", (int(pid),)) if pid.isdigit() else None
-        if u is None:
-            self.page(req, "找不到", "<h1>找不到這位玩家</h1>", 404)
-            return
-        stats = self.s.one("""SELECT COUNT(*) AS plays, COUNT(DISTINCT hash || ':' || difficulty) AS charts,
-                                     SUM(crown >= 2) AS fcs FROM scores WHERE access_code=?""", (u["access_code"],))
-        best = self.s.q("""SELECT hash, difficulty, MAX(score) AS score, MAX(crown) AS crown, MAX(received_at) AS received_at
-                           FROM scores WHERE access_code=? GROUP BY hash, difficulty ORDER BY difficulty DESC, score DESC
-                           LIMIT 50""", (u["access_code"],))
-        recent = self.s.q("""SELECT s.received_at, s.hash, s.difficulty, s.score, s.crown, ? AS username, ? AS pid
-                             FROM scores s WHERE access_code=? ORDER BY id DESC LIMIT 15""",
-                          (u["username"], u["pid"], u["access_code"]))
-        best_rows = "".join(f'<tr><td><a href="/chart/{esc(r["hash"])}?d={r["difficulty"]}">{esc(self.song_name(r["hash"]))}'
-                            f'</a></td><td>{course_badge(r["difficulty"])}</td><td class="num">{r["score"]:,}</td>'
-                            f'<td>{crown_badge(r["crown"])}</td></tr>' for r in best)
-        title = f'<p class="muted">{esc(u["title"])}</p>' if u["title"] else ""
-        body = f"""<h1>{esc(u["username"])}</h1>{title}
-<p class="small muted">{stats["plays"]} 次遊玩・{stats["charts"]} 個譜面・全連 {stats["fcs"] or 0}</p>
-<div class="grid"><div class="card"><h2 style="margin-top:0">最佳成績</h2>
-{('<table><tr><th>曲目</th><th>難度</th><th class="num">分數</th><th></th></tr>' + best_rows + '</table>') if best else '<p class="muted">還沒有成績。</p>'}</div>
-<div class="card"><h2 style="margin-top:0">最近遊玩</h2>{self._plays_table(recent, show_player=False)}</div></div>"""
-        self.page(req, u["username"], body)
+        place = self.tables.place.get((h, d), "")
+        const = self.tables.constant.get((h, d))
+        info = (f'<p class="small muted">難易度表 {esc(place)}' + (f'・常數 {const:.1f}' if const else '') + '</p>') if place else ""
+        self.page(req, title, f"<h1>{esc(title)}</h1>{sub}<p>{tabs} <a class='small' href='/song/{esc(h)}'>這首歌的所有難度 →</a></p>"
+                              f"{info}{jump}<div class='card'>{''.join(table)}</div>")
 
     # ------------------------------------------------------------------------------------------------------------
     # my page

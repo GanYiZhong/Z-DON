@@ -7,7 +7,7 @@
 | 遊戲線上 API（帳號、成績、排行、重播、段位、獎牌、AI 對戰…） | `/health`、`/user`、`/submit_score`… | 遊戲（`config.toml` 的 `zdon_server_url`） |
 | 遊戲更新（差量） | `/update/<頻道>/…` | `zdon_update.bat` 與遊戲內 F9 更新 |
 | Skin 更新 | `/skins/<名稱>/raw/branch/<分支>/…` | 遊戲內建的 skin updater（`.skin-repo`） |
-| 網站 zdon.taiko.ac | `/`、`/download`、`/charts`、`/player/…`、`/me` | 瀏覽器：下載、排行、玩家頁、會員綁定遊戲帳號（`zdon_site.py`） |
+| 網站 zdon.taiko.ac | `/`、`/download`、`/songs`、`/leaderboard`、`/tables`、`/player/…`、`/me` | 瀏覽器：下載、排行、玩家頁、會員綁定遊戲帳號（`zdon_site.py`） |
 
 資料全部在 `data_dir`（預設 `server/zdon_data/`）：`zdon.db`（SQLite）和發布出去的檔案。備份就是複製這個資料夾。
 
@@ -104,9 +104,16 @@ python server\zdon_server.py jump <access code> --score-id <成績編號> # 或�
 `forge.taiko.ac/sso/zdon`，在那裡登入（或註冊、收驗證信、忘記密碼），再帶一張 60 秒有效、簽章過的票證回來。
 這裡只記會員的 TaikoForge id 與 email、以及他綁了哪些遊戲帳號。
 
-頁面：首頁（下載、最近遊玩、本月熱門）、下載（每個更新頻道的完整安裝包 zip，`publish` 時自動產生）、
-Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、排行（可搜尋曲名；曲名由遊戲送成績時附上）、
-玩家頁、我的頁面（輸入 access code 綁定遊戲帳號、改名、從排行頁把歌送到遊戲的選曲畫面）。
+頁面：首頁（下載、Rating 前五名、本月熱門、最近遊玩）、下載（每個更新頻道的完整安裝包 zip，`publish` 時自動產生）、
+Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、歌曲 `/songs`（最多人玩的歌、可搜尋；曲名由遊戲送成績時附上，
+舊網址 `/charts` 也導到這裡）與歌曲頁 `/song/<hash>`（同曲名的所有難度排行）、單一譜面排行 `/chart/<hash>`（挑戰、送到遊戲）、
+Rating 排行 `/leaderboard`、難易度表 `/tables`、玩家頁（Rating、對照難易度表的王冠統計、Best 50、段位、最近遊玩）與
+全部成績 `/player/<id>/scores`（搜尋、難度、排序、分頁）、我的頁面（輸入 access code 綁定遊戲帳號、改名、從排行頁把歌送到遊戲的選曲畫面）。
+
+Rating 與難易度表（`zdon_site_stats.py`）照 [YataiDON-Syakai](https://github.com/Yonokid/YataiDON-Syakai) 的算法：
+魔王／裏魔王最好的 50 個譜面平均；譜面常數 = 星數 + 通關難易度表的等級加成，分數係數 60 萬分起算、100 萬為 1，
+全連 +0.5、全良 +1.0。難易度表是 Syakai 的 `src/data/diffchart`（GPL-3.0），放在 `site_data/diffchart/`；
+雜湊是遊戲的每難度雜湊，跟 YataiDON 相同，所以直接對得上。
 
 ### 網頁版（/play）
 
