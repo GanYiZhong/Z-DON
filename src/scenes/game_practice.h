@@ -221,12 +221,9 @@ private:
     std::optional<Screens> global_keys_practice();
     void animate_scrobble_to(int new_index);
     void scrobble_step_bar(bool right, int count = 1);
-    // Z-DON drum gestures while paused: both dons together = branch, quick kats = bigger steps
+    // Z-DON drum gesture while paused: both dons together = branch
     double zdon_don_wait_ms = -1.0;
     bool zdon_don_right = false;
-    double zdon_scrub_last_ms = -1e9;
-    bool zdon_scrub_right = false;
-    int zdon_scrub_run = 0;
     void zdon_cycle_branch();
     bool zdon_don_gesture(bool l, bool r);
     void review_jump(int card); // upstream review panel

@@ -510,7 +510,7 @@ void PracticeGameScreen::scrobble_step_bar(bool right, int count) {
         }
     }
     // merge 0ed42ec: upstream stops at the first / last bar (its skip buttons grey out there) instead of Z-DON's
-    // wrap-around; Z-DON's step count (quick kats = bigger steps) is kept and clamped to the ends
+    // wrap-around; a step of several bars (count) is clamped to the ends
     if (right ? at_last_bar() : at_first_bar()) {
         seek_limit_ms = now_ms;
         return;
@@ -959,13 +959,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
         bool scrobble_right = is_r_kat_pressed(global_data.player_num);
 
         if (!bars.empty() && (scrobble_left || scrobble_right)) {
-            // Z-DON: quick kats the same way move 4, then 8 bars a hit
-            const bool right = !scrobble_left && scrobble_right;
-            const double now = get_current_ms();
-            zdon_scrub_run = (right == zdon_scrub_right && now - zdon_scrub_last_ms < 250.0) ? zdon_scrub_run + 1 : 1;
-            zdon_scrub_right = right;
-            zdon_scrub_last_ms = now;
-            scrobble_step_bar(right, zdon_scrub_run >= 8 ? 8 : zdon_scrub_run >= 4 ? 4 : 1);
+            scrobble_step_bar(!scrobble_left && scrobble_right); // one bar a kat, however quick
         }
     }
 
