@@ -461,10 +461,13 @@ class Site(StatsPages, MePages):
             return
         if not rest:
             try:
-                songs = json.loads(body).get("songs", [])
+                d = json.loads(body)
             except ValueError:
-                songs = []
-            self._json(req, 200, {"logged_in": True, "songs": songs})
+                d = {}
+            # paid: a starter-or-above plan is active (audio kept while it lasts); retention_days: the days the
+            # audio is kept after the chart (free) or after the plan ends; each song has audio_expires_at
+            self._json(req, 200, {"logged_in": True, "songs": d.get("songs", []), "paid": bool(d.get("paid")),
+                                  "retention_days": d.get("retention_days", 30)})
             return
         req.send(status, body, ctype, {"Cache-Control": "no-store"})
 
