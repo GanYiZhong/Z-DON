@@ -50,6 +50,9 @@ namespace {
 } // namespace
 
 void PauseMenu::open_menu(double now_ms) {
+    // Z-DON: drum presses still buffered are not meant for the menu. With auto play no player reads the drum keys,
+    // so a press made during the song waited here and moved or confirmed the menu the moment it opened.
+    clear_input_buffers();
     if (!pause_start) {
         pause_start = now_ms;
     }

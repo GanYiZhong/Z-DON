@@ -1,6 +1,7 @@
 #include "practice_menu.h"
 
 #include "../../libs/global_data.h"
+#include "../../libs/input/input.h"
 
 void PracticeMenu::init_textures() {
     fn_draw = fn_draw_dialog = fn_hit_test = {};
@@ -18,6 +19,7 @@ void PracticeMenu::unload() {
 }
 
 void PracticeMenu::open_menu() {
+    clear_input_buffers(); // Z-DON: as PauseMenu::open_menu (presses from an auto-played song)
     open = true;
     index = ROW_COUNT - 1;
 }
