@@ -1277,6 +1277,9 @@ void PracticeGameScreen::draw() {
 
     tex.draw_texture(t_large_drum, {.index = 0});
     tex.draw_texture(t_large_drum, {.index = 1});
+    if (practice_player) {
+        practice_player->draw_large_drum_hits(); // Z-DON: the hit colours over the drums, not under them
+    }
 
     int other_idx = (global_data.player_num == PlayerNum::P1) ? 1 : 0;
     int player_idx = (global_data.player_num == PlayerNum::P1) ? 0 : 1;

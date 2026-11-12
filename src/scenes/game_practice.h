@@ -24,7 +24,10 @@ public:
         }
     }
 
-    void draw(float y) override { tex.draw_texture(t_drum, {.fade = fade->attribute, .index = player_index}); }
+    // the player's overlay pass runs before the screen draws the large drums over it: drawn later, by
+    // PracticePlayer::draw_large_drum_hits, or the don / ka colour never shows
+    void draw(float /*y*/) override {}
+    void draw_large() { tex.draw_texture(t_drum, {.fade = fade->attribute, .index = player_index}); }
 };
 
 class PracticePlayer : public Player {
@@ -66,6 +69,15 @@ public:
             draw_drum_hit_list.push_back(std::make_unique<DrumHitEffect>(drum_type, side));
         }
         spawn_scrobble_effect(drum_type, side, static_cast<int>(player_num) - 1);
+    }
+
+    // Z-DON: the large drums' don / ka flashes, on top of the drums (PracticeGameScreen::draw)
+    void draw_large_drum_hits() {
+        for (auto& e : draw_drum_hit_list) {
+            if (auto* p = dynamic_cast<PracticeDrumHitEffect*>(e.get())) {
+                p->draw_large();
+            }
+        }
     }
 
     void spawn_scrobble_effect(DrumType drum_type, Side side, int player_index) {
