@@ -1156,6 +1156,9 @@ def cmd_publish_web(cfg: dict, args) -> None:
     missing = [n for n in names if not (src / n).is_file()]
     if missing:
         sys.exit(f"{src}: missing {', '.join(missing)}")
+    # the page downloads the compressed copy when there is one (and YataiDON.data otherwise)
+    if (src / "YataiDON.data.gz").is_file():
+        names.append("YataiDON.data.gz")
     dest = cfg["data_dir"] / "web"
     tmp = dest.with_name("web.new")
     if tmp.exists():
