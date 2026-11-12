@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import fnmatch
 import hashlib
+import re
 import hmac
 import html
 import json
@@ -1162,6 +1163,14 @@ def cmd_publish_web(cfg: dict, args) -> None:
     tmp.mkdir(parents=True)
     for n in names:
         shutil.copy2(src / n, tmp / n)
+    # the page asks for YataiDON.js?v=<its hash>: Cloudflare has browsers keep .js for hours, and an old
+    # YataiDON.js does not instantiate a new YataiDON.wasm (the page's locateFile passes the version on)
+    ver = hashlib.sha256((tmp / "YataiDON.js").read_bytes()).hexdigest()[:12]
+    page = (tmp / "YataiDON.html").read_text(encoding="utf-8")
+    versioned = re.sub(r"src=(['\"]?)YataiDON\.js(?:\?v=[0-9a-f]+)?(?=\1)", lambda m: f"src={m.group(1)}YataiDON.js?v={ver}", page)
+    if versioned == page:
+        sys.exit("publish-web: the page has no <script src=YataiDON.js> to version")
+    (tmp / "YataiDON.html").write_text(versioned, encoding="utf-8")
     old = dest.with_name("web.old")
     if old.exists():
         shutil.rmtree(old)
