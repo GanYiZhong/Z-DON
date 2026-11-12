@@ -307,6 +307,8 @@ if(ANDROID OR APPLE OR EMSCRIPTEN OR WIN32)
     if (WIN32)
       #file(MAKE_DIRECTORY "${OPUS_INCLUDE_SHIM_DIR}/opus")
       file(COPY "${opus_SOURCE_DIR}/include" DESTINATION "${OPUS_INCLUDE_SHIM_DIR}/opus")
+    elseif(CMAKE_HOST_WIN32)  # Z-DON: cross builds from Windows (web) cannot create symlinks without admin
+      file(COPY "${opus_SOURCE_DIR}/include/" DESTINATION "${OPUS_INCLUDE_SHIM_DIR}/opus")
     else()
       file(CREATE_LINK "${opus_SOURCE_DIR}/include" "${OPUS_INCLUDE_SHIM_DIR}/opus" SYMBOLIC)
     endif()

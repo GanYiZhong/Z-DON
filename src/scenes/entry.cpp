@@ -422,7 +422,8 @@ Screens EntryScreen::on_screen_end(Screens next_screen) {
 
 bool EntryScreen::join_by_drum() {
     static constexpr std::array seats{PlayerNum::P1, PlayerNum::P2};
-    const auto* hit = std::ranges::find_if(seats, [this](PlayerNum seat) {
+    // NOLINTNEXTLINE(readability-qualified-auto): the iterator is a pointer only in libstdc++
+    const auto hit = std::ranges::find_if(seats, [this](PlayerNum seat) {
         return !seat_joined(seat) && (is_l_don_pressed(seat) || is_r_don_pressed(seat));
     });
     if (hit == seats.end()) {

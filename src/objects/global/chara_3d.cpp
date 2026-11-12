@@ -367,8 +367,8 @@ namespace {
             if (ec) {
                 return {};
             }
-            key +=
-                p->string() + '|' + std::to_string(mtime.time_since_epoch().count()) + '|' + std::to_string(size) + '|';
+            key += p->string() + '|' + std::to_string(static_cast<long long>(mtime.time_since_epoch().count())) + '|' +
+                   std::to_string(size) + '|';
         }
         key += normalize_face_scale ? '1' : '0';
         return key;

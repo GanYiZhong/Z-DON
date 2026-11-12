@@ -27,6 +27,7 @@
 #include <zlib.h>
 #else
 #include <miniz.h>
+#undef compress // miniz renames zlib's compress to mz_compress, which would rename texture_bc7::compress too
 #endif
 
 #include "jobs.h"

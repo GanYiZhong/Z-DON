@@ -164,6 +164,9 @@ static void zdon_check_opengl() {
     };
     const std::string vendor = str(0x1F00), renderer = str(0x1F01), version = str(0x1F02); // GL_VENDOR...
     spdlog::info("OpenGL: {} ({}), version {}", renderer, vendor, version);
+    if (version.starts_with("OpenGL ES")) {
+        return; // GLES builds (web: WebGL 2) render with ES 3.0, not desktop GL 3.3
+    }
     int major = 0, minor = 0;
     if (std::sscanf(version.c_str(), "%d.%d", &major, &minor) == 2 && (major > 3 || (major == 3 && minor >= 3))) {
         return;
