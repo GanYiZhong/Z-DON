@@ -71,7 +71,7 @@ DEFAULT_CONFIG = {
     "site": {"url": "", "name": "Z-DON", "sso_url": "", "sso_secret": "", "forge_url": "https://forge.taiko.ac",
              "session_secret": ""},
     # publish (windows channel) also puts the install zip on this repository's rolling GitHub release (zdon_github.py)
-    "github": {"release_repo": "", "tag": "rolling", "asset": "Z-DON-windows.zip"},
+    "github": {"release_repo": "", "tag": "rolling", "asset": "Z-DON-windows.zip", "workflow": ""},
 }
 
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}

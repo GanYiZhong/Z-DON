@@ -1,6 +1,8 @@
 """The GitHub rolling release: every `publish` of the windows channel puts the same install zip the website hands out
 (update/windows/package.zip) on one GitHub release, whose tag is moved to the commit the build came from. Uses the
 GitHub CLI (`gh`, logged in to an account that can write the repository); set [github] release_repo to turn it on.
+With [github] workflow set (zdon-release.yml), it then starts that workflow, which builds Linux, macOS and Android
+on GitHub and adds them to the same release.
 """
 from __future__ import annotations
 
@@ -63,3 +65,14 @@ def rolling_release(cfg: dict, package: Path, version: str, repo_dir: Path) -> N
                 "--notes", body, "--latest")
     print(f"GitHub release {repo}@{tag} now has {asset} ({version})"
           + ("" if pushed else f"; {sha[:8]} isn't pushed, so the tag points at main {target[:8]}"))
+    # the other platforms: .github/workflows/zdon-release.yml builds them from main on GitHub's runners and adds
+    # them to the same release (only for a pushed build, so they come from the same commit)
+    workflow = gh_cfg.get("workflow", "")
+    if not workflow:
+        return
+    if not pushed:
+        print(f"not starting {workflow}: push main first, then run it on GitHub (Actions) or publish again")
+        return
+    r = _gh("workflow", "run", workflow, "--repo", repo, "--ref", "main", "-f", f"version={version}", check=False)
+    print(f"started {workflow} (Linux, macOS, Android)" if r.returncode == 0
+          else f"couldn't start {workflow}: {r.stderr.strip()}")

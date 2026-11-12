@@ -1,0 +1,297 @@
+# Z-DON: the Linux, macOS and Android builds of the rolling release. `publish` (server/zdon_github.py) starts it after
+# putting the Windows zip on the release, with the version it published; it can also be run by hand. Each build
+# uploads its zip / APK to the same "rolling" release. The desktop zips carry the same Songs/ and Skins/ as the
+# Windows zip (taken from it), so every platform starts with SimpleStyle and Dark.
+#
+# Secrets (optional): NETWORK_AUTH_KEY, the zdon.taiko.ac key (without it the builds start offline; config.toml
+# [network] zdon_server_key still works); ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS /
+# ANDROID_KEY_PASSWORD to sign the APK with a fixed key (without them it is signed with a debug key, which changes
+# every run, so a new APK won't install over the last one).
+name: Z-DON rolling release (Linux, macOS, Android)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (as published, e.g. 20261113-0738-94afee80); empty = the commit"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zdon-release
+  cancel-in-progress: true
+
+env:
+  NETWORK_URL: https://zdon.taiko.ac
+  RELEASE_TAG: rolling
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-26.04
+    container: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+    steps:
+      - name: Bootstrap container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y sudo git ca-certificates curl python3 build-essential zip
+
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ccache ninja-build pkg-config patchelf libssl-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxtst-dev libgl1-mesa-dev \
+            libasound2-dev libpulse-dev libjack-dev liblua5.4-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
+            libavdevice-dev libogg-dev libvorbis-dev libflac-dev libopus-dev libmp3lame-dev libmpg123-dev \
+            libspeex-dev libdw-dev
+
+      - name: Setup SDL3
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3-head
+          build-type: Release
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            .cmake-deps
+          key: zdon-linux-${{ github.sha }}
+          restore-keys: zdon-linux-
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DNETWORK_URL="$NETWORK_URL" -DNETWORK_AUTH_KEY="${{ secrets.NETWORK_AUTH_KEY }}"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          P=release/Z-DON-Linux
+          mkdir -p $P/lib
+          cp build/bin/YataiDON $P/
+          cp -r shader $P/
+          chmod +x $P/YataiDON
+          # the shared libraries the distribution may not have: FFmpeg, the sndfile codecs, SDL3 and what they need
+          ldd build/bin/YataiDON | grep -E "(libav|libsw|libsndfile|libogg|libvorbis|libFLAC|libopus|libmp3lame|libmpg123|libspeex|libSDL3).*=>" \
+            | awk '{print $3}' | grep -v '^$' | xargs -I{} cp -L {} $P/lib/ || true
+          for so in $P/lib/*.so*; do
+            ldd "$so" 2>/dev/null | grep "=>" | awk '{print $3}' | grep -v '^$' \
+              | grep -vE "lib(c|m|dl|rt|resolv|nsl|util|anl|pthread|gcc_s|stdc\+\+|X11|GL|asound|pulse|jack|Xi|Xrandr)\.so|xcb|ld-linux" \
+              | xargs -I{} cp -L {} $P/lib/ 2>/dev/null || true
+          done
+          patchelf --set-rpath '$ORIGIN/lib' $P/YataiDON
+          for so in $P/lib/*.so*; do [ -f "$so" ] && patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Z-DON-Linux
+          path: release/Z-DON-Linux/
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    runs-on: macos-26
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+    steps:
+      - name: Select Xcode 26.6
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake ccache ninja pkg-config ffmpeg sdl3 dylibbundler libogg libvorbis flac opus lame \
+            mpg123 speex libsndfile libidn2
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            .cmake-deps
+          key: zdon-macos-${{ github.sha }}
+          restore-keys: zdon-macos-
+
+      - name: Configure
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)" -DCMAKE_EXE_LINKER_FLAGS="-L$(brew --prefix)/lib" \
+            -DNETWORK_URL="$NETWORK_URL" -DNETWORK_AUTH_KEY="${{ secrets.NETWORK_AUTH_KEY }}"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          P=release/Z-DON-macOS
+          mkdir -p $P/lib
+          cp build/bin/YataiDON $P/
+          cp -r shader $P/
+          chmod +x $P/YataiDON
+          dylibbundler -od -b -x $P/YataiDON -d $P/lib -p @executable_path/lib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Z-DON-macOS
+          path: release/Z-DON-macOS/
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Install NDK r30 and CMake 3.31.6
+        run: |
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | $SDKMANAGER --licenses >/dev/null 2>&1 || true
+          $SDKMANAGER "ndk;30.0.16248370" "cmake;3.31.6"
+
+      - id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: .android-ffmpeg
+          key: android-ffmpeg-ndk30-${{ hashFiles('tools/build_ffmpeg_android.sh') }}
+
+      - name: Build FFmpeg for Android
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/30.0.16248370 bash tools/build_ffmpeg_android.sh
+
+      - name: Build OpenSSL for Android
+        run: ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/30.0.16248370 bash tools/build_openssl_android.sh
+
+      - uses: actions/cache@v4
+        with:
+          path: .cmake-deps
+          key: android-cmake-deps-ndk30-${{ hashFiles('cmake/deps.cmake') }}
+
+      - id: cache-shaderc
+        uses: actions/cache@v4
+        with:
+          path: .host-shaderc
+          key: host-shaderc-${{ runner.os }}-${{ hashFiles('cmake/deps.cmake') }}
+
+      - name: Build host shaderc
+        if: steps.cache-shaderc.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libgl1-mesa-dev
+          BGFX_TAG=$(grep -A1 'bgfx.cmake.git' cmake/deps.cmake | sed -n 's/.*GIT_TAG *//p')
+          git clone --depth 1 --branch "$BGFX_TAG" --recurse-submodules --shallow-submodules \
+            https://github.com/bkaradzic/bgfx.cmake.git "$RUNNER_TEMP/bgfx"
+          cmake -S "$RUNNER_TEMP/bgfx" -B "$RUNNER_TEMP/bgfx-build" -DCMAKE_BUILD_TYPE=Release \
+            -DBGFX_BUILD_EXAMPLES=OFF -DBGFX_BUILD_TESTS=OFF -DBGFX_BUILD_TOOLS=ON -DBGFX_BUILD_TOOLS_SHADER=ON \
+            -DBGFX_BUILD_TOOLS_TEXTURE=OFF -DBGFX_BUILD_TOOLS_GEOMETRY=OFF -DBGFX_BUILD_TOOLS_BIN2C=OFF \
+            -DBGFX_INSTALL=OFF -DBGFX_CUSTOM_TARGETS=OFF
+          cmake --build "$RUNNER_TEMP/bgfx-build" --target shaderc --parallel "$(nproc)"
+          mkdir -p .host-shaderc
+          cp "$RUNNER_TEMP/bgfx-build/cmake/bgfx/shaderc" .host-shaderc/
+
+      - name: Install host shaderc
+        run: |
+          mkdir -p .cmake-deps/bgfx-build/cmake/bgfx
+          cp .host-shaderc/shaderc .cmake-deps/bgfx-build/cmake/bgfx/shaderc
+
+      - name: Write local.properties and the signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > platform/android/local.properties
+          echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.31.6" >> platform/android/local.properties
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > platform/android/zdon-release.jks
+            printf 'storeFile=zdon-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" "${{ secrets.ANDROID_KEY_ALIAS }}" \
+              "${{ secrets.ANDROID_KEY_PASSWORD }}" > platform/android/keystore.properties
+          else
+            # no key: sign the release APK with a debug key made here (installable, but changes every run)
+            keytool -genkeypair -keystore platform/android/zdon-debug.jks -storepass android -keypass android \
+              -alias zdon -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Z-DON debug" -noprompt
+            printf 'storeFile=zdon-debug.jks\nstorePassword=android\nkeyAlias=zdon\nkeyPassword=android\n' \
+              > platform/android/keystore.properties
+          fi
+
+      - name: Build APK
+        working-directory: platform/android
+        env:
+          NETWORK_AUTH_KEY: ${{ secrets.NETWORK_AUTH_KEY }}
+        run: ./gradlew assembleRelease --no-daemon -PgfxBackend=bgfx
+
+      - name: Name the APK
+        run: |
+          mkdir -p release
+          cp platform/android/app/build/outputs/apk/release/app-release.apk release/Z-DON-Android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Z-DON-Android
+          path: release/Z-DON-Android.apk
+          if-no-files-found: error
+
+  release:
+    name: Upload to the rolling release
+    needs: [linux, macos, android]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Songs and Skins from the Windows zip
+        run: |
+          gh release download "$RELEASE_TAG" --pattern Z-DON-windows.zip --dir win
+          mkdir -p common
+          unzip -q win/Z-DON-windows.zip 'Songs/*' 'Skins/*' -d common || true
+          ls common
+
+      - name: Zip and upload
+        run: |
+          shopt -s nullglob
+          files=()
+          for os in Linux macOS; do
+            d="artifacts/Z-DON-$os"
+            [ -d "$d" ] || { echo "no $os build"; continue; }
+            chmod +x "$d/YataiDON"
+            cp -r common/. "$d/"
+            (cd "$d" && zip -qr "$GITHUB_WORKSPACE/Z-DON-$(echo $os | tr '[:upper:]' '[:lower:]').zip" .)
+            files+=("Z-DON-$(echo $os | tr '[:upper:]' '[:lower:]').zip")
+          done
+          [ -f artifacts/Z-DON-Android/Z-DON-Android.apk ] && cp artifacts/Z-DON-Android/Z-DON-Android.apk Z-DON-android.apk \
+            && files+=(Z-DON-android.apk)
+          ls -l "${files[@]}"
+          [ ${#files[@]} -gt 0 ] && gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          echo "uploaded: ${files[*]} (version ${{ inputs.version || github.sha }})"

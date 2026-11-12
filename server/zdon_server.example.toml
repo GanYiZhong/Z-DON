@@ -59,3 +59,4 @@ forge_url = "https://forge.taiko.ac"
 release_repo = ""               # e.g. "GanYiZhong/Z-DON"
 tag = "rolling"
 asset = "Z-DON-windows.zip"
+workflow = ""                   # e.g. "zdon-release.yml": then also start the Linux / macOS / Android builds
