@@ -24,7 +24,9 @@ import json
 import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 from zdon_credit import Credit
 from zdon_site_me import ME_CSS, MePages
@@ -119,7 +121,7 @@ def crown_badge(c) -> str:
 class Site(StatsPages, MePages):
     # "/me" only as a whole segment: the game's API has /medals (and /song_ranking: songs pages are /songs, /song/)
     PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css",
-                "/song/", "/tables/", "/cosm/")
+                "/song/", "/tables/", "/cosm/", "/forge/")
     PAGES = ("/", "/me", "/admin", "/songs", "/leaderboard", "/tables")
 
     def __init__(self, cfg: dict, store, nonces):
@@ -278,6 +280,8 @@ class Site(StatsPages, MePages):
             self.game_account(req)
         elif path == "/auth/callback":
             self.callback(req, query)
+        elif path == "/forge/songs" or path.startswith("/forge/songs/"):
+            self.forge_songs(req, path[len("/forge/songs"):])
         else:
             self.page(req, "找不到", "<h1>找不到這一頁</h1>", 404)
 
@@ -420,6 +424,49 @@ class Site(StatsPages, MePages):
         accounts = [{"access_code": r["access_code"], "username": r["username"]} for r in self._linked(req.sess["uid"])]
         self._json(req, 200, {"logged_in": True, "email": req.sess.get("email", ""), "accounts": accounts,
                               "csrf": self._csrf(req.sess)})
+
+    # the web game (/play): the member's own TaikoForge charts, asked from TaikoForge's partner API
+    # (taikoforge/partner.py) by this server, signed with the SSO secret: GET /forge/songs (the list),
+    # /forge/songs/<job>/tja, /forge/songs/<job>/audio (OGG)
+
+    _FORGE_JOB = re.compile(r"^/([0-9a-f]{32})/(tja|audio)$")
+
+    def forge_songs(self, req, rest: str):
+        if not req.sess:
+            self._json(req, 200, {"logged_in": False, "songs": []})
+            return
+        if rest:
+            m = self._FORGE_JOB.match(rest)
+            if not m:
+                self._json(req, 404, {"detail": "not found"})
+                return
+            rest = f"/{m.group(1)}/{m.group(2)}"
+        client = self.sso_url.rstrip("/").rsplit("/", 1)[-1] or "zdon"
+        path = f"/partner/{client}/songs{rest}"
+        query = urllib.parse.urlencode({"uid": req.sess["uid"]})
+        ts = str(int(time.time()))
+        sig = hmac.new(self.sso_secret.encode(), f"GET\n{path}\n{query}\n{ts}".encode(), hashlib.sha256).hexdigest()
+        r = urllib.request.Request(f"{self.forge_url}{path}?{query}",
+                                   headers={"X-TF-Time": ts, "X-TF-Sig": sig, "User-Agent": "zdon-site"})
+        try:
+            with urllib.request.urlopen(r, timeout=180) as resp:  # the first audio of a song may be converted
+                body = resp.read()
+                ctype = resp.headers.get("Content-Type", "application/octet-stream")
+                status = resp.status
+        except urllib.error.HTTPError as e:
+            self._json(req, e.code if e.code in (401, 403, 404) else 502, {"detail": f"TaikoForge: HTTP {e.code}"})
+            return
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            self._json(req, 502, {"detail": f"TaikoForge: {e}"})
+            return
+        if not rest:
+            try:
+                songs = json.loads(body).get("songs", [])
+            except ValueError:
+                songs = []
+            self._json(req, 200, {"logged_in": True, "songs": songs})
+            return
+        req.send(status, body, ctype, {"Cache-Control": "no-store"})
 
     def new_game_account(self, req, form):
         uid = req.sess["uid"]
