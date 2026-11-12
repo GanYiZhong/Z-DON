@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 
 #include "../libs/gfx/color_utils.h"
@@ -27,7 +28,23 @@ public:
     // the player's overlay pass runs before the screen draws the large drums over it: drawn later, by
     // PracticePlayer::draw_large_drum_hits, or the don / ka colour never shows
     void draw(float /*y*/) override {}
-    void draw_large() { tex.draw_texture(t_drum, {.fade = fade->attribute, .index = player_index}); }
+    void draw_large() {
+        const auto i = static_cast<size_t>(player_index);
+        if (type != DrumType::DON || !t_drum || i >= t_drum->x.size() || i >= t_drum->x2.size()) {
+            tex.draw_texture(t_drum, {.fade = fade->attribute, .index = player_index});
+            return;
+        }
+        // Z-DON: the skin's don flash covers the whole face; light only the half that was hit, as the input
+        // test does (InputTestDrumEffect) and as the kat rims do
+        const float left = static_cast<float>(t_drum->x[i]);
+        const float centre = left + static_cast<float>(t_drum->x2[i]) / 2.0f;
+        const float right = left + static_cast<float>(t_drum->x2[i]);
+        const int sx = virtual_to_screen_x(side == Side::LEFT ? left : centre);
+        const int ex = virtual_to_screen_x(side == Side::LEFT ? centre : right);
+        begin_scissor_mode(sx, 0, std::max(0, ex - sx), get_render_height());
+        tex.draw_texture(t_drum, {.fade = fade->attribute, .index = player_index});
+        end_scissor_mode();
+    }
 };
 
 class PracticePlayer : public Player {
