@@ -200,10 +200,11 @@ class Site(StatsPages, MePages):
         else:
             who = ""
         note = f'<p class="flash{" err" if err else ""}">{esc(flash)}</p>' if flash else ""
+        play_nav = '<a href="/play/"><b>遊玩遊戲</b></a>' if self.web_ready() else ""
         doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} - {esc(self.name)}</title>
 <link rel="stylesheet" href="/site.css?v={CSS_VERSION}"></head><body>
-<header><div class="in"><a class="logo" href="/">Z-<span>DON</span></a><nav><a href="/download">下載</a>
+<header><div class="in"><a class="logo" href="/">Z-<span>DON</span></a><nav>{play_nav}<a href="/download">下載</a>
 <a href="/songs">歌曲</a><a href="/leaderboard">排行</a><a href="/tables">難易度表</a><a href="/skins">Skin</a></nav>
 <div>{who}</div></div></header>
 <main><div class="in">{note}{body}</div></main>
@@ -500,6 +501,10 @@ class Site(StatsPages, MePages):
             return row["title"]
         return h[:12] + "…"
 
+    def web_ready(self) -> bool:
+        """The web version is published (zdon_server.py publish-web), so /play/ has a game to open."""
+        return (Path(self.cfg["data_dir"]) / "web" / "YataiDON.html").is_file()
+
     def channels(self) -> list[tuple[str, str, Path]]:
         root = Path(self.cfg["data_dir"]) / "update"
         out = []
@@ -539,8 +544,13 @@ class Site(StatsPages, MePages):
     def home(self, req):
         ch = self.channels()
         latest = ch[0] if ch else None
-        dl = (f'<p><a class="btn" href="/download">下載 Z-DON</a> <span class="muted small">{esc(self.version_label(latest[1], latest[2]))} 版</span></p>'
-              if latest else '<p class="muted">還沒有發布的版本。</p>')
+        play = '<a class="btn" href="/play/">遊玩遊戲</a> ' if self.web_ready() else ''
+        dl = (f'<p>{play}<a class="btn{" sec" if play else ""}" href="/download">下載 Z-DON</a> '
+              f'<span class="muted small">{esc(self.version_label(latest[1], latest[2]))} 版</span></p>'
+              if latest else (f'<p>{play}</p>' if play else '<p class="muted">還沒有發布的版本。</p>'))
+        if play:
+            dl += ('<p class="small muted">遊玩遊戲：直接在瀏覽器裡玩，不用安裝（電腦版 Chrome、Edge 或 Firefox，'
+                   '用鍵盤打）。登入後成績會跟著帳號，也能玩你在 TaikoForge 做的譜面。</p>')
         recent = self.s.q("""SELECT s.received_at, s.hash, s.difficulty, s.score, s.crown, u.username, u.rowid AS pid
                              FROM scores s JOIN users u USING(access_code) ORDER BY s.id DESC LIMIT 12""")
         stats = self.s.one("SELECT (SELECT COUNT(*) FROM users) AS players, (SELECT COUNT(*) FROM scores) AS plays")
@@ -572,7 +582,8 @@ class Site(StatsPages, MePages):
     def download(self, req):
         ch = [c for c in self.channels() if (c[2] / "package.zip").is_file()]
         if not ch:
-            self.page(req, "下載", '<h1>下載</h1><p class="muted">還沒有可以下載的版本。</p>')
+            play = '<p><a href="/play/">直接在瀏覽器遊玩 →</a></p>' if self.web_ready() else ''
+            self.page(req, "下載", f'<h1>下載</h1><p class="muted">還沒有可以下載的版本。</p>{play}')
             return
         # the main channel first ("windows"), the rest as small links
         ch.sort(key=lambda c: (c[0] != "windows", c[0]))
@@ -581,6 +592,8 @@ class Site(StatsPages, MePages):
         # the version in the link: a cache in between never hands out an older build under the same address
         others = "".join(f' <a href="/download/{esc(n)}.zip?v={esc(urllib.parse.quote(v))}">{esc(n)}</a>'
                          for n, v, _ in ch[1:])
+        play = ('<p style="text-align:center">不想安裝？<a href="/play/">直接在瀏覽器遊玩 →</a></p>'
+                if self.web_ready() else '')
         body = f"""<div class="card hero" style="text-align:center;padding:2.2em 1.3em">
 <h1 style="margin-bottom:.3em">下載 Z-DON</h1>
 <p><a class="btn" style="font-size:1.25em;padding:.7em 2.2em" href="/download/{esc(name)}.zip?v={esc(urllib.parse.quote(version))}">下載（Windows）</a></p>
@@ -590,7 +603,7 @@ class Site(StatsPages, MePages):
 <li>執行 <b>YataiDON.exe</b></li>
 <li>第一次開啟時選要用的 skin，會自動下載（約 3～5 分鐘）</li>
 </ol></div>
-<p class="small muted" style="text-align:center">之後有新版時，遊戲標題畫面會提示，按 <b>F9</b> 就會自動更新。{('<br>其他版本：' + others) if others else ''}</p>"""
+<p class="small muted" style="text-align:center">之後有新版時，遊戲標題畫面會提示，按 <b>F9</b> 就會自動更新。{('<br>其他版本：' + others) if others else ''}</p>{play}"""
         self.page(req, "下載", body)
 
     def download_zip(self, req, channel: str):
