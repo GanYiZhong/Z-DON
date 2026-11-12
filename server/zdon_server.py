@@ -888,14 +888,24 @@ def make_handler(cfg: dict, api: Api, site):
             ctype = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                      ".wasm": "application/wasm", ".data": "application/octet-stream"}.get(
                 f.suffix, mimetypes.guess_type(f.name)[0] or "application/octet-stream")
-            size = f.stat().st_size
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(size))
+            st = f.stat()
+            size = st.st_size
+            # the browser keeps a copy and asks whether it is still current (no-cache = revalidate): a later
+            # visit gets 304 instead of the 100+ MB data package again; publish-web changes the size or time
+            etag = f'"{size:x}-{st.st_mtime_ns:x}"'
+            fresh = etag in [t.strip() for t in self.headers.get("If-None-Match", "").split(",")]
+            self.send_response(304 if fresh else 200)
+            self.send_header("ETag", etag)
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            if fresh:
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(size))
             self.end_headers()
             if self.command != "HEAD":
                 with open(f, "rb") as fh:
