@@ -242,7 +242,7 @@ private:
     void initialize_practice_chart();
     void sync_branch_display();
     void pause_practice();
-    void resume_practice();
+    void resume_practice(Side don_side = Side::LEFT); // the side the resuming don was hit on
     void open_practice_menu();
     void change_practice_speed(bool down, bool up);
     void restart_practice();

@@ -299,7 +299,7 @@ void PracticeGameScreen::pause_practice() {
     scrobble_time = bars[scrobble_index].hit_ms;
 }
 
-void PracticeGameScreen::resume_practice() {
+void PracticeGameScreen::resume_practice(Side don_side) {
     if (!clock.is_paused()) {
         return;
     }
@@ -316,7 +316,7 @@ void PracticeGameScreen::resume_practice() {
 
     if (practice_player) {
         practice_player->paused = false;
-        practice_player->spawn_scrobble_effect(DrumType::DON, Side::LEFT, static_cast<int>(global_data.player_num) - 1);
+        practice_player->spawn_scrobble_effect(DrumType::DON, don_side, static_cast<int>(global_data.player_num) - 1);
     }
 
     set_touch_drum_enabled(true);
@@ -944,8 +944,11 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
             return std::nullopt;
         }
 
-        if (zdon_don_gesture(is_l_don_pressed(global_data.player_num), is_r_don_pressed(global_data.player_num))) {
-            resume_practice();
+        const bool l_don = is_l_don_pressed(global_data.player_num);
+        const bool r_don = is_r_don_pressed(global_data.player_num);
+        if (zdon_don_gesture(l_don, r_don)) {
+            // a don held for the branch gesture's window resumes later, with neither key pressed this frame
+            resume_practice((r_don && !l_don) || (!l_don && !r_don && zdon_don_right) ? Side::RIGHT : Side::LEFT);
         }
 
         bool speed_down = other_drum_pressed(global_data.player_num, PracticeDrumRole::L_KAT);
