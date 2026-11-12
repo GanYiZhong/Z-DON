@@ -157,6 +157,10 @@ class StatsPages:
                      key=lambda kv: -kv[1]["rating"])[:BEST_N]
         return sum(v["rating"] for _, v in top) / BEST_N, top
 
+    @staticmethod
+    def invalidate_board():
+        StatsPages._board_cache = (0.0, [])
+
     def leaderboard_rows(self) -> list[dict]:
         """Every player with a rated play, best first (kept a minute)."""
         at, rows = StatsPages._board_cache
@@ -172,10 +176,11 @@ class StatsPages:
             p["dfc"] += crown >= 3
             p["ratings"].append(play_rating(self.tables.constant.get((r["hash"], r["difficulty"])), r["score"], crown))
         users = {u["access_code"]: u for u in self.s.q("SELECT rowid AS pid, access_code, username FROM users")}
+        off = self.hidden_codes("no_board") | self.hidden_codes("private")  # zdon_site_me.py: privacy
         rows = []
         for code, p in per.items():
             u = users.get(code)
-            if u is None:
+            if u is None or code in off:
                 continue
             rating = sum(sorted(p["ratings"], reverse=True)[:BEST_N]) / BEST_N
             rows.append({"pid": u["pid"], "username": u["username"], "rating": rating, "clear": p["clear"],
@@ -219,7 +224,7 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         pid = query.get("p", "")
         if pid.isdigit():
             u = self.s.one("SELECT access_code, username FROM users WHERE rowid=?", (int(pid),))
-            if u:
+            if u and (not self.prefs(u["access_code"])["private"] or self.viewer_owns(req, u["access_code"])):
                 return [u["access_code"]], u["username"], f"?p={pid}"
         if req.sess:
             linked = self._linked(req.sess["uid"])
@@ -367,6 +372,9 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         if u is None:
             self.page(req, "找不到", "<h1>找不到這位玩家</h1>", 404)
             return
+        if self.prefs(u["access_code"])["private"] and not self.viewer_owns(req, u["access_code"]):
+            self.page(req, u["username"], f'<h1>{S.esc(u["username"])}</h1><p class="muted">這位玩家的頁面不公開。</p>')
+            return
         code = u["access_code"]
         best = self._best_charts([code])
         rating, top = self._rating_of(best)
@@ -431,6 +439,9 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         u = self.s.one("SELECT rowid AS pid, * FROM users WHERE rowid=?", (int(pid),)) if pid.isdigit() else None
         if u is None:
             self.page(req, "找不到", "<h1>找不到這位玩家</h1>", 404)
+            return
+        if self.prefs(u["access_code"])["private"] and not self.viewer_owns(req, u["access_code"]):
+            self.page(req, u["username"], f'<h1>{S.esc(u["username"])}</h1><p class="muted">這位玩家的頁面不公開。</p>')
             return
         q = (query.get("q") or "").strip().lower()
         d = query.get("d", "")

@@ -27,6 +27,7 @@ import time
 import urllib.parse
 
 from zdon_credit import Credit
+from zdon_site_me import ME_CSS, MePages
 from zdon_site_stats import STATS_CSS, StatsPages
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -81,7 +82,10 @@ input[type=text]{padding:.45em .6em;border:1px solid var(--line);border-radius:6
 .flash{background:#e9f6ec;border:1px solid #bfe3c8;border-radius:8px;padding:.6em 1em}
 .flash.err{background:#fdeceb;border-color:#f3c3bf}footer{color:var(--muted);font-size:.85em;text-align:center;padding:2em}
 select{padding:.4em .5em;border:1px solid var(--line);border-radius:6px;font-size:1em;background:#fff}
-""" + STATS_CSS
+""" + STATS_CSS + ME_CSS
+
+
+CSS_VERSION = hashlib.sha256(CSS.encode()).hexdigest()[:10]  # in the link: a changed sheet is a new address
 
 
 def esc(v) -> str:
@@ -112,10 +116,10 @@ def crown_badge(c) -> str:
     return f'<span class="crown {CROWN_CLASS[c]}">{CROWNS[c]}</span>' if c in CROWNS else ""
 
 
-class Site(StatsPages):
+class Site(StatsPages, MePages):
     # "/me" only as a whole segment: the game's API has /medals (and /song_ranking: songs pages are /songs, /song/)
     PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css",
-                "/song/", "/tables/")
+                "/song/", "/tables/", "/cosm/")
     PAGES = ("/", "/me", "/admin", "/songs", "/leaderboard", "/tables")
 
     def __init__(self, cfg: dict, store, nonces):
@@ -133,6 +137,7 @@ class Site(StatsPages):
         # the TaikoForge accounts (uids) that review reports on /admin
         self.admins = {str(a) for a in site.get("admins", [])}
         self.credit = Credit(store)
+        self.init_me()
         self.secure = self.public_url.startswith("https://")
         key_file = Path(cfg["data_dir"]) / "site_secret.key"
         secret = str(site.get("session_secret", ""))
@@ -195,7 +200,7 @@ class Site(StatsPages):
         note = f'<p class="flash{" err" if err else ""}">{esc(flash)}</p>' if flash else ""
         doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} - {esc(self.name)}</title>
-<link rel="stylesheet" href="/site.css"></head><body>
+<link rel="stylesheet" href="/site.css?v={CSS_VERSION}"></head><body>
 <header><div class="in"><a class="logo" href="/">Z-<span>DON</span></a><nav><a href="/download">下載</a>
 <a href="/songs">歌曲</a><a href="/leaderboard">排行</a><a href="/tables">難易度表</a><a href="/skins">Skin</a></nav>
 <div>{who}</div></div></header>
@@ -220,6 +225,8 @@ class Site(StatsPages):
             routes = {"/auth/logout": self.logout, "/auth/game-account/new": self.new_game_account,
                       "/me/link": self.link, "/me/unlink": self.unlink,
                       "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge,
+                      "/me/profile": self.save_profile, "/me/look": self.save_look, "/me/privacy": self.save_privacy,
+                      "/me/score/delete": self.delete_score,
                       "/admin/resolve": self.admin_resolve}
             fn = routes.get(path)
             if fn is None:
@@ -255,6 +262,12 @@ class Site(StatsPages):
             self.player_page(req, path[len("/player/"):])
         elif path == "/me":
             self.me(req, query)
+        elif path == "/me/scores":
+            self.my_scores(req, query)
+        elif path == "/me/export.csv":
+            self.export_csv(req, query)
+        elif path.startswith("/cosm/"):
+            self.cosm_icon(req, path[len("/cosm/"):])
         elif path == "/admin":
             self.admin(req)
         elif path == "/auth/login":
@@ -612,35 +625,6 @@ class Site(StatsPages):
 
     def _owns(self, uid: str, code: str) -> bool:
         return self.s.one("SELECT 1 FROM member_links WHERE forge_uid=? AND access_code=?", (uid, code)) is not None
-
-    def me(self, req, query, flash: str = "", err: bool = False):
-        if not req.sess:
-            req.redirect("/auth/login")
-            return
-        csrf = self._csrf(req.sess)
-        linked = self._linked(req.sess["uid"])
-        parts = [f"<h1>我的頁面</h1><p class='muted small'>TaikoForge 帳號：{esc(req.sess['email'])}"
-                 f"（<a href='{esc(self.forge_url)}/account'>管理帳號</a>）</p>"]
-        if linked:
-            for r in linked:
-                masked = r["access_code"][:4] + "…" + r["access_code"][-4:]
-                parts.append(f"""<div class="card"><h2 style="margin-top:0"><a href="/player/{r["pid"]}">{esc(r["username"])}</a>
-<span class="muted small">遊戲帳號 {esc(masked)}</span></h2>
-<form method="post" action="/me/rename" style="display:inline"><input type="hidden" name="csrf" value="{csrf}">
-<input type="hidden" name="code" value="{esc(r["access_code"])}"><input type="text" name="name" maxlength="32"
-value="{esc(r["username"])}"> <button class="btn small sec">改名</button></form>
-<form method="post" action="/me/unlink" style="display:inline;margin-left:1em"><input type="hidden" name="csrf" value="{csrf}">
-<input type="hidden" name="code" value="{esc(r["access_code"])}"><button class="btn small sec">解除綁定</button></form>
-</div>""")
-        else:
-            parts.append('<p class="muted">還沒有綁定遊戲帳號。</p>')
-        parts.append(f"""<div class="card"><h2 style="margin-top:0">綁定遊戲帳號</h2>
-<p class="small">遊戲帳號的 access code 在遊戲資料夾 <code>config.toml</code> 的 <code>[network]</code>
-<code>access_code_1</code>（20 位數字）。綁定後可以在這裡改名、從排行頁把歌送到遊戲。</p>
-<form method="post" action="/me/link"><input type="hidden" name="csrf" value="{csrf}">
-<input type="text" name="code" inputmode="numeric" autocomplete="off" placeholder="access code">
-<button class="btn small">綁定</button></form></div>""")
-        self.page(req, "我的頁面", "".join(parts), flash=flash, err=err)
 
     def link(self, req, form):
         uid = req.sess["uid"]
