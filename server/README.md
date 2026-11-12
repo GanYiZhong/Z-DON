@@ -108,6 +108,15 @@ python server\zdon_server.py jump <access code> --score-id <成績編號> # 或�
 Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、排行（可搜尋曲名；曲名由遊戲送成績時附上）、
 玩家頁、我的頁面（輸入 access code 綁定遊戲帳號、改名、從排行頁把歌送到遊戲的選曲畫面）。
 
+### 網頁版（/play）
+
+網頁版（Z-DON-Web）也由這個伺服器提供：`python zdon_server.py publish-web <Z-DON-Web>/build-web/bin` 會把
+YataiDON.html/.js/.wasm/.data 放到 `data/web`，網址是 `/play/`（附 COOP/COEP 標頭，瀏覽器的多執行緒需要）。
+網頁開始前會問 `/auth/game-account`：沒登入就給「用 TaikoForge 登入」（`/auth/login?next=/play/`，登入完回到
+`/play/`）；登入了就用會員綁定的遊戲帳號玩（多個時讓玩家選、沒有就 `POST /auth/game-account/new` 建一個並綁定）。
+TaikoForge 那邊不用改（回呼網址一樣是 `/auth/callback`）。網頁版建置時要編進同一把 `auth_key`
+（Z-DON-Web 的 `tools/zdon_web_build.sh` 預設讀 Z-DON 的 `.env`）。
+
 ### 設定
 
 1. TaikoForge 那邊（forge.taiko.ac 的環境變數）：

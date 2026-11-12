@@ -870,7 +870,41 @@ def make_handler(cfg: dict, api: Api, site):
             with open(path, "rb") as f:
                 shutil.copyfileobj(f, self.wfile, 1 << 20)
 
+        def _play(self, path: str) -> bool:
+            # /play: the web version (publish-web), with the headers its threads need (cross-origin isolation)
+            if path == "/play":
+                self.send_response(301)
+                self.send_header("Location", "/play/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            if not path.startswith("/play/"):
+                return False
+            rel = path[len("/play/"):] or "YataiDON.html"
+            f = safe_join(data / "web", rel)
+            if f is None or not f.is_file():
+                self._json(404, {"detail": "not found"})
+                return True
+            ctype = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                     ".wasm": "application/wasm", ".data": "application/octet-stream"}.get(
+                f.suffix, mimetypes.guess_type(f.name)[0] or "application/octet-stream")
+            size = f.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.end_headers()
+            if self.command != "HEAD":
+                with open(f, "rb") as fh:
+                    shutil.copyfileobj(fh, self.wfile, 1 << 20)
+            return True
+
         def _published(self, path: str) -> bool:
+            if self._play(path):
+                return True
             # /update/<channel>/(version.txt|checksums.sha256|files/<rel>)
             if path.startswith("/update/"):
                 self._file(safe_join(data / "update", path[len("/update/"):]))
@@ -1104,6 +1138,32 @@ def cmd_publish_skin(cfg: dict, args) -> None:
           f"  {args.branch}")
 
 
+def cmd_publish_web(cfg: dict, args) -> None:
+    # the web version's build folder (Z-DON-Web build-web/bin) -> data/web, served at /play
+    src = Path(args.src).resolve()
+    names = ["YataiDON.html", "YataiDON.js", "YataiDON.wasm", "YataiDON.data"]
+    missing = [n for n in names if not (src / n).is_file()]
+    if missing:
+        sys.exit(f"{src}: missing {', '.join(missing)}")
+    dest = cfg["data_dir"] / "web"
+    tmp = dest.with_name("web.new")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    for n in names:
+        shutil.copy2(src / n, tmp / n)
+    old = dest.with_name("web.old")
+    if old.exists():
+        shutil.rmtree(old)
+    if dest.exists():
+        dest.rename(old)
+    tmp.rename(dest)
+    if old.exists():
+        shutil.rmtree(old)
+    size = sum((dest / n).stat().st_size for n in names)
+    print(f"published the web version: {size / 1048576:.0f} MB, served at /play/")
+
+
 def cmd_users(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     for r in store.q("""SELECT u.access_code, u.username, u.idm IS NOT NULL AS card, COUNT(s.id) AS plays
@@ -1209,6 +1269,8 @@ def main(argv=None) -> None:
     s.add_argument("--name")
     s.add_argument("--branch", default="main")
     s.add_argument("--parent", help="the skin it inherits from (default: Graphics/skin_config.json)")
+    s = sub.add_parser("publish-web", help="publish the web version (Z-DON-Web build-web/bin), served at /play/")
+    s.add_argument("src")
     sub.add_parser("users", help="list players and their access codes")
     s = sub.add_parser("jump", help="send a player's game to a song or a replay")
     s.add_argument("access_code")
@@ -1226,7 +1288,8 @@ def main(argv=None) -> None:
     s.add_argument("name")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
-    {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "users": cmd_users,
+    {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "publish-web": cmd_publish_web,
+     "users": cmd_users,
      "jump": cmd_jump, "rename": cmd_rename, "recode": cmd_recode,
      "import-local": cmd_import_local}[args.cmd](cfg, args)
 

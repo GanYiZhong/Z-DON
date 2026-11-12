@@ -7,6 +7,10 @@ This site keeps only the member's TaikoForge id, the email to show them, and whi
 
 Pages: home, download (update channels), skins, charts and their rankings, player profiles, my page
 (link a game account, rename it, send a song to the game).
+
+The web version of the game (/play, served by zdon_server.py) logs in the same way: /auth/login?next=/play/
+returns there, then the page asks /auth/game-account for the member's game accounts and may create one with
+POST /auth/game-account/new; it plays as the account the player picks.
 """
 from __future__ import annotations
 
@@ -207,7 +211,8 @@ class Site:
             if not self._post_ok(req, form):
                 self.page(req, "無效的請求", "<h1>無效的請求</h1><p>請重新整理頁面再試一次。</p>", 403)
                 return
-            routes = {"/auth/logout": self.logout, "/me/link": self.link, "/me/unlink": self.unlink,
+            routes = {"/auth/logout": self.logout, "/auth/game-account/new": self.new_game_account,
+                      "/me/link": self.link, "/me/unlink": self.unlink,
                       "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge,
                       "/admin/resolve": self.admin_resolve}
             fn = routes.get(path)
@@ -237,7 +242,9 @@ class Site:
         elif path == "/admin":
             self.admin(req)
         elif path == "/auth/login":
-            self.login(req)
+            self.login(req, query)
+        elif path == "/auth/game-account":
+            self.game_account(req)
         elif path == "/auth/callback":
             self.callback(req, query)
         else:
@@ -310,15 +317,23 @@ class Site:
     # ------------------------------------------------------------------------------------------------------------
     # login (TaikoForge single sign-on)
 
-    def login(self, req):
+    @staticmethod
+    def _local_next(nxt: str) -> str:
+        # only a path on this site (no //host or scheme): where a login returns to
+        return nxt if nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt and len(nxt) < 200 else ""
+
+    def login(self, req, query: dict[str, str] | None = None):
         if not (self.sso_url and self.sso_secret):
             self.page(req, "登入", "<h1>登入尚未設定</h1><p class='muted'>站長還沒設定 [site] sso_url / sso_secret。</p>",
                       503)
             return
         state = secrets.token_urlsafe(24)
         sep = "&" if "?" in self.sso_url else "?"
-        req.redirect(self.sso_url + sep + urllib.parse.urlencode({"state": state}),
-                     [self._cookie("zdon_sso_state", state, 600)])
+        cookies = [self._cookie("zdon_sso_state", state, 600)]
+        nxt = self._local_next((query or {}).get("next", ""))
+        if nxt:
+            cookies.append(self._cookie("zdon_sso_next", urllib.parse.quote(nxt, safe="/"), 600))
+        req.redirect(self.sso_url + sep + urllib.parse.urlencode({"state": state}), cookies)
 
     def callback(self, req, query):
         ticket = query.get("ticket", "")
@@ -336,8 +351,10 @@ class Site:
                           ON CONFLICT(forge_uid) DO UPDATE SET email=excluded.email, last_login=excluded.last_login""",
                        (uid, email, now, now))
         payload = b64(json.dumps({"uid": uid, "email": email, "exp": now + SESSION_DAYS * 86400}).encode())
-        req.redirect("/me", [clear_state,
-                             self._cookie("zdon_session", f"{payload}.{self._sign(payload)}", SESSION_DAYS * 86400)])
+        nxt = self._local_next(urllib.parse.unquote(req.cookies.get("zdon_sso_next", "")))
+        req.redirect(nxt or "/me", [clear_state, self._cookie("zdon_sso_next", "", 0),
+                                    self._cookie("zdon_session", f"{payload}.{self._sign(payload)}",
+                                                 SESSION_DAYS * 86400)])
 
     def verify_ticket(self, ticket: str, state: str) -> dict | None:
         if not ticket or "." not in ticket or not state or not self.sso_secret:
@@ -357,6 +374,38 @@ class Site:
         if not self.nonces.fresh("sso:" + str(c.get("nonce", ""))):
             return None
         return c
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the web game (/play): the member's game accounts
+
+    def _json(self, req, status: int, obj) -> None:
+        req.send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8",
+                 {"Cache-Control": "no-store"})
+
+    def game_account(self, req):
+        if not req.sess:
+            self._json(req, 200, {"logged_in": False, "login_url": "/auth/login?next=/play/"})
+            return
+        accounts = [{"access_code": r["access_code"], "username": r["username"]} for r in self._linked(req.sess["uid"])]
+        self._json(req, 200, {"logged_in": True, "email": req.sess.get("email", ""), "accounts": accounts,
+                              "csrf": self._csrf(req.sess)})
+
+    def new_game_account(self, req, form):
+        uid = req.sess["uid"]
+        name = (form.get("name") or "").strip()[:32] or "Player"
+        now = int(time.time())
+        with self.s.lock:
+            if len(self._linked(uid)) >= 10:
+                self._json(req, 400, {"detail": "too many game accounts"})
+                return
+            while True:
+                code = str(secrets.randbelow(9 * 10**19) + 10**19)  # 20 digits, as zdon_server.new_access_code
+                if not self.s.one("SELECT 1 FROM users WHERE access_code=?", (code,)):
+                    break
+            self.s.run("INSERT INTO users(access_code, username, idm, created_at) VALUES (?,?,?,?)",
+                       (code, name, None, now))
+            self.s.run("INSERT OR IGNORE INTO member_links VALUES (?,?,?)", (code, uid, now))
+        self._json(req, 200, {"access_code": code, "username": name})
 
     def logout(self, req, form):
         req.redirect("/", [self._cookie("zdon_session", "", 0)])
