@@ -382,8 +382,8 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         rank = next((i for i, r in enumerate(board, 1) if r["pid"] == u["pid"]), None)
         plays = self.s.one("SELECT COUNT(*) AS n FROM scores WHERE access_code=?", (code,))["n"]
         crowns = [v["crown"] for v in best.values()]
-        title = f'<p class="muted" style="margin-top:-.4em">{S.esc(u["title"])}</p>' if u["title"] else ""
-        head = f"""<h1>{S.esc(u["username"])}</h1>{title}
+        from zdon_site_plate import PLATE_JS, nameplate_html
+        head = f"""<h1 style="display:flex;align-items:center;gap:.6em;flex-wrap:wrap">{nameplate_html(u["username"], u["title"] or "", int(u["title_bg"] or 0), 1.3)}</h1>{PLATE_JS}
 <div class="grid"><div class="card"><div class="muted small">Rating</div><div class="big">{rating:.2f}</div>
 <div class="small muted">{f'全站第 {rank} 名' if rank else '還沒有排名'}・<a href="/leaderboard">排行</a></div></div>
 <div class="card"><div class="muted small">遊玩</div><div class="big">{plays}</div><div class="small muted">{len(best)} 個譜面・

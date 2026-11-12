@@ -108,7 +108,7 @@ python server\zdon_server.py jump <access code> --score-id <成績編號> # 或�
 Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、歌曲 `/songs`（最多人玩的歌、可搜尋；曲名由遊戲送成績時附上，
 舊網址 `/charts` 也導到這裡）與歌曲頁 `/song/<hash>`（同曲名的所有難度排行）、單一譜面排行 `/chart/<hash>`（挑戰、送到遊戲）、
 Rating 排行 `/leaderboard`、難易度表 `/tables`、玩家頁（Rating、對照難易度表的王冠統計、Best 50、段位、最近遊玩）與
-全部成績 `/player/<id>/scores`（搜尋、難度、排序、分頁）、我的頁面（`zdon_site_me.py`：綁定遊戲帳號；每個帳號的名牌〔名字、稱號、底色〕、角色外觀〔三個顏色、頭飾＋身體或全身服裝、
+全部成績 `/player/<id>/scores`（搜尋、難度、排序、分頁）、我的頁面（`zdon_site_me.py`：綁定遊戲帳號；每個帳號的名牌〔名字、稱號、底色；照 PyTaikoGreen 的 nameplate.lua 用 skin 的圖片疊出來，字體是 skin 的 font.ttf 只切出顯示的字，zdon_site_plate.py〕、角色外觀〔三個顏色、頭飾＋身體或全身服裝、
 小夥伴，名稱與圖示取自已發布的 PyTaikoGreen skin 的 `Models/`，`force_unlock = false` 時只列已擁有的〕，遊戲下次登入時套用；
 信用分與紀錄、送出的檢舉結果、獎牌、AI 對戰勝場；不列入 Rating 排行、玩家頁不公開〔`member_prefs` 表〕；遊玩紀錄可刪除、匯出 CSV；
 從排行頁把歌送到遊戲的選曲畫面）。

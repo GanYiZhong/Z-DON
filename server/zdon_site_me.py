@@ -17,11 +17,9 @@ import urllib.parse
 from pathlib import Path
 
 import zdon_site as S
+from zdon_site_plate import PLATE_CSS, PLATE_JS, PlateFiles, nameplate_html
 
 TITLE_BG = {0: "1P", 1: "2P", 2: "木色", 3: "紫色", 4: "金色"}
-PLATE_CSS = {0: "linear-gradient(#ff6a4d,#d8321f)", 1: "linear-gradient(#4db8ff,#1f74d8)",
-             2: "linear-gradient(#c9935a,#8a5a2b)", 3: "linear-gradient(#b07ae0,#6a35a8)",
-             4: "linear-gradient(#ffe27a,#d9a400)"}
 COSM_KINDS = {"costume": "costume_icon", "head": "costume_head_icon", "body": "costume_body_icon", "puchichara": "acce"}
 OWNED_TYPE = {"costume": 2, "head": 3, "body": 4, "puchichara": 5}
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -34,9 +32,6 @@ CREATE TABLE IF NOT EXISTS member_prefs (
 """
 
 ME_CSS = """
-.plate{display:inline-flex;flex-direction:column;justify-content:center;min-width:15em;padding:.35em 1em;border-radius:10px;
-color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6);border:2px solid #2b2024;box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}
-.plate .t{font-size:.78em;opacity:.95}.plate .n{font-weight:800;font-size:1.15em}
 .acct-tabs{display:flex;gap:.4em;flex-wrap:wrap;margin:.4em 0 1em}.acct-tabs a,.acct-tabs span{padding:.3em .8em;border-radius:6px;
 border:1px solid var(--line);background:#fff}.acct-tabs span{background:var(--ink);color:#fff}
 .row{display:flex;gap:1em;flex-wrap:wrap;align-items:center;margin:.5em 0}.row label{min-width:5em;color:var(--muted);font-size:.9em}
@@ -44,7 +39,7 @@ border:1px solid var(--line);background:#fff}.acct-tabs span{background:var(--in
 input[type=color]{width:3em;height:2em;border:1px solid var(--line);border-radius:6px;padding:0;background:#fff}
 .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.6em}.kv div{background:#faf5ef;border-radius:8px;padding:.5em .8em}
 .kv b{display:block;font-size:1.4em}.danger{background:#fff;color:#c0392b;border:1px solid #f3c3bf}
-"""
+""" + PLATE_CSS
 
 
 def credit_reason(text: str) -> str:
@@ -64,6 +59,21 @@ class MePages:
     def init_me(self):
         with self.s.lock:
             self.s.db.executescript(PREFS_SCHEMA)
+        self.plates = PlateFiles(Path(self.cfg["data_dir"]) / "skins" / "PyTaikoGreen")
+
+    def plate_piece(self, req, name: str):
+        data = self.plates.piece(name)
+        if data is None:
+            req.send(404, b"", "image/png")
+            return
+        req.send(200, data, "image/png", {"Cache-Control": "max-age=86400"})
+
+    def plate_font(self, req, query):
+        data = self.plates.font(query.get("t", ""))
+        if data is None:
+            req.send(404, b"", "font/ttf")
+            return
+        req.send(200, data, "font/ttf", {"Cache-Control": "max-age=604800"})
 
     # ------------------------------------------------------------------------------------------------------------
     # costume data from the published PyTaikoGreen skin
@@ -98,6 +108,9 @@ class MePages:
 
     def cosm_icon(self, req, rest: str):
         kind, _, file = rest.partition("/")
+        if kind == "plate" and file.endswith(".png"):
+            self.plate_piece(req, file[:-4])
+            return
         d = self._models_dir()
         if kind in COSM_KINDS and d and re.fullmatch(r"\d{1,4}\.png", file):
             path = d / COSM_KINDS[kind] / file
@@ -169,17 +182,19 @@ class MePages:
         # nameplate
         bg = int(u["title_bg"] or 0)
         opts = "".join(f'<option value="{k}"{" selected" if k == bg else ""}>{v}</option>' for k, v in TITLE_BG.items())
-        styles = json.dumps(PLATE_CSS)
         out.append(f"""<div class="card"><h2 style="margin-top:0">名牌</h2>
-<div class="plate" id="plate" style="background:{PLATE_CSS.get(bg, PLATE_CSS[0])}"><span class="t" id="pt">{S.esc(u["title"] or "")}</span>
-<span class="n" id="pn">{S.esc(u["username"])}</span></div>
+<p>{nameplate_html(u["username"], u["title"] or "", bg, 1.6, ids=True)}</p>
 <form method="post" action="/me/profile">{hidden}
 <div class="row"><label>名字</label><input type="text" name="name" maxlength="32" value="{S.esc(u["username"])}"
- oninput="document.getElementById('pn').textContent=this.value"></div>
+ oninput="npText('np_n',this.value)"></div>
 <div class="row"><label>稱號</label><input type="text" name="title" maxlength="40" value="{S.esc(u["title"] or "")}"
- oninput="document.getElementById('pt').textContent=this.value"></div>
-<div class="row"><label>底色</label><select name="title_bg" onchange="document.getElementById('plate').style.background={S.esc(styles)}[this.value]">{opts}</select></div>
-<button class="btn small">儲存名牌</button></form></div>""")
+ oninput="npText('np_t',this.value)"></div>
+<div class="row"><label>底色</label><select name="title_bg" onchange="npBg(+this.value)">{opts}</select></div>
+<button class="btn small">儲存名牌</button></form></div>{PLATE_JS}
+<script>var npT;function npText(id,v){{document.getElementById(id).textContent=v;npFit();clearTimeout(npT);
+npT=setTimeout(function(){{npFont(document.getElementById('np_n').textContent+document.getElementById('np_t').textContent)}},300);}}
+function npBg(b){{document.getElementById('np_f').style.backgroundPosition='0 -'+(b*32)+'px';
+document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>""")
 
         # character
         names = self.cosm_names()

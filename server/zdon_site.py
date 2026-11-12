@@ -266,6 +266,8 @@ class Site(StatsPages, MePages):
             self.my_scores(req, query)
         elif path == "/me/export.csv":
             self.export_csv(req, query)
+        elif path == "/cosm/font.ttf":
+            self.plate_font(req, query)
         elif path.startswith("/cosm/"):
             self.cosm_icon(req, path[len("/cosm/"):])
         elif path == "/admin":
