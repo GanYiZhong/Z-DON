@@ -245,7 +245,7 @@ jobs:
         working-directory: platform/android
         env:
           NETWORK_AUTH_KEY: ${{ secrets.NETWORK_AUTH_KEY }}
-        run: ./gradlew assembleRelease --no-daemon -PgfxBackend=bgfx
+        run: ./gradlew assembleRelease --no-daemon -PgfxBackend=raylib   # Z-DON code draws through raylib (density, texture paths); not bgfx yet
 
       - name: Name the APK
         run: |
