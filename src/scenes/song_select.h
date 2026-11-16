@@ -117,6 +117,7 @@ protected:
     void arm_diff_select_timer(int seconds, double current_ms);
     bool diff_timer_extend_pending = false;
     bool diff_timer_extended = false;
+    virtual bool popup_open() { return player->neiro_selector.has_value() || player->modifier_selector.has_value(); }
 
     virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool shows_ai_assigned() { return false; }
@@ -124,6 +125,9 @@ protected:
     virtual bool mutes_enter_voice() { return false; } // the AI select (skin zdon_ai_no_enter_voice)
     virtual bool is_waiwai_screen() { return false; }
     virtual fs::path bgm_override() { return {}; }
+    fs::path bgm_dir;
+    bool bgm_is_box = false;
+    void update_box_bgm();
     virtual Screens get_game_screen_target() { return Screens::GAME; }
 
 public:

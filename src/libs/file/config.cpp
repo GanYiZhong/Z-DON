@@ -362,6 +362,7 @@ Config get_config() {
     config.general.skin_updater = config_file["general"]["skin_updater"].value_or(true);
     config.general.fast_transitions = config_file["general"]["fast_transitions"].value_or(false);
     config.general.pause_menu = config_file["general"]["pause_menu"].value_or(true);
+    config.general.ignore_account_appearance = config_file["general"]["ignore_account_appearance"].value_or(true);
 
     // limits (timer_frozen / song_limit used to live under [general])
     config.limits.timer_frozen =
@@ -436,6 +437,12 @@ Config get_config() {
 
     config.card_reader.enabled = config_file["card_reader"]["enabled"].value_or(false);
 
+    config.card_reader.backend = config_file["card_reader"]["backend"].value_or("serial");
+    config.card_reader.device = config_file["card_reader"]["device"].value_or("");
+    config.card_reader.port = config_file["card_reader"]["port"].value_or("/dev/ttyUSB0");
+    const int baudrate = config_file["card_reader"]["baudrate"].value_or(38400);
+    config.card_reader.baudrate = (baudrate == 38400 || baudrate == 115200) ? baudrate : 38400;
+
     // Parse paths
     config.paths.tja_path = parsePathArrayOrDefault(config_file, "paths", "tja_path", {fs::path("Songs")});
     config.paths.start_path = fs::path(config_file["paths"]["start_path"].value_or(""));
@@ -457,10 +464,10 @@ Config get_config() {
     config.keys_1p.right_kat = parseKeyArrayOrDefault(config_file, "keys_1p", "right_kat", {SDL_SCANCODE_K});
 
     // Parse keys_2p
-    config.keys_2p.left_kat = parseKeyArrayOrDefault(config_file, "keys_2p", "left_kat", {SDL_SCANCODE_Z});
-    config.keys_2p.left_don = parseKeyArrayOrDefault(config_file, "keys_2p", "left_don", {SDL_SCANCODE_X});
-    config.keys_2p.right_don = parseKeyArrayOrDefault(config_file, "keys_2p", "right_don", {SDL_SCANCODE_C});
-    config.keys_2p.right_kat = parseKeyArrayOrDefault(config_file, "keys_2p", "right_kat", {SDL_SCANCODE_V});
+    config.keys_2p.left_kat = parseKeyArrayOrDefault(config_file, "keys_2p", "left_kat", {});
+    config.keys_2p.left_don = parseKeyArrayOrDefault(config_file, "keys_2p", "left_don", {});
+    config.keys_2p.right_don = parseKeyArrayOrDefault(config_file, "keys_2p", "right_don", {});
+    config.keys_2p.right_kat = parseKeyArrayOrDefault(config_file, "keys_2p", "right_kat", {});
 
     // Parse gamepad_1p (fallback to legacy [gamepad] if missing)
     const toml::table* gamepad_1p_node = config_file["gamepad_1p"].as_table();
@@ -554,36 +561,38 @@ void save_config(const Config& config) {
     toml::table config_table;
 
     // General
-    config_table.insert("general", toml::table{{"fps_counter", config.general.fps_counter},
-                                               {"audio_offset", config.general.audio_offset},
-                                               {"visual_offset", config.general.visual_offset},
-                                               {"language", config.general.language},
-                                               {"zdon_language_auto", config.general.zdon_language_auto},
-                                               {"song_timer", config.general.song_timer},
-                                               {"judge_counter", config.general.judge_counter},
-                                               {"show_timing_offset", config.general.show_timing_offset},
-                                               {"zdon_hit_timing", config.general.zdon_hit_timing},
-                                               {"zdon_song_progress", config.general.zdon_song_progress},
-                                               {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
-                                               {"zdon_sort_filter", config.general.zdon_sort_filter},
-                                               {"zdon_practice_loop", config.general.zdon_practice_loop},
-                                               {"zdon_early_hitsound", config.general.zdon_early_hitsound},
-                                               {"zdon_press_time_judge", config.general.zdon_press_time_judge},
-                                               {"zdon_branch_by_measure", config.general.zdon_branch_by_measure},
-                                               {"zdon_coin_mode", config.general.zdon_coin_mode},
-                                               {"zdon_coin_credits", config.general.zdon_coin_credits},
-                                               {"zdon_ai_level", config.general.zdon_ai_level},
-                                               {"zdon_ai_wins", config.general.zdon_ai_wins},
-                                               {"log_level", config.general.log_level},
-                                               {"practice_mode_bar_delay", config.general.practice_mode_bar_delay},
-                                               {"score_method", config.general.score_method},
-                                               {"display_bpm", config.general.display_bpm},
-                                               {"webcam_number", config.general.webcam_number},
-                                               {"touch_input", config.general.touch_input},
-                                               {"touch_drum_size", config.general.touch_drum_size},
-                                               {"skin_updater", config.general.skin_updater},
-                                               {"fast_transitions", config.general.fast_transitions},
-                                               {"pause_menu", config.general.pause_menu}});
+    config_table.insert("general",
+                        toml::table{{"fps_counter", config.general.fps_counter},
+                                    {"audio_offset", config.general.audio_offset},
+                                    {"visual_offset", config.general.visual_offset},
+                                    {"language", instance_language()},
+                                    {"zdon_language_auto", config.general.zdon_language_auto},
+                                    {"song_timer", config.general.song_timer},
+                                    {"judge_counter", config.general.judge_counter},
+                                    {"show_timing_offset", config.general.show_timing_offset},
+                                    {"zdon_hit_timing", config.general.zdon_hit_timing},
+                                    {"zdon_song_progress", config.general.zdon_song_progress},
+                                    {"zdon_hit_timing_show", config.general.zdon_hit_timing_show},
+                                    {"zdon_sort_filter", config.general.zdon_sort_filter},
+                                    {"zdon_practice_loop", config.general.zdon_practice_loop},
+                                    {"zdon_early_hitsound", config.general.zdon_early_hitsound},
+                                    {"zdon_press_time_judge", config.general.zdon_press_time_judge},
+                                    {"zdon_branch_by_measure", config.general.zdon_branch_by_measure},
+                                    {"zdon_coin_mode", config.general.zdon_coin_mode},
+                                    {"zdon_coin_credits", config.general.zdon_coin_credits},
+                                    {"zdon_ai_level", config.general.zdon_ai_level},
+                                    {"zdon_ai_wins", config.general.zdon_ai_wins},
+                                    {"log_level", config.general.log_level},
+                                    {"practice_mode_bar_delay", config.general.practice_mode_bar_delay},
+                                    {"score_method", config.general.score_method},
+                                    {"display_bpm", config.general.display_bpm},
+                                    {"webcam_number", config.general.webcam_number},
+                                    {"touch_input", config.general.touch_input},
+                                    {"touch_drum_size", config.general.touch_drum_size},
+                                    {"skin_updater", config.general.skin_updater},
+                                    {"fast_transitions", config.general.fast_transitions},
+                                    {"pause_menu", config.general.pause_menu},
+                                    {"ignore_account_appearance", config.general.ignore_account_appearance}});
 
     config_table.insert("limits", toml::table{{"timer_frozen", config.limits.timer_frozen},
                                               {"song_limit", config.limits.song_limit},
@@ -604,7 +613,11 @@ void save_config(const Config& config) {
                                     {"zdon_update_url", config.network.zdon_update_url},
                                     {"zdon_update_check", config.network.zdon_update_check}});
 
-    config_table.insert("card_reader", toml::table{{"enabled", config.card_reader.enabled}});
+    config_table.insert("card_reader", toml::table{{"enabled", config.card_reader.enabled},
+                                                   {"backend", config.card_reader.backend},
+                                                   {"device", config.card_reader.device},
+                                                   {"port", config.card_reader.port},
+                                                   {"baudrate", config.card_reader.baudrate}});
 
     // Paths
     toml::array tja_path_array;
@@ -613,7 +626,7 @@ void save_config(const Config& config) {
     }
     config_table.insert("paths", toml::table{{"tja_path", tja_path_array},
                                              {"start_path", config.paths.start_path.string()},
-                                             {"skin", config.paths.skin.string()}});
+                                             {"skin", instance_skin()}});
 
     // Keys
     config_table.insert("keys", toml::table{{"exit_key", getKeyStringSafe(config.keys.exit_key)},

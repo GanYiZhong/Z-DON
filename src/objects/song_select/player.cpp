@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <iterator>
 #include <string_view>
+#include <thread>
 
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/scores.h"
 #include "../../libs/gfx/text.h"
 #include "../../libs/input/input.h"
+#include "../../libs/network/network.h"
+#include "../../libs/notify.h"
 #include "../../libs/time.h"
 #include "../game/zdon_ai_board.h"
 #include "song_select_script.h"
@@ -83,6 +86,7 @@ void SongSelectPlayer::update(double current_time) {
         if (neiro_selector->is_finished) {
             neiro_selector.reset();
             scores_manager.save_player_data(player_data);
+            push_modifiers();
             chara->set_anim(AnimIndex::DON_SELECT_PANELDOWN);
         }
     }
@@ -92,6 +96,7 @@ void SongSelectPlayer::update(double current_time) {
         if (modifier_selector->is_finished) {
             modifier_selector.reset();
             scores_manager.save_player_data(player_data);
+            push_modifiers();
             chara->set_anim(AnimIndex::DON_SELECT_PANELDOWN);
         }
     }
@@ -104,12 +109,27 @@ void SongSelectPlayer::update(double current_time) {
     sync_level_panel();
 }
 
+void SongSelectPlayer::push_modifiers() {
+    if (!global_data.config->network.online_play || !network.is_online()) {
+        return;
+    }
+    const std::string code = get_player_id(player_num);
+    if (code.empty()) {
+        return;
+    }
+    const PlayerData data = player_data;
+    std::thread([code, data] { network.push_modifiers(code, data); }).detach();
+}
+
+std::string SongSelectPlayer::own_start_voice() const {
+    return !start_voice.empty() ? start_voice
+                                : "voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p";
+}
+
 bool SongSelectPlayer::is_voice_playing() {
     // merge 0ed42ec: Z-DON's silent AI decide wait plus upstream's shared start voice
     return get_current_ms() < voice_silent_until_ms ||
-           audio.is_sound_playing(!shared_start_voice.empty()
-                                      ? shared_start_voice
-                                      : "voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p");
+           audio.is_sound_playing(!shared_start_voice.empty() ? shared_start_voice : own_start_voice());
 }
 
 bool SongSelectPlayer::has_course(Difficulty d) const {
@@ -241,7 +261,7 @@ void SongSelectPlayer::sync_ura(bool ura) {
 }
 
 SongSelectState SongSelectPlayer::select_song() {
-    audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+    audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
     BaseBox* item = navigator.get_current_item();
     if (navigator.is_directory(item) && item->genre_index == GenreIndex::DAN) {
         const auto player_index = static_cast<int>(player_num);
@@ -327,6 +347,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
 
     if (key_pressed(SDL_SCANCODE_F5)) {
         navigator.load_current_directory(navigator.current_path);
+        notify("Song list refreshed");
     }
     // Z-DON: F2 opens the song search from anywhere on the wheel
     if (key_pressed(SDL_SCANCODE_F2)) {
@@ -342,7 +363,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         last_moved = current_ms;
         navigated = true;
     } else if (l_kat || wheel > 0) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         navigator.move_left();
         last_moved = current_ms;
         navigated = true;
@@ -354,7 +375,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         last_moved = current_ms;
         navigated = true;
     } else if (r_kat || wheel < 0) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         navigator.move_right();
         last_moved = current_ms;
         navigated = true;
@@ -368,7 +389,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
         hold_dir = 0;
     }
     if (hold_dir && !navigated && current_ms >= next_repeat) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         if (hold_dir < 0) {
             navigator.move_left();
         } else {
@@ -418,18 +439,18 @@ std::optional<std::pair<int, int>> SongSelectPlayer::handle_input_diff_sort(Diff
     if (is_l_kat_pressed(player_num)) {
         diff_sort_selector->input_left();
         if (!tex.options[SCO::ONE_MENU_SORT]) {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         }
     }
     if (is_r_kat_pressed(player_num)) {
         diff_sort_selector->input_right();
         if (!tex.options[SCO::ONE_MENU_SORT]) {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         }
     }
     if (is_l_don_pressed(player_num) || is_r_don_pressed(player_num)) {
         if (!tex.options[SCO::ONE_MENU_SORT]) {
-            audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
         }
         return diff_sort_selector->input_select();
     }
@@ -519,8 +540,8 @@ std::optional<std::string> SongSelectPlayer::handle_input_search() {
     return std::nullopt;
 }
 
-static bool neiro_in_options() {
-    return tex.options[SCO::OPTION_NEIRO_ROW];
+static bool neiro_slot_used() {
+    return !tex.options[SCO::OPTION_NEIRO_ROW] || global_data.current_screen == "BATTLE_SELECT";
 }
 
 void SongSelectPlayer::decide_course() {
@@ -534,8 +555,7 @@ void SongSelectPlayer::decide_course() {
             audio.play_sound("ai_select_vo_begin", VolumePreset::VOICE);
         }
     } else if (shared_start_voice.empty()) { // upstream: a shared voice is played by the screen
-        audio.play_player_sound("voice_start_song_" + std::to_string(static_cast<int>(player_num)) + "p", player_num,
-                                VolumePreset::VOICE);
+        audio.play_player_sound(own_start_voice(), player_num, VolumePreset::VOICE);
     }
 }
 
@@ -588,7 +608,7 @@ bool SongSelectPlayer::begin_level_select() {
 
 void SongSelectPlayer::handle_level_select(bool l_kat, bool r_kat, bool l_don, bool r_don) {
     if (l_kat || r_kat) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         if (l_kat && level_sel <= 1) { // past the lowest level: back to the course board
             level_select = false;
             zdon_ai_level_panel_phase(true);
@@ -601,7 +621,7 @@ void SongSelectPlayer::handle_level_select(bool l_kat, bool r_kat, bool l_don, b
             audio.play_player_sound("cancel", player_num, VolumePreset::SOUND);
             return;
         }
-        audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
         level_select = false;
         level_done = true;
         level_panel_on = false;
@@ -639,12 +659,12 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
 
     if (l_kat) {
         if (modifier_selector.has_value()) {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             modifier_selector->left();
         } else if (neiro_selector.has_value()) {
             neiro_selector->left();
         } else {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             navigate_difficulty_left();
             if (selected_difficulty >= Difficulty::EASY) {
                 selected_diff_bounce->start();
@@ -653,12 +673,12 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
         }
     } else if (r_kat) {
         if (modifier_selector.has_value()) {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             modifier_selector->right();
         } else if (neiro_selector.has_value()) {
             neiro_selector->right();
         } else {
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             Difficulty prev_difficulty = selected_difficulty;
             navigate_difficulty_right();
             if (selected_difficulty >= Difficulty::EASY) {
@@ -669,7 +689,7 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
             }
         }
     } else if (l_don || r_don) {
-        audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
         if (modifier_selector.has_value()) {
             modifier_selector->confirm();
         } else if (neiro_selector.has_value()) {
@@ -678,7 +698,7 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
             if (selected_difficulty == Difficulty::MODIFIER) {
                 modifier_selector = ModifierSelector(player_num, &player_data);
                 chara->set_anim(AnimIndex::DON_SELECT_PANELUP);
-            } else if (selected_difficulty == Difficulty::NEIRO && !neiro_in_options()) {
+            } else if (selected_difficulty == Difficulty::NEIRO && !neiro_in_option_panel()) {
                 neiro_selector = NeiroSelector(player_num, &player_data);
                 chara->set_anim(AnimIndex::DON_SELECT_PANELUP);
             } else if (selected_difficulty >= Difficulty::EASY) {
@@ -706,7 +726,7 @@ void SongSelectPlayer::navigate_difficulty_left() {
             }
         }
         selected_difficulty =
-            (below != Difficulty::BACK) ? below : (neiro_in_options() ? Difficulty::MODIFIER : Difficulty::NEIRO);
+            (below != Difficulty::BACK) ? below : (neiro_slot_used() ? Difficulty::NEIRO : Difficulty::MODIFIER);
     } else if (selected_difficulty == Difficulty::NEIRO || selected_difficulty == Difficulty::MODIFIER) {
         diff_selector_move_2->start();
         prev_diff = selected_difficulty;
@@ -720,7 +740,7 @@ void SongSelectPlayer::navigate_difficulty_left() {
     } else if (selected_difficulty == curr_diffs.front()) {
         diff_selector_move_2->start();
         prev_diff = selected_difficulty;
-        selected_difficulty = neiro_in_options() ? Difficulty::MODIFIER : Difficulty::NEIRO;
+        selected_difficulty = neiro_slot_used() ? Difficulty::NEIRO : Difficulty::MODIFIER;
     } else {
         diff_selector_move_1->start();
         prev_diff = selected_difficulty;
@@ -754,7 +774,7 @@ void SongSelectPlayer::navigate_difficulty_right() {
             toggle_ura_mode();
         }
     } else if (selected_difficulty == Difficulty::NEIRO ||
-               (selected_difficulty == Difficulty::MODIFIER && neiro_in_options())) {
+               (selected_difficulty == Difficulty::MODIFIER && !neiro_slot_used())) {
         prev_diff = selected_difficulty;
         selected_difficulty = curr_diffs.front();
         diff_selector_move_2->start();

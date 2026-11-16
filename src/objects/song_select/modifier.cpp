@@ -7,6 +7,7 @@
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/filesystem.h"
 #include "../global/zdon_hud.h"
+#include "neiro.h"
 
 const std::array<std::string, 5> ModifierSelector::BASE_MOD_NAMES = {"auto", "speed", "display", "inverse", "random"};
 
@@ -57,10 +58,14 @@ ModifierSelector::ModifierSelector(PlayerNum player_num, PlayerData* player) : p
     mod_names.emplace_back("ghost");        // Z-DON PB pace
     mod_names.emplace_back("flashlight");   // Z-DON flashlight
     mod_names.emplace_back("sudden_death"); // Z-DON the play ends on a miss
+    // battle mode plays for progress, so it has no auto row
+    if (global_data.current_screen == "BATTLE_SELECT") {
+        std::erase(mod_names, "auto");
+    }
     if (tex.options[SCO::OPTION_SKIP_ROW]) {
         mod_names.emplace_back("skip");
     }
-    if (tex.options[SCO::OPTION_NEIRO_ROW]) {
+    if (neiro_in_option_panel()) {
         load_neiro_names();
         mod_names.emplace_back("neiro");
     }
@@ -84,23 +89,8 @@ ModifierSelector::~ModifierSelector() {
 }
 
 void ModifierSelector::load_neiro_names() {
-    std::filesystem::path neiro_list_path = resolve_skin_path("Sounds/hit_sounds/neiro_list.txt");
-
-    std::ifstream neiro_list(neiro_list_path);
-    if (!neiro_list.is_open()) {
-        spdlog::error("Failed to open neiro_list.txt");
-    } else {
-        std::string line;
-        while (std::getline(neiro_list, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (!line.empty()) {
-                neiro_names.push_back(line);
-            }
-        }
-    }
-    neiro_names.push_back(tex.skin_text("modifier_text_muon", language, "無音"));
+    neiro_names = read_neiro_names();
+    neiro_names.push_back(tex.skin_text("modifier_text_muon", language));
 
     neiro_index = player->neiro_index;
     if (neiro_index == -1) {
@@ -123,9 +113,8 @@ void ModifierSelector::step_neiro(int dir) {
         return;
     }
 
-    std::filesystem::path rel = std::filesystem::path("Sounds/hit_sounds") / std::to_string(neiro_index) /
-                                (neiro_index == 0 ? "don.wav" : "don.ogg");
-    neiro_preview = audio.load_sound(resolve_skin_path(rel), "hit_sound");
+    fs::path base = fs::path("Sounds/hit_sounds") / std::to_string(neiro_index);
+    neiro_preview = audio.load_sound(resolve_skin_path(base / (neiro_index == 0 ? "don.wav" : "don.ogg")), "hit_sound");
     if (!neiro_preview.empty()) {
         audio.play_player_sound(neiro_preview, player_num, VolumePreset::HITSOUND);
     }

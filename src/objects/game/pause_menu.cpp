@@ -49,6 +49,18 @@ namespace {
 
 } // namespace
 
+void PauseMenu::init_textures() {
+    fn_draw = {};
+    if (load("PauseMenu", "pause_menu")) {
+        fn_draw = lua_object["draw"];
+    }
+}
+
+void PauseMenu::unload() {
+    fn_draw = {};
+    lua_object = sol::table();
+}
+
 void PauseMenu::open_menu(double now_ms) {
     // Z-DON: drum presses still buffered are not meant for the menu. With auto play no player reads the drum keys,
     // so a press made during the song waited here and moved or confirmed the menu the moment it opened.
@@ -57,6 +69,7 @@ void PauseMenu::open_menu(double now_ms) {
         pause_start = now_ms;
     }
     open = true;
+    opened_ms = now_ms;
     countdown_start.reset();
     index = ROW_RESUME;
 }
@@ -92,11 +105,11 @@ PauseMenu::Action PauseMenu::update(double now_ms) {
     const bool left = menu_left_pressed();
     const bool right = menu_right_pressed();
     if (left != right) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         index = (index + (right ? 1 : ROW_COUNT - 1)) % ROW_COUNT;
     }
     if (menu_confirm_pressed()) {
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         switch (index) {
         case ROW_RESTART:
             reset();
@@ -144,6 +157,10 @@ void PauseMenu::make_texts() {
 
 void PauseMenu::draw(double now_ms) {
     if (!active()) {
+        return;
+    }
+    if (open && fn_draw.valid()) { // the skin draws the menu (upstream pause_menu.lua); the countdown stays ours
+        call(fn_draw, "PauseMenu:draw", index, now_ms - opened_ms);
         return;
     }
     make_texts();

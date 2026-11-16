@@ -22,11 +22,13 @@
 #include "../gfx/text.h"
 #include "../global_data.h"
 #include "../input/input.h"
+#include "../network/network.h"
 #include "../screen.h"
 #include "../texture_ondemand.h"
 #include "../video/webcam.h"
 #include "../zdon_lua.h"
 #include "filesystem.h"
+#include "scores.h"
 
 namespace {
     namespace lua_metadata {
@@ -1049,6 +1051,7 @@ void ScriptManager::register_lua_bindings() {
                                                              outline_thickness, spacing, 1.0f, font.value_or(""));
                           ptr->x_offset = cfg->x;
                           ptr->y_offset = cfg->y;
+                          ptr->position_key = skin_config_key;
                           return ptr;
                       });
 
@@ -1071,6 +1074,22 @@ void ScriptManager::register_lua_bindings() {
     });
 
     tex.set_function("player_num", [] -> int { return static_cast<int>(global_data.player_num); });
+
+    tex.set_function("record_counts", [](int player_num, int min_course) -> sol::table {
+        const auto& net = global_data.config->network;
+        const RecordCounts rc =
+            scores_manager.get_record_counts(player_num == 2 ? net.access_code_2 : net.access_code_1, min_course);
+        sol::table t = script_manager.lua->create_table(0, 2);
+        t["ranks"] = script_manager.lua->create_table_with();
+        t["crowns"] = script_manager.lua->create_table_with();
+        for (size_t i = 0; i < rc.ranks.size(); i++) {
+            t["ranks"][i + 1] = rc.ranks[i];
+        }
+        for (size_t i = 0; i < rc.crowns.size(); i++) {
+            t["crowns"][i + 1] = rc.crowns[i];
+        }
+        return t;
+    });
 
     tex.set_function("display_bpm", [] -> bool { return global_data.config->general.display_bpm; });
 
@@ -1166,7 +1185,35 @@ void ScriptManager::register_lua_bindings() {
         draw_texture_pro(webcam.get_texture(), src, dst, Vec2{0, 0}, 0, Color::WHITE);
     });
 
+    camera_tbl.set_function("detect_faces", [](bool on) { webcam.detect_faces(on); });
+
+    // {x, y, w, h} fractions of the camera frame, latest detection
+    camera_tbl.set_function("faces", [](sol::this_state state) {
+        sol::state_view lua_view(state);
+        sol::table out = lua_view.create_table();
+        for (const FaceBox& f : webcam.faces()) {
+            out.add(lua_view.create_table_with("x", f.x, "y", f.y, "w", f.w, "h", f.h));
+        }
+        return out;
+    });
+
     lua["camera"] = camera_tbl;
+
+    sol::table network_tbl = lua.create_table();
+    // {title, genre} rows of Hiroba's most played songs, or nil while loading / offline
+    network_tbl.set_function("popular_songs", [](sol::this_state state) -> sol::object {
+        sol::state_view lua_view(state);
+        const auto* songs = network.popular_songs();
+        if (!songs) {
+            return sol::lua_nil;
+        }
+        sol::table out = lua_view.create_table();
+        for (const auto& song : *songs) {
+            out.add(lua_view.create_table_with("title", song.title, "genre", song.genre));
+        }
+        return out;
+    });
+    lua["network"] = network_tbl;
 
     register_zdon_lua_bindings(tex);
     register_song_select_lua_bindings(lua);

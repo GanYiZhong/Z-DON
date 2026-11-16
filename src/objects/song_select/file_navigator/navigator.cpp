@@ -10,6 +10,8 @@
 #include "../../../libs/gfx/text.h"
 #include "../../../libs/jobs.h"
 #include "../../../libs/library_index.h"
+#include "../../../libs/network/network.h"
+#include "../../../libs/notify.h"
 #include "../../../libs/zdon_lang.h"
 #include "../../dan_select/dan_navigator.h"
 #include "../../game/zdon_ai_board.h"
@@ -17,6 +19,7 @@
 #include "box_back.h"
 #include "box_song_osu.h"
 #include "color_utils.h"
+#include "navigation_load.h"
 #ifdef _WIN32
 #include "../../../platform/platform_windows.h"
 #endif
@@ -254,9 +257,8 @@ static SongParser take_parser(std::unordered_map<std::string, std::unique_ptr<So
 
 static std::unique_ptr<BackBox> make_back_box(const fs::path& parent_path, const BoxDef* folder = nullptr) {
     BoxDef d;
-    d.back_color = BackBox::COLOR;
+    d.back_color = {BackBox::COLOR};
     d.fore_color = BackBox::COLOR;
-    d.texture_index = TextureIndex::NONE;
     d.genre_index = folder ? folder->genre_index : GenreIndex::NAMCO;
     return std::make_unique<BackBox>(parent_path, d);
 }
@@ -276,7 +278,7 @@ static bool alpha_less(const std::string& a, const std::string& b) {
 static void apply_song_genre(SongBox* song, const BoxDef& box_def) {
     song->song_genre_index = box_def.genre_index;
     song->song_genre_label = box_def.genre_label;
-    if (!box_def.box_color.has_value() && !box_def.back_color.has_value() && !box_def.fore_color.has_value()) {
+    if (box_def.box_color.empty() && box_def.back_color.empty() && !box_def.fore_color.has_value()) {
         return;
     }
     BoxColors colors = resolve_box_colors(box_def.box_color, box_def.back_color, box_def.fore_color);
@@ -749,13 +751,22 @@ void Navigator::preload(std::vector<fs::path> songs_paths, std::optional<std::ve
             }
             if (bd.collection == "FAVORITE" && !favorite_folder_path) {
                 favorite_folder_path = entry.path();
-                for (const auto& e : read_song_list(entry.path() / "song_list.txt")) {
-                    favorite_songs.insert(e.title + "|" + e.subtitle);
-                }
             }
         }
     }
+    set_song_list_folders(favorite_folder_path.value_or(fs::path()), recent_folder_path.value_or(fs::path()));
+    reload_favorites();
     is_preloaded = true;
+}
+
+void Navigator::reload_favorites() {
+    favorite_songs.clear();
+    if (!favorite_folder_path) {
+        return;
+    }
+    for (const auto& e : read_song_list(song_list_file(*favorite_folder_path))) {
+        favorite_songs.insert(e.title + "|" + e.subtitle);
+    }
 }
 
 void Navigator::init(std::vector<fs::path> songs_paths) {
@@ -788,6 +799,7 @@ void Navigator::init(std::vector<fs::path> songs_paths) {
         if (!is_preloaded) {
             preload(std::move(songs_paths));
         }
+        reload_favorites();
 
         load_start_folder();
         is_init = true;
@@ -1221,7 +1233,7 @@ void Navigator::load_current_directory_async(const fs::path path) {
             const fs::path& curr_path = entry.path();
             try {
                 if (!fs::is_directory(curr_path)) {
-                    if (curr_path.filename() == "song_list.txt") {
+                    if (is_song_list_file(curr_path)) { // upstream #381: an account's own list in favorites / recent
                         wait_for_song_files();
                         BoxDef entry_box_def = parse_box_def(curr_path);
                         parse_song_list(curr_path, entry_box_def, false);
@@ -1510,7 +1522,7 @@ void Navigator::cancel_diff_sort() {
 
 void Navigator::load_from_song_list(const fs::path& path, const BoxDef& box_def, bool mark_favorite) {
     int songs_added = 0;
-    for (const auto& entry : read_song_list(path / "song_list.txt")) {
+    for (const auto& entry : read_song_list(song_list_file(path))) {
         if (abort_loading) {
             break;
         }
@@ -1541,6 +1553,21 @@ void Navigator::load_from_song_list(const fs::path& path, const BoxDef& box_def,
     }
 }
 
+static void push_song_list(const std::vector<SongListEntry>& entries, const char* kind) {
+    const std::string account = song_list_account();
+    if (account.empty()) {
+        return;
+    }
+    std::vector<std::string> hashes;
+    hashes.reserve(entries.size());
+    for (const auto& entry : entries) {
+        hashes.push_back(entry.hash);
+    }
+    std::thread([account, kind = std::string(kind), hashes = std::move(hashes)] {
+        network.update_song_list(account, kind, hashes);
+    }).detach();
+}
+
 void Navigator::toggle_favorite(SongBox* song) {
     if (!favorite_folder_path || hide_collections) {
         return;
@@ -1550,7 +1577,7 @@ void Navigator::toggle_favorite(SongBox* song) {
     std::string subtitle = en_or_first(song->parser.metadata.subtitle);
     std::string key = title + "|" + subtitle;
 
-    fs::path song_list_path = *favorite_folder_path / "song_list.txt";
+    fs::path song_list_path = song_list_file(*favorite_folder_path);
     auto entries = read_song_list(song_list_path);
 
     bool was_favorite = favorite_songs.contains(key);
@@ -1558,14 +1585,17 @@ void Navigator::toggle_favorite(SongBox* song) {
         favorite_songs.erase(key);
         std::erase_if(entries, [&](const SongListEntry& e) { return e.title == title && e.subtitle == subtitle; });
         song->is_favorite = false;
+        notify("Removed from favorites");
     } else {
         favorite_songs.insert(key);
         std::string hash = scores_manager.get_single_hash(song->parser.file_path);
         entries.insert(entries.begin(), {std::move(hash), title, subtitle});
         song->is_favorite = true;
+        notify("Added to favorites");
     }
 
     queue_song_list_write(song_list_path, entries);
+    push_song_list(entries, "favorites");
 }
 
 fs::path Navigator::find_box_def_folder(const fs::path& song_path) {
@@ -1584,7 +1614,7 @@ void Navigator::add_to_recent(const SongBox* song) {
         return;
     }
     FolderBox::invalidate_scan_cache(); // song_list.txt counts change
-    fs::path song_list_path = *recent_folder_path / "song_list.txt";
+    fs::path song_list_path = song_list_file(*recent_folder_path);
 
     auto& titles = song->parser.metadata.title;
     auto& subtitles = song->parser.metadata.subtitle;
@@ -1600,6 +1630,7 @@ void Navigator::add_to_recent(const SongBox* song) {
     }
 
     queue_song_list_write(song_list_path, entries);
+    push_song_list(entries, "recent");
     promote_recent_box(song);
 }
 
@@ -2002,7 +2033,7 @@ void Navigator::load_songs_inline_async(const fs::path path, BoxDef box_def) {
             try {
                 std::error_code tec;
                 if (!entry.is_directory(tec)) {
-                    if (curr_path.filename() == "song_list.txt") {
+                    if (is_song_list_file(curr_path)) {
                         parse_song_list(curr_path, box_def, true);
                         continue;
                     }
@@ -2055,87 +2086,8 @@ BoxDef Navigator::parse_box_def(const fs::path& path) {
 }
 
 BoxDef Navigator::parse_box_def_uncached(const fs::path& path) {
-    std::ifstream boxDef(path / "box.def");
-    std::string line;
-    BoxDef result;
-    result.name = path.filename().string();
-    result.texture_index = TextureIndex::DEFAULT;
-    result.genre_index = GenreIndex::DEFAULT;
-    result.collection = "";
-    bool title_localized = false;
-    std::array<bool, 3> explanation_localized = {false, false, false};
-    int title_rank = 0; // Z-DON: zdon_lang_tag_rank of the localized title / explanation lines taken
-    std::array<int, 3> explanation_rank = {0, 0, 0};
-
-    while (std::getline(boxDef, line)) {
-        if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
-            static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
-            line.erase(0, 3);
-        }
-        line = utf8_from_utf8_or_sjis(line); // box.def files from older simulators are Shift-JIS
-        line.erase(0, line.find_first_not_of(" \t\r\n"));
-        line.erase(line.find_last_not_of(" \t\r\n") + 1);
-        auto get_value = [&](const std::string& prefix) -> std::string { return line.substr(prefix.size()); };
-
-        if (line.starts_with("#GENRE:")) {
-            std::string genre = get_value("#GENRE:");
-            auto it = TEXTURE_MAP.find(genre);
-            if (it != TEXTURE_MAP.end()) {
-                result.texture_index = it->second;
-            }
-            result.genre_index = get_genre_index(genre);
-            result.genre_label = genre;
-        } else if (line.starts_with("#TITLE:")) {
-            if (!title_localized) {
-                result.name = get_value("#TITLE:");
-            }
-        } else if (line.starts_with("#TITLE")) {
-            // Z-DON: the tag that fits the language best (zdon_lang.h: TITLEZH_TW over TITLEZH)
-            if (const size_t colon = line.find(':'); colon != std::string::npos) {
-                const int rank = zdon_lang_tag_rank(std::string_view(line).substr(6, colon - 6),
-                                                    global_data.config->general.language);
-                if (rank > title_rank) {
-                    result.name = line.substr(colon + 1);
-                    title_rank = rank;
-                    title_localized = true;
-                }
-            }
-        } else if (line.starts_with("#COLLECTION:")) {
-            result.collection = get_value("#COLLECTION:");
-            auto it = TEXTURE_MAP.find(result.collection);
-            if (it != TEXTURE_MAP.end()) {
-                result.texture_index = it->second;
-            }
-            result.genre_index = get_genre_index(result.collection);
-        } else if (line.starts_with("#BOXCOLOR:")) {
-            result.box_color = parse_hex_color(get_value("#BOXCOLOR:"));
-            result.texture_index = TextureIndex::NONE;
-        } else if (line.starts_with("#BACKCOLOR:")) {
-            result.back_color = parse_hex_color(get_value("#BACKCOLOR:"));
-            result.texture_index = TextureIndex::NONE;
-        } else if (line.starts_with("#FORECOLOR:")) {
-            result.fore_color = parse_hex_color(get_value("#FORECOLOR:"));
-        } else if (line.starts_with("#BOXEXPLANATION")) {
-            for (int n = 0; n < 3; n++) {
-                std::string plain_prefix = "#BOXEXPLANATION" + std::to_string(n + 1) + ":";
-                if (line.starts_with(plain_prefix) && !explanation_localized[n]) {
-                    result.explanation[n] = get_value(plain_prefix);
-                }
-            }
-            // Z-DON: #BOXEXPLANATION<tag><1-3>: the tag that fits the language best (zdon_lang.h)
-            if (const size_t colon = line.find(':'); colon != std::string::npos && colon > 16) {
-                const int n = line[colon - 1] - '1';
-                const int rank = zdon_lang_tag_rank(std::string_view(line).substr(15, colon - 16),
-                                                    global_data.config->general.language);
-                if (n >= 0 && n < 3 && rank > explanation_rank[n]) {
-                    result.explanation[n] = line.substr(colon + 1);
-                    explanation_rank[n] = rank;
-                    explanation_localized[n] = true;
-                }
-            }
-        }
-    }
-    return result;
+    // merge 1cd3844: the one box.def parser (navigation_load.cpp), with upstream #362's colour stops / textures
+    return parse_navigation_box_def(path, global_data.config->general.language);
 }
 
 bool Navigator::has_def_file(const std::filesystem::path& path) {

@@ -408,7 +408,7 @@ namespace {
         if (zdon_test_mode()) {
             return false;
         }
-        if (auto index = library_index(); index && destination.filename() == "song_list.txt") {
+        if (auto index = library_index(); index && destination.filename().string().starts_with("song_list")) {
             index->note_song_list_written(destination.parent_path());
         }
         return true;
@@ -427,6 +427,74 @@ void normalize_song_list(const fs::path& path, SongListSnapshot expected, std::v
         song_lists().normalize(std::move(*destination), std::move(expected), std::move(entries),
                                std::move(cancellation));
     }
+}
+
+namespace {
+    std::string g_song_list_account; // access code whose lists own this credit
+    fs::path g_favorites_folder;
+    fs::path g_recent_folder;
+    std::mutex g_song_list_account_mutex;
+
+    bool is_account_folder(const fs::path& folder) {
+        return !g_song_list_account.empty() && ((!g_favorites_folder.empty() && folder == g_favorites_folder) ||
+                                                (!g_recent_folder.empty() && folder == g_recent_folder));
+    }
+} // namespace
+
+void set_song_list_account(const std::string& access_code) {
+    std::scoped_lock lock(g_song_list_account_mutex);
+    g_song_list_account = access_code;
+}
+
+std::string song_list_account() {
+    std::scoped_lock lock(g_song_list_account_mutex);
+    return g_song_list_account;
+}
+
+void set_song_list_folders(const fs::path& favorites, const fs::path& recent) {
+    std::scoped_lock lock(g_song_list_account_mutex);
+    g_favorites_folder = favorites;
+    g_recent_folder = recent;
+}
+
+void write_account_song_lists(const std::string& access_code, const std::vector<std::string>& favorites,
+                              const std::vector<std::string>& recent) {
+    set_song_list_account(access_code);
+    fs::path favorites_folder;
+    fs::path recent_folder;
+    {
+        std::scoped_lock lock(g_song_list_account_mutex);
+        favorites_folder = g_favorites_folder;
+        recent_folder = g_recent_folder;
+    }
+    auto write = [](const fs::path& folder, const std::vector<std::string>& hashes) {
+        if (folder.empty()) {
+            return;
+        }
+        std::vector<SongListEntry> entries;
+        entries.reserve(hashes.size());
+        for (const std::string& hash : hashes) {
+            entries.push_back({hash, "", ""});
+        }
+        queue_song_list_write(song_list_file(folder), entries);
+    };
+    write(favorites_folder, favorites);
+    write(recent_folder, recent);
+}
+
+fs::path song_list_file(const fs::path& folder) {
+    std::scoped_lock lock(g_song_list_account_mutex);
+    if (!is_account_folder(folder)) {
+        return folder / "song_list.txt";
+    }
+    return folder / ("song_list_" + g_song_list_account + ".txt");
+}
+
+bool is_song_list_file(const fs::path& file) {
+    std::scoped_lock lock(g_song_list_account_mutex);
+    const std::string name = is_account_folder(file.parent_path()) ? "song_list_" + g_song_list_account + ".txt"
+                                                                   : std::string("song_list.txt");
+    return file.filename() == name;
 }
 
 uint64_t song_list_write_revision() {

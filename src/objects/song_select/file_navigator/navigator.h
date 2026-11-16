@@ -166,6 +166,7 @@ private:
     fs::path resolve_start_path(); // upstream: config start_path
     void load_start_folder();
     void promote_recent_box(const SongBox* song);
+    void reload_favorites();
     void collapse_inline_now();
     void flush_pending_boxes();
     void exit_inline();

@@ -1668,8 +1668,12 @@ void AudioEngine::queue_song_loudness(const fs::path& file_path, bool priority) 
     }
 }
 
+static bool is_song_sound(const std::string& name) {
+    return name == "song" || name.starts_with("song_dan_");
+}
+
 float AudioEngine::loaded_sound_gain(const fs::path& file_path, const std::string& name) {
-    if (name != "song") {
+    if (!is_song_sound(name)) {
         return song_loudness::skin_gain();
     }
     return loaded_song_gain(file_path);
@@ -1732,7 +1736,7 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
         // Z-DON keeps decoded sounds across screens with resident sounds and predecode, not upstream's
         // decoded-sound asset cache
         auto install_sound = [&](const sound& snd) { store_sound(name, snd); };
-        if (name == "song") {
+        if (is_song_sound(name)) {
             queue_song_loudness(file_path, true);
         } else if (PreSound ps; take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
             if (std::shared_ptr<ProgressiveHead> h = std::move(ps.head)) {
@@ -1942,7 +1946,7 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
         has_screen_sounds = has_screen_sounds || fs::exists(dir / screen_name);
     }
     if (!has_screen_sounds && warn) {
-        spdlog::warn("Sounds for screen {} not found", screen_name);
+        spdlog::debug("Sounds for screen {} not found", screen_name);
     }
 
     want(sounds_path / "don.wav", "don", true);
@@ -2274,13 +2278,17 @@ void AudioEngine::play_sound(SoundId id, VolumePreset volume_preset, float gain)
     }
     // two-player mode: a player's sound plays on that player's own cursor, into its channel
     SoundSlot* route = &name_slot;
-    if (const int player = sound_player(name_slot, volume_preset); player >= 0) {
+    const int player = sound_player(name_slot, volume_preset);
+    if (player >= 0) {
         if (SoundSlot* p = player_slot(id, player)) {
             id = name_slot.player_slot[player].load(std::memory_order_relaxed);
             route = p;
         }
     }
     SoundSlot& snd = *route;
+    if (player >= 0 && volume_preset == VolumePreset::HITSOUND) {
+        snd.pan.store(player == 0 ? 0.0f : 1.0f, std::memory_order_relaxed); // upstream 1cd3844: 1P left, 2P right
+    }
     if (volume_preset != VolumePreset::NONE) {
         snd.category.store(static_cast<uint8_t>(volume_preset), std::memory_order_relaxed); // the mixer applies it live
     }
@@ -2568,7 +2576,8 @@ void AudioEngine::unload_music_stream(const std::string& name) {
         std::scoped_lock g(music_lock);
         auto it = music_streams.find(name);
         if (it == music_streams.end()) {
-            spdlog::warn("Music stream {} not found", name);
+            // load_* call this to release a previous entry; nothing to unload is normal (upstream fd5bafe)
+            spdlog::debug("Music stream {} not found", name);
             return;
         }
         old = std::move(it->second);

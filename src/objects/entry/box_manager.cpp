@@ -1,5 +1,7 @@
 ﻿#include "box_manager.h"
 
+#include <algorithm>
+
 #include "../../libs/gfx/text.h"
 #include "../../libs/global_data.h"
 #include "../../libs/network/zdon_update.h"
@@ -43,6 +45,7 @@ void BoxManager::build_board_list() {
 
     boxes.clear();
     box_locations.clear();
+    access_code_board = false;
 
     guest_board = guests_only(is_2p);
     dan_box_index = (dan_available && !is_2p && !guest_board) ? 1 : -1;
@@ -62,9 +65,10 @@ void BoxManager::build_board_list() {
     }
     for (auto [screen, sc] :
          {std::pair{Screens::PRACTICE_SELECT, "entry_practice"},
-          std::pair{Screens::AI_SELECT, "entry_ai_battle"},  // AI battle (no label in the skin: no board)
-          std::pair{Screens::RECORD_SELECT, "entry_record"}, // Z-DON recording mode (same)
-          std::pair{Screens::ONLINE_SELECT, "entry_online"}, // Z-DON online battle (built-in label without one)
+          std::pair{Screens::AI_SELECT, "entry_ai_battle"},       // AI battle (no label in the skin: no board)
+          std::pair{Screens::BATTLE_SELECT, "entry_enso_battle"}, // upstream enso battle (skin script needed)
+          std::pair{Screens::RECORD_SELECT, "entry_record"},      // Z-DON recording mode (same)
+          std::pair{Screens::ONLINE_SELECT, "entry_online"},      // Z-DON online battle (built-in label without one)
           std::pair{Screens::ENTRY, "entry_costume"}, std::pair{Screens::REWARD_SHOP, "entry_shop"},
           std::pair{Screens::SETTINGS, "entry_settings"}}) {
         // guests only get the normal game and costumes
@@ -85,6 +89,10 @@ void BoxManager::build_board_list() {
         if (screen == Screens::ONLINE_SELECT && zdon_update::server_base().empty()) {
             continue;
         }
+        if (screen == Screens::BATTLE_SELECT &&
+            (tex.options[SCO::DISABLE_ENSO_BATTLE] || !script_manager.has_lua_script("enso_battle"))) {
+            continue;
+        }
         std::string label = screen == Screens::ONLINE_SELECT && font_manager.get_text_info(sc) == nullptr
                                 ? zhud::text("online_mode")
                                 : font_manager.get_text_label(sc);
@@ -96,6 +104,11 @@ void BoxManager::build_board_list() {
             continue;
         }
         box_locations.push_back(screen);
+        if (screen == Screens::SETTINGS && global_data.config->network.guest_mode) {
+            access_code_board = true;
+            boxes.push_back(std::make_unique<Box>("Access Code", font_size, screen, "entry_access_code"));
+            continue;
+        }
         boxes.push_back(std::make_unique<Box>(label, font_size, screen));
     }
 
@@ -141,7 +154,9 @@ void BoxManager::build_board_list() {
 
 bool BoxManager::check_board_list_change() const {
     return (dan_available && !is_2p && !guests_only(is_2p)) != (dan_box_index >= 0) ||
-           waiwai_replaces_game() != waiwai_board || guests_only(is_2p) != guest_board;
+           waiwai_replaces_game() != waiwai_board || guests_only(is_2p) != guest_board ||
+           (global_data.config->network.guest_mode != access_code_board &&
+            std::ranges::contains(box_locations, Screens::SETTINGS));
 }
 
 void BoxManager::change_board_list() {
@@ -149,11 +164,12 @@ void BoxManager::change_board_list() {
     selected_box_index = 0;
 }
 
-// practice, the AI battle and recording have no 2P mode: with two players in, their boards are greyed out
+// practice, the AI battle, the enso battle and recording have no 2P mode: with two players in, their boards are
+// greyed out
 bool BoxManager::is_disabled(int index) const {
     const Screens l = boxes[index]->location;
-    return is_2p && (l == Screens::PRACTICE_SELECT || l == Screens::AI_SELECT || l == Screens::RECORD_SELECT ||
-                     l == Screens::ONLINE_SELECT);
+    return is_2p && (l == Screens::PRACTICE_SELECT || l == Screens::AI_SELECT || l == Screens::BATTLE_SELECT ||
+                     l == Screens::RECORD_SELECT || l == Screens::ONLINE_SELECT);
 }
 
 bool BoxManager::selection_allowed() const {
@@ -170,8 +186,12 @@ void BoxManager::select_box() {
         shop_request = true;
         return;
     }
+    if (location == Screens::SETTINGS && access_code_board) {
+        access_code_request = true;
+        return;
+    }
     if (!selection_allowed()) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         return;
     }
     if (location == Screens::SONG_SELECT) {
@@ -180,6 +200,8 @@ void BoxManager::select_box() {
         // upstream's mode voice (Green's Sounds/entry/mode_ai.ogg); a child skin inherits the file, but Z-DON's AI
         // battle has its own voice timing, so it stays silent there as before
         audio.play_sound("mode_ai", VolumePreset::VOICE);
+    } else if (location == Screens::BATTLE_SELECT) {
+        audio.play_sound("mode_battle", VolumePreset::VOICE);
     }
     fade_out->start();
 }

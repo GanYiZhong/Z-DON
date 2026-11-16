@@ -132,7 +132,7 @@ bool SongSelectScreen::zdon_search_input() {
         }
     }
     if (changed) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         zdon_search_refresh();
         return true;
     }
@@ -153,17 +153,17 @@ bool SongSelectScreen::zdon_search_input() {
     zdon_search.last_mouse = m;
     if (const float wheel = mouse_wheel(); wheel != 0 && n > 0) {
         zdon_search.sel = std::clamp(zdon_search.sel + (wheel < 0 ? 1 : -1), -1, n - 1);
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         return true;
     }
     if (key_pressed(SDL_SCANCODE_DOWN) && n > 0) {
         zdon_search.sel = std::min(zdon_search.sel + 1, n - 1);
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         return true;
     }
     if (key_pressed(SDL_SCANCODE_UP) && zdon_search.sel >= 0) {
         zdon_search.sel--;
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         return true;
     }
     const bool blank = player->search_string.find_first_not_of(" \t") == std::string::npos;
@@ -171,7 +171,7 @@ bool SongSelectScreen::zdon_search_input() {
     const bool enter = (key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_KP_ENTER)) && pick >= 0;
     if (enter || clicked_row >= 0) {
         const fs::path target = zdon_search.hits[clicked_row >= 0 ? clicked_row : pick];
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         search_box.reset();
         player->search_string.clear();
         set_keyboard_visible(false);

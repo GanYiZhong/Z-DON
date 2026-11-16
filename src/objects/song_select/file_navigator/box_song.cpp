@@ -7,6 +7,10 @@
 #include "../../../libs/audio/audio.h"
 #include "../../../libs/fixed_step.h"
 #include "../../../libs/gfx/text.h"
+#include "../../../libs/latest_worker.h"
+#include "../../../libs/network/network.h"
+#include "../../../platform/platform.h"
+#include "color_utils.h"
 #include "navigator.h"
 
 namespace {
@@ -52,6 +56,13 @@ SongBox::SongBox(const fs::path& path, const BoxDef& box_def, SongParser parser)
     song_genre_label = box_def.genre_label;
 
     parser.get_metadata();
+    if (box_def.collab) {
+        auto colors = DEFAULT_COLORS.find(get_genre_index(parser.metadata.genre));
+        if (colors != DEFAULT_COLORS.end() && colors->second[1].has_value()) {
+            fore_color = colors->second[1].value();
+            text_color = Color::WHITE;
+        }
+    }
     auto& titles = parser.metadata.title;
     const std::string& lang = global_data.config->general.language;
     text_name = localized_text(titles, lang, LocalizedTextFallback::ENGLISH_OR_FIRST);
@@ -152,6 +163,20 @@ void SongBox::load_text() {
 
 void SongBox::update(double current_time) {
     BaseBox::update(current_time);
+    if (popular_rank < 0) {
+        int best = 0;
+        for (const auto& hash : hashes) {
+            int rank = hash.empty() ? 0 : network.popular_rank(hash);
+            if (rank < 0) {
+                best = -1;
+                break;
+            }
+            if (rank > 0 && (best == 0 || rank < best)) {
+                best = rank;
+            }
+        }
+        popular_rank = best;
+    }
     // Z-DON (merge 0ed42ec): no upstream early return for closed boxes; the score_history load below also runs
     // for closed boxes here
     if (!diff_fade_in->settled(current_time)) { // one animation shared by every song box
@@ -291,10 +316,7 @@ void SongBox::draw_score_history() {
     if (!yellow_box_opened) {
         return;
     }
-    if (get_current_ms() < box_opened_at + 3000.0) {
-        return;
-    }
-    score_history->draw();
+    score_history->draw(get_current_ms() - box_opened_at);
 }
 
 void SongBox::enter_box() {

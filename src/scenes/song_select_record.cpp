@@ -127,15 +127,15 @@ void RecordSongSelectScreen::update_modal() {
         } else if (kat) { // left / right through auto, no hits and the courses
             const int n = 2 + static_cast<int>(available.size());
             cursor = (cursor + (r_kat ? 1 : n - 1)) % n;
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         } else if (don && cursor >= 2) { // tick a course to record with the decided one (that one stays)
             const int c = available[cursor - 2];
             if (c != difficulty) {
                 ticked[c] = !ticked[c];
             }
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         } else if (don) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             const Job job{song, lanes(), cursor == 0, title};
             if (running) { // after the ones before it
                 queue.push_back(job);

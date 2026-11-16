@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -21,6 +22,7 @@
 #include "../gfx/texture.h"
 #include "../global_data.h"
 #include "../math/sha256.h"
+#include "../notify.h"
 #include "../parsers/tja.h"
 #include "android_ca.h"
 
@@ -242,8 +244,54 @@ void NetworkClient::check_heartbeat() {
                                                                           // connection through Cloudflare
 }
 
+bool NetworkClient::fetch_title(const std::string& access_code, std::string& title) {
+    if (!network_enabled() || is_guest_id(access_code)) {
+        return false;
+    }
+    cpr::Response response =
+        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
+                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        return false;
+    }
+
+    rapidjson::Document doc;
+    if (doc.Parse(response.text.c_str()).HasParseError()) {
+        return false;
+    }
+    if (!doc.HasMember("title") || !doc["title"].IsString()) {
+        return false;
+    }
+
+    title = doc["title"].GetString();
+    return true;
+}
+
+bool NetworkClient::fetch_title_bg(const std::string& access_code, int& title_bg) {
+    if (!network_enabled() || is_guest_id(access_code)) {
+        return false;
+    }
+    cpr::Response response =
+        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
+                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        return false;
+    }
+
+    rapidjson::Document doc;
+    if (doc.Parse(response.text.c_str()).HasParseError()) {
+        return false;
+    }
+    if (!doc.HasMember("title_bg") || !doc["title_bg"].IsInt()) {
+        return false;
+    }
+
+    title_bg = doc["title_bg"].GetInt();
+    return true;
+}
+
 void NetworkClient::update_username(const std::string& access_code, const std::string& username) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return;
     }
     cpr::Response response =
@@ -256,8 +304,99 @@ void NetworkClient::update_username(const std::string& access_code, const std::s
     }
 }
 
+void NetworkClient::update_settings(const std::string& access_code, const std::string& key, const std::string& value) {
+    if (!network_enabled() || is_guest_id(access_code)) {
+        return;
+    }
+    cpr::Response response = cpr::Post(
+        cpr::Url{network_url("/update_settings")},
+        signed_headers("POST", "/update_settings", {{"access_code", access_code}, {"key", key}, {"value", value}}),
+        cpr::Parameters{{"access_code", access_code}}, cpr::Payload{{"key", key}, {"value", value}},
+        cpr::Timeout{5000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        spdlog::error("Failed to update setting {}: HTTP {} - {}", key, response.status_code, response.text);
+    }
+}
+
+void NetworkClient::push_modifiers(const std::string& access_code, const PlayerData& player) {
+    if (!network_enabled() || access_code.empty() || access_code == "0" || access_code == "1" ||
+        is_guest_id(access_code)) {
+        return;
+    }
+    const std::pair<const char*, std::string> settings[] = {
+        {"modifier_auto", player.modifier_auto ? "1" : "0"},
+        {"modifier_speed", std::to_string(player.modifier_speed)},
+        {"modifier_display", player.modifier_display ? "1" : "0"},
+        {"modifier_inverse", player.modifier_inverse ? "1" : "0"},
+        {"modifier_random", std::to_string(player.modifier_random)},
+        {"modifier_skip", player.modifier_skip ? "1" : "0"},
+        {"neiro_index", std::to_string(player.neiro_index)},
+    };
+    for (const auto& [key, value] : settings) {
+        update_settings(access_code, key, value);
+    }
+}
+
+void NetworkClient::update_song_list(const std::string& access_code, const std::string& kind,
+                                     const std::vector<std::string>& hashes) {
+    if (!network_enabled() || is_guest_id(access_code)) {
+        return;
+    }
+    std::string json = "[";
+    for (size_t i = 0; i < hashes.size(); i++) {
+        json += i == 0 ? "\"" : ",\"";
+        json += hashes[i];
+        json += '"';
+    }
+    json += ']';
+    cpr::Response response = cpr::Post(
+        cpr::Url{network_url("/update_song_list")},
+        signed_headers("POST", "/update_song_list", {{"access_code", access_code}, {"kind", kind}, {"hashes", json}}),
+        cpr::Parameters{{"access_code", access_code}}, cpr::Payload{{"kind", kind}, {"hashes", json}},
+        cpr::Timeout{5000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        spdlog::error("Failed to update the {} list: HTTP {} - {}", kind, response.status_code, response.text);
+    }
+}
+
+bool NetworkClient::fetch_costume(const std::string& access_code, int& head_index, int& body_index, int& cos_index,
+                                  bool& is_costume) {
+    if (!network_enabled() || is_guest_id(access_code)) {
+        return false;
+    }
+    cpr::Response response =
+        cpr::Get(cpr::Url{network_url("/user")}, signed_headers("GET", "/user", {{"access_code", access_code}}),
+                 cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+    if (response.status_code != 200) {
+        return false;
+    }
+
+    rapidjson::Document doc;
+    if (doc.Parse(response.text.c_str()).HasParseError()) {
+        return false;
+    }
+    if (!doc.HasMember("chara_head_index") || !doc["chara_head_index"].IsInt()) {
+        return false;
+    }
+    if (!doc.HasMember("chara_body_index") || !doc["chara_body_index"].IsInt()) {
+        return false;
+    }
+    if (!doc.HasMember("chara_cos_index") || !doc["chara_cos_index"].IsInt()) {
+        return false;
+    }
+    if (!doc.HasMember("chara_is_costume") || !doc["chara_is_costume"].IsBool()) {
+        return false;
+    }
+
+    head_index = doc["chara_head_index"].GetInt();
+    body_index = doc["chara_body_index"].GetInt();
+    cos_index = doc["chara_cos_index"].GetInt();
+    is_costume = doc["chara_is_costume"].GetBool();
+    return true;
+}
+
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_code) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return std::nullopt;
     }
     cpr::Response response =
@@ -301,6 +440,31 @@ std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_co
     if (doc.HasMember("puchichara")) {
         user.acce_index = doc["puchichara"].IsInt() ? doc["puchichara"].GetInt() : 0;
     }
+    if (doc.HasMember("chara_paint")) {
+        user.paint_index = doc["chara_paint"].IsInt() ? doc["chara_paint"].GetInt() : 0;
+    }
+    if (doc.HasMember("settings") && doc["settings"].IsObject()) {
+        const rapidjson::Value& settings = doc["settings"];
+        for (auto it = settings.MemberBegin(); it != settings.MemberEnd(); ++it) {
+            if (it->value.IsString()) {
+                user.settings[it->name.GetString()] = it->value.GetString();
+            }
+        }
+    }
+    auto read_hashes = [&doc](const char* key) {
+        std::vector<std::string> hashes;
+        if (!doc.HasMember(key) || !doc[key].IsArray()) {
+            return hashes;
+        }
+        for (const auto& entry : doc[key].GetArray()) {
+            if (entry.IsString()) {
+                hashes.emplace_back(entry.GetString());
+            }
+        }
+        return hashes;
+    };
+    user.favorites = read_hashes("favorites");
+    user.recent = read_hashes("recent");
     user.import_requested =
         doc.HasMember("import_requested") && doc["import_requested"].IsBool() && doc["import_requested"].GetBool();
     return user;
@@ -343,7 +507,7 @@ void NetworkClient::check_and_install_android_update() {}
 
 void NetworkClient::update_costume(const std::string& access_code, int head_index, int body_index, int cos_index,
                                    bool is_costume) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return;
     }
     cpr::Response response = cpr::Post(cpr::Url{network_url("/update_costume")},
@@ -370,7 +534,7 @@ void NetworkClient::update_costume(const std::string& access_code, int head_inde
 
 std::vector<RemoteScore> NetworkClient::fetch_scores(const std::string& access_code) {
     std::vector<RemoteScore> result;
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return result;
     }
     cpr::Response response =
@@ -533,6 +697,37 @@ std::optional<std::vector<RankingEntry>> NetworkClient::song_leaderboard(const s
     return std::nullopt;
 }
 
+int NetworkClient::popular_rank(const std::string& hash) {
+    if (!network_enabled() || !online || hash.empty()) {
+        return 0;
+    }
+    if (!popular_ranks.has_value()) {
+        request_popular();
+        return -1;
+    }
+    auto it = popular_ranks->find(hash);
+    return it == popular_ranks->end() ? 0 : it->second;
+}
+
+void NetworkClient::request_popular() {
+    if (!pending_popular.has_value()) {
+        pending_popular =
+            cpr::GetAsync(cpr::Url{network_url("/most_played_songs")}, signed_headers("GET", "/most_played_songs", {}),
+                          cpr::Timeout{5000} NETWORK_CA_OPT);
+    }
+}
+
+const std::vector<NetworkClient::PopularSong>* NetworkClient::popular_songs() {
+    if (!network_enabled() || !online) {
+        return nullptr;
+    }
+    if (!popular_ranks.has_value()) {
+        request_popular();
+        return nullptr;
+    }
+    return &popular_list;
+}
+
 void NetworkClient::request_replay(int score_id) {
     if (!network_enabled()) {
         return;
@@ -556,7 +751,7 @@ std::optional<ReplayData> NetworkClient::take_replay_result() {
 }
 
 void NetworkClient::clear_import_flag(const std::string& access_code) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return;
     }
     cpr::Response response =
@@ -631,7 +826,7 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
                                  const std::string& modifiers_json, bool chara_is_costume, int chara_cos_index,
                                  const std::string& source_folder, int gauge,
                                  const std::optional<JudgeParams>& judge_params) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return;
     }
     leaderboard_cache.erase(hash);
@@ -704,7 +899,7 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
 
 void NetworkClient::submit_dan(const std::string& access_code, const std::string& course_id, const DanResultData& rd,
                                const std::vector<DanSongEntry>& dan_songs, int arrival) {
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         return;
     }
     rapidjson::Document doc;
@@ -770,7 +965,7 @@ void NetworkClient::submit_dan(const std::string& access_code, const std::string
 }
 
 void NetworkClient::poll_jump(const std::string& access_code) {
-    if (!network_enabled()) {
+    if (!network_enabled() || is_guest_id(access_code)) {
         return;
     }
     if (pending_jump.has_value()) {
@@ -785,7 +980,7 @@ void NetworkClient::spin_gacha(const std::string& access_code) {
     if (pending_gacha.has_value()) {
         return;
     }
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         gacha_result = GachaResult{.error = "offline_gacha"};
         return;
     }
@@ -800,7 +995,7 @@ std::optional<GachaResult> NetworkClient::take_gacha_result() {
 
 void NetworkClient::submit_kinotake(int seat, const std::string& access_code, int team, int score, bool duet,
                                     bool costume) {
-    if (!network_enabled() || !online || seat < 0 || seat > 1 || team < 0) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1 || team < 0) {
         return;
     }
     std::map<std::string, std::string> params{
@@ -821,12 +1016,12 @@ void NetworkClient::submit_kinotake(int seat, const std::string& access_code, in
 }
 
 void NetworkClient::submit_don_points(int seat, const std::string& access_code, const std::vector<int>& gauges) {
-    if (!network_enabled() || !online || seat < 0 || seat > 1 || gauges.empty()) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1 || gauges.empty()) {
         return;
     }
     std::string list;
-    for (int gauge : gauges) {
-        list += (list.empty() ? "" : ",") + std::to_string(gauge);
+    for (size_t i = 0; i < std::min<size_t>(gauges.size(), 16); ++i) {
+        list += (list.empty() ? "" : ",") + std::to_string(gauges[i]);
     }
     std::map<std::string, std::string> params{{"access_code", access_code}, {"gauges", list}};
     pending_don_points.emplace_back(
@@ -836,7 +1031,7 @@ void NetworkClient::submit_don_points(int seat, const std::string& access_code, 
 }
 
 void NetworkClient::submit_medals(int seat, const std::string& access_code) {
-    if (!network_enabled() || !online || seat < 0 || seat > 1) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1) {
         return;
     }
     pending_medals.emplace_back(seat, cpr::PostAsync(cpr::Url{network_url("/medals")},
@@ -847,11 +1042,11 @@ void NetworkClient::submit_medals(int seat, const std::string& access_code) {
 }
 
 void NetworkClient::submit_revive_result(const std::string& access_code, bool success) {
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         return;
     }
     const std::string result = success ? "true" : "false";
-    pending_revive.push_back(cpr::PostAsync(
+    pending_posts.push_back(cpr::PostAsync(
         cpr::Url{network_url("/revive_result")},
         signed_headers("POST", "/revive_result", {{"access_code", access_code}, {"success", result}}),
         cpr::Parameters{{"access_code", access_code}, {"success", result}}, cpr::Timeout{5000} NETWORK_CA_OPT));
@@ -859,7 +1054,7 @@ void NetworkClient::submit_revive_result(const std::string& access_code, bool su
 
 void NetworkClient::submit_ai_battle(const std::string& access_code, const std::string& song_hash, int difficulty,
                                      int stars, bool won, bool assigned, const std::string& sections) {
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         return;
     }
     const std::string won_text = won ? "true" : "false";
@@ -885,7 +1080,7 @@ void NetworkClient::submit_ai_battle(const std::string& access_code, const std::
 
 void NetworkClient::request_reward_shop(int seat, const std::string& access_code) {
     shop_seats[seat] = {};
-    if (!network_enabled() || !online || seat < 0 || seat > 1) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1) {
         return;
     }
     pending_shop.emplace_back(seat, cpr::GetAsync(cpr::Url{network_url("/reward_shop")},
@@ -895,7 +1090,7 @@ void NetworkClient::request_reward_shop(int seat, const std::string& access_code
 }
 
 void NetworkClient::buy_shop_good(int seat, const std::string& access_code, int type, int id) {
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         shop_buy_result = ShopBuyResult{.seat = seat, .status = "error"};
         return;
     }
@@ -913,7 +1108,7 @@ std::optional<ShopBuyResult> NetworkClient::take_shop_buy_result() {
 }
 
 void NetworkClient::unlock_campaign_costume(const std::string& access_code, int cos_index) {
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         return;
     }
     const std::string cos = std::to_string(cos_index);
@@ -928,7 +1123,7 @@ void NetworkClient::unlock_campaign_costume(const std::string& access_code, int 
 
 AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string& access_code) {
     AIBattleStatus status;
-    if (!network_enabled() || !online) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
         return status;
     }
     cpr::Response response = cpr::Get(cpr::Url{network_url("/ai_battle")},
@@ -946,6 +1141,107 @@ AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string& access_c
         status.next_reward_wins = read("next_reward_wins", -1);
     }
     return status;
+}
+
+static BattleStatus parse_battle_status(const rapidjson::Value& doc) {
+    const auto read = [&doc](const char* key, int fallback) {
+        return doc.HasMember(key) && doc[key].IsInt() ? doc[key].GetInt() : fallback;
+    };
+    BattleStatus status;
+    status.answered = true;
+    status.bond = read("bond", 1);
+    status.exp = read("exp", 0);
+    status.exp_next = read("exp_next", -1);
+    status.best_power = read("best_power", 0);
+    status.stones = read("stones", 0);
+    status.moves = read("moves", 1);
+    status.move_cost = read("move_cost", -1);
+    status.stage = read("stage", 1);
+    status.cleared = read("cleared", 0);
+    status.orbs = read("orbs", 0);
+    status.orb_rewards = read("orb_rewards", 0);
+    status.orb_cost = read("orb_cost", -1);
+    if (doc.HasMember("skills") && doc["skills"].IsArray()) {
+        for (const auto& move : doc["skills"].GetArray()) {
+            status.skills.push_back(move.IsInt() ? move.GetInt() : 11);
+        }
+    }
+    if (doc.HasMember("story") && doc["story"].IsArray()) {
+        for (const auto& id : doc["story"].GetArray()) {
+            if (id.IsString()) {
+                status.story.emplace_back(id.GetString());
+            }
+        }
+    }
+    if (doc.HasMember("bosses") && doc["bosses"].IsObject()) {
+        for (const auto& [key, boss] : doc["bosses"].GetObject()) {
+            if (boss.IsObject() && boss.HasMember("hp") && boss["hp"].IsInt() && boss.HasMember("max") &&
+                boss["max"].IsInt()) {
+                int stage = 0;
+                std::from_chars(key.GetString(), key.GetString() + key.GetStringLength(), stage);
+                status.bosses[stage] = {boss["hp"].GetInt(), boss["max"].GetInt()};
+            }
+        }
+    }
+    return status;
+}
+
+BattleStatus NetworkClient::fetch_battle_status(const std::string& access_code) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
+        return {};
+    }
+    cpr::Response response = cpr::Get(cpr::Url{network_url("/enso_battle")},
+                                      cpr::Parameters{{"access_code", access_code}}, cpr::Timeout{3000} NETWORK_CA_OPT);
+    rapidjson::Document doc;
+    if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
+        return parse_battle_status(doc);
+    }
+    return {};
+}
+
+void NetworkClient::mark_battle_story(const std::string& access_code, const std::vector<std::string>& seen) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seen.empty()) {
+        return;
+    }
+    std::string ids;
+    for (const std::string& id : seen) {
+        ids += (ids.empty() ? "" : ",") + id;
+    }
+    const std::map<std::string, std::string> fields{{"access_code", access_code}, {"seen", ids}};
+    pending_posts.push_back(cpr::PostAsync(
+        cpr::Url{network_url("/enso_battle/story")}, signed_headers("POST", "/enso_battle/story", fields),
+        cpr::Parameters{{"access_code", access_code}, {"seen", ids}}, cpr::Timeout{5000} NETWORK_CA_OPT));
+}
+
+void NetworkClient::submit_battle(const std::string& access_code, const std::string& song_hash, int difficulty,
+                                  int stage, int hits, int damage, int power, int chests, int orb_chests,
+                                  const std::vector<int>& skills) {
+    if (!network_enabled() || is_guest_id(access_code) || !online) {
+        return;
+    }
+    std::string picks;
+    for (const int move : skills) {
+        picks += (picks.empty() ? "" : ",") + std::to_string(move);
+    }
+    std::map<std::string, std::string> fields{{"access_code", access_code},
+                                              {"song_hash", song_hash},
+                                              {"difficulty", std::to_string(difficulty)},
+                                              {"stage", std::to_string(stage)},
+                                              {"hits", std::to_string(hits)},
+                                              {"damage", std::to_string(damage)},
+                                              {"power", std::to_string(power)},
+                                              {"chests", std::to_string(chests)},
+                                              {"skills", picks}};
+    if (orb_chests > 0) {
+        fields["orb_chests"] = std::to_string(orb_chests);
+    }
+    cpr::Parameters params;
+    for (const auto& [key, value] : fields) {
+        params.Add({key, value});
+    }
+    pending_battle.push_back(cpr::PostAsync(cpr::Url{network_url("/enso_battle")},
+                                            signed_headers("POST", "/enso_battle", fields), params,
+                                            cpr::Timeout{5000} NETWORK_CA_OPT));
 }
 
 OwnedCosmetics NetworkClient::fetch_owned_cosmetics(const std::string& access_code) {
@@ -1123,6 +1419,7 @@ void NetworkClient::update(double current_ms) {
                 spdlog::info("Update check: APK up to date");
             } else {
                 spdlog::info("Update check: newer APK available, downloading");
+                notify("Update available, downloading");
                 pending_update_expected_sha256 = expected_sha256;
                 std::error_code mkdir_ec;
                 fs::create_directories(fs::path(kUpdateApkTmpPath).parent_path(), mkdir_ec);
@@ -1291,6 +1588,9 @@ void NetworkClient::update(double current_ms) {
     const auto json_bool = [](const rapidjson::Value& v, const char* key) {
         return v.HasMember(key) && v[key].IsBool() && v[key].GetBool();
     };
+    const auto text_of = [](const rapidjson::Value& v, const char* key) -> std::string {
+        return v.HasMember(key) && v[key].IsString() ? v[key].GetString() : "";
+    };
     for (auto it = pending_ai_battle.begin(); it != pending_ai_battle.end();) {
         if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
@@ -1314,9 +1614,6 @@ void NetworkClient::update(double current_ms) {
             progress.challenge = json_bool(doc, "challenge");
             progress.next_reward_wins = json_int(doc, "next_reward_wins", -1);
             progress.all_rewards = json_bool(doc, "all_rewards");
-            auto text_of = [](const rapidjson::Value& v, const char* key) -> std::string {
-                return v.HasMember(key) && v[key].IsString() ? v[key].GetString() : "";
-            };
             progress.next_reward_name = text_of(doc, "next_reward_name");
             if (doc.HasMember("reward") && doc["reward"].IsObject()) {
                 progress.reward_kind = text_of(doc["reward"], "kind");
@@ -1334,16 +1631,58 @@ void NetworkClient::update(double current_ms) {
         }
         it = pending_ai_battle.erase(it);
     }
-    for (auto it = pending_revive.begin(); it != pending_revive.end();) {
+    for (auto it = pending_posts.begin(); it != pending_posts.end();) {
         if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
             continue;
         }
         cpr::Response response = it->get();
         if (response.status_code != 200) {
-            spdlog::warn("Revive result failed: HTTP {} - {}", response.status_code, response.text);
+            spdlog::warn("POST {} failed: HTTP {} - {}", response.url.str(), response.status_code, response.text);
         }
-        it = pending_revive.erase(it);
+        it = pending_posts.erase(it);
+    }
+    for (auto it = pending_battle.begin(); it != pending_battle.end();) {
+        if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        cpr::Response response = it->get();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject() &&
+            doc.HasMember("before") && doc["before"].IsObject() && doc.HasMember("after") && doc["after"].IsObject()) {
+            BattleProgress progress;
+            progress.answered = true;
+            progress.before = parse_battle_status(doc["before"]);
+            progress.after = parse_battle_status(doc["after"]);
+            if (doc.HasMember("boss") && doc["boss"].IsObject()) {
+                const rapidjson::Value& boss = doc["boss"];
+                progress.boss_before = BattleBoss{json_int(boss, "hp_before", 0), json_int(boss, "max", 0)};
+                progress.boss_hp_after = json_int(boss, "hp_after", 0);
+            }
+            if (doc.HasMember("chests") && doc["chests"].IsArray()) {
+                for (const auto& stones : doc["chests"].GetArray()) {
+                    progress.chests.push_back(stones.IsInt() ? stones.GetInt() : 0);
+                }
+            }
+            if (doc.HasMember("orb_chests") && doc["orb_chests"].IsArray()) {
+                for (const auto& orbs : doc["orb_chests"].GetArray()) {
+                    progress.orb_chests.push_back(orbs.IsInt() ? orbs.GetInt() : 0);
+                }
+            }
+            if (doc.HasMember("orb_reward") && doc["orb_reward"].IsObject()) {
+                progress.orb_reward_kind = text_of(doc["orb_reward"], "kind");
+                progress.orb_reward_name = text_of(doc["orb_reward"], "name");
+            }
+            if (doc.HasMember("reward") && doc["reward"].IsObject()) {
+                progress.reward_kind = text_of(doc["reward"], "kind");
+                progress.reward_name = text_of(doc["reward"], "name");
+            }
+            battle_progress_ = std::move(progress);
+        } else {
+            spdlog::warn("Battle submit failed: HTTP {} - {}", response.status_code, response.text);
+        }
+        it = pending_battle.erase(it);
     }
     for (auto it = pending_dan.begin(); it != pending_dan.end();) {
         if (it->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
@@ -1538,6 +1877,56 @@ void NetworkClient::update(double current_ms) {
         }
     }
 
+    if (pending_popular.has_value() &&
+        pending_popular->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_popular->get();
+        pending_popular.reset();
+        rapidjson::Document doc;
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() &&
+            doc.HasMember("songs") && doc["songs"].IsArray()) {
+            std::map<std::string, int> ranks;
+            popular_list.clear();
+            int place = 0;
+            const std::string& lang = global_data.config->general.language;
+            for (const auto& row : doc["songs"].GetArray()) {
+                if (!row.IsObject() || ++place > 10) {
+                    continue;
+                }
+                PopularSong song;
+                if (row.HasMember("title") && row["title"].IsObject()) {
+                    const auto& t = row["title"];
+                    for (const char* key : {lang.c_str(), "en"}) {
+                        if (song.title.empty() && t.HasMember(key) && t[key].IsString()) {
+                            song.title = t[key].GetString();
+                        }
+                    }
+                    for (auto it = t.MemberBegin(); song.title.empty() && it != t.MemberEnd(); ++it) {
+                        if (it->value.IsString()) {
+                            song.title = it->value.GetString();
+                        }
+                    }
+                }
+                if (row.HasMember("genre") && row["genre"].IsString()) {
+                    song.genre = row["genre"].GetString();
+                }
+                popular_list.push_back(std::move(song));
+                if (row.HasMember("hashes") && row["hashes"].IsArray()) {
+                    for (const auto& h : row["hashes"].GetArray()) {
+                        if (h.IsString()) {
+                            ranks.emplace(h.GetString(), place);
+                        }
+                    }
+                } else if (row.HasMember("hash") && row["hash"].IsString()) {
+                    ranks.emplace(row["hash"].GetString(), place);
+                }
+            }
+            popular_ranks = std::move(ranks);
+        } else {
+            spdlog::warn("most_played_songs: HTTP {} - {}", response.status_code, response.text);
+            popular_ranks.emplace();
+        }
+    }
+
     if (pending_score_submit.has_value() &&
         pending_score_submit->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         cpr::Response response = pending_score_submit->get();
@@ -1568,6 +1957,10 @@ void NetworkClient::shutdown() {
     if (pending_leaderboard.has_value()) {
         pending_leaderboard->wait();
         pending_leaderboard.reset();
+    }
+    if (pending_popular.has_value()) {
+        pending_popular->wait();
+        pending_popular.reset();
     }
 #if defined(__ANDROID__)
     if (pending_update_checksum.has_value()) {
@@ -1601,6 +1994,18 @@ void NetworkClient::submit_dan(const std::string&, const std::string&, const Dan
                                const std::vector<DanSongEntry>&, int) {}
 void NetworkClient::clear_import_flag(const std::string&) {}
 void NetworkClient::update_username(const std::string&, const std::string&) {}
+void NetworkClient::update_settings(const std::string&, const std::string&, const std::string&) {}
+void NetworkClient::push_modifiers(const std::string&, const PlayerData&) {}
+void NetworkClient::update_song_list(const std::string&, const std::string&, const std::vector<std::string>&) {}
+bool NetworkClient::fetch_title(const std::string&, std::string&) {
+    return false;
+}
+bool NetworkClient::fetch_title_bg(const std::string&, int&) {
+    return false;
+}
+bool NetworkClient::fetch_costume(const std::string&, int&, int&, int&, bool&) {
+    return false;
+}
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string&) {
     return std::nullopt;
 }
@@ -1622,6 +2027,12 @@ void NetworkClient::submit_ai_battle(const std::string&, const std::string&, int
 AIBattleStatus NetworkClient::fetch_ai_battle_status(const std::string&) {
     return {};
 }
+BattleStatus NetworkClient::fetch_battle_status(const std::string&) {
+    return {};
+}
+void NetworkClient::mark_battle_story(const std::string&, const std::vector<std::string>&) {}
+void NetworkClient::submit_battle(const std::string&, const std::string&, int, int, int, int, int, int, int,
+                                  const std::vector<int>&) {}
 void NetworkClient::request_reward_shop(int seat, const std::string&) {
     shop_seats[seat] = {};
 }
@@ -1669,6 +2080,12 @@ std::optional<ChallengeList> NetworkClient::take_challenges() {
 void NetworkClient::request_replay(int) {}
 std::optional<std::vector<RankingEntry>> NetworkClient::song_leaderboard(const std::string&) {
     return std::nullopt;
+}
+int NetworkClient::popular_rank(const std::string&) {
+    return 0;
+}
+const std::vector<NetworkClient::PopularSong>* NetworkClient::popular_songs() {
+    return nullptr;
 }
 std::optional<ReplayData> NetworkClient::take_replay_result() {
     return std::nullopt;

@@ -102,6 +102,19 @@ void DanGameScreen::init_dan() {
     parser = std::make_shared<SongParser>(first.song_path, static_cast<int>(start_delay));
     load_song_audio(AudioLoadMode::Sync);
 
+    unload_dan_music();
+    dan_music.assign(sd.selected_dan.size(), "");
+    for (size_t i = 1; i < sd.selected_dan.size(); i++) {
+        try {
+            SongParser sp(sd.selected_dan[i].song_path);
+            if (fs::exists(sp.metadata.wave)) {
+                dan_music[i] = audio.load_sound(sp.metadata.wave, "song_dan_" + std::to_string(i));
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Dan: failed to preload audio for song {}: {}", i + 1, e.what());
+        }
+    }
+
     players.clear();
     players.push_back(std::make_unique<Player>(
         parser, global_data.player_num, first.difficulty, false, get_player_modifiers(global_data.player_num),
@@ -122,6 +135,15 @@ void DanGameScreen::init_dan() {
     begin_song_presentation(first, 1);
 }
 
+void DanGameScreen::unload_dan_music() {
+    for (const auto& name : dan_music) {
+        if (!name.empty()) {
+            audio.unload_sound(name);
+        }
+    }
+    dan_music.clear();
+}
+
 void DanGameScreen::change_song() {
     SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
     const auto& entry = sd.selected_dan[song_index];
@@ -133,7 +155,11 @@ void DanGameScreen::change_song() {
     const auto t0 = std::chrono::steady_clock::now();
     parser = std::make_shared<SongParser>(entry.song_path, static_cast<int>(start_delay));
     const auto t1 = std::chrono::steady_clock::now();
-    load_song_audio(AudioLoadMode::Sync);
+    if (song_index < std::ssize(dan_music) && !dan_music[song_index].empty()) {
+        song_music = dan_music[song_index]; // preloaded when the course started
+    } else {
+        load_song_audio(AudioLoadMode::Sync);
+    }
     const auto t2 = std::chrono::steady_clock::now();
 
     song_started = false;
@@ -487,6 +513,7 @@ void DanGameScreen::save_result_data(bool all_failed) {
     sd.dan_result_data.dan_index = sd.dan_index;
     sd.dan_result_data.dan_index_max = sd.dan_index_max;
     sd.dan_result_data.is_gaiden = sd.dan_gaiden;
+    sd.dan_result_data.is_modern = sd.dan_modern;
     sd.dan_result_data.dan_title = sd.song_title;
     sd.dan_result_data.score = players[0]->get_score();
     if (dan_gauge) {
@@ -603,6 +630,7 @@ Screens DanGameScreen::on_screen_end(Screens next_screen) {
     dan_info_cache.reset();
     draw_seq.reset();
     between.stop();
+    unload_dan_music();
     return GameScreen::on_screen_end(next_screen);
 }
 
@@ -675,7 +703,6 @@ std::optional<Screens> DanGameScreen::update() {
         if (std::ssize(sd.dan_result_data.songs) <= song_index) {
             DanResultSong song_res = build_song_result(sd);
             save_song_score(song_res);
-            players[0]->input_log.clear(); // each song is submitted with only its own inputs
             sd.dan_result_data.songs.push_back(song_res);
         }
 

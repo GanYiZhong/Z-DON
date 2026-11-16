@@ -87,7 +87,7 @@ bool ResultScreen::zdon_freeze_to_game_over() const {
 }
 
 bool ResultScreen::exiting() const {
-    return retrying || zdon_freeze_exit > 0 || (fade_out && fade_out->is_started);
+    return retrying || zdon_freeze_exit > 0 || in_game_over() || (fade_out && fade_out->is_started);
 }
 
 // Z-DON AI battle: the credit's last song (limits.song_limit reached) shows the credit's AI songs before it ends
@@ -123,6 +123,9 @@ void ResultScreen::start_fade_out() {
                                          global_data.config->limits.song_limit == global_data.songs_played);
     if (credit_end && credit_end_screen() == Screens::GAME_OVER && game_over_overlay()) {
         game_over.start();
+        if (audio.has_sound("bgm")) {
+            audio.stop_sound("bgm");
+        }
         return;
     }
     fade_out->start();
@@ -140,7 +143,7 @@ void ResultScreen::handle_input(double current_ms) {
     if (reveal_end == 0) {
         if (skipped_time == 0) {
             skipped_time = current_ms;
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         }
         return;
     }
@@ -148,7 +151,7 @@ void ResultScreen::handle_input(double current_ms) {
         global_data.config->general.fast_transitions ? kFastInputDelayMs : kWaitEffectEndMs + kWaitNextSceneMs;
     if (current_ms >= reveal_end + advance_delay && !exiting()) {
         begin_exit();
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
     }
 }
 
@@ -173,7 +176,7 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
         if (check_key_pressed(global_data.config->keys.back_key) && reveal_end_ms() > 0) {
             quitting = true;
             start_fade_out();
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             return;
         }
         handle_input(current_ms);
@@ -285,17 +288,17 @@ bool ResultScreen::zdon_hist_input() {
         if (zdon_ai_pages_open()) {
             if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
                 zdon_ai_page_next();
-                audio.play_sound("kat", VolumePreset::SOUND);
+                audio.play_sound("kat", VolumePreset::HITSOUND);
             } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
                 zdon_ai_pages_finish();
-                audio.play_sound("don", VolumePreset::SOUND);
+                audio.play_sound("don", VolumePreset::HITSOUND);
             }
             return true;
         }
         // AI battle (AiResultSectionMain SwitchSection): kat switches the VS panel's simple / detail view
         if (is_l_kat_pressed(PlayerNum::P1) || is_r_kat_pressed(PlayerNum::P1)) {
             global_data.zdon_ai.detail = !global_data.zdon_ai.detail;
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         }
         return false;
     }
@@ -309,7 +312,7 @@ bool ResultScreen::zdon_hist_input() {
         }
         if (is_l_kat_pressed(who) || is_r_kat_pressed(who)) {
             zdon_hist_open[pn] = !zdon_hist_open[pn];
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         }
     }
     return false;

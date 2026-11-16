@@ -40,6 +40,7 @@ public:
     ~SettingsBox();
 
     void set_y(float new_y);
+    float center_y() const { return t_box ? y + t_box->y[0] + t_box->y2[0] / 2.0f : y; }
     void set_box_count(int box_count);
 
     bool can_move() const;
@@ -69,4 +70,5 @@ public:
 
     void update(double current_time_ms, bool selected);
     void draw();
+    void draw_overlay();
 };

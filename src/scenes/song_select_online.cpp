@@ -418,9 +418,9 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
         }
         if (l_kat || r_kat) {
             menu_cursor = (menu_cursor + (r_kat ? 1 : kMenuCount - 1)) % kMenuCount;
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         } else if (don) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             if (menu_cursor == 0) {
                 close_modal(); // browse: deciding a course lists the challenges
             } else if (!account) {
@@ -502,9 +502,9 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
         } else if (l_kat || r_kat) {
             const int n = static_cast<int>(courses.size());
             course_cursor = (course_cursor + (r_kat ? 1 : n - 1)) % n;
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         } else if (don) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             guest_ready(courses[course_cursor]);
         }
         break;
@@ -533,9 +533,9 @@ std::optional<Screens> OnlineSongSelectScreen::update_modal() {
         } else if (l_kat || r_kat) {
             const int n = static_cast<int>(entries.size());
             cursor = (cursor + (r_kat ? 1 : n - 1)) % n;
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         } else if (don) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             replay_is_challenge = true; // take_replay_jump starts the battle when the play arrives
             network.request_replay(entries[cursor].score_id);
             fetch_started_ms = get_current_ms();

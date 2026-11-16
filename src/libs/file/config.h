@@ -55,6 +55,7 @@ struct GeneralConfig {
     bool zdon_press_time_judge = false; // Z-DON: judge a hit at the press time rather than the frame's time
     // Z-DON: a branch is decided one measure before its head at any speed (off: when its first note appears)
     bool zdon_branch_by_measure = false;
+    bool ignore_account_appearance = true;
 };
 
 struct LimitsConfig {
@@ -64,10 +65,11 @@ struct LimitsConfig {
 };
 
 struct CardReaderConfig {
+    std::string backend = "serial";
+    std::string device;
     bool enabled = true;
     std::string port = "/dev/ttyUSB0";
     int baudrate = 38400;
-    int poll_interval_ms = 1000;
 };
 
 struct NetworkConfig {
@@ -95,7 +97,7 @@ struct KeysConfig {
     int exit_key = 0;
     int fullscreen_key = 0;
     int borderless_key = 0;
-    int pause_key = 0;
+    int pause_key = 0; // Z-DON: opens the pause menu (upstream 5f369cc dropped it; Escape opens its menu)
     int back_key = 0;
     int restart_key = 0;
     // Menus use a fixed gamepad layout instead of the drum bindings (see input.cpp)

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(YataiDON VERSION 1.0.8 LANGUAGES C CXX)
+project(YataiDON VERSION 1.0.9 LANGUAGES C CXX)
 
 cmake_policy(SET CMP0002 NEW)  # Logical target names must be globally unique
 cmake_policy(SET CMP0079 NEW)  # Allow target_link_libraries() everywhere
@@ -142,13 +142,15 @@ if(WIN32)
 elseif(ANDROID)
     file(GLOB PLATFORM_SOURCES src/platform/*_android.cpp src/platform/platform_mobile.cpp)
 elseif(APPLE AND NOT IOS)
-    file(GLOB PLATFORM_SOURCES src/platform/*_macos.cpp src/platform/platform_posix.cpp src/platform/platform_desktop.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_macos.cpp src/platform/platform_posix.cpp
+        src/platform/platform_desktop.cpp)
 elseif(IOS)
     file(GLOB PLATFORM_SOURCES src/platform/*_ios.mm src/platform/*_ios.cpp src/platform/platform_mobile.cpp)
 elseif(EMSCRIPTEN)
     file(GLOB PLATFORM_SOURCES src/platform/*_emscripten.cpp src/platform/platform_desktop.cpp)
 elseif(UNIX)
-    file(GLOB PLATFORM_SOURCES src/platform/*_linux.cpp src/platform/platform_posix.cpp src/platform/platform_desktop.cpp)
+    file(GLOB PLATFORM_SOURCES src/platform/*_linux.cpp src/platform/platform_posix.cpp
+        src/platform/platform_desktop.cpp)
 endif()
 list(APPEND PLATFORM_SOURCES src/platform/platform_defaults.cpp)
 
@@ -158,13 +160,49 @@ if(SUPPORT_FUMEN)
 endif()
 
 # Card reader
+set(YATAIDON_LIBNFC "AUTO" CACHE STRING "libnfc reader support: AUTO, ON, or OFF")
+set_property(CACHE YATAIDON_LIBNFC PROPERTY STRINGS AUTO ON OFF)
+if(NOT YATAIDON_LIBNFC MATCHES "^(AUTO|ON|OFF)$")
+  message(FATAL_ERROR "YATAIDON_LIBNFC must be AUTO, ON, or OFF")
+endif()
 if(NETWORK_ENABLED AND ((UNIX AND NOT ANDROID AND NOT APPLE_IOS AND NOT EMSCRIPTEN) OR WIN32))
   file(GLOB CARD_READER_SOURCES src/libs/optional/card_reader.cpp)
   list(APPEND CppFiles ${CARD_READER_SOURCES})
   set(CARD_READER_ENABLED ON)
   message(STATUS "Card reader enabled")
+  if(NOT YATAIDON_LIBNFC STREQUAL "OFF")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(LIBNFC QUIET IMPORTED_TARGET libnfc)
+    endif()
+    if(TARGET PkgConfig::LIBNFC)
+      set(YATAIDON_LIBNFC_TARGET PkgConfig::LIBNFC)
+    else()
+      find_path(LIBNFC_INCLUDE_DIR nfc/nfc.h)
+      find_library(LIBNFC_LIBRARY NAMES nfc libnfc)
+      if(LIBNFC_INCLUDE_DIR AND LIBNFC_LIBRARY)
+        add_library(yataidon_libnfc UNKNOWN IMPORTED)
+        set_target_properties(yataidon_libnfc PROPERTIES
+          IMPORTED_LOCATION "${LIBNFC_LIBRARY}"
+          INTERFACE_INCLUDE_DIRECTORIES "${LIBNFC_INCLUDE_DIR}")
+        set(YATAIDON_LIBNFC_TARGET yataidon_libnfc)
+      endif()
+    endif()
+    if(YATAIDON_LIBNFC_TARGET)
+      list(APPEND CppFiles src/libs/optional/libnfc/reader.cpp)
+      message(STATUS "libnfc card reader enabled")
+    elseif(YATAIDON_LIBNFC STREQUAL "ON")
+      message(FATAL_ERROR "libnfc requested but not found; install its development package")
+    else()
+      message(STATUS "libnfc not found; building serial card reader only")
+    endif()
+  endif()
 elseif(NETWORK_ENABLED)
   message(STATUS "Card reader not available on this platform (requires POSIX or Windows)")
+endif()
+
+if(YATAIDON_LIBNFC STREQUAL "ON" AND NOT CARD_READER_ENABLED)
+  message(FATAL_ERROR "libnfc requires networking and a supported desktop platform")
 endif()
 
 list(APPEND CppFiles ${PLATFORM_SOURCES})
@@ -313,6 +351,7 @@ else()
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    qrcodegen
     tomlplusplus::tomlplusplus
     spdlog::spdlog
     lua::lua
@@ -322,8 +361,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     bc7enc
 )
 
+if(TARGET facedetection)
+  target_link_libraries(${PROJECT_NAME} PRIVATE facedetection)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_FACE_DETECTION)
+endif()
+
 # Optional libraries: shared code checks these YATAIDON_HAS_* macros, never platform names.
 # (platform/ps5/game.cmake builds without any of them.)
+# SDL text input / IME; consoles use their own keyboards.
+target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_SDL_TEXT_INPUT)
 if(NOT EMSCRIPTEN)
   target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)
   target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_HTTP)
@@ -348,6 +394,11 @@ endif()
 
 if(YATAIDON_PROFILER)
   target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
+endif()
+
+if(YATAIDON_LIBNFC_TARGET)
+  target_link_libraries(${PROJECT_NAME} PRIVATE ${YATAIDON_LIBNFC_TARGET})
+  target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_HAS_LIBNFC)
 endif()
 
 if(CARD_READER_ENABLED)
@@ -403,10 +454,8 @@ if(NOT IOS AND NOT EMSCRIPTEN)
 endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE portaudio)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE g719)
-target_compile_definitions(${PROJECT_NAME} PRIVATE YATAIDON_G719)
-
 if(SUPPORT_FUMEN)
+  target_link_libraries(${PROJECT_NAME} PRIVATE g719)
   target_compile_definitions(${PROJECT_NAME} PRIVATE
     SUPPORT_FUMEN
     DATATABLE_SEED="${DATATABLE_SEED}"

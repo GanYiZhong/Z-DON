@@ -23,6 +23,7 @@
 void GameScreen::on_screen_start() {
     Screen::on_screen_start();
     reset_playback();
+    pause_menu.init_textures();
     start_delay = 1000.0f;
     JudgePos::X = tex.get_skin_config(SC::GAME_JUDGE_POS)->x;
     JudgePos::Y = tex.get_skin_config(SC::GAME_JUDGE_POS)->y;
@@ -87,6 +88,7 @@ Screens GameScreen::on_screen_end(Screens next_screen) {
     global_data.zdon_ai.don_draw_now = nullptr; // it points at this screen's player
     global_data.zdon_ai.ai_draw_now = nullptr;
     unload_song();
+    pause_menu = PauseMenu();
     background.reset();
     transition.reset();
     global_data.camera = CameraConfig(); // TJA camera commands must not leak out of the song
@@ -299,6 +301,7 @@ void GameScreen::reset_playback() {
     clock.reset(get_current_ms());
     song_started = false;
     score_saved = false;
+    pause_used = false;
     paused_audio_time = 0.0f;
 }
 
@@ -421,7 +424,7 @@ std::optional<Screens> GameScreen::global_keys() {
             open_pause_menu(); // Z-DON: Escape pauses (pause_menu = false: leaves at once, as before)
             return std::nullopt;
         }
-        return on_screen_end(Screens::SONG_SELECT);
+        return on_screen_end(select_screen());
     }
 
     // if (check_key_pressed(global_data.config->keys.pause_key)) {
@@ -450,6 +453,7 @@ bool GameScreen::can_pause() const {
 
 void GameScreen::open_pause_menu() {
     pause_playback();
+    pause_used = true;
     pause_menu.open_menu(get_current_ms());
     spdlog::info("Pause menu opened at {:.1f} ms", clock.position());
 }
@@ -535,6 +539,9 @@ std::vector<std::string> GameScreen::zdon_unsaved_reasons(const Player& player) 
 }
 
 void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) {
+    if (pause_used) {
+        return;
+    }
     Player* target = nullptr;
     for (const auto& player : players) {
         if (player && player->player_num == player_num) {
@@ -1016,18 +1023,20 @@ std::optional<Screens> GameScreen::update() {
     double current_ms = get_frame_ms();
     allnet_indicator.update(current_ms);
     if (pause_menu.active()) {
-        return update_pause_menu(Screens::SONG_SELECT); // Z-DON: the song, its video and the notes wait
+        return update_pause_menu(select_screen()); // Z-DON: the song, its video and the notes wait
     }
     clock.update(current_ms);
 
     transition->update(current_ms);
-    update_gameplay(current_ms);
+    if (!pause_menu.active()) {
+        update_gameplay(current_ms);
+    }
     update_skip();
     zdon_sudden_death_check();
     result_transition.update(current_ms);
 
     if (result_transition.is_finished && !audio.is_sound_playing("result_transition")) {
-        return on_screen_end(Screens::RESULT);
+        return on_screen_end(result_screen());
     }
 
     // Z-DON: a course of a stacked recording ends with the longest course (zdon_record.h --record-tracks)
@@ -1048,11 +1057,7 @@ std::optional<Screens> GameScreen::update() {
 
         end_song(song_end, transition_delay, BackgroundNotification::Enabled);
     }
-    if (global_data.config->limits.song_limit <= 0) {
-        return global_keys();
-    }
-
-    return std::nullopt;
+    return global_keys();
 }
 
 void GameScreen::draw_overlay(bool with_song_info) {
@@ -1088,6 +1093,7 @@ void GameScreen::draw_overlay(bool with_song_info) {
     if (result_transition.is_started) {
         result_transition.draw();
     }
+    pause_menu.draw(get_current_ms()); // Z-DON: the pause clock is wall time (pause_menu.h)
 }
 
 // Z-DON PB pace: record this play's score whenever it changes; the best play's curve is read on the first frame
@@ -1193,5 +1199,4 @@ void GameScreen::draw() {
         background->draw_fore();
     }
     draw_overlay();
-    pause_menu.draw(get_current_ms());
 }

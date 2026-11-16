@@ -69,13 +69,13 @@ protected:
             }
             const PlayerNum seat = global_data.player_num;
             if (is_l_kat_pressed(seat)) {
-                audio.play_player_sound("kat", seat, VolumePreset::SOUND);
+                audio.play_player_sound("kat", seat, VolumePreset::HITSOUND);
                 support_cursor = std::max(support_cursor - 1, 0);
             } else if (is_r_kat_pressed(seat)) {
-                audio.play_player_sound("kat", seat, VolumePreset::SOUND);
+                audio.play_player_sound("kat", seat, VolumePreset::HITSOUND);
                 support_cursor = std::min(support_cursor + 1, SUPPORT_COUNT[support_course] - 1);
             } else if (is_l_don_pressed(seat) || is_r_don_pressed(seat)) {
-                audio.play_player_sound("don", seat, VolumePreset::SOUND);
+                audio.play_player_sound("don", seat, VolumePreset::HITSOUND);
                 support_decided = true;
             }
             return;
@@ -332,9 +332,9 @@ protected:
         }
         if (next != board_cursor) {
             board_cursor = next;
-            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::HITSOUND);
         } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
-            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::HITSOUND);
             if (board_cursor < 0) {
                 close_board();
                 set_diff_stage(true);
@@ -367,7 +367,7 @@ protected:
             if (kl || kr) {
                 if (strict && (kr || (kl && page0_off > 0))) {
                     page0_off += kr ? 1 : -1;
-                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::HITSOUND);
                     if (kr) {
                         navigator.move_right(); // the input was read above, so the shelf is moved here
                     } else {
@@ -375,13 +375,13 @@ protected:
                     }
                     zdon_ai_set_diff_stage(true, page0_off == 0 ? -1 : -2);
                 } else {
-                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+                    audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::HITSOUND);
                 }
             } else if (strict && page0_off > 0) {
                 // another genre of the shelf is focused: the normal song select reads the don (the shelf is its own)
                 SongSelectScreen::handle_input_browsing(current_ms);
             } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
-                audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+                audio.play_player_sound("don", PlayerNum::P1, VolumePreset::HITSOUND);
                 page0 = false;
                 zdon_ai_set_diff_stage(true, diff_cursor);
             }
@@ -389,12 +389,12 @@ protected:
         }
         if (is_l_kat_pressed(PlayerNum::P1)) {
             diff_cursor = std::max(0, diff_cursor - 1);
-            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::HITSOUND);
         } else if (is_r_kat_pressed(PlayerNum::P1)) {
             diff_cursor = std::min(6, diff_cursor + 1);
-            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::SOUND);
+            audio.play_player_sound("kat", PlayerNum::P1, VolumePreset::HITSOUND);
         } else if (is_l_don_pressed(PlayerNum::P1) || is_r_don_pressed(PlayerNum::P1)) {
-            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::SOUND);
+            audio.play_player_sound("don", PlayerNum::P1, VolumePreset::HITSOUND);
             if (diff_cursor == 0) {
                 if (page0_enabled) {
                     page0 = true;

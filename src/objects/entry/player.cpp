@@ -13,6 +13,7 @@ static void apply_pd_look(Chara3D& chara, PlayerData* pd, PlayerNum player_num) 
         chara.set_don_colors(pd->chara_color_1, pd->chara_color_2, pd->chara_color_3);
         chara.apply_face(pd->chara_face_index);
         chara.set_puchi(pd->chara_acce_index);
+        chara.set_paint(pd->chara_paint_index);
     } else {
         chara.set_don_colors(chara_default_color_1(player_num), chara_default_color_2(player_num),
                              {249, 240, 225, 255});
@@ -232,19 +233,20 @@ void EntryPlayer::handle_input() {
     }
 
     if (menu_confirm_pressed(player_num)) {
-        audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
         if (box_manager->is_costume_box()) {
             box_manager->open_costume_menu(player_num);
         } else {
+            box_manager->opening_player = player_num;
             box_manager->select_box();
         }
     }
     if (menu_left_pressed(player_num)) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         box_manager->move_left();
     }
     if (menu_right_pressed(player_num)) {
-        audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+        audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         box_manager->move_right();
     }
 }

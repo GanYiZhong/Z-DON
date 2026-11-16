@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
+#include <regex>
 
 #include "../libs/file/script.h"
 #include "../libs/input/input.h"
@@ -133,7 +134,7 @@ std::optional<Screens> DanSelectScreen::tick_timer(double current_ms) {
         if (dan_navigator.get_current()->is_back) {
             return start_dan_transition();
         }
-        audio.play_sound("don_big", VolumePreset::SOUND);
+        audio.play_sound("don_big", VolumePreset::HITSOUND);
         open_confirm(current_ms);
         return std::nullopt;
     }
@@ -142,7 +143,7 @@ std::optional<Screens> DanSelectScreen::tick_timer(double current_ms) {
     }
     confirm_index = CONFIRM_YES;
     select_timer.reset();
-    audio.play_sound("don", VolumePreset::SOUND);
+    audio.play_sound("don", VolumePreset::HITSOUND);
     return on_screen_end(Screens::GAME_DAN);
 }
 
@@ -195,6 +196,9 @@ Screens DanSelectScreen::on_screen_end(Screens next_screen) {
             sd.dan_index_max = std::max(sd.dan_index_max, b->dan_index);
         }
         sd.dan_gaiden = current->gaiden;
+        // the version set Hiroba's is_profile_dan_version accepts
+        static const std::regex modern_version(R"(Arcade/3[0-5] Nijiiro 202[1-6]/)");
+        sd.dan_modern = std::regex_search(current->path.generic_string(), modern_version);
         sd.dan_gen3 = current->gen3;
         if (!current->songs.empty()) {
             sd.selected_song = current->songs[0].song_path;
@@ -229,15 +233,15 @@ void DanSelectScreen::handle_input_browsing(double current_ms) {
         audio.play_sound("skip", VolumePreset::SOUND);
         dan_navigator.skip(10);
     } else if (!wheel_locked && nav_left) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         dan_navigator.move_left();
         wheel_locked = true;
     } else if (!wheel_locked && nav_right) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         dan_navigator.move_right();
         wheel_locked = true;
     } else if (!wheel_locked && confirm) {
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         if (dan_navigator.get_current()->is_back) {
             back_requested = true;
         } else {
@@ -258,15 +262,15 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
 
     if (modifier_selector.has_value()) {
         if (l_kat) {
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
             modifier_selector->left();
         }
         if (r_kat) {
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
             modifier_selector->right();
         }
         if (don) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             modifier_selector->confirm();
         }
         return std::nullopt;
@@ -284,11 +288,11 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
     const int order[3] = {CONFIRM_OPTION, yes_right ? CONFIRM_NO : CONFIRM_YES, yes_right ? CONFIRM_YES : CONFIRM_NO};
     int slot = static_cast<int>(std::find(order, order + 3, confirm_index) - order);
     if (l_kat) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         slot = std::max(slot - 1, 0);
     }
     if (r_kat) {
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         slot = std::min(slot + 1, 2);
     }
     confirm_index = order[slot];
@@ -298,12 +302,12 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
     }
 
     if (confirm_index == CONFIRM_OPTION) {
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         modifier_selector.emplace(pn, &dan_player_data);
         return std::nullopt;
     }
     if (confirm_index == CONFIRM_YES) {
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         return on_screen_end(Screens::GAME_DAN);
     }
     audio.play_sound("cancel", VolumePreset::SOUND);
@@ -381,7 +385,9 @@ void DanSelectScreen::draw() {
     dan_navigator.draw();
 
     // Lumen DonModel rests in the same 200x200 box as song select, so share its slots
-    const bool p1 = global_data.player_num == PlayerNum::P1;
+    // Dan select is single-player: always place the chara and nameplate on the left (P1) side,
+    // even when a lone player is seated as P2. (issue #100 sub-bug 1)
+    const bool p1 = true;
     const auto chara_pos = tex.chara_xy(p1 ? "song_select_1p" : "song_select_2p");
     const auto plate_pos = tex.nameplate_xy(p1 ? "song_select_1p" : "song_select_2p");
     if (chara) {

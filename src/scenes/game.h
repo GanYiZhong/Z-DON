@@ -44,9 +44,12 @@ protected:
     void pause_playback();
     void resume_playback(std::optional<double> chart_ms = std::nullopt);
     virtual PlayerNum restart_player_num() const { return global_data.player_num; }
+    virtual Screens select_screen() const { return Screens::SONG_SELECT; }
+    virtual Screens result_screen() const { return Screens::RESULT; }
 
     // Z-DON: the pause menu (pause_menu.h); screens that handle Escape themselves turn it off
     PauseMenu pause_menu;
+    bool pause_used = false; // upstream 5f369cc: a song paused on the way is not saved
     bool window_was_focused = true;
     virtual bool pause_menu_allowed() const { return true; }
     bool can_pause() const;
@@ -116,7 +119,7 @@ public:
 
     void restart_song();
 
-    void toggle_pause();
+    void toggle_pause(); // Z-DON: [general] pause_menu = false keeps the plain pause on Space
 
     void resync_song(double current_ms);
 

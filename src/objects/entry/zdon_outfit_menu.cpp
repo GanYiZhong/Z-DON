@@ -55,14 +55,14 @@ void ZdonOutfitMenu::handle_input() {
     }
     if (menu_left_pressed(player_num)) {
         index = (index - 1 + count) % count;
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
     }
     if (menu_right_pressed(player_num)) {
         index = (index + 1) % count;
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
     }
     if (menu_confirm_pressed(player_num)) {
-        audio.play_sound("don", VolumePreset::SOUND);
+        audio.play_sound("don", VolumePreset::HITSOUND);
         const std::string id = get_player_id(player_num);
         if (!id.empty()) {
             scores_manager.set_outfit(id, zdon_skin_key(), index);

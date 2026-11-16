@@ -49,10 +49,14 @@
 #include "libs/gfx/sdl_main_compat.h"
 #endif
 
+#include "libs/notify.h"
 #include "objects/global/debug_menu.h"
 #include "objects/global/fps_counter.h"
+#include "objects/global/toast.h"
 #include "objects/global/zdon_hud.h"
+#include "objects/song_select/file_navigator/navigator.h"
 #include "scenes/ai_battle.h"
+#include "scenes/battle.h"
 #include "scenes/campaign.h"
 #include "scenes/dan_result.h"
 #include "scenes/dan_select.h"
@@ -141,6 +145,15 @@ static void draw_zdon_update_notice(Screens screen) {
     t.draw({.x = x + 20 * s, .y = y + 8 * s});
 }
 
+static void notify_skin_update_finished() {
+    static bool was_running = false;
+    const SkinUpdater::Status st = skin_updater.snapshot();
+    if (was_running && !st.running && st.any_updated && st.failed.empty()) {
+        notify("Skin updates installed");
+    }
+    was_running = st.running;
+}
+
 [[noreturn]] static void exit_now(int code) {
     std::cout.flush();
     std::cerr.flush();
@@ -160,40 +173,6 @@ static std::filesystem::path path_from_arg(const std::string& arg) {
         return {};
     }
 #endif
-}
-
-// Consumes --card-port/--card-baud/--card-poll-ms (and removes them from argv) so check_args never sees them.
-static void parse_card_reader_args(int& argc, char* argv[], CardReaderConfig& cr) {
-    int out = 1;
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        const bool known = arg == "--card-port" || arg == "--card-baud" || arg == "--card-poll-ms";
-        if (!known) {
-            argv[out++] = argv[i];
-            continue;
-        }
-        if (i + 1 >= argc) {
-            std::cerr << "Error: " << arg << " requires a value\n";
-            exit_now(1);
-        }
-        std::string val = argv[++i];
-        if (arg == "--card-port") {
-            cr.port = val;
-            continue;
-        }
-        try {
-            size_t pos = 0;
-            int n = std::stoi(val, &pos);
-            if (pos != val.size() || n <= 0) {
-                throw std::invalid_argument(val);
-            }
-            (arg == "--card-baud" ? cr.baudrate : cr.poll_interval_ms) = n;
-        } catch (const std::exception&) {
-            std::cerr << "Error: Invalid value for " << arg << ": " << val << "\n";
-            exit_now(1);
-        }
-    }
-    argc = out;
 }
 
 Screens check_args(int argc, char* argv[]) {
@@ -242,10 +221,6 @@ Screens check_args(int argc, char* argv[]) {
             std::cout << "  --dan <path>: (test) load the library, then play that dan course on auto\n";
             std::cout << "  --record <out.mp4>    : render the play to a video, faster than real time (no hits\n";
             std::cout << "                          unless --auto); --record-fps <n> (60), --record-result <s> (6)\n";
-            std::cout << "Card reader (valid with or without song_path):\n";
-            std::cout << "  --card-port <path>   : Serial port (default /dev/ttyUSB0)\n";
-            std::cout << "  --card-baud <rate>   : Baud rate (default 38400)\n";
-            std::cout << "  --card-poll-ms <ms>  : Poll interval (default 100)\n";
             exit_now(0);
         } else if (!arg.empty() && arg[0] == '-') {
             std::cerr << "Error: Unknown option: " << arg << "\n";
@@ -393,6 +368,7 @@ struct LoopState {
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / 60.0));
     std::chrono::time_point<std::chrono::steady_clock> next_frame_time = std::chrono::steady_clock::now();
     FPSCounter fps_counter;
+    std::unique_ptr<Toast> toast;
     Color last_color = Color::BLACK;
     double screen_fade_start = 0.0;
 };
@@ -406,6 +382,8 @@ static bool screen_fade_applies(Screens from, Screens to) {
     case Screens::GAME_PRACTICE:
     case Screens::AI_GAME:
     case Screens::AI_RESULT:
+    case Screens::BATTLE_GAME:
+    case Screens::BATTLE_RESULT:
     case Screens::RESULT:
     case Screens::RESULT_2P:
     case Screens::WAIWAI_GAME:
@@ -458,6 +436,9 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     }
     put_screen<AIGameScreen>(screens, except, Screens::AI_GAME);
     put_screen<AIResultScreen>(screens, except, Screens::AI_RESULT);
+    put_screen<BattleSongSelectScreen>(screens, except, Screens::BATTLE_SELECT); // upstream enso battle
+    put_screen<BattleGameScreen>(screens, except, Screens::BATTLE_GAME);
+    put_screen<BattleResultScreen>(screens, except, Screens::BATTLE_RESULT);
     put_screen<LoadingScreen>(screens, except, Screens::LOADING);
     put_screen<GameScreen>(screens, except, Screens::GAME);
     put_screen<Game2PScreen>(screens, except, Screens::GAME_2P);
@@ -487,6 +468,7 @@ void drop_other_screens_for_skin_reload() {
     if (!g_loop) {
         return;
     }
+    g_loop->toast.reset(); // holds Lua refs; must die before the state does
     for (auto it = g_loop->screens.begin(); it != g_loop->screens.end();) {
         if (it->first != g_loop->current_screen) {
             it = g_loop->screens.erase(it);
@@ -691,6 +673,41 @@ static void draw_stats_add(const std::string& screen_name) {
     }
 }
 
+void reload_current_screen_scripts() {
+    if (!g_loop) {
+        return;
+    }
+    // Every screen holds sol::tables created by the state we are about to replace,
+    // and the navigator keeps its own Lua-backed boxes across screens.
+    g_loop->screens.clear();
+    g_loop->toast.reset();
+    navigator.reset_for_skin_reload();
+    script_manager.shutdown();
+    script_manager.init(fs::path("Skins") / global_data.config->paths.skin / "Scripts");
+    populate_screens(g_loop->screens);
+}
+
+static void apply_pending_skin_reload() {
+    if (!global_data.skin_reload_pending) {
+        return;
+    }
+    global_data.skin_reload_pending = false;
+    spdlog::info("Reloading for this credit: skin {}, language {}", global_data.config->paths.skin.string(),
+                 global_data.config->general.language);
+    g_loop->screens.clear();
+    g_loop->toast.reset();
+    try {
+        load_skin();
+    } catch (const std::exception& e) {
+        // The folder is there but unusable: lose the account's skin rather than the cabinet.
+        spdlog::error("Skin reload failed ({}); falling back to the instance skin", e.what());
+        revert_user_appearance();
+        global_data.skin_reload_pending = false;
+        load_skin();
+    }
+    populate_screens(g_loop->screens);
+}
+
 static std::chrono::steady_clock::duration frame_duration(double fps) {
     return fps > 0.0 && !fixed_step::on() ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                                 std::chrono::duration<double>(1.0 / fps))
@@ -739,11 +756,20 @@ static void run_frame() {
         spdlog::info("Toggled borderless windowed mode");
     }
 
+    apply_pending_skin_reload();
+
     // Z-DON texture density: with a skin's texture_density > 1 the frame draws into a target of the screen size
     // x density from here on, and the camera below maps onto it
     density::begin_frame(global_data.camera.border_color);
     L.camera = compute_camera2d(tex.screen_width, tex.screen_height);
     if (!global_data.skinless) {
+        if (!L.toast && script_manager.has_lua_script("toast")) {
+            L.toast = std::make_unique<Toast>();
+        }
+        if (L.toast) {
+            L.toast->update(g_frame_ms);
+        }
+        notify_skin_update_finished();
         debug_menu.update(L.camera);
     }
     if (draw_log_dev_hook()) { // dev hook ZDON_DRAW_LOG: keep this frame's draw calls for dump_screen_tick
@@ -790,7 +816,14 @@ static void run_frame() {
         PROFILE_SCOPE_N("screen update");
         PROFILE_ZONE_TEXT(screen->screen_name);
         const auto t0 = std::chrono::steady_clock::now();
-        next_screen = screen->in_game_over() ? screen->update_game_over() : screen->update();
+        if (screen->in_game_over()) {
+            // The game over overlay plays over the live host screen: keep the host updating so it is
+            // not frozen under the overlay, and stay in the scene until the overlay finishes.
+            screen->update();
+            next_screen = screen->update_game_over();
+        } else {
+            next_screen = screen->update();
+        }
         g_spike_update_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         g_spike_screen = screen->screen_name;
     }
@@ -926,6 +959,22 @@ static void run_frame() {
             }
         }
     }
+
+    if (debug_menu.reload_scripts) {
+        debug_menu.reload_scripts = false;
+        clear_asset_caches(); // re-read the skin from disk, so edits show up
+        screen->on_screen_end(L.current_screen);
+        reload_current_screen_scripts();
+        screen_it = L.screens.find(L.current_screen);
+        screen = (screen_it != L.screens.end()) ? screen_it->second.get() : nullptr;
+        if (!screen) {
+            end_blend_mode();
+            end_mode_2d();
+            end_drawing();
+            return;
+        }
+    }
+
     if (!next_screen.has_value() && debug_menu.requested_screen.has_value()) {
         clear_asset_caches(); // a debug jump re-reads the skin from disk, so edits show up
         next_screen = screen->on_screen_end(debug_menu.requested_screen.value());
@@ -990,6 +1039,10 @@ static void run_frame() {
 
         draw_skin_update_status();
         draw_zdon_update_notice(L.current_screen);
+
+        if (L.toast) {
+            L.toast->draw();
+        }
 
         debug_menu.draw();
     }
@@ -1296,7 +1349,6 @@ static int game_main(int argc, char* argv[]) {
 
     save_config(*global_data.config);
     ensure_config_file(*global_data.config);
-    parse_card_reader_args(argc, argv, global_data.config->card_reader);
     Screens initial_screen = check_args(argc, argv);
     // Dev hook: YATAIDON_FORCE_AUTO=1 plays every chart on auto (the dan courses have no CLI)
     if (const char* fa = std::getenv("YATAIDON_FORCE_AUTO"); fa && *fa == '1') {

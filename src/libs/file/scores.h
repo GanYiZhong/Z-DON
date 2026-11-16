@@ -128,6 +128,11 @@ struct SongCacheEntry {
 constexpr int SONG_CACHE_VERSION = 5; // 3: Shift-JIS charts read as UTF-8; 4: Z-DON TITLEZH_TW over TITLEZH;
                                       // 5: upstream's title keeps -Old/New Audio-
 
+struct RecordCounts {
+    std::array<int, 7> ranks{};  // Rank::_WHITE.._RAINBOW
+    std::array<int, 3> crowns{}; // cumulative: a DFC also counts as FC and clear
+};
+
 struct RemoteScore;
 
 // Z-DON: a dan course song's note count (DanNavigator::song_note_count) for one version of its chart
@@ -208,6 +213,8 @@ public:
     void set_zdon_ghost(const std::string& hash, int difficulty, const std::string& player_id,
                         const std::vector<std::pair<float, int>>& points);
     void set_outfit(const std::string& player_id, const std::string& skin, int outfit);
+    // Best-score ranks and crowns over every chart of player_id with difficulty >= min_difficulty.
+    RecordCounts get_record_counts(const std::string& player_id, int min_difficulty);
     // diff hash -> number of saved plays for player_id
     std::unordered_map<std::string, int> get_play_counts(const std::string& player_id);
     // out_score_id (optional) receives the new scores row id, or -1 if the insert failed.

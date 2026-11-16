@@ -127,17 +127,19 @@ void register_box_lua_bindings(sol::state& lua) {
             t["a"] = c.a;
             return t;
         },
-        "name", &BaseBox::horizontal_name, "collection", &BaseBox::collection, "genre_index",
-        [](BaseBox& self) { return static_cast<int>(self.genre_index); }, "texture_index",
-        [](BaseBox& self) { return static_cast<int>(self.texture_index); }, "has_recolor", &BaseBox::has_recolor,
-        "begin_recolor", &BaseBox::begin_recolor, "end_recolor", &BaseBox::end_recolor);
+        "name", &BaseBox::horizontal_name, "collection", &BaseBox::collection, "collab", &BaseBox::collab,
+        "genre_index", [](BaseBox& self) { return static_cast<int>(self.genre_index); }, "texture_index",
+        [](BaseBox& self) { return self.texture_index; }, "has_recolor", &BaseBox::has_recolor, "has_gradient",
+        &BaseBox::has_gradient, "has_flat_recolor", &BaseBox::has_flat_recolor, "gradient_texture",
+        &BaseBox::gradient_texture, "begin_recolor", &BaseBox::begin_recolor, "end_recolor", &BaseBox::end_recolor);
 
     lua.new_usertype<SongBox>(
         "SongBox", sol::base_classes, sol::bases<BaseBox>(), "text_subtitle", &SongBox::text_subtitle, "subtitle",
         &SongBox::horizontal_subtitle, "subtitle_large", &SongBox::horizontal_subtitle_large, "bpm_text",
         [](SongBox& self) { return self.bpm_text.get(); }, "is_ura", &SongBox::is_ura, "oni_locked",
-        &SongBox::oni_locked, "is_favorite", &SongBox::is_favorite, "diff_fade_in", &SongBox::diff_fade_in, "has_ura",
-        &SongBox::has_ura, "ex_data_flag", &SongBox::ex_data_flag, "course_info",
+        &SongBox::oni_locked, "popular_rank", &SongBox::popular_rank, "is_favorite", &SongBox::is_favorite,
+        "diff_fade_in", &SongBox::diff_fade_in, "has_ura", &SongBox::has_ura, "ex_data_flag", &SongBox::ex_data_flag,
+        "course_info",
         [](SongBox& self, double diff) {
             auto info = self.course_info(static_cast<int>(diff));
             return course_table(info, diff >= 0 && diff < static_cast<int>(self.scores.size()) &&

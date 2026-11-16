@@ -534,10 +534,15 @@ bool SkinUpdater::available() {
 }
 
 void SkinUpdater::start() {
-    if (started_.exchange(true)) {
+    if (running_.load()) {
         return;
     }
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+    started_ = true;
     running_ = true;
+    any_updated_ = false;
     thread_ = std::thread([this] {
 #ifdef _WIN32
         // below the game for CPU time: a pass without a hash cache reads every skin file

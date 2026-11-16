@@ -8,11 +8,12 @@
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../libs/network/skin_updater.h"
 
 #ifdef CARD_READER_ENABLED
 #include "../libs/optional/card_reader.h"
-static std::unique_ptr<card_reader::CardReader> g_card_reader;
-static double g_last_card_poll_ms = 0;
+static std::unique_ptr<card_reader::Reader> g_card_reader;
+static double g_next_card_start_ms = 0;
 #endif
 
 void TitleScreen::on_screen_start() {
@@ -22,9 +23,12 @@ void TitleScreen::on_screen_start() {
     reset_attract_objects();
     load_videos();
     state = TitleState::OP_VIDEO;
-    hit_taiko_text = std::make_unique<OutlinedText>(font_manager.get_text_label("hit_taiko_to_start"),
-                                                    font_manager.get_text_info("hit_taiko_to_start")->font_size,
-                                                    Color::WHITE, Color::BLACK, false, 4);
+    // A skin without this key just draws nothing rather than dereferencing a null SkinInfo.
+    if (const SkinInfo* hit_taiko_info = font_manager.get_text_info("hit_taiko_to_start")) {
+        hit_taiko_text =
+            std::make_unique<OutlinedText>(font_manager.get_text_label("hit_taiko_to_start"), hit_taiko_info->font_size,
+                                           Color::WHITE, Color::BLACK, false, 4);
+    }
     fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(13));
     text_overlay_fade = dynamic_cast<FadeAnimation*>(tex.get_animation(14));
     if (!fade_out || !text_overlay_fade) {
@@ -43,6 +47,7 @@ void TitleScreen::on_screen_start() {
         global_data.card_override[i] = false;
     }
     scores_manager.clear_guests();
+    set_song_list_account("");
     global_data.guest_credit = false;
     scores_manager.player_1 = global_data.config->network.access_code_1;
     scores_manager.player_2 = global_data.config->network.access_code_2;
@@ -50,13 +55,20 @@ void TitleScreen::on_screen_start() {
     global_data.card_reader_card_id_hex.clear();
 
 #ifdef CARD_READER_ENABLED
+    g_next_card_start_ms = 0;
     // Card reader only matters when online (case 4: offline scan does nothing)
     // Opened on a worker thread; update() starts polling once it is ready
     if (global_data.config && global_data.config->network.online_play && global_data.config->card_reader.enabled) {
-        card_reader::reader_opener().request(global_data.config->card_reader.port,
-                                             global_data.config->card_reader.baudrate);
+        card_reader::reader_opener().request(
+            global_data.config->card_reader.port, global_data.config->card_reader.baudrate,
+            global_data.config->card_reader.backend, global_data.config->card_reader.device);
     }
 #endif
+
+    // Re-check for skin updates every time the title screen opens.
+    if (global_data.config && global_data.config->general.skin_updater) {
+        skin_updater.start();
+    }
 }
 
 static void scan_mp4_folder(const char* folder, std::vector<fs::path>& out) {
@@ -220,44 +232,35 @@ std::optional<Screens> TitleScreen::update() {
     if (!g_card_reader) {
         if (auto opened = card_reader::reader_opener().take()) {
             g_card_reader = std::move(*opened);
-            if (g_card_reader) {
-                g_card_reader->start_polling();
-                g_card_reader->set_led_color(255, 255, 255); // White for polling
-                g_last_card_poll_ms = current_ms;
-                spdlog::info("Card reader initialized and polling started");
-            } else {
+            if (!g_card_reader) {
                 spdlog::warn("Failed to initialize card reader");
             }
         }
     }
-    // Poll for cards if card reader is active
+    if (g_card_reader && !g_card_reader->is_polling() && !fade_out->is_started && current_ms >= g_next_card_start_ms) {
+        if (g_card_reader->start_polling()) {
+            g_card_reader->set_led_color(255, 255, 255); // White for polling
+            spdlog::info("Card reader polling started");
+        }
+
+        g_next_card_start_ms = get_current_ms() + 1000;
+    }
+
     if (g_card_reader && g_card_reader->is_polling()) {
-        int poll_interval = global_data.config ? global_data.config->card_reader.poll_interval_ms : 100;
-        if (current_ms - g_last_card_poll_ms >= poll_interval) {
-            g_last_card_poll_ms = current_ms;
-            if (g_card_reader->poll_once()) {
-                const auto& card_info = g_card_reader->get_card_info();
-                if (card_info.valid && !card_info.card_id_hex.empty()) {
-                    // Card detected! Store the hex card ID and transition to entry screen
-                    // The server will convert hex to decimal access code
-                    global_data.card_reader_card_id_hex = card_info.card_id_hex;
-                    global_data.card_reader_card_valid = true;
+        const bool accepts_card = !fade_out->is_started;
+        g_card_reader->set_accepting_cards(accepts_card);
+        if (auto event = g_card_reader->take_event(); accepts_card && event) {
+            global_data.card_reader_card_id_hex = event->card.card_id;
+            global_data.card_reader_card_valid = true;
 
-                    spdlog::info("Card detected (hex: {}), transitioning to entry screen", card_info.card_id_hex);
+            spdlog::info("Card detected, transitioning to entry screen");
+            g_card_reader->set_led_color(0, 255, 0);
+            g_card_reader->stop_polling();
 
-                    // Green LED for success
-                    g_card_reader->set_led_color(0, 255, 0);
-
-                    // Stop polling
-                    g_card_reader->stop_polling();
-
-                    // Start fade out to entry screen
-                    if (!fade_out->is_started) {
-                        fade_out->start();
-                        fade_out->unlock_input();
-                        audio.play_sound("don", VolumePreset::SOUND);
-                    }
-                }
+            if (!fade_out->is_started) {
+                fade_out->start();
+                fade_out->unlock_input();
+                audio.play_sound("don", VolumePreset::HITSOUND);
             }
         }
     }
@@ -275,7 +278,7 @@ void TitleScreen::start_entry() {
         fade_out->start();
     }
     fade_out->unlock_input();
-    audio.play_sound("don", VolumePreset::SOUND);
+    audio.play_sound("don", VolumePreset::HITSOUND);
 }
 
 bool TitleScreen::update_gacha(double current_ms) {
@@ -315,7 +318,7 @@ bool TitleScreen::update_gacha(double current_ms) {
         return false;
     }
     gacha_busy = true;
-    audio.play_sound("don", VolumePreset::SOUND);
+    audio.play_sound("don", VolumePreset::HITSOUND);
     const std::string& code = global_data.config->network.access_code_1;
     if (code.empty() || code == "0" || code == "1") {
         network_msg.show("error_not_play");
@@ -359,10 +362,13 @@ void TitleScreen::draw() {
     allnet_indicator.draw();
     entry_overlay.draw(true);
 
-    hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.25 - hit_taiko_text->width / 2),
-                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
-                          .fade = text_overlay_fade->attribute});
-    hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.75 - hit_taiko_text->width / 2),
-                          .y = font_manager.get_text_info("hit_taiko_to_start")->y,
-                          .fade = text_overlay_fade->attribute});
+    if (const SkinInfo* hit_taiko_info = font_manager.get_text_info("hit_taiko_to_start");
+        hit_taiko_info && hit_taiko_text) {
+        hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.25 - hit_taiko_text->width / 2),
+                              .y = hit_taiko_info->y,
+                              .fade = text_overlay_fade->attribute});
+        hit_taiko_text->draw({.x = static_cast<float>(tex.screen_width * 0.75 - hit_taiko_text->width / 2),
+                              .y = hit_taiko_info->y,
+                              .fade = text_overlay_fade->attribute});
+    }
 }

@@ -178,6 +178,7 @@ struct DanResultData {
     int dan_index = -1;
     int dan_index_max = -1;
     bool is_gaiden = false;
+    bool is_modern = true; // older versions are recorded but never rank up the profile or grant the costume
     std::string dan_title = "default_title";
     int score = 0;
     float gauge_length = 0.0f;
@@ -229,6 +230,21 @@ struct AIMatchResult {
     int stars = 1;
 };
 
+// one battle mode song, for its result screen
+struct BattleTally {
+    bool played = false;
+    int stage = 1;
+    int difficulty = 0;
+    bool boss = false;
+    int boss_hp = 0; // before the song
+    int boss_hp_max = 0;
+    int kills = 0;
+    int damage = 0;
+    int power = 0;
+    int chests = 0;
+    int orb_chests = 0;
+};
+
 struct SessionData {
     fs::path selected_song;
     std::string selected_collection; // the song select folder it was picked from, sent with the score
@@ -242,6 +258,7 @@ struct SessionData {
     int dan_index = -1;
     int dan_index_max = -1;
     bool dan_gaiden = false;
+    bool dan_modern = true;
     bool dan_gen3 = false;
     int selected_difficulty = 0;
     int subdiff = 0;
@@ -362,6 +379,7 @@ struct GlobalData {
     bool force_auto_play = false;
     fs::path cli_dan; // `--dan` (test): the course dan select starts as soon as its scan is done
     bool skinless = false;
+    bool skin_reload_pending = false;
     bool needs_onboarding = false;
     bool returned_from_result = false;
     bool entry_join_pending = false;
@@ -374,6 +392,21 @@ struct GlobalData {
     int kinotake_team[2] = {-1, -1};
     int kinotake_next = 0;
     AIMatchResult ai_match;
+    bool battle_tracked = false;
+    int battle_bond = 1;
+    std::string waiwai_collab = "taiko"; // the waiwai song's collab art set (Graphics/waiwai_game/tips/<collab>.png)
+    int waiwai_rare_total = 0;           // rare notes per player this song
+    unsigned waiwai_rare_hits = 0;       // bit n: either player hit their n-th rare note
+    int battle_best_power = 0;
+    int battle_stage = 1;
+    int battle_boss_hp = 0; // the stage's boss, if it has one
+    int battle_boss_hp_max = 0;
+    int battle_moves = 1;           // special moves unlocked
+    bool battle_hacchake = false;   // the Maou event's move, bought with orbs
+    bool battle_orbs = false;       // white chests can drop
+    std::vector<int> battle_skills; // the skill picker's slots; empty until the first battle select
+    BattleTally battle_song;
+    bool hold_genre_voice = false;             // a song select story/intro is running: folder voices wait for it
     std::vector<int> credit_gauges[2];         // soul gauge percent per scored song this credit, per seat
     std::vector<std::string> credit_titles[2]; // same songs
     bool reward_shop_from_entry = false;       // mode select opened the shop: no reward time, back to entry
@@ -404,10 +437,19 @@ bool guests_only(bool two_player);
 void load_skin();
 void unload_skin();
 
+void set_user_appearance(const std::string& skin, const std::string& language);
+void clear_user_appearance();
+void apply_user_appearance();
+void revert_user_appearance();
+std::string instance_skin();
+std::string instance_language();
+
 void queue_window_resize(int width, int height);
 bool apply_queued_window_resize();
 
 void drop_other_screens_for_skin_reload();
 void reload_skin_screens();
+// Rebuilds the current screen against a fresh Lua state, so script edits on disk take effect.
+void reload_current_screen_scripts();
 
 extern GlobalData global_data;

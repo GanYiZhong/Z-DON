@@ -40,7 +40,7 @@ namespace {
         bool has_song_list = false;
         for (const LibraryIndex::Entry& e : listing.entries) {
             fs::path p = dir / e.name;
-            if (e.name == L"song_list.txt") {
+            if (e.name.starts_with(L"song_list") && is_song_list_file(p)) { // upstream #381: account lists
                 has_song_list = true;
                 song_lists.push_back(p);
             } else if (name_has_ext(e.name, L".tja") || name_has_ext(e.name, L".osu")) {
@@ -68,8 +68,8 @@ namespace {
         // a song_list.txt written since the walk (favorites / recently played)
         if (!has_song_list && index.song_list_written(dir)) {
             std::error_code ec;
-            if (fs::exists(dir / "song_list.txt", ec)) {
-                song_lists.push_back(dir / "song_list.txt");
+            if (const fs::path file = song_list_file(dir); fs::exists(file, ec)) {
+                song_lists.push_back(file);
             }
         }
         return true;
@@ -154,7 +154,7 @@ namespace {
         auto scan = fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied, scan_ec);
         while (scan != fs::end(scan)) {
             const fs::directory_entry& entry = *scan;
-            if (entry.path().filename() == "song_list.txt") {
+            if (entry.path().filename().native().starts_with(L"song_list") && is_song_list_file(entry.path())) {
                 add_song_list(entry.path());
                 scan.increment(scan_ec);
                 if (scan_ec) {
@@ -296,6 +296,9 @@ void FolderBox::run_deferred_scans(std::atomic<bool>& abort_flag) {
 }
 
 FolderBox::~FolderBox() {
+    if (!custom_voice.empty()) {
+        audio.unload_sound(custom_voice);
+    }
     if (box_texture.has_value()) {
         unload_texture(box_texture.value());
     }
@@ -322,6 +325,9 @@ void FolderBox::load_text() {
     if (!is_osu_folder && fs::exists(path / "box_icon.png") && !box_icon.has_value()) {
         box_icon = load_texture_mipmapped((path / "box_icon.png").string().c_str());
     }
+    if (!is_osu_folder && custom_voice.empty() && fs::exists(path / "box.ogg")) {
+        custom_voice = audio.load_sound(path / "box.ogg", "box_voice_" + path.string());
+    }
     text_loaded = true;
 }
 
@@ -331,6 +337,9 @@ std::string FolderBox::hover_voice() const {
     }
     if (collection == WAIWAI_NORMAL_COLLECTION) {
         return "voice_waiwai_exit";
+    }
+    if (!custom_voice.empty()) {
+        return custom_voice;
     }
     return "genre_voice_" + std::to_string(static_cast<int>(genre_index));
 }
@@ -354,13 +363,21 @@ void FolderBox::update(double current_time) {
     BaseBox::update(current_time);
 
     if (!is_open_prev && yellow_box_opened) {
-        if (!audio.is_sound_playing("voice_enter")) {
+        genre_voice_pending = global_data.hold_genre_voice;
+        if (!genre_voice_pending && !audio.is_sound_playing("voice_enter")) {
             audio.play_sound(hover_voice(), VolumePreset::VOICE);
             genre_voice_started = true;
         }
-    } else if (!yellow_box_opened && genre_voice_started) {
-        audio.stop_sound(hover_voice());
-        genre_voice_started = false;
+    } else if (yellow_box_opened && genre_voice_pending && !global_data.hold_genre_voice) {
+        genre_voice_pending = false;
+        audio.play_sound(hover_voice(), VolumePreset::VOICE);
+        genre_voice_started = true;
+    } else if (!yellow_box_opened) {
+        genre_voice_pending = false;
+        if (genre_voice_started) {
+            audio.stop_sound(hover_voice());
+            genre_voice_started = false;
+        }
     }
 }
 

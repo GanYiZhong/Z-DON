@@ -737,6 +737,23 @@ std::vector<PlayRecord> ScoresManager::recent_plays(const std::string& hash, int
     return out;
 }
 
+RecordCounts ScoresManager::get_record_counts(const std::string& player_id, int min_difficulty) {
+    std::scoped_lock lock(maps_mutex);
+    RecordCounts out;
+    for (const auto& [key, s] : score_cache) {
+        if (std::get<2>(key) != player_id || std::get<1>(key) < min_difficulty) {
+            continue;
+        }
+        if (int r = static_cast<int>(s.rank); r >= 1 && r <= 7) {
+            out.ranks[r - 1]++;
+        }
+        for (int c = 1; c <= std::min(static_cast<int>(s.crown), 3); c++) {
+            out.crowns[c - 1]++;
+        }
+    }
+    return out;
+}
+
 std::unordered_map<std::string, int> ScoresManager::get_play_counts(const std::string& player_id) {
     std::scoped_lock lock(maps_mutex);
     std::unordered_map<std::string, int> counts;

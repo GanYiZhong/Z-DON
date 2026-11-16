@@ -508,7 +508,7 @@ static void add_chart_file(std::vector<fs::path>& songs, std::vector<fs::path>* 
 
 static void collect_navigation_file(const fs::path& path, std::vector<fs::path>& files) {
     auto name = path.filename().string();
-    if (name == "song_list.txt" || name == "box.def") {
+    if (name.starts_with("song_list") && path.extension() == ".txt") {
         files.push_back(path);
         return;
     }

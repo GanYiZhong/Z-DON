@@ -139,6 +139,7 @@ enum class SCO : unsigned int {
     DAN_TITLE_HORIZONTAL,
     DAN_CHIP_NAME_BLACK,
     DISABLE_CHARA_3D,
+    DRUM_JOIN,
     CROP_RESULT_SCREENSHOT,
     LOADING_COUNTDOWN,
     DISABLE_RETRY_GAME,
@@ -161,6 +162,7 @@ enum class SCO : unsigned int {
     AI_DON_UNDER_FLAMES,       // Z-DON: the arena's Don is drawn when the skin asks, so the skin's flames lie over it
     AI_GAME_CHARA_3D,          // Z-DON: the arena's AI is the 3D AI Don (tex.ai_draw_rival)
     AI_LOADING_CHARA_3D,       // Z-DON: the loading VS window shows both 3D Dons (tex.ai_vs_chara_draw)
+    DISABLE_ENSO_BATTLE,
 };
 
 namespace std {
@@ -178,6 +180,7 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"dan_title_horizontal", SCO::DAN_TITLE_HORIZONTAL},
     {"dan_chip_name_black", SCO::DAN_CHIP_NAME_BLACK},
     {"disable_chara_3d", SCO::DISABLE_CHARA_3D},
+    {"drum_join", SCO::DRUM_JOIN},
     {"crop_result_screenshot", SCO::CROP_RESULT_SCREENSHOT},
     {"loading_countdown", SCO::LOADING_COUNTDOWN},
     {"disable_retry_game", SCO::DISABLE_RETRY_GAME},
@@ -190,6 +193,7 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"disable_ai_combo_announce", SCO::DISABLE_AI_COMBO_ANNOUNCE},
     {"ai_select_chara_3d", SCO::AI_SELECT_CHARA_3D},
     {"ai_keep_preview", SCO::AI_KEEP_PREVIEW},
+    {"disable_enso_battle", SCO::DISABLE_ENSO_BATTLE},
     {"ai_wait_loading_card", SCO::AI_WAIT_LOADING_CARD},
     {"ai_start_voice", SCO::AI_START_VOICE},
     {"ai_list_fade_in_place", SCO::AI_LIST_FADE_IN_PLACE},

@@ -586,8 +586,7 @@ void Chara3D::init_common(bool mirror, bool use_skin_config) {
 }
 
 void Chara3D::finish_load() {
-    fs::path face_dir = resolve_skin_path("Models/face");
-    load_face_textures(face_dir);
+    load_face_textures(resolve_skin_path("Models/face/face_000000.png")); // upstream: one face sheet
 
     fs::path skin_anim_path = resolve_skin_path("Graphics/global/animation.json");
     load_face_anims(skin_anim_path);
@@ -741,21 +740,11 @@ void Chara3D::set_face_rim_texture(fs::path& texture_path) {
     }
 }
 
-void Chara3D::load_face_textures(fs::path& face_dir) {
-    if (!fs::exists(face_dir)) {
+void Chara3D::load_face_textures(const fs::path& sheet_path) {
+    if (!fs::exists(sheet_path)) {
         return;
     }
-    std::vector<fs::path> paths;
-    for (auto& e : fs::directory_iterator(face_dir)) {
-        if (e.path().extension() == ".png") {
-            paths.push_back(e.path());
-        }
-    }
-    if (paths.empty()) {
-        return;
-    }
-    std::ranges::sort(paths);
-    Image sheet = load_image(paths[0].string().c_str());
+    Image sheet = load_image(sheet_path.string().c_str());
     // Frames are square and stacked vertically; derive the size from the
     // sheet width instead of assuming 128px, so higher-resolution skins
     // slice on the right boundaries (the UVs are normalized anyway).
@@ -769,7 +758,51 @@ void Chara3D::load_face_textures(fs::path& face_dir) {
         unload_image(frame_img);
     }
     unload_image(sheet);
-    apply_face(0);
+    apply_face(std::max(current_face_index, 0));
+}
+
+static constexpr float PAINT_PLANE_SCALE = 4.0f / 3.0f;
+
+void Chara3D::scale_face_planes(float factor) {
+    for (size_t p = 0; p < parts.size(); p++) {
+        for (int m = 0; m < parts[p].meshCount; m++) {
+            if (parts[p].meshMaterial[m] != part_face_material_index[p]) {
+                continue;
+            }
+            Mesh& mesh = parts[p].meshes[m];
+            float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+            for (int v = 0; v < mesh.vertexCount; v++) {
+                minx = std::min(minx, mesh.vertices[v * 3]);
+                maxx = std::max(maxx, mesh.vertices[v * 3]);
+                miny = std::min(miny, mesh.vertices[v * 3 + 1]);
+                maxy = std::max(maxy, mesh.vertices[v * 3 + 1]);
+            }
+            normalize_face_mesh_size(mesh, std::max(maxx - minx, maxy - miny) * factor);
+            update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * static_cast<int>(sizeof(float)), 0);
+        }
+    }
+    applied_frame = -1;
+    render_dirty = true;
+}
+
+void Chara3D::set_paint(int index) {
+    if (index == paint_index) {
+        return;
+    }
+    fs::path sheet = index > 0 ? resolve_skin_path(fs::path("Models/paint") / (std::to_string(index) + ".png"))
+                               : resolve_skin_path("Models/face/face_000000.png");
+    if (!fs::exists(sheet)) {
+        return;
+    }
+    if ((index > 0) != (paint_index > 0)) {
+        scale_face_planes(index > 0 ? PAINT_PLANE_SCALE : 1.0f / PAINT_PLANE_SCALE);
+    }
+    paint_index = index;
+    for (auto& t : face_textures) {
+        unload_texture(t);
+    }
+    face_textures.clear();
+    load_face_textures(sheet);
 }
 
 void Chara3D::load_face_anims(fs::path& anim_path) {
@@ -1426,12 +1459,14 @@ std::unique_ptr<Chara3D> make_chara_from_player_data(const PlayerData* pd, bool 
         std::string body_name = std::to_string(pd->chara_body_index);
         auto chara = std::make_unique<Chara3D>(head_name, body_name, mirror, use_skin_config);
         chara->set_puchi(pd->chara_acce_index);
+        chara->set_paint(pd->chara_paint_index);
         return chara;
     }
     std::string costume_name = pd ? std::to_string(pd->chara_cos_index) : "0";
     auto chara = std::make_unique<Chara3D>(costume_name, mirror, use_skin_config);
     if (pd) {
         chara->set_puchi(pd->chara_acce_index);
+        chara->set_paint(pd->chara_paint_index);
     }
     return chara;
 }

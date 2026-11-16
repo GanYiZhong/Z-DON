@@ -132,6 +132,7 @@ ResultPlayer::ResultPlayer(PlayerNum player_num, bool has_2p, bool is_2p)
     fn_draw_gauge = lua_object["draw_gauge"];
     fn_draw_front = lua_object["draw_front"];
     fn_chara_pos = lua_object["chara_pos"];
+    fn_chara_mirror = lua_object["chara_mirror"];
     fn_nameplate_pos = lua_object["nameplate_pos"];
     fn_draw_song_info = lua_object["draw_song_info"];
 }
@@ -191,7 +192,7 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
             score_delay.value() += 16.67 * 3;
             if (all_done) {
                 if (!zdon_ai_result_lane(player_num)) {
-                    audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                    audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
                 }
                 update_index = std::ssize(update_list);
                 rows_done_ms = current_ms;
@@ -222,7 +223,7 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
         }
         if (score_animator->is_finished) {
             if (!zdon_ai_result_lane(player_num)) {
-                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
             }
             score_delay.value() += 750;
             if (update_index == std::ssize(update_list) - 1) {
@@ -355,6 +356,12 @@ void ResultPlayer::draw() {
         chara->set_puchi_adjust((*pos)[4].get_or(0.0f), (*pos)[5].get_or(0.0f), (*pos)[6].get_or(1.0f));
     } else {
         chara->set_puchi_adjust(0.0f, 0.0f, 1.0f);
+    }
+    if (fn_chara_mirror.valid()) {
+        auto mirror_opt = call_r<bool>(fn_chara_mirror, "ResultPlayer:chara_mirror");
+        if (mirror_opt) {
+            chara->set_mirror(mirror_opt.value());
+        }
     }
     chara->draw(cx, cy, cs);
     call(fn_draw_front, "ResultPlayer:draw_front");

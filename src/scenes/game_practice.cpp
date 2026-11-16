@@ -495,7 +495,7 @@ void PracticeGameScreen::scrobble_step_bar(bool right, int count) {
     if (bars.empty()) {
         return;
     }
-    audio.play_sound("kat", VolumePreset::SOUND);
+    audio.play_sound("kat", VolumePreset::HITSOUND);
     if (right) {
         skip_r_kat_anim->start();
     } else {
@@ -509,9 +509,11 @@ void PracticeGameScreen::scrobble_step_bar(bool right, int count) {
             practice_player->spawn_scrobble_effect(DrumType::KAT, Side::LEFT, player_idx);
         }
     }
-    // merge 0ed42ec: upstream stops at the first / last bar (its skip buttons grey out there) instead of Z-DON's
-    // wrap-around; a step of several bars (count) is clamped to the ends
-    if (right ? at_last_bar() : at_first_bar()) {
+    if (!right && at_first_bar()) {
+        animate_scrobble_to(static_cast<int>(bars.size()) - 1);
+        return;
+    }
+    if (right && at_last_bar()) {
         seek_limit_ms = now_ms;
         return;
     }
@@ -533,7 +535,7 @@ void PracticeGameScreen::review_jump(int card) {
     }
     TextureResizeAnimation* anims[3] = {speed_l_kat_anim, menu_don_anim, speed_r_kat_anim};
     anims[card]->start();
-    audio.play_sound(card == 1 ? "don" : "kat", VolumePreset::SOUND);
+    audio.play_sound(card == 1 ? "don" : "kat", VolumePreset::HITSOUND);
     if (target != scrobble_index) {
         animate_scrobble_to(target);
     }
@@ -630,7 +632,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     if (button_hit(t_resume_don, player_idx, resume_don_anim)) {
         if (clicked) {
             resume_practice();
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -655,7 +657,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     if (button_hit(t_menu_don, other_idx, menu_don_anim)) {
         if (clicked) {
             open_practice_menu();
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -664,7 +666,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     if (button_hit(t_speed_l_kat, other_idx * 2 + 1, speed_l_kat_anim)) {
         if (clicked) {
             change_practice_speed(true, false);
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -673,7 +675,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
     if (button_hit(t_speed_r_kat, other_idx * 2, speed_r_kat_anim)) {
         if (clicked) {
             change_practice_speed(false, true);
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -684,7 +686,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
         if (clicked && practice_player) {
             practice_player->spawn_hit_effects(DrumType::DON, Side::LEFT);
             practice_player->spawn_scrobble_effect(DrumType::DON, Side::LEFT, player_idx);
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -694,7 +696,7 @@ std::optional<Screens> PracticeGameScreen::handle_mouse_input() {
         if (clicked && practice_player) {
             practice_player->spawn_hit_effects(DrumType::DON, Side::RIGHT);
             practice_player->spawn_scrobble_effect(DrumType::DON, Side::RIGHT, player_idx);
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
         }
         return std::nullopt;
     }
@@ -799,7 +801,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
             scrobble_step_bar(!step_l && step_r);
         }
         if (is_l_don_pressed(global_data.player_num) || is_r_don_pressed(global_data.player_num)) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             mark_finish_anim->start();
             menu.open_review_end();
         } else if (is_l_kat_pressed(other_player)) {
@@ -857,7 +859,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                             auto it = std::ranges::lower_bound(marks, scrobble_index);
                             new_index = (it == marks.begin()) ? marks.back() : *(--it);
                         }
-                        audio.play_sound("kat", VolumePreset::SOUND);
+                        audio.play_sound("kat", VolumePreset::HITSOUND);
                         if (right) {
                             skip_r_kat_anim->start();
                         } else {
@@ -874,7 +876,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                     }
                 }
                 if (p1_don) {
-                    audio.play_sound("don", VolumePreset::SOUND);
+                    audio.play_sound("don", VolumePreset::HITSOUND);
                     mark_finish_anim->start();
                     menu.close();
                 }
@@ -893,7 +895,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                     scrobble_step_bar(!step_l && step_r);
                 }
                 if (p1_don) {
-                    audio.play_sound("don", VolumePreset::SOUND);
+                    audio.play_sound("don", VolumePreset::HITSOUND);
                     mark_action_anim->start();
                     auto marked = std::ranges::find(jump_bars, scrobble_index);
                     if (marked != jump_bars.end()) {
@@ -911,7 +913,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                     }
                 }
                 if (p2_don) {
-                    audio.play_sound("don", VolumePreset::SOUND);
+                    audio.play_sound("don", VolumePreset::HITSOUND);
                     mark_finish_anim->start();
                     menu.close_mark_edit();
                 }
@@ -925,11 +927,11 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
                        is_l_don_pressed(other_player) || is_r_don_pressed(other_player);
 
             if (step_l || step_r) {
-                audio.play_sound("kat", VolumePreset::SOUND);
+                audio.play_sound("kat", VolumePreset::HITSOUND);
                 menu.step(step_r);
             }
             if (don) {
-                audio.play_sound("don", VolumePreset::SOUND);
+                audio.play_sound("don", VolumePreset::HITSOUND);
                 bool in_dialog = menu.dialog != PracticeMenu::Dialog::NONE;
                 auto action =
                     in_dialog ? menu.confirm() : menu.activate(practice_player && practice_player->is_auto_play());
@@ -939,7 +941,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
         }
 
         if (other_don_pressed(global_data.player_num)) {
-            audio.play_sound("don", VolumePreset::SOUND);
+            audio.play_sound("don", VolumePreset::HITSOUND);
             open_practice_menu();
             return std::nullopt;
         }
@@ -954,7 +956,7 @@ std::optional<Screens> PracticeGameScreen::global_keys_practice() {
         bool speed_down = other_drum_pressed(global_data.player_num, PracticeDrumRole::L_KAT);
         bool speed_up = other_drum_pressed(global_data.player_num, PracticeDrumRole::R_KAT);
         if (clock.is_paused() && (speed_down || speed_up)) {
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
             change_practice_speed(speed_down, speed_up);
         }
 
@@ -1505,7 +1507,7 @@ bool PracticeGameScreen::zdon_practice_keys() {
         const int d = zdon_digit_pressed();
         if (d >= 0 && zdon_bar_input.size() < 4) {
             zdon_bar_input += static_cast<char>('0' + d);
-            audio.play_sound("kat", VolumePreset::SOUND);
+            audio.play_sound("kat", VolumePreset::HITSOUND);
         }
         if (key_pressed(SDL_SCANCODE_BACKSPACE) && !zdon_bar_input.empty()) {
             zdon_bar_input.pop_back();
@@ -1516,11 +1518,11 @@ bool PracticeGameScreen::zdon_practice_keys() {
         if (key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_KP_ENTER)) {
             const int n = zdon_bar_input.empty() ? 0 : std::stoi(zdon_bar_input);
             if (n >= 1 && n <= static_cast<int>(bars.size())) {
-                audio.play_sound("don", VolumePreset::SOUND);
+                audio.play_sound("don", VolumePreset::HITSOUND);
                 animate_scrobble_to(n - 1);
                 zdon_bar_input_open = false;
             } else {
-                audio.play_sound("kat", VolumePreset::SOUND);
+                audio.play_sound("kat", VolumePreset::HITSOUND);
                 zhud::toast(zhud::text("bar_missing", zdon_bar_input));
                 zdon_bar_input.clear();
             }
@@ -1531,7 +1533,7 @@ bool PracticeGameScreen::zdon_practice_keys() {
     if (const int d = zdon_digit_pressed(); d >= 0 && !bars.empty()) {
         zdon_bar_input_open = true;
         zdon_bar_input = d > 0 ? std::string(1, static_cast<char>('0' + d)) : std::string();
-        audio.play_sound("kat", VolumePreset::SOUND);
+        audio.play_sound("kat", VolumePreset::HITSOUND);
         return true;
     }
     // F6: the branch for the whole song: decided by the play -> normal -> advanced -> master
@@ -1545,7 +1547,7 @@ bool PracticeGameScreen::zdon_practice_keys() {
 void PracticeGameScreen::zdon_cycle_branch() {
     zdon_branch_force = zdon_branch_force >= static_cast<int>(BranchDifficulty::MASTER) ? -1 : zdon_branch_force + 1;
     zdon_apply_branch_force();
-    audio.play_sound("don", VolumePreset::SOUND);
+    audio.play_sound("don", VolumePreset::HITSOUND);
     zhud::toast(zhud::text("branch", zhud::text(zdon_branch_key(zdon_branch_force))));
 }
 
@@ -1698,7 +1700,7 @@ static float ease_out(double p) {
 }
 
 void PracticeGameScreen::draw_skip_buttons(int player_idx, bool clamp) const {
-    bool l_off = clamp && at_first_bar();
+    bool l_off = false;
     bool r_off = clamp && at_last_bar();
     tex.draw_texture(l_off ? t_skip_l_kat_off : t_skip_l_kat,
                      {.scale = skip_l_kat_anim ? static_cast<float>(skip_l_kat_anim->attribute) : 1.0f,

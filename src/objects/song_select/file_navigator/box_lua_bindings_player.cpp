@@ -201,7 +201,8 @@ void register_player_lua_bindings(sol::state& lua) {
         }));
 
     lua.new_usertype<GenreBG>("GenreBG", "texture_frame", &GenreBG::texture_frame, "name", &GenreBG::name_text,
-                              "has_recolor", &GenreBG::has_recolor, "begin_recolor", &GenreBG::begin_recolor,
+                              "has_recolor", &GenreBG::has_recolor, "has_gradient", &GenreBG::has_gradient,
+                              "gradient_texture", &GenreBG::gradient_texture, "begin_recolor", &GenreBG::begin_recolor,
                               "end_recolor", &GenreBG::end_recolor, "stretch",
                               sol::property([](GenreBG& self) { return self.stretch.get(); }), "scale",
                               sol::property([](GenreBG& self) { return self.scale.get(); }), "move",

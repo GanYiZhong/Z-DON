@@ -55,12 +55,14 @@ public:
 
     bool solo = true;
     std::string shared_start_voice;
+    std::string start_voice;
     double oni_open_ms = -1.0;
 
     SongSelectPlayer(PlayerNum player_num);
 
     void update(double current_time);
     bool is_voice_playing();
+    std::string own_start_voice() const;
 
     // zdon_ai_arcade_flow (Green AI select): the course board carries the cabinet's level panel (footage Tl7g8XXXvAM
     // t=127-131): it slides in with the board and follows the highlighted course on the lit board (decide_course); a
@@ -107,4 +109,6 @@ private:
     void handle_level_select(bool l_kat, bool r_kat, bool l_don, bool r_don);
     bool level_done = false, level_panel_on = false;
     int level_sel = 1, level_top = 4, level_song = 0, level_course = -1;
+    // The panel just closed: keep the account's server-side copy in step
+    void push_modifiers();
 };

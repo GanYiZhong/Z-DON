@@ -9,7 +9,32 @@
 #include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/practice_timer.h"
 
+void SongSelectScreen::update_box_bgm() {
+    const fs::path& dir = navigator.current_path;
+    if (dir == bgm_dir) {
+        return;
+    }
+    bgm_dir = dir;
+    std::error_code ec;
+    const fs::path box_bgm = dir / "box.ogg";
+    const bool has_box_bgm = !dir.empty() && fs::exists(dir / "box.def", ec) && fs::exists(box_bgm, ec);
+    if (!has_box_bgm && !bgm_is_box) {
+        return;
+    }
+    fs::path file = box_bgm;
+    if (!has_box_bgm) {
+        file = bgm_override();
+        file = resolve_skin_path(file.empty() ? fs::path("Sounds/song_select/bgm.ogg") : file);
+    }
+    audio.stop_sound("bgm");
+    audio.load_sound(file, "bgm");
+    audio.play_sound("bgm", VolumePreset::MUSIC);
+    bgm_is_box = has_box_bgm;
+}
+
 void SongSelectScreen::on_screen_start() {
+    bgm_dir.clear();
+    bgm_is_box = false;
     Screen::on_screen_start();
     global_data.zdon_ai.active = false; // Z-DON: an AI battle ends at the song select
     zdon_online.reset();                // and an online battle
@@ -350,7 +375,7 @@ std::optional<Screens> SongSelectScreen::poll_second_player_join(double current_
 
     join_request_ms = current_ms;
     join_existing_seat = in;
-    audio.play_sound("don", VolumePreset::SOUND);          // CheckEntry: don_l / don_r
+    audio.play_sound("don", VolumePreset::HITSOUND);       // CheckEntry: don_l / don_r
     audio.play_sound("entry_2p_add", VolumePreset::SOUND); // SecondPlayerJoinToEntry
     spdlog::info("[2P join] {}P asked to join from song select; {}P holds", static_cast<int>(out),
                  static_cast<int>(in));
@@ -472,6 +497,7 @@ std::optional<Screens> SongSelectScreen::update() {
 
     if (screen_init) {
         navigator.update(current_time);
+        update_box_bgm();
     }
 
     if (game_transition.has_value() && join_request_ms < 0.0) {
@@ -551,6 +577,8 @@ Screens SongSelectScreen::on_screen_end(Screens next_screen) {
 void SongSelectScreen::draw_overlays() {
     script->draw_overlays(state);
 
+    // merge 1cd3844: upstream 802ec7b2 leaves the pill to a skin that draws the counter; Z-DON's hook (6c46cc52)
+    // replaces only the text, and the skins written for it (Nijiiro's chip digits) draw over the engine's pill
     if (!uses_session_timer()) {
         // the cabinet's AI select keeps the translucent pill behind the counter text (footage Tl7g8XXXvAM f012 / f028,
         // round 16: round 14 had removed it); in the arcade flow the skin may size it (zdon_ai_counter_pill)
@@ -600,9 +628,8 @@ void SongSelectScreen::draw() {
 
     draw_overlays();
 
-    // the personal-best panel gives way to the neiro / option popup, which shares its corner
-    const bool popup_open = (player->neiro_selector.has_value() || player->modifier_selector.has_value());
-    if (screen_init && !popup_open) {
+    // the personal-best / leaderboard panel gives way to the popups that share its corner
+    if (screen_init && !popup_open()) {
         navigator.draw_score_history();
     }
 

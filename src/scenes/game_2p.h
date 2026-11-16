@@ -66,10 +66,10 @@ private:
     void live_end_now(); // the song ends here (a surrender either way)
 
 protected:
-    // merge 0ed42ec: upstream's virtual with Z-DON's rule as the base (a Z-DON AI battle goes back to the AI
-    // song select); upstream's AIGameScreen overrides it
-    virtual Screens select_screen() const;
-    virtual Screens result_screen() const { return Screens::RESULT_2P; }
+    // merge 0ed42ec: upstream's virtual with Z-DON's rule (a Z-DON AI battle goes back to the AI song select);
+    // upstream's AIGameScreen overrides it
+    Screens select_screen() const override;
+    Screens result_screen() const override { return Screens::RESULT_2P; }
 
 public:
     bool two_player_audio() const override { return true; }

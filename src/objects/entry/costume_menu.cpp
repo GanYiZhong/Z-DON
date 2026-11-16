@@ -265,11 +265,11 @@ void CostumeMenu::handle_input() {
             int n = static_cast<int>(costume_icons.size());
             if (menu_left_pressed(player_num)) {
                 costume_icon_index = (costume_icon_index - 1 + n) % n;
-                audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+                audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             }
             if (menu_right_pressed(player_num)) {
                 costume_icon_index = (costume_icon_index + 1) % n;
-                audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+                audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
             }
             if (menu_confirm_pressed(player_num)) {
                 if (pick_stage == CostumePickStage::HEAD) {
@@ -284,18 +284,18 @@ void CostumeMenu::handle_input() {
                 } else {
                     confirmed = true;
                 }
-                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
             }
         }
     } else {
         int prev_index = selected_index;
         if (menu_left_pressed(player_num)) {
             selected_index = (selected_index - 1 + NUM_ITEMS) % NUM_ITEMS;
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         }
         if (menu_right_pressed(player_num)) {
             selected_index = (selected_index + 1) % NUM_ITEMS;
-            audio.play_player_sound("kat", player_num, VolumePreset::SOUND);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
         }
         if (selected_index != prev_index) {
             if (is_preset_item(ITEMS[selected_index])) {
@@ -319,7 +319,7 @@ void CostumeMenu::handle_input() {
                     return;
                 }
                 costume_select_mode = true;
-                audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
                 play_voice(voice); // upstream b8d6157: the item's voice line
             };
             // Z-DON: the shared open_icon_select lambda, with upstream's per-item voice as a parameter
@@ -335,7 +335,7 @@ void CostumeMenu::handle_input() {
                 }
                 if (preset_cos_id) {
                     confirmed = true;
-                    audio.play_player_sound("don", player_num, VolumePreset::SOUND);
+                    audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
                 }
             }
         }

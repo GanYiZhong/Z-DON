@@ -6,6 +6,7 @@
 #include <iterator>
 #include <numbers>
 #include <optional>
+#include <random>
 #include <ranges>
 #include <utility>
 #include <vector>
@@ -253,6 +254,10 @@ void Player::spawn_ending_anim(Background* background) {
     if (ending_background && ending_background->wants_handle_ending()) {
         ending_background->handle_ending(player_num, kind);
     }
+    // a screen that plays its own ending would otherwise also hear this one's sounds and voice
+    if (skip_ending_anim) {
+        ending_anim.reset();
+    }
 }
 
 void Player::reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int new_difficulty) {
@@ -279,6 +284,7 @@ void Player::reload_for_dan(const std::shared_ptr<SongParser>& new_parser, int n
     reset_chart();
     gauge.reset();          // reset_chart recreates gauge; discard it for dan mode
     branch_history.clear(); // switching charts: old song's branch decisions don't apply here
+    input_log.clear();
     skipped_run = false;
 }
 
@@ -827,8 +833,10 @@ void Player::draw(double ms_from_start, float x, float y) {
     }
     draw_lane_cover(y);
 
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_effect(judge_x + cdx, y + judge_y + cdy);
+    if (!hide_judgment) {
+        for (Judgment& anim : draw_judge_list) {
+            anim.draw_effect(judge_x + cdx, y + judge_y + cdy);
+        }
     }
     {
         int scissor_x = virtual_to_screen_x(lane_cover_tex_id->scissor_right());
@@ -841,12 +849,14 @@ void Player::draw(double ms_from_start, float x, float y) {
         end_scissor_mode();
     }
 
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_outer_effect(judge_x + cdx, y + judge_y + cdy);
-        anim.draw_ray_effect(judge_x + cdx, y + judge_y + cdy);
-    }
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_text(judge_x, y + judge_y);
+    if (!hide_judgment) {
+        for (Judgment& anim : draw_judge_list) {
+            anim.draw_outer_effect(judge_x + cdx, y + judge_y + cdy);
+            anim.draw_ray_effect(judge_x + cdx, y + judge_y + cdy);
+        }
+        for (Judgment& anim : draw_judge_list) {
+            anim.draw_text(judge_x, y + judge_y);
+        }
     }
 
     draw_overlays(y);
@@ -878,8 +888,10 @@ void Player::draw_practice(double ms_from_start, float x, float y, bool draw_not
     }
     draw_lane_cover(y);
 
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_effect(judge_x, y + judge_y);
+    if (!hide_judgment) {
+        for (Judgment& anim : draw_judge_list) {
+            anim.draw_effect(judge_x, y + judge_y);
+        }
     }
 
     if (draw_notes_on) {
@@ -890,12 +902,12 @@ void Player::draw_practice(double ms_from_start, float x, float y, bool draw_not
         end_scissor_mode();
     }
 
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_outer_effect(judge_x, y + judge_y);
-        anim.draw_ray_effect(judge_x, y + judge_y);
-    }
-    for (Judgment& anim : draw_judge_list) {
-        anim.draw_text(judge_x, y + judge_y);
+    if (!hide_judgment) {
+        for (Judgment& anim : draw_judge_list) {
+            anim.draw_outer_effect(judge_x, y + judge_y);
+            anim.draw_ray_effect(judge_x, y + judge_y);
+            anim.draw_text(judge_x, y + judge_y);
+        }
     }
 
     draw_overlays(y);
@@ -1540,6 +1552,9 @@ void Player::play_note_manager(double current_ms, std::optional<Background>& bac
             if (Gauge* g = active_gauge()) {
                 g->add_bad();
             }
+            if (on_note_judged) { // upstream enso battle (battle.cpp)
+                on_note_judged(lane->front(), Judgments::BAD);
+            }
 
             lane->pop_front();
             branch_note_count++;
@@ -1679,8 +1694,13 @@ void Player::note_correct(const Note& note, double current_ms) {
     if (note.type != NoteType::KUSUDAMA) {
         bool is_big =
             note.type == NoteType::DON_L || note.type == NoteType::KAT_L || note.type == NoteType::BALLOON_HEAD;
+        const int rare = rare_order(note);
+        if (rare >= 0) {
+            rare_hit_mask |= 1u << rare;
+        }
         draw_arc_list.emplace_back(note.type, current_ms, arc_player(), is_big, note.type == NoteType::BALLOON_HEAD,
-                                   judge_x, judge_y, rainbow_arc, synchro(note));
+                                   judge_x, judge_y, rainbow_arc, synchro(note), fade_arc,
+                                   rare >= 0 ? rare_keys[rare % rare_keys.size()] : std::string{});
     }
     auto it = std::ranges::lower_bound(draw_note_buffer, note.index, {}, &Note::index);
     if (it != draw_note_buffer.end() && *it == note) {
@@ -1690,7 +1710,8 @@ void Player::note_correct(const Note& note, double current_ms) {
 
 void Player::check_drumroll(double current_ms, DrumType drum_type, std::optional<Background>& background) {
     const bool is_big = !other_notes.empty() && other_notes.front().type == NoteType::ROLL_HEAD_L;
-    draw_arc_list.emplace_back(NoteType(drum_type), current_ms, arc_player(), is_big, false, 0.0f, 0.0f, rainbow_arc);
+    draw_arc_list.emplace_back(NoteType(drum_type), current_ms, arc_player(), is_big, false, 0.0f, 0.0f, rainbow_arc,
+                               false, fade_arc);
     curr_drumroll_count++;
     if (curr_drumroll_count == 1) {
         drumroll_counter.reset(); // an equal count left by the last roll would not restart the animations
@@ -1891,6 +1912,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             if (background.has_value()) {
                 background->handle_bad(PlayerNum(1 + is_2p));
             }
+            if (on_note_judged) {
+                on_note_judged(curr_note, Judgments::BAD);
+            }
             branch_note_count++;
             lane.pop_front();
             curr_note = lane.front();
@@ -1915,6 +1939,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             good_count++;
             score += base_score;
             score_counter.add_popup(base_score, true);
+            if (on_note_judged) {
+                on_note_judged(curr_note, Judgments::GOOD);
+            }
             note_correct(curr_note, current_ms);
             if (Gauge* g = active_gauge()) {
                 g->add_good();
@@ -1935,6 +1962,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             ok_count++;
             score += 10 * std::floor(base_score / 2 / 10);
             score_counter.add_popup(10 * std::floor(base_score / 2 / 10), true);
+            if (on_note_judged) {
+                on_note_judged(curr_note, Judgments::OK);
+            }
             note_correct(curr_note, current_ms);
             if (Gauge* g = active_gauge()) {
                 g->add_ok();
@@ -1967,6 +1997,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             }
             if (background.has_value()) {
                 background->handle_bad(PlayerNum(1 + is_2p));
+            }
+            if (on_note_judged) {
+                on_note_judged(note, Judgments::BAD);
             }
         }
     }
@@ -2018,6 +2051,13 @@ void Player::kusudama_counter_manager(double current_ms) {
     if (!is_balloon && kusudama_counter.has_value() && !kusudama_counter->has_popped()) {
         if (kusudama_counter->can_miss()) {
             kusudama_counter->miss(current_ms);
+            audio.play_player_sound("kusudama_fail", PlayerNum::ALL, VolumePreset::SOUND);
+            if (kusudama_partner) {
+                audio.play_sound("kusudama_fail_voice_1p", VolumePreset::VOICE);
+                audio.play_sound("kusudama_fail_voice_2p", VolumePreset::VOICE);
+            } else {
+                audio.play_sound("kusudama_fail_voice", VolumePreset::VOICE);
+            }
         } else {
             kusudama_counter.reset();
         }
@@ -2278,6 +2318,31 @@ int Player::miss_arm_frame(double current_ms, const Note& note) const {
     return t < 33 ? 0 : t < 67 ? 1 : 2;
 }
 
+void Player::set_rare_notes(std::vector<std::string> keys, int count, uint64_t seed) {
+    rare_keys = std::move(keys);
+    rare_notes.clear();
+    rare_hit_mask = 0;
+    if (rare_keys.empty() || count <= 0 || draw_note_list.empty()) {
+        return;
+    }
+    auto [first, last] = std::ranges::minmax(draw_note_list, {}, &Note::hit_ms);
+    const double lo = first.hit_ms + (last.hit_ms - first.hit_ms) * 0.1;
+    const double hi = first.hit_ms + (last.hit_ms - first.hit_ms) * 0.9;
+    std::vector<long long> dons;
+    for (const Note& note : draw_note_list) {
+        if (note.type == NoteType::DON && note.hit_ms >= lo && note.hit_ms <= hi) {
+            dons.push_back(std::llround(note.hit_ms));
+        }
+    }
+    std::ranges::sort(dons);
+    dons.erase(std::ranges::unique(dons).begin(), dons.end());
+    std::vector<long long> picked;
+    std::ranges::sample(dons, std::back_inserter(picked), count, std::mt19937_64(seed));
+    for (size_t i = 0; i < picked.size(); ++i) {
+        rare_notes[picked[i]] = static_cast<int>(i);
+    }
+}
+
 void Player::draw_synchro(double current_ms, const Note& note, float cx, float cy, int current_eighth) {
     const SynchroArt& art = (*synchro_art)[note.type == NoteType::KAT_L];
     const float s = tex.screen_scale;
@@ -2460,6 +2525,16 @@ void Player::draw_notes(double current_ms, float y) {
             draw_drumroll(current_ms, y, note, current_eighth, false);
         } else if (note.type == NoteType::BALLOON_HEAD) {
             draw_balloon(current_ms, y, note, current_eighth, false);
+        } else if (int rare = note.display ? rare_order(note) : -1; rare >= 0) {
+            TextureObject* t = tex.get_texture(rare_keys[rare % rare_keys.size()]);
+            int frames = 1;
+            if (auto* framed = dynamic_cast<FramedTexture*>(t)) {
+                frames = std::max<int>(1, static_cast<int>(framed->textures.size()));
+            }
+            tex.draw_texture(t, {.frame = static_cast<int>(current_ms / 150.0) % frames,
+                                 .center = true,
+                                 .x = pos->first - (t_notes_9->width / 2.0f),
+                                 .y = pos->second + tex.get_skin_config(SC::GAME_NOTES)->y});
         } else if (note.display && synchro(note)) {
             draw_synchro(current_ms, note, pos->first,
                          pos->second + tex.get_skin_config(SC::GAME_NOTES)->y + t_notes_9->height / 2.0f,
@@ -2624,6 +2699,12 @@ void Player::draw_lane_cover(float y) {
     tex.draw_texture(lane_cover_tex_id, {.y = y});
     if (is_dan) {
         tex.draw_texture(t_dan_lane_cover, {.y = y});
+    }
+}
+
+void Player::use_lane_cover(const std::string& name) {
+    if (tex.has_texture("lane/" + name)) {
+        lane_cover_tex_id = tex.get_texture("lane/" + name);
     }
 }
 
