@@ -867,8 +867,8 @@ void ScriptManager::register_lua_bindings() {
     });
 
     // Z-DON: a clickable area this frame (zdon_mouse.h): steps 0 confirms, -n / +n walks the selection, "back" goes
-    // back, "none" takes the click and does nothing; id (optional, >= 0) names the item so a walk to it finds it again
-    // each frame. The same coordinates as draw_rect.
+    // back, "none" takes the click and does nothing, "cmd:<n>" hands n to the screen; id (optional, >= 0) names the
+    // item so a walk to it finds it again each frame. The same coordinates as draw_rect.
     tex.set_function("click_area",
                      [](float x, float y, float w, float h, const sol::object& action, sol::optional<int> id) {
                          int steps = 0;
@@ -877,6 +877,9 @@ void ScriptManager::register_lua_bindings() {
                          } else if (action.is<std::string>()) {
                              const std::string a = action.as<std::string>();
                              steps = a == "back" ? zdon_mouse::kBack : a == "none" ? zdon_mouse::kSwallow : 0;
+                             if (a.starts_with("cmd:")) { // a command for the screen (zdon_mouse::take_command)
+                                 steps = zdon_mouse::kCommand + std::atoi(a.c_str() + 4);
+                             }
                          }
                          zdon_mouse::add_area(x, y, w, h, steps, id.value_or(-1));
                      });

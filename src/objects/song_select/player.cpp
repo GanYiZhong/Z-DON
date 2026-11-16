@@ -9,6 +9,7 @@
 #include "../../libs/file/scores.h"
 #include "../../libs/gfx/text.h"
 #include "../../libs/input/input.h"
+#include "../../libs/input/zdon_mouse.h"
 #include "../../libs/network/network.h"
 #include "../../libs/notify.h"
 #include "../../libs/time.h"
@@ -654,6 +655,24 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
             song->oni_locked = false;
             curr_diffs = song->get_diffs();
             oni_hidden = false;
+        }
+    }
+
+    // Z-DON mouse: the option board's rows (cmd:<row, 1-based>) and outside it (cmd:0, close), from its script
+    if (modifier_selector.has_value() || neiro_selector.has_value()) {
+        if (const auto cmd = zdon_mouse::take_command()) {
+            if (*cmd == 0) {
+                audio.play_player_sound("don", player_num, VolumePreset::HITSOUND);
+                if (modifier_selector.has_value()) {
+                    modifier_selector->close();
+                } else {
+                    neiro_selector->confirm();
+                }
+            } else if (modifier_selector.has_value()) {
+                audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
+                modifier_selector->jump_to(*cmd - 1);
+            }
+            return SongSelectState::SONG_SELECTED;
         }
     }
 

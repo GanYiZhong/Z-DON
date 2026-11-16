@@ -80,6 +80,9 @@ public:
     MoveAnimation* move_out = nullptr;
 
     ModifierSelector(PlayerNum player_num, PlayerData* player);
+    // Z-DON mouse: the cursor to a row (0-based), or the board closed as the last row's confirm closes it
+    void jump_to(int index);
+    void close();
     ~ModifierSelector();
     ModifierSelector(const ModifierSelector&) = delete;
     ModifierSelector& operator=(const ModifierSelector&) = delete;

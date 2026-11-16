@@ -7,6 +7,7 @@
 // and a click on the selected item (0 steps) confirms it. Areas live one frame: whatever is drawn registers again.
 // Touch is not the mouse here: the mouse events a touch screen makes are left out (the touch drum has its own).
 
+#include <optional>
 #include <string_view>
 
 #include "../gfx.h"
@@ -16,6 +17,8 @@ namespace zdon_mouse {
     inline constexpr int kSwallow =
         1 << 20; // an area that takes the click and does nothing (a panel with its own mouse)
     inline constexpr int kBack = kSwallow + 1; // an area that goes back
+    // an area whose click is a command for the screen (kCommand + n): take_command() gives n in that frame's update
+    inline constexpr int kCommand = kSwallow + 1000;
 
     // x, y, w, h in the canvas's coordinates (tex.screen_width x tex.screen_height, as textures are drawn);
     // steps: 0 confirm, -n / +n that many kat presses left / right, kSwallow, kBack. A later area wins where they
@@ -32,5 +35,8 @@ namespace zdon_mouse {
 
     // the screen changed: steps queued for the old one are dropped
     void reset();
+
+    // this frame's clicked command (an area kCommand + n), once; nothing when none
+    std::optional<int> take_command();
 
 } // namespace zdon_mouse

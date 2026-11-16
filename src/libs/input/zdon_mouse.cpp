@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../global_data.h"
@@ -28,6 +29,7 @@ namespace zdon_mouse {
         constexpr double kStepMs = 90.0;      // between the presses of a walk
         constexpr double kWalkMaxMs = 4000.0; // a walk that has not arrived by then is given up
         float wheel_rest = 0.0f;              // a touchpad's part-notches, until they make one
+        std::optional<int> command;           // clicked this frame (kCommand + n)
 
         double cursor_moved_ms = -1e18;
         bool cursor_shown = false;
@@ -63,11 +65,16 @@ namespace zdon_mouse {
             return;
         }
         for (const Area& a : drawing) {
-            const Color c = a.steps == 0          ? Color{0, 200, 0, 80}
+            const Color c = a.steps >= kCommand   ? Color{220, 120, 0, 70}
+                            : a.steps == 0        ? Color{0, 200, 0, 80}
                             : a.steps >= kSwallow ? Color{90, 90, 90, 60}
                                                   : Color{0, 80, 255, 60};
             draw_rectangle(Rect{a.x, a.y, a.w, a.h}, c);
         }
+    }
+
+    std::optional<int> take_command() {
+        return std::exchange(command, std::nullopt);
     }
 
     void reset() {
@@ -79,6 +86,7 @@ namespace zdon_mouse {
 
     void frame(const Camera2D& camera, std::string_view screen) {
         shown.swap(drawing);
+        command.reset();
         drawing.clear();
         static std::string last_screen;
         if (screen != last_screen) {
@@ -132,6 +140,8 @@ namespace zdon_mouse {
             stop_walk();
             if (!hit || hit->steps == 0) {
                 inject_menu_press(0); // the selected item, or nowhere in particular: confirm, as a don would
+            } else if (hit->steps >= kCommand) {
+                command = hit->steps - kCommand;
             } else if (hit->steps == kBack) {
                 inject_menu_press(2);
             } else if (hit->steps != kSwallow) {

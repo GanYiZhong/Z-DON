@@ -146,6 +146,19 @@ void ModifierSelector::confirm() {
     }
 }
 
+void ModifierSelector::jump_to(int index) {
+    if (!is_confirmed && index >= 0 && index < std::ssize(mod_names)) {
+        current_mod_index = index;
+    }
+}
+
+void ModifierSelector::close() {
+    if (!is_confirmed && !mod_names.empty()) {
+        current_mod_index = static_cast<int>(mod_names.size()) - 1;
+        confirm();
+    }
+}
+
 void ModifierSelector::start_text_animation(int dir) {
     move_sideways->start();
     fade_sideways->start();
