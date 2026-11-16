@@ -50,6 +50,8 @@ public:
 
     virtual void confirm() {}
     virtual bool needs_text_input() const { return false; }
+    // Z-DON: while highlighted it reads raw keys / buttons / notes (a binding capture): the mouse stays out
+    virtual bool captures_input() const { return false; }
     // Z-DON: a held kat repeats move_left/move_right while highlighted (numeric values).
     virtual bool repeats_on_hold() const { return false; }
     // Z-DON: re-read the value from config (after a reset of sibling options).
@@ -171,6 +173,7 @@ class KeybindOptionBox : public BaseOptionBox {
     void rebuild_text();
 
 public:
+    bool captures_input() const override { return true; }
     KeybindOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
@@ -192,6 +195,7 @@ class KeyBindControllerOptionBox : public BaseOptionBox {
     void rebuild_text();
 
 public:
+    bool captures_input() const override { return true; }
     KeyBindControllerOptionBox(const std::string& name, const std::string& description, const std::string& path);
 
     void confirm() override;
@@ -290,6 +294,7 @@ public:
 // mapped to that role's controller button (one is added to [gamepad_1p] when the role has none).
 class MidiLearnOptionBox : public BaseOptionBox {
 public:
+    bool captures_input() const override { return true; }
     MidiLearnOptionBox(const std::string& name, const std::string& description, const std::string& path);
     ~MidiLearnOptionBox() override;
 

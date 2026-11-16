@@ -36,6 +36,10 @@ float mouse_wheel();
 Vec2 mouse_position();
 bool mouse_down(int button); // SDL_BUTTON_LEFT etc.
 bool mouse_pressed(int button);
+bool mouse_moved();            // Z-DON: the mouse (not a touch) moved this frame
+bool mouse_click_from_touch(); // Z-DON: this frame's button press is SDL's copy of a touch
+// Z-DON: a menu press as a drum gives it (zdon_mouse.h): -1 kat left, 1 kat right, 0 don, 2 the back key
+void inject_menu_press(int action);
 void show_cursor();
 void hide_cursor();
 

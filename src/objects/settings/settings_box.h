@@ -71,4 +71,8 @@ public:
     void update(double current_time_ms, bool selected);
     void draw();
     void draw_overlay();
+    // Z-DON (zdon_mouse.h): in the list, the box is a click target that many steps from the selected box (found from
+    // the y of the selected box and the list's pitch); open, its option's blue arrows are kat left / right
+    void add_click_areas(float selected_y, float pitch, int id) const;
+    float list_y() const { return y; }
 };

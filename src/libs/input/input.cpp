@@ -1450,6 +1450,8 @@ namespace {
         std::deque<int> char_queue;
         std::bitset<8> mouse_pressed;
         float wheel = 0.0f;
+        bool mouse_moved = false;       // Z-DON: by a mouse, not a touch
+        bool mouse_touch_click = false; // Z-DON: a button press SDL made from a touch
     };
 
     std::mutex frame_mutex;
@@ -1494,6 +1496,14 @@ namespace {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (event->button.button < pending.mouse_pressed.size()) {
                 pending.mouse_pressed.set(event->button.button);
+            }
+            if (event->button.which == SDL_TOUCH_MOUSEID) {
+                pending.mouse_touch_click = true;
+            }
+            break;
+        case SDL_EVENT_MOUSE_MOTION:
+            if (event->motion.which != SDL_TOUCH_MOUSEID) {
+                pending.mouse_moved = true;
             }
             break;
         default:
@@ -1600,6 +1610,35 @@ Vec2 mouse_position() {
 
 bool mouse_down(int button) {
     return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(button)) != 0;
+}
+
+bool mouse_moved() {
+    std::scoped_lock lock(frame_mutex);
+    return frame.mouse_moved;
+}
+
+bool mouse_click_from_touch() {
+    std::scoped_lock lock(frame_mutex);
+    return frame.mouse_touch_click;
+}
+
+void inject_menu_press(int action) {
+    int key = 0;
+    if (action < 0) {
+        key = TOUCH_L_KAT;
+    } else if (action == 1) {
+        key = TOUCH_R_KAT;
+    } else if (action == 0) {
+        key = TOUCH_L_DON;
+    } else if (global_data.config) {
+        key = global_data.config->keys.back_key;
+    }
+    if (key == 0) {
+        return;
+    }
+    last_input_ms.store(get_current_ms(), std::memory_order_relaxed);
+    std::scoped_lock lock(input_mutex);
+    pressed_keys.emplace(key, 1.0f);
 }
 
 bool mouse_pressed(int button) {

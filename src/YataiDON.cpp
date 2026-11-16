@@ -22,6 +22,7 @@
 #include "libs/global_data.h"
 #include "libs/input/ime_ui.h"
 #include "libs/input/input.h"
+#include "libs/input/zdon_mouse.h"
 #include "libs/math/animation.h"
 #include "libs/network/network.h"
 #include "libs/network/skin_updater.h"
@@ -746,6 +747,8 @@ static void run_frame() {
     poll_touch_once();
 
     apply_queued_window_resize();
+    // Z-DON: the mouse in menus (clicks, wheel, the cursor), against what the last frame drew
+    zdon_mouse::frame(compute_camera2d(tex.screen_width, tex.screen_height), global_data.current_screen);
     seg_mark(SEG_INPUT);
 
     if (check_key_pressed(global_data.config->keys.fullscreen_key)) {
@@ -1032,6 +1035,7 @@ static void run_frame() {
     seg_mark(SEG_SWITCH);
     if (!global_data.skinless) {
         draw_touch_drum();
+        zdon_mouse::draw_debug();
 
         if (global_data.config->general.fps_counter) {
             L.fps_counter.draw();

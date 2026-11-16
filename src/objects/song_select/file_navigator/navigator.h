@@ -250,6 +250,8 @@ public:
     void update(double current_ms);
     void draw_background();
     void draw();
+    // Z-DON (zdon_mouse.h): each box on screen is a click target that many steps from the open one
+    void add_click_areas() const;
     void draw_diff_select_bg();
     void draw_score_history();
 

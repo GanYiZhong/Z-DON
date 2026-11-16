@@ -1,6 +1,7 @@
 #include "script.h"
 
 #include "../fixed_step.h"
+#include "../input/zdon_mouse.h"
 #ifdef TRACY_ENABLE
 #include <tracy/TracyLua.hpp>
 #endif
@@ -864,6 +865,21 @@ void ScriptManager::register_lua_bindings() {
         }
         draw_rectangle({x, y, w, h}, Color{to_u8(r), to_u8(g), to_u8(b), to_u8(a)});
     });
+
+    // Z-DON: a clickable area this frame (zdon_mouse.h): steps 0 confirms, -n / +n walks the selection, "back" goes
+    // back, "none" takes the click and does nothing; id (optional, >= 0) names the item so a walk to it finds it again
+    // each frame. The same coordinates as draw_rect.
+    tex.set_function("click_area",
+                     [](float x, float y, float w, float h, const sol::object& action, sol::optional<int> id) {
+                         int steps = 0;
+                         if (action.is<double>()) {
+                             steps = static_cast<int>(std::lround(action.as<double>()));
+                         } else if (action.is<std::string>()) {
+                             const std::string a = action.as<std::string>();
+                             steps = a == "back" ? zdon_mouse::kBack : a == "none" ? zdon_mouse::kSwallow : 0;
+                         }
+                         zdon_mouse::add_area(x, y, w, h, steps, id.value_or(-1));
+                     });
 
     // rounded rectangle with an outline; roundness is raylib's 0..1 corner factor, the outline thickness is in pixels
     tex.set_function("draw_rounded_rect", [](float x, float y, float w, float h, float roundness,

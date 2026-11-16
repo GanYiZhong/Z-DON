@@ -153,4 +153,14 @@ void SettingsBoxManager::draw() {
     for (auto& b : boxes) {
         b->draw_overlay();
     }
+    // Z-DON: the boxes (the list) or the open box's arrows take mouse clicks
+    if (boxes.empty()) {
+        return;
+    }
+    const float selected_y = boxes[selected_box_index]->list_y();
+    for (int i = 0; i < std::ssize(boxes); i++) {
+        if (!box_selected || i == selected_box_index) {
+            boxes[i]->add_click_areas(selected_y, BOX_STEP_BASE * tex.screen_scale, i);
+        }
+    }
 }

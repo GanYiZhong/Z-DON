@@ -4,6 +4,7 @@
 
 #include "../libs/fixed_step.h"
 #include "../libs/input/input.h"
+#include "../libs/input/zdon_mouse.h"
 #include "../libs/network/network.h"
 #include "../libs/zdon_online.h"
 #include "../objects/game/zdon_ai_board.h"
@@ -621,6 +622,12 @@ void SongSelectScreen::draw() {
         player->try_lua_selector(false, navigator.get_diff_fade_in(), 0);
     }
     navigator.draw();
+    // Z-DON mouse: the list takes clicks while browsing; the search panel has its own mouse
+    if (search_box) {
+        zdon_mouse::add_area(0, 0, tex.screen_width, tex.screen_height, zdon_mouse::kSwallow);
+    } else if (state == SongSelectState::BROWSING && !diff_sort_selector) {
+        navigator.add_click_areas();
+    }
     script->draw_footer();
 
     player->draw(state, false, navigator.get_diff_fade_in());

@@ -8,6 +8,7 @@
 #include "../../../libs/fixed_step.h"
 #include "../../../libs/gfx/han_fold_table.h"
 #include "../../../libs/gfx/text.h"
+#include "../../../libs/input/zdon_mouse.h"
 #include "../../../libs/jobs.h"
 #include "../../../libs/library_index.h"
 #include "../../../libs/network/network.h"
@@ -3384,6 +3385,52 @@ void Navigator::draw() {
             if (script) {
                 script->draw_box(box.get());
             }
+        }
+    }
+}
+
+void Navigator::add_click_areas() const {
+    const int n = static_cast<int>(items.size());
+    if (n == 0 || open_index >= items.size()) {
+        return;
+    }
+    const float s = tex.screen_scale;
+    // the list's pitch and the open row's extra gap, as set_positions places them
+    float pitch = vertical_gallery ? 120 * s : 100 * s;
+    float gap = vertical_gallery ? 90 * s : 0.0f;
+    if (vertical_gallery) {
+        if (const SkinInfo* p = tex.get_skin_config(SC::SONG_SELECT_ROW_PITCH)) {
+            if (p->x > 0) {
+                pitch = p->x;
+            }
+            if (p->y > 0) {
+                gap = p->y;
+            }
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        int offset = i - static_cast<int>(open_index);
+        if (offset > n / 2) {
+            offset -= n;
+        } else if (offset < -n / 2) {
+            offset += n;
+        }
+        const auto& box = items[i];
+        if (vertical_gallery) {
+            if (box->position < -100 || box->position > tex.screen_height + 100) {
+                continue;
+            }
+            // a row: its pitch tall about its y (the open one also takes the gaps around it), about its x (the centre)
+            const float h = offset == 0 ? pitch + 2 * gap : pitch;
+            zdon_mouse::add_area(box->box_x() - 330 * s, box->position - h / 2, 660 * s, h, offset, i);
+        } else {
+            if (box->position < -100 || box->position > tex.screen_width + 100) {
+                continue;
+            }
+            // a column: the open one from its left to its right bound, the others a pitch wide
+            const float x0 = offset == 0 ? box->left_bound : box->position;
+            const float w = offset == 0 ? std::max(box->right_bound - box->left_bound, pitch) : pitch;
+            zdon_mouse::add_area(x0, 90 * s, w, 540 * s, offset, i);
         }
     }
 }

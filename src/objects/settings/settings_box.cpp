@@ -1,5 +1,6 @@
 #include "settings_box.h"
 
+#include <cmath>
 #include <iterator>
 #include <stdexcept>
 #include <utility>
@@ -7,6 +8,7 @@
 #include "../../libs/audio/audio.h"
 #include "../../libs/file/filesystem.h"
 #include "../../libs/input/input.h"
+#include "../../libs/input/zdon_mouse.h"
 #include "../../platform/platform.h"
 
 std::unique_ptr<BaseOptionBox> SettingsBox::make_option_box(const rapidjson::Value& opt) {
@@ -325,6 +327,54 @@ void SettingsBox::draw_text() const {
         label->draw({.color = Color::RED, .x = text_x, .y = text_y});
     } else {
         label->draw({.x = text_x, .y = text_y});
+    }
+}
+
+void SettingsBox::add_click_areas(float selected_y, float pitch, int id) const {
+    if (!t_box || t_box->x.empty() || t_box->x2.empty()) {
+        return;
+    }
+    if (!in_box) {
+        const int steps = pitch > 0 ? static_cast<int>(std::lround((y - selected_y) / pitch)) : 0;
+        zdon_mouse::add_area(x + t_box->x[0], y + t_box->y[0], t_box->x2[0], t_box->y2[0], steps, id);
+        return;
+    }
+    if (options.empty()) {
+        return;
+    }
+    const BaseOptionBox& option = *options[option_index];
+    if (option.is_highlighted) {
+        // a value being changed: a click confirms it (as a don), but a binding capture or a text field takes no
+        // click at all (it would bind the click's press, or end the typing)
+        if (option.captures_input() || option.needs_text_input()) {
+            zdon_mouse::add_area(0, 0, tex.screen_width, tex.screen_height, zdon_mouse::kSwallow);
+        }
+        return;
+    }
+    // an option shown: a click outside it leaves the box (kat left past the first option, as the drum leaves it;
+    // the back key would leave the settings), on it opens it, on an arrow goes to the next option
+    zdon_mouse::add_area(0, 0, tex.screen_width, tex.screen_height, -(option_index + 1));
+    if (!t_blue_arrow || t_blue_arrow->x2.empty() || t_blue_arrow->x.size() < 2 || t_blue_arrow->y.empty()) {
+        return;
+    }
+    // the arrows are small: a margin around each
+    const float pad = 24.0f * tex.screen_scale;
+    auto arrow = [&](size_t i, float dx, int steps) {
+        if (i < t_blue_arrow->x.size() && i < t_blue_arrow->x2.size() && i < t_blue_arrow->y.size() &&
+            i < t_blue_arrow->y2.size()) {
+            zdon_mouse::add_area(t_blue_arrow->x[i] + dx - pad, t_blue_arrow->y[i] - pad, t_blue_arrow->x2[i] + 2 * pad,
+                                 t_blue_arrow->y2[i] + 2 * pad, steps);
+        }
+    };
+    const float move = blue_arrow_move ? static_cast<float>(blue_arrow_move->attribute) : 0.0f;
+    // the option's panel: between the arrows, about their height and a little more
+    const float panel_x = t_blue_arrow->x[0] + t_blue_arrow->x2[0];
+    const float panel_w = t_blue_arrow->x[1] - panel_x;
+    zdon_mouse::add_area(panel_x, t_blue_arrow->y[0] - 50 * tex.screen_scale, panel_w,
+                         t_blue_arrow->y2[0] + 150 * tex.screen_scale, 0);
+    arrow(0, -move, -1);
+    if (option_index != std::ssize(options) - 1) {
+        arrow(1, move, 1);
     }
 }
 
