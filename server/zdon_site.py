@@ -56,34 +56,72 @@ CREATE TABLE IF NOT EXISTS link_attempts (
 """
 
 CSS = """
-:root{--ink:#2b2024;--muted:#7a6d70;--line:#eadfd6;--bg:#fffaf3;--card:#fff;--red:#e8443a;--blue:#3b8ede;
---gold:#d9a400;--rainbow:linear-gradient(90deg,#e8443a,#f0a020,#3fae5a,#3b8ede,#9b59d0)}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Noto Sans TC","Noto Sans JP",sans-serif;
-color:var(--ink);background:var(--bg);line-height:1.6}
+:root{--ink:#2b2024;--muted:#7a6d70;--line:#efe4d9;--bg:#fbf6ee;--card:#fff;--red:#e8443a;--red2:#c92f26;--blue:#3b8ede;
+--night:#1f1828;--gold:#d9a400;--rainbow:linear-gradient(90deg,#e8443a,#f0a020,#3fae5a,#3b8ede,#9b59d0);
+--shadow:0 1px 2px rgba(60,30,20,.06),0 6px 22px rgba(60,30,20,.07)}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:system-ui,"Noto Sans TC","Noto Sans JP",sans-serif;color:var(--ink);line-height:1.6;
+background:var(--bg) radial-gradient(circle at 1px 1px,rgba(120,80,50,.07) 1px,transparent 0) 0 0/22px 22px;
+min-height:100vh;display:flex;flex-direction:column}main{flex:1}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
-header{background:var(--ink);color:#fff}header .in{display:flex;gap:1.4em;align-items:center;flex-wrap:wrap}
-header a{color:#fff}.logo{font-weight:800;font-size:1.3em;letter-spacing:.02em}.logo span{color:var(--red)}
-.in{max-width:1040px;margin:0 auto;padding:.8em 1.2em}nav{display:flex;gap:1.1em;flex:1}
-.who{font-size:.9em;opacity:.9}main .in{padding-top:1.6em;padding-bottom:3em}
-h1{font-size:1.7em;margin:.2em 0 .6em}h2{font-size:1.25em;margin:1.8em 0 .6em}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.1em 1.3em;margin:1em 0}
-.hero{background:linear-gradient(135deg,#fff 0%,#fff1e6 100%)}
-.btn{display:inline-block;background:var(--red);color:#fff;border:0;border-radius:8px;padding:.55em 1.2em;
-font-size:1em;cursor:pointer;font-weight:600}.btn:hover{text-decoration:none;filter:brightness(1.08)}
-.btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line)}.btn.small{padding:.25em .7em;font-size:.88em}
-table{border-collapse:collapse;width:100%}td,th{padding:.45em .6em;border-bottom:1px solid var(--line);text-align:left}
-td.small{white-space:nowrap}th{font-size:.85em;color:var(--muted);font-weight:600}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+header{background:var(--night);color:#fff;position:sticky;top:0;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.18)}
+header::after{content:"";display:block;height:3px;background:linear-gradient(90deg,var(--red) 0 50%,var(--blue) 50%)}
+header .in{display:flex;gap:1em;align-items:center;padding-top:.55em;padding-bottom:.55em}header a{color:#fff}
+.logo{display:flex;align-items:center;gap:.45em;font-weight:900;font-size:1.3em;letter-spacing:.03em;white-space:nowrap}
+.logo:hover{text-decoration:none}.logo span{color:var(--red)}
+.mark{width:1.25em;height:1.25em;border-radius:50%;flex:none;background:radial-gradient(circle,var(--red) 0 42%,#fff3e3 43% 55%,var(--red2) 56%);
+box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+.in{max-width:1080px;margin:0 auto;padding:.8em 1.2em}
+nav{display:flex;gap:.2em;flex:1;overflow-x:auto;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 92%,transparent)}
+nav::-webkit-scrollbar{display:none}
+nav a{padding:.35em .75em;border-radius:999px;white-space:nowrap;color:#e9e2ea;font-size:.95em}
+nav a:hover{background:rgba(255,255,255,.1);text-decoration:none}nav a.on{background:rgba(255,255,255,.14);color:#fff}
+nav a.play{background:var(--red);color:#fff;font-weight:700}nav a.play:hover{background:#f05a50}
+.who{font-size:.85em;opacity:.8}.acct{display:flex;align-items:center;gap:.6em;white-space:nowrap}
+main .in{padding-top:1.8em;padding-bottom:3em}
+h1{font-size:1.8em;line-height:1.25;margin:.2em 0 .6em}h2{font-size:1.2em;margin:1.8em 0 .7em}
+.card>h2:first-child,.card h2[style]{display:flex;align-items:center;gap:.5em}
+.card>h2:first-child::before,.card h2[style]::before{content:"";width:.32em;height:1.05em;border-radius:3px;background:var(--red)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:1.2em 1.4em;margin:1.1em 0;
+box-shadow:var(--shadow);overflow-x:auto}
+.hero{position:relative;overflow:hidden;color:#fff;border:0;padding:2.2em 1.8em;
+background:radial-gradient(circle at 88% 30%,rgba(232,68,58,.55) 0 64px,transparent 65px),
+radial-gradient(circle at 88% 30%,transparent 0 84px,rgba(255,255,255,.08) 85px 92px,transparent 93px),
+radial-gradient(circle at 74% 92%,rgba(59,142,222,.55) 0 38px,transparent 39px),
+radial-gradient(circle at 96% 85%,rgba(232,68,58,.35) 0 22px,transparent 23px),
+linear-gradient(135deg,#2a1d33 0%,#44202a 60%,#5a2222 100%)}
+.hero h1{font-size:2.4em;margin:.1em 0 .3em;letter-spacing:.02em}.hero h1 span{color:#ff6a5f}
+.hero p{max-width:40em}.hero .muted{color:#d9cdd4}.hero a:not(.btn){color:#9fd0ff}
+.hero .btn.sec{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.35)}
+.stats{display:flex;gap:.6em;flex-wrap:wrap;margin-top:1.2em}
+.stats div{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:.35em .9em;font-size:.9em}
+.stats b{font-size:1.25em;margin-right:.25em}
+.btn{display:inline-block;background:var(--red);color:#fff;border:1px solid transparent;border-radius:10px;padding:.55em 1.25em;
+font-size:1em;cursor:pointer;font-weight:700;box-shadow:0 2px 0 var(--red2);transition:transform .08s,filter .15s}
+.btn:hover{text-decoration:none;filter:brightness(1.07)}.btn:active{transform:translateY(1px);box-shadow:none}
+.btn.sec{background:#fff;color:var(--ink);border-color:var(--line);box-shadow:none}.btn.small{padding:.25em .75em;font-size:.88em;border-radius:8px}
+header .btn.sec{background:transparent;color:#fff;border-color:rgba(255,255,255,.3)}
+table{border-collapse:collapse;width:100%}td,th{padding:.5em .6em;border-bottom:1px solid var(--line);text-align:left}
+tr:last-child td{border-bottom:0}tbody tr:hover td,table tr:hover td{background:#fff8f0}
+td.small{white-space:nowrap}th{font-size:.8em;color:var(--muted);font-weight:600;letter-spacing:.03em;background:#fcf8f3}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}.small{font-size:.88em}code{background:#f5ede4;padding:.1em .35em;border-radius:4px}
 pre{background:#f5ede4;padding:.8em 1em;border-radius:8px;overflow:auto}
-.crown{font-size:.8em;padding:.05em .45em;border-radius:4px;color:#fff;white-space:nowrap}
+.crown{font-size:.78em;padding:.08em .5em;border-radius:999px;color:#fff;white-space:nowrap;font-weight:600}
 .crown.clear{background:#b9a46a}.crown.fc{background:var(--gold)}.crown.dfc{background:var(--rainbow)}
-.course{font-size:.8em;padding:.05em .45em;border-radius:4px;background:#eee;white-space:nowrap}
-.c0{background:#ffcf3f}.c1{background:#9fd36b}.c2{background:#7ac4e8}.c3{background:#ef7aa0;color:#fff}
-.c4{background:#9b6fd0;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1em}
-input[type=text]{padding:.45em .6em;border:1px solid var(--line);border-radius:6px;font-size:1em;width:16em;max-width:100%}
-.flash{background:#e9f6ec;border:1px solid #bfe3c8;border-radius:8px;padding:.6em 1em}
-.flash.err{background:#fdeceb;border-color:#f3c3bf}footer{color:var(--muted);font-size:.85em;text-align:center;padding:2em}
-select{padding:.4em .5em;border:1px solid var(--line);border-radius:6px;font-size:1em;background:#fff}
+.course{font-size:.78em;padding:.08em .55em;border-radius:999px;background:#eee;white-space:nowrap;font-weight:600}
+.c0{background:#ffd75e}.c1{background:#a7da74}.c2{background:#86cdee}.c3{background:#ef6f97;color:#fff}
+.c4{background:#9b6fd0;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 1.1em}
+input[type=text]{padding:.5em .75em;border:1px solid var(--line);border-radius:10px;font-size:1em;width:16em;max-width:100%;background:#fff}
+input[type=text]:focus,select:focus{outline:2px solid rgba(59,142,222,.35);border-color:var(--blue)}
+.flash{background:#e9f6ec;border:1px solid #bfe3c8;border-radius:10px;padding:.6em 1em}
+.flash.err{background:#fdeceb;border-color:#f3c3bf}
+footer{color:var(--muted);font-size:.85em;text-align:center;padding:1.6em 1em 2.2em;border-top:1px solid var(--line);background:rgba(255,255,255,.5)}
+select{padding:.45em .6em;border:1px solid var(--line);border-radius:10px;font-size:1em;background:#fff}
+.rank{display:inline-grid;place-items:center;width:1.7em;height:1.7em;border-radius:50%;font-weight:800;font-size:.85em;background:#f3ece4}
+.rk{width:1%;padding-right:.2em}.rank.r1{background:#ffd75e}.rank.r2{background:#dfe3e8}.rank.r3{background:#f0c39a}
+@media (max-width:640px){.in{padding:.7em .9em}main .in{padding-top:1.1em}.card{padding:1em;border-radius:14px}
+.hero{padding:1.6em 1.2em;background-size:auto}.hero h1{font-size:1.9em}.who{display:none}h1{font-size:1.5em}}
 """ + STATS_CSS + ME_CSS
 
 
@@ -191,21 +229,27 @@ class Site(StatsPages, MePages):
     def page(self, req, title: str, body: str, status: int = 200, flash: str = "", err: bool = False):
         sess = req.sess
         if sess:
-            who = (f'<span class="who">{esc(sess.get("email"))}</span> <a href="/me">我的頁面</a> '
+            who = (f'<div class="acct"><span class="who">{esc(sess.get("email"))}</span><a href="/me">我的頁面</a>'
                    f'<form method="post" action="/auth/logout" style="display:inline">'
                    f'<input type="hidden" name="csrf" value="{self._csrf(sess)}">'
-                   f'<button class="btn small sec">登出</button></form>')
+                   f'<button class="btn small sec">登出</button></form></div>')
         elif self.sso_url and self.sso_secret:
             who = '<a class="btn small" href="/auth/login">登入</a>'
         else:
             who = ""
         note = f'<p class="flash{" err" if err else ""}">{esc(flash)}</p>' if flash else ""
-        play_nav = '<a href="/play/"><b>遊玩遊戲</b></a>' if self.web_ready() else ""
+        here = urllib.parse.urlsplit(getattr(req, "path", "") or "").path
+        links = [("/download", "下載"), ("/songs", "歌曲"), ("/leaderboard", "排行"), ("/tables", "難易度表"),
+                 ("/skins", "Skin")]
+        nav = "".join(f'<a href="{u}"{" class=\"on\"" if here == u or here.startswith(u + "/") else ""}>{t}</a>'
+                      for u, t in links)
+        if self.web_ready():
+            nav = '<a class="play" href="/play/">▶ 遊玩遊戲</a>' + nav
         doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} - {esc(self.name)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#1f1828">
+<title>{esc(title)} - {esc(self.name)}</title>
 <link rel="stylesheet" href="/site.css?v={CSS_VERSION}"></head><body>
-<header><div class="in"><a class="logo" href="/">Z-<span>DON</span></a><nav>{play_nav}<a href="/download">下載</a>
-<a href="/songs">歌曲</a><a href="/leaderboard">排行</a><a href="/tables">難易度表</a><a href="/skins">Skin</a></nav>
+<header><div class="in"><a class="logo" href="/"><i class="mark"></i><b>Z-<span>DON</span></b></a><nav>{nav}</nav>
 <div>{who}</div></div></header>
 <main><div class="in">{note}{body}</div></main>
 <footer>Z-DON 源自 <a href="https://github.com/Yonokid/YataiDON">YataiDON</a>（GPL-3.0）・會員由
@@ -557,15 +601,15 @@ class Site(StatsPages, MePages):
         hot = self.s.q("""SELECT hash, difficulty, COUNT(*) AS n FROM scores
                           WHERE received_at > ? GROUP BY hash, difficulty ORDER BY n DESC LIMIT 8""",
                        (int(time.time()) - 30 * 86400,))
-        board = "".join(f'<tr><td class="num">{i}</td><td><a href="/player/{r["pid"]}">{esc(r["username"])}</a></td>'
+        board = "".join(f'<tr><td class="rk"><span class="rank r{i}">{i}</span></td><td><a href="/player/{r["pid"]}">{esc(r["username"])}</a></td>'
                         f'<td class="num"><b>{r["rating"]:.2f}</b></td></tr>'
                         for i, r in enumerate(self.leaderboard_rows()[:5], 1))
         hot_html = "".join(f'<tr><td><a href="/chart/{esc(r["hash"])}?d={r["difficulty"]}">'
                            f'{esc(self.song_name(r["hash"]))}</a></td><td>{course_badge(r["difficulty"])}</td>'
                            f'<td class="num">{r["n"]}</td></tr>' for r in hot)
-        body = f"""<div class="card hero"><h1>Z-DON</h1>
+        body = f"""<div class="card hero"><h1>Z-<span>DON</span></h1>
 <p>以 YataiDON 為基礎、追求極致效能與新功能的太鼓模擬器。成績與排行在這裡，帳號跟 TaikoForge 共用。</p>{dl}
-<p class="small muted">{stats["players"]} 位玩家・{stats["plays"]} 筆成績</p></div>
+<div class="stats"><div><b>{stats["players"]:,}</b>位玩家</div><div><b>{stats["plays"]:,}</b>筆成績</div></div></div>
 <div class="grid"><div class="card"><h2 style="margin-top:0">Rating 排行</h2>{('<table>' + board + '</table><p class="small"><a href="/leaderboard">完整排行 →</a></p>') if board else '<p class="muted">還沒有成績。</p>'}</div>
 <div class="card"><h2 style="margin-top:0">本月熱門</h2>{('<table><tr><th>曲目</th><th>難度</th><th class="num">遊玩</th></tr>' + hot_html + '</table>') if hot else '<p class="muted">還沒有成績。</p>'}</div></div>
 <div class="card"><h2 style="margin-top:0">最近遊玩</h2>{self._plays_table(recent)}</div>"""

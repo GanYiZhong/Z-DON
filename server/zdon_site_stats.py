@@ -212,7 +212,8 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         out = [f'<div class="card"><table><tr><th class="num">#</th><th>玩家</th><th class="num">Rating</th>'
                f'<th class="num">{crown(1)}</th><th class="num">{crown(2)}</th><th class="num">{crown(3)}</th></tr>']
         for i, r in enumerate(rows[:200], 1):
-            out.append(f'<tr><td class="num">{i}</td><td><a href="/player/{r["pid"]}">{S.esc(r["username"])}</a></td>'
+            out.append(f'<tr><td class="rk"><span class="rank r{i}">{i}</span></td>'
+                       f'<td><a href="/player/{r["pid"]}">{S.esc(r["username"])}</a></td>'
                        f'<td class="num"><b>{r["rating"]:.2f}</b></td><td class="num">{r["clear"]}</td>'
                        f'<td class="num">{r["fc"]}</td><td class="num">{r["dfc"]}</td></tr>')
         out.append('</table><p class="small muted">王冠數：魔王與裏魔王的譜面數（全良也算在全連和通關裡）。</p></div>')
