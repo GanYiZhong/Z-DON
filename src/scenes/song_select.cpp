@@ -396,6 +396,14 @@ void SongSelectScreen::handle_input(double current_ms) {
         clear_input_buffers();
         return;
     }
+    // Z-DON: [keys] random_song_key (unbound by default) jumps to a random song of the listing
+    if (state == SongSelectState::BROWSING && global_data.config->keys.random_song_key != 0 &&
+        !game_transition.has_value() && check_key_pressed(global_data.config->keys.random_song_key)) {
+        if (navigator.random_song_in_listing()) {
+            audio.play_sound("kat", VolumePreset::HITSOUND);
+        }
+        return;
+    }
     if (state == SongSelectState::BROWSING) {
         handle_input_browsing(current_ms);
     } else if (state == SongSelectState::SONG_SELECTED) {

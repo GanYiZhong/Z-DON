@@ -18,6 +18,19 @@
 #include "text_layout.h"
 
 namespace {
+    // Z-DON: the accuracy of a course's stored best play (its good / ok / bad), -1 when there is none
+    template<class Scores>
+    double zdon_best_accuracy(const Scores& scores, int d) {
+        if (d < 0 || d >= std::ssize(scores) || !scores[static_cast<size_t>(d)].has_value()) {
+            return -1.0;
+        }
+        const auto& sc = *scores[static_cast<size_t>(d)];
+        const int judged = sc.good + sc.ok + sc.bad;
+        return judged > 0 ? (sc.good + (0.5 * sc.ok)) / judged : -1.0;
+    }
+} // namespace
+
+namespace {
 
     void draw_folder_image(const Texture& image, sol::table params) {
         float s = tex.screen_scale;
@@ -163,6 +176,12 @@ void register_box_lua_bindings(sol::state& lua) {
             const int d = static_cast<int>(diff);
             return (d >= 0 && d < std::ssize(self.scores) && self.scores[d].has_value()) ? self.scores[d]->score : 0;
         },
+        // Z-DON: box:best_accuracy(diff) / best_accuracy_p2(diff) -> the accuracy of the best-score play on that
+        // course, (good + ok / 2) / (good + ok + bad), 0..1; -1 when there is none
+        "best_accuracy",
+        [](SongBox& self, double diff) { return zdon_best_accuracy(self.scores, static_cast<int>(diff)); },
+        "best_accuracy_p2",
+        [](SongBox& self, double diff) { return zdon_best_accuracy(self.scores_p2, static_cast<int>(diff)); },
         // Z-DON: box:ai_section_crowns(diff) -> { crown per section, 0 none .. 3 donderful } of the player's AI
         // battles on that course (scores.db zdon_ai_sections)
         "ai_section_crowns",

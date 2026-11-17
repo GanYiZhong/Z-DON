@@ -55,6 +55,11 @@ namespace zdon_usio {
         double reads_per_sec = 0;
     };
     Snapshot snapshot();
+    // why the reader is not running (empty while it runs, or before start()): for the USIO test panel
+    std::string last_error();
+    // the thresholds the reader compares with, changeable while it runs (the USIO test panel's keys)
+    void set_thresholds(const std::array<int, 8>& t); // any thread; each clamped to 1-65535
+    std::array<int, 8> thresholds();
 
     // bnusio_GetSwIn bits (TaikoArcadeLoader's emulation)
     constexpr uint32_t SW_TEST = 1u << 7;

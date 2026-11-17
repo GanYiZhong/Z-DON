@@ -12,6 +12,36 @@ namespace zdon_usio {
         Snapshot state; // state_mutex
     } // namespace
 
+    namespace {
+        std::string error_text; // state_mutex
+        std::array<std::atomic<int>, 8> live_threshold{};
+        std::array<int, 8> load_thresholds() {
+            std::array<int, 8> out{};
+            for (size_t i = 0; i < out.size(); i++) {
+                out[i] = live_threshold[i].load(std::memory_order_relaxed);
+            }
+            return out;
+        }
+    } // namespace
+
+    void set_thresholds(const std::array<int, 8>& t) {
+        std::scoped_lock lock(state_mutex);
+        for (size_t i = 0; i < t.size(); i++) {
+            const int v = std::clamp(t[i], 1, 65535);
+            live_threshold[i].store(v, std::memory_order_relaxed);
+            state.threshold[i] = v;
+        }
+    }
+
+    std::array<int, 8> thresholds() {
+        return load_thresholds();
+    }
+
+    std::string last_error() {
+        std::scoped_lock lock(state_mutex);
+        return error_text;
+    }
+
     Snapshot snapshot() {
         std::scoped_lock lock(state_mutex);
         Snapshot out = state;
@@ -104,7 +134,6 @@ namespace zdon_usio {
         // for holdoff_ms (a piezo rings on after the stick leaves it) and must fall back below the threshold
         // before it counts again. A don hit also shakes the rim sensor, which the stronger-sensor pick absorbs.
         void loop(HMODULE lib, Settings s, Sinks sinks) {
-            const std::array<int, 8> th_all = s.threshold;
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             auto open = proc<OpenFn>(lib, "bnusio_Open");
             auto close = proc<CloseFn>(lib, "bnusio_Close");
@@ -142,7 +171,7 @@ namespace zdon_usio {
                     state.board = name ? name : "";
                 }
                 state.firmware = firmware ? static_cast<uint64_t>(firmware()) : 0;
-                state.threshold = th_all;
+                state.threshold = load_thresholds();
                 state.has_switches = sw_in != nullptr;
             }
             spdlog::info("USIO: switches {}, coin counter {}, service counter {}", sw_in ? "yes" : "no",
@@ -172,9 +201,9 @@ namespace zdon_usio {
             auto connected_checked = started;
             bool connected_now = is_connected ? is_connected() != 0 : true;
             const auto holdoff = std::chrono::milliseconds(s.holdoff_ms);
-            const std::array<int, 8> th = s.threshold;
 
             while (run.load(std::memory_order_acquire)) {
+                const std::array<int, 8> th = load_thresholds(); // the test panel may change them
                 if (communication) {
                     communication(0);
                 }
@@ -336,11 +365,18 @@ namespace zdon_usio {
         // its own folder first, so the DLLs bnusio.dll needs next to it load too
         library = LoadLibraryExW(path.wstring().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!library) {
-            spdlog::error("USIO: cannot load '{}' (error {})", path.string(), GetLastError());
+            const DWORD err = GetLastError();
+            spdlog::error("USIO: cannot load '{}' (error {})", path.string(), err);
+            std::scoped_lock lock(state_mutex);
+            error_text = "cannot load " + path.string() + " (Windows error " + std::to_string(err) + ")";
             return;
         }
         if (!proc<OpenFn>(library, "bnusio_Open") || !proc<GetAnalogInFn>(library, "bnusio_GetAnalogIn")) {
             spdlog::error("USIO: '{}' has no bnusio_Open / bnusio_GetAnalogIn", path.string());
+            {
+                std::scoped_lock lock(state_mutex);
+                error_text = path.string() + " has no bnusio_Open / bnusio_GetAnalogIn";
+            }
             FreeLibrary(library);
             library = nullptr;
             return;
@@ -351,6 +387,7 @@ namespace zdon_usio {
         }
         spdlog::info("USIO: using '{}' (thresholds {}, hold-off {} ms, poll {} us)", path.string(), th_text,
                      settings.holdoff_ms, settings.poll_us);
+        set_thresholds(settings.threshold);
         run.store(true, std::memory_order_release);
         worker = std::thread(loop, library, settings, std::move(sinks));
     }
@@ -378,6 +415,8 @@ namespace zdon_usio {
 
     void start(const Settings& /*settings*/, Sinks /*sinks*/) {
         spdlog::warn("USIO: only supported on Windows");
+        std::scoped_lock lock(state_mutex);
+        error_text = "USIO is only supported on Windows";
     }
     void stop() {}
     bool running() {

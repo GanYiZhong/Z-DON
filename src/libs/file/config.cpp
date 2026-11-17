@@ -459,6 +459,14 @@ Config get_config() {
     config.keys.borderless_key = getKeyCodeOrDefault(config_file["keys"]["borderless_key"].value_or("f10"), "f10");
     config.keys.pause_key = getKeyCodeOrDefault(config_file["keys"]["pause_key"].value_or("space"), "space");
     config.keys.back_key = getKeyCodeOrDefault(config_file["keys"]["back_key"].value_or("escape"), "escape");
+    config.keys.random_song_key = 0;
+    if (auto v = config_file["keys"]["random_song_key"].value<std::string>(); v && !v->empty()) {
+        try {
+            config.keys.random_song_key = getKeyCode(*v);
+        } catch (const std::runtime_error& e) {
+            spdlog::warn("[keys] random_song_key: {}", e.what());
+        }
+    }
     config.keys.restart_key = getKeyCodeOrDefault(config_file["keys"]["restart_key"].value_or("f1"), "f1");
     config.keys.gamepad_menu_layout = config_file["keys"]["gamepad_menu_layout"].value_or(false);
 
@@ -659,6 +667,9 @@ void save_config(const Config& config) {
                                             {"borderless_key", getKeyStringSafe(config.keys.borderless_key)},
                                             {"pause_key", getKeyStringSafe(config.keys.pause_key)},
                                             {"back_key", getKeyStringSafe(config.keys.back_key)},
+                                            {"random_song_key", config.keys.random_song_key != 0
+                                                                    ? getKeyStringSafe(config.keys.random_song_key)
+                                                                    : std::string()},
                                             {"restart_key", getKeyStringSafe(config.keys.restart_key)},
                                             {"gamepad_menu_layout", config.keys.gamepad_menu_layout}});
 

@@ -3140,6 +3140,25 @@ void Navigator::set_positions(bool init, float duration) {
     }
 }
 
+bool Navigator::random_song_in_listing() {
+    if (items.empty() || inline_streaming || is_processing) {
+        return false;
+    }
+    std::vector<int> candidates;
+    for (int i = 0; i < std::ssize(items); i++) {
+        if (i != open_index && is_song(items[static_cast<size_t>(i)].get())) {
+            candidates.push_back(i);
+        }
+    }
+    if (candidates.empty()) {
+        return false;
+    }
+    static std::mt19937 rng(std::random_device{}());
+    const int target = candidates[std::uniform_int_distribution<size_t>(0, candidates.size() - 1)(rng)];
+    navigate(target - open_index, true);
+    return true;
+}
+
 void Navigator::navigate(int delta, bool snap) {
     if (items.empty() || inline_streaming) {
         return;

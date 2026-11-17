@@ -175,6 +175,7 @@ private:
     void selftest_box_records_if_requested();
 
 public:
+    bool random_song_in_listing(); // Z-DON: the cursor to a random song of the current listing
     Navigator();
     ~Navigator();
 

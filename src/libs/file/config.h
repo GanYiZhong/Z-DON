@@ -104,6 +104,7 @@ struct KeysConfig {
     int borderless_key = 0;
     int pause_key = 0; // Z-DON: opens the pause menu (upstream 5f369cc dropped it; Escape opens its menu)
     int back_key = 0;
+    int random_song_key = 0; // Z-DON: song select jumps to a random song of the listing (0 = unbound)
     int restart_key = 0;
     // Menus use a fixed gamepad layout instead of the drum bindings (see input.cpp)
     bool gamepad_menu_layout = false;

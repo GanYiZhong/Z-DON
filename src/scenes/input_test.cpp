@@ -35,6 +35,35 @@ std::optional<Screens> InputTestScreen::update() {
     if (check_key_pressed(global_data.config->keys.back_key)) {
         return on_screen_end(Screens::SETTINGS);
     }
+    // Z-DON USIO thresholds, live: [ ] lower / raise all by 250 (Shift: 50), R back to the config's, S saves
+    if (global_data.config->usio.enabled && zdon_usio::running()) {
+        auto& usio = global_data.config->usio;
+        const bool lower = key_pressed(SDL_SCANCODE_LEFTBRACKET);
+        if (lower || key_pressed(SDL_SCANCODE_RIGHTBRACKET)) {
+            const int step = (key_down(SDL_SCANCODE_LSHIFT) || key_down(SDL_SCANCODE_RSHIFT)) ? 50 : 250;
+            auto t = zdon_usio::thresholds();
+            for (int& v : t) {
+                v += lower ? -step : step;
+            }
+            zdon_usio::set_thresholds(t);
+        }
+        if (key_pressed(SDL_SCANCODE_R)) {
+            std::array<int, 8> base{};
+            base.fill(usio.threshold);
+            if (usio.thresholds.size() == base.size()) {
+                std::ranges::copy(usio.thresholds, base.begin());
+            }
+            zdon_usio::set_thresholds(base);
+        }
+        if (key_pressed(SDL_SCANCODE_S)) {
+            const auto t = zdon_usio::thresholds();
+            const bool same = std::ranges::all_of(t, [&](int v) { return v == t[0]; });
+            usio.threshold = t[0];
+            usio.thresholds = same ? std::vector<int>{} : std::vector<int>(t.begin(), t.end());
+            save_config(*global_data.config);
+            audio.play_sound("don", VolumePreset::HITSOUND);
+        }
+    }
 
     double current_ms = get_current_ms();
     for (auto it = hit_effects.begin(); it != hit_effects.end();) {
@@ -103,6 +132,9 @@ void InputTestScreen::draw_usio(double now) {
     if (!u.active) {
         text("USIO is not running: check [usio] dll in config.toml and latest.log", 20, 20, 22,
              Color{255, 120, 100, 255});
+        if (const std::string why = zdon_usio::last_error(); !why.empty()) {
+            text(why, 20, 52, 18, Color{255, 180, 160, 255});
+        }
         return;
     }
     const bool one_threshold = std::ranges::all_of(u.threshold, [&](int t) { return t == u.threshold[0]; });
@@ -173,5 +205,6 @@ void InputTestScreen::draw_usio(double now) {
                      u.service_total < 0 ? std::string("-") : std::to_string(u.service_total), credits,
                      global_data.config->general.zdon_coin_mode ? "" : " (coin mode off)"),
          20, 668, 18, Color::WHITE);
-    text("yellow line: threshold   TEST or back key: return", 860, 690, 14, dim);
+    text("yellow line: threshold   [ ] -/+250 (Shift 50)   S save   R reset   TEST or back key: return", 860, 690, 14,
+         dim);
 }
