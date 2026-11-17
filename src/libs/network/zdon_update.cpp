@@ -35,6 +35,16 @@
 #undef GetObject
 #endif
 
+#if !defined(_WIN32) && !defined(__ANDROID__) && (defined(__linux__) || defined(__APPLE__))
+#include <fcntl.h>
+#include <sys/types.h>
+#include <unistd.h>
+#define ZDON_POSIX_UPDATER 1
+#endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace zdon_update {
@@ -56,12 +66,29 @@ namespace zdon_update {
             return s.substr(i);
         }
 
+        // the server's update channel for this platform (server/zdon_server.py publish / publish-github); empty where
+        // there is no updater (Android installs an APK, the consoles and the web have none)
+        const char* channel() {
+#if defined(_WIN32)
+            return "windows";
+#elif defined(__APPLE__) && TARGET_OS_OSX
+            return "macos";
+#elif defined(__linux__) && !defined(__ANDROID__)
+            return "linux";
+#else
+            return "";
+#endif
+        }
+
         std::string source_url() {
+            if (*channel() == '\0') {
+                return "";
+            }
             std::string url = global_data.config->network.zdon_update_url;
             if (url.empty()) {
                 url = server_base();
                 if (!url.empty()) {
-                    url += "/update/windows";
+                    url += std::string("/update/") + channel();
                 }
             }
             while (!url.empty() && url.back() == '/') {
@@ -221,6 +248,56 @@ namespace zdon_update {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         spdlog::info("Z-DON update: updater started; closing the game");
+        return true;
+#elif defined(ZDON_POSIX_UPDATER)
+        // Linux / macOS: zdon_update.sh, detached from the game (its own session), output in .zdon_update.log
+        const fs::path dir = install_dir();
+        const fs::path script = dir / "zdon_update.sh";
+        const std::string url = source_url();
+        std::error_code ec;
+#if defined(YATAIDON_HAS_HTTP)
+        if (!fs::exists(script, ec) && !url.empty()) { // an install from before the script shipped
+            cpr::Response r = cpr::Get(cpr::Url{url + "/files/zdon_update.sh"}, cpr::Timeout{8000});
+            if (r.status_code == 200 && !r.text.empty()) {
+                std::ofstream(script, std::ios::binary) << r.text;
+                spdlog::info("Z-DON update: fetched zdon_update.sh from the server");
+            }
+        }
+#endif
+        if (!fs::exists(script, ec)) {
+            spdlog::warn("Z-DON update: {} is missing", script.string());
+            return false;
+        }
+        const std::string script_s = script.string();
+        const std::string log_s = (dir / ".zdon_update.log").string();
+        const std::string dir_s = dir.string();
+        const std::string pid_s = std::to_string(getpid());
+        const pid_t child = fork();
+        if (child < 0) {
+            spdlog::warn("Z-DON update: could not start the updater (fork failed)");
+            return false;
+        }
+        if (child == 0) {
+            setsid();
+            if (chdir(dir_s.c_str()) != 0) {
+                _exit(127);
+            }
+            const int fd = open(log_s.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+            if (url.empty()) {
+                execl("/bin/sh", "sh", script_s.c_str(), "--wait-pid", pid_s.c_str(), "--restart",
+                      static_cast<char*>(nullptr));
+            } else {
+                execl("/bin/sh", "sh", script_s.c_str(), "--wait-pid", pid_s.c_str(), "--restart", "--url", url.c_str(),
+                      static_cast<char*>(nullptr));
+            }
+            _exit(127);
+        }
+        spdlog::info("Z-DON update: updater started (log: {}); closing the game", log_s);
         return true;
 #else
         return false;

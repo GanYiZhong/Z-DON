@@ -80,6 +80,10 @@ DEFAULT_CONFIG = {
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
 PROTECTED_INSTALL_DIRS = {"cache", "Songs", "Records", "logs", ".zdon_update_tmp"}
 DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdon_update.bat"]
+# Linux / macOS builds (from the GitHub rolling release, publish-github): the executable, its bundled libraries,
+# the shaders and the updater script
+POSIX_PUBLISH = ["YataiDON", "lib/**", "shader/**", "zdon_update.sh"]
+GITHUB_PLATFORMS = {"linux": "Z-DON-linux.zip", "macos": "Z-DON-macos.zip"}
 # never published, whatever the patterns say: the USIO board's bnusio.dll is the cabinet maker's file (docs/ZDON_USIO.md)
 NEVER_PUBLISH_NAMES = {"bnusio.dll"}
 BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in the install zip only, not in updates (the user's choice 2026-11-11)
@@ -764,6 +768,11 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None,
     old = dest.with_name(dest.name + ".old")
     shutil.rmtree(staging, ignore_errors=True)
     shutil.rmtree(old, ignore_errors=True)
+    if old.exists():  # a file in it is still open (a download of the last release): move it out of the way
+        try:
+            os.replace(old, old.with_name(f"{old.name}-{int(time.time())}"))
+        except OSError:
+            pass
     files_root = staging / "files" if version is not None else staging
     for rel, src in sources.items():
         target = files_root / rel
@@ -1160,6 +1169,128 @@ def cmd_publish(cfg: dict, args) -> None:
         except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
             detail = getattr(e, "stderr", "") or ""
             sys.exit(f"published, but the GitHub release failed: {e} {detail.strip()}")
+        if cfg["github"].get("workflow"):
+            spawn_publish_github(args, version)
+
+
+def spawn_publish_github(args, version: str) -> None:
+    """After a windows publish started the GitHub workflow: a background `publish-github --wait-for <version>`
+    publishes the Linux and macOS builds to their update channels once the workflow has put them on the release."""
+    log_file = HERE / "zdon_data" / "publish_github.log"
+    cmd = [sys.executable, str(Path(__file__).resolve())]
+    if getattr(args, "config", None):
+        cmd += ["--config", str(Path(args.config).resolve())]
+    cmd += ["publish-github", "--wait-for", version]
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as out:
+            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             creationflags=flags, close_fds=True, cwd=str(HERE))
+        print(f"Linux / macOS update channels: published in the background once GitHub has built them ({log_file})")
+    except OSError as e:
+        print(f"couldn't start publish-github in the background: {e}; run it by hand later")
+
+
+def _github_get(url: str, timeout: int = 60) -> bytes:
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "zdon-server", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def cmd_publish_github(cfg: dict, args) -> None:
+    """Publishes the Linux and macOS builds on the GitHub rolling release to the update/linux and update/macos
+    channels (what zdon_update.sh and the game's update check read). Their version is the .zdon_version the
+    workflow writes into each zip. --wait-for <version>: first wait (up to --timeout minutes) until the release
+    has builds of that version."""
+    repo, tag = cfg["github"]["release_repo"], cfg["github"]["tag"]
+    if not repo:
+        sys.exit("[github] release_repo isn't set")
+    platforms = [args.platform] if args.platform else list(GITHUB_PLATFORMS)
+    deadline = time.time() + args.timeout * 60
+    pending = set(platforms)
+    first = True
+    started = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    while pending:
+        if not first:
+            if time.time() > deadline:
+                log(f"publish-github: gave up waiting for {', '.join(sorted(pending))} {args.wait_for or ''}")
+                return
+            time.sleep(120)
+        first = False
+        updated = {}
+        if args.wait_for:  # only download an asset the workflow replaced since this wait began
+            try:
+                rel = json.loads(_github_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}"))
+                updated = {a["name"]: a.get("updated_at", "") for a in rel.get("assets", [])}
+            except (OSError, ValueError) as e:
+                log(f"publish-github: release info: {e}")
+                continue
+        for plat in sorted(pending):
+            asset = GITHUB_PLATFORMS[plat]
+            if args.wait_for and updated.get(asset, "") < started:
+                continue
+            url = f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+            try:
+                data = _github_get(url, timeout=1800)
+            except OSError as e:
+                log(f"publish-github: {asset}: {e}")
+                if not args.wait_for:
+                    pending.discard(plat)
+                continue
+            work = cfg["data_dir"] / f".publish_github_{plat}"
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir(parents=True)
+            try:
+                with zipfile.ZipFile(io_bytes(data)) as z:
+                    names = [n for n in z.namelist() if not n.endswith("/")]
+                    wanted = [n for n in names if n == ".zdon_version" or any(
+                        fnmatch.fnmatchcase(n, pat) or (pat.endswith("/**") and n.startswith(pat[:-2]))
+                        for pat in POSIX_PUBLISH)]
+                    for n in wanted:
+                        target = work / n
+                        if not target.resolve().is_relative_to(work.resolve()):
+                            continue
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(z.read(n))
+                version_file = work / ".zdon_version"
+                version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+                if args.wait_for and version != args.wait_for:
+                    log(f"publish-github: {asset} is {version or '(no version)'}, waiting for {args.wait_for}")
+                    continue
+                if not version:
+                    version = dt.datetime.now().strftime("%Y%m%d-%H%M") + "-github"
+                dest = cfg["data_dir"] / "update" / plat
+                have = (dest / "version.txt").read_text(encoding="utf-8").strip() if (dest / "version.txt").is_file() else ""
+                if have == version and not args.force:
+                    log(f"publish-github: {plat} is already {version}")
+                    pending.discard(plat)
+                    continue
+                sources = {rel: work / rel for rel in collect(work, POSIX_PUBLISH, [])}
+                if "zdon_update.sh" not in sources and (HERE.parent / "zdon_update.sh").exists():
+                    sources["zdon_update.sh"] = HERE.parent / "zdon_update.sh"
+                site_url = str(cfg["site"].get("url", "")).rstrip("/")
+                if site_url:
+                    url_file = cfg["data_dir"] / f".zdon_update_{plat}.url"
+                    url_file.write_text(f"{site_url}/update/{plat}\n", encoding="utf-8", newline="\n")
+                    sources["zdon_update.url"] = url_file
+                if "YataiDON" not in sources:
+                    log(f"publish-github: {asset} has no YataiDON executable; not published")
+                    pending.discard(plat)
+                    continue
+                publish_tree(sources, dest, version)
+                log(f"publish-github: published {plat} {version} ({len(sources)} files)")
+                pending.discard(plat)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
+
+def io_bytes(data: bytes):
+    import io
+    return io.BytesIO(data)
 
 
 def cmd_publish_skin(cfg: dict, args) -> None:
@@ -1326,6 +1457,12 @@ def main(argv=None) -> None:
     s.add_argument("--include", action="append", help=f"glob to publish (repeatable; default {DEFAULT_PUBLISH})")
     s.add_argument("--exclude", action="append", help="glob to leave out (repeatable)")
     s.add_argument("--no-github", action="store_true", help="don't update the GitHub rolling release this time")
+    s = sub.add_parser("publish-github", help="publish the Linux / macOS builds of the GitHub rolling release "
+                                          "to the update/linux and update/macos channels")
+    s.add_argument("--platform", choices=sorted(GITHUB_PLATFORMS))
+    s.add_argument("--wait-for", help="wait until the release has builds of this version")
+    s.add_argument("--timeout", type=int, default=90, help="minutes to wait (with --wait-for)")
+    s.add_argument("--force", action="store_true", help="publish even when the channel has that version")
     s = sub.add_parser("publish-skin", help="publish a skin folder for the skin updater")
     s.add_argument("src")
     s.add_argument("--name")
@@ -1351,6 +1488,7 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     {"serve": cmd_serve, "publish": cmd_publish, "publish-skin": cmd_publish_skin, "publish-web": cmd_publish_web,
+     "publish-github": cmd_publish_github,
      "users": cmd_users,
      "jump": cmd_jump, "rename": cmd_rename, "recode": cmd_recode,
      "import-local": cmd_import_local}[args.cmd](cfg, args)

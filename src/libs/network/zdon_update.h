@@ -17,8 +17,9 @@ namespace zdon_update {
     void start_check();
     Status status();
 
-    // Starts zdon_update.ps1 (wait for this process, update, restart the game) in its own console.
-    // True when it started; the caller then closes the game.
+    // Starts the updater (wait for this process, update, restart the game): zdon_update.ps1 in its own console on
+    // Windows, zdon_update.sh in the background on Linux / macOS. True when it started; the caller then closes the
+    // game.
     bool launch_updater();
 
     void shutdown();

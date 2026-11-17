@@ -68,6 +68,12 @@ python server\zdon_server.py publish build\bin
   commit；commit 還沒推上 GitHub 時指向 main，說明裡會註明）。需要已登入、有寫入權限的 `gh`。`--no-github` 這次不更新
   （`zdon_github.py`）。
 
+- Linux／macOS：`[github] workflow` 在 GitHub 建好 Linux、macOS 版並放上 rolling release 後，發布 windows 時會在背景執行
+  `python server\zdon_server.py publish-github --wait-for <版本>`（記錄在 `zdon_data/publish_github.log`），把兩個 zip 裡的
+  `YataiDON`、`lib/`、`shader/`、`zdon_update.sh` 發布到 `update/linux`、`update/macos` 頻道。也可以手動執行
+  `publish-github`（`--platform linux|macos`、`--force`）。遊戲在 Linux／macOS 按 F9 時在背景執行 `zdon_update.sh`
+  （輸出在遊戲資料夾的 `.zdon_update.log`），一樣只下載有變動的檔案，然後重新開啟遊戲。Android 沒有遊戲內更新。
+
 玩家端：
 
 - 遊戲啟動時在背景檢查，有新版就在標題／登入畫面上方顯示，按 **F9**：遊戲關閉 → 更新程式只下載有變動的檔案

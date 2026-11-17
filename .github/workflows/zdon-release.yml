@@ -90,7 +90,9 @@ jobs:
           mkdir -p $P/lib
           cp build/bin/YataiDON $P/
           cp -r shader $P/
-          chmod +x $P/YataiDON
+          cp zdon_update.sh $P/
+          chmod +x $P/YataiDON $P/zdon_update.sh
+          echo "${{ inputs.version || github.sha }}" > $P/.zdon_version
           # the shared libraries the distribution may not have: FFmpeg, the sndfile codecs, SDL3 and what they need
           ldd build/bin/YataiDON | grep -E "(libav|libsw|libsndfile|libogg|libvorbis|libFLAC|libopus|libmp3lame|libmpg123|libspeex|libSDL3).*=>" \
             | awk '{print $3}' | grep -v '^$' | xargs -I{} cp -L {} $P/lib/ || true
@@ -107,6 +109,7 @@ jobs:
           name: Z-DON-Linux
           path: release/Z-DON-Linux/
           if-no-files-found: error
+          include-hidden-files: true  # .zdon_version
 
   macos:
     name: macOS
@@ -156,7 +159,9 @@ jobs:
           mkdir -p $P/lib
           cp build/bin/YataiDON $P/
           cp -r shader $P/
-          chmod +x $P/YataiDON
+          cp zdon_update.sh $P/
+          chmod +x $P/YataiDON $P/zdon_update.sh
+          echo "${{ inputs.version || github.sha }}" > $P/.zdon_version
           dylibbundler -od -b -x $P/YataiDON -d $P/lib -p @executable_path/lib
 
       - uses: actions/upload-artifact@v4
@@ -164,6 +169,7 @@ jobs:
           name: Z-DON-macOS
           path: release/Z-DON-macOS/
           if-no-files-found: error
+          include-hidden-files: true  # .zdon_version
 
   android:
     name: Android
@@ -290,7 +296,7 @@ jobs:
           for os in Linux macOS; do
             d="artifacts/Z-DON-$os"
             [ -d "$d" ] || { echo "no $os build"; continue; }
-            chmod +x "$d/YataiDON"
+            chmod +x "$d/YataiDON" "$d/zdon_update.sh"
             cp -r common/. "$d/"
             (cd "$d" && zip -qr "$GITHUB_WORKSPACE/Z-DON-$(echo $os | tr '[:upper:]' '[:lower:]').zip" .)
             files+=("Z-DON-$(echo $os | tr '[:upper:]' '[:lower:]').zip")
