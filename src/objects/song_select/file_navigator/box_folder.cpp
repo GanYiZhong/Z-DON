@@ -154,7 +154,8 @@ namespace {
         auto scan = fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied, scan_ec);
         while (scan != fs::end(scan)) {
             const fs::directory_entry& entry = *scan;
-            if (entry.path().filename().native().starts_with(L"song_list") && is_song_list_file(entry.path())) {
+            if (entry.path().filename().native().starts_with(fs::path("song_list").native()) &&
+                is_song_list_file(entry.path())) {
                 add_song_list(entry.path());
                 scan.increment(scan_ec);
                 if (scan_ec) {
