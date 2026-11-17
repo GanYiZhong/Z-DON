@@ -57,11 +57,10 @@ struct GeneralConfig {
     bool zdon_branch_by_measure = false;
     bool zdon_lane3d = false; // Z-DON: the lanes on a 3D plane the mouse and skin scripts turn (zdon_lane3d.h)
     bool zdon_remember_difficulty = false; // Z-DON: each song reopens on the difficulty last played on it
-    bool zdon_hit_error_bar = false;
-    bool zdon_new_best_chip = false; // Z-DON: the result screen shows "New best +N" when a saved play beats it       //
-                                     // Z-DON: a timing bar under the judge circle with the last hits' offsets
-    int zdon_lane3d_preset = 0;      // the view each song starts in: 0 flat, 1 tilt, 2 highway, 3 angle
-    bool zdon_lane3d_hint_shown = false; // the controls' hint was shown once
+    bool zdon_hit_error_bar = false;       // Z-DON: a timing bar under the judge circle with the last hits' offsets
+    bool zdon_new_best_chip = false;       // Z-DON: the result screen shows "New best +N" when a saved play beats it
+    int zdon_lane3d_preset = 0;            // the view each song starts in: 0 flat, 1 tilt, 2 highway, 3 angle
+    bool zdon_lane3d_hint_shown = false;   // the controls' hint was shown once
     bool ignore_account_appearance = true;
 };
 

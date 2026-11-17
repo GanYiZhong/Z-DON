@@ -605,6 +605,10 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         }
         int64_t played_at = unix_now();
         std::string modifiers_json = modifiers_to_json(target->get_modifiers());
+        // Z-DON: whether it replaces a stored best, ranked as the scores table ranks (crown first, then score)
+        session_data.result_data.new_best =
+            !run_skipped && prev_score.has_value() &&
+            (score.crown > prev_score->crown || (score.crown == prev_score->crown && score.score > prev_score->score));
         scores_manager.save_score(hash, session_data.selected_difficulty, player_id, score, played_at, modifiers_json);
         // Z-DON PB pace: a new best keeps its score curve
         if (auto& g = zdon_ghost[std::clamp(static_cast<int>(player_num), 0, 3)];

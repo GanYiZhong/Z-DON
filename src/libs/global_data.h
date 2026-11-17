@@ -202,6 +202,7 @@ struct ResultData {
     bool cleared = true;
     int prev_score = 0;
     bool prev_known = false; // Z-DON: prev_score is a stored best (not just "none yet")
+    bool new_best = false;   // Z-DON: this play replaced a stored best (crown first, then score, as scores.db)
     bool submitted = false;
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;

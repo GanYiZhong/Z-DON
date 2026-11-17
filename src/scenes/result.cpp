@@ -266,7 +266,7 @@ void ResultScreen::zdon_draw_new_best() const {
         }
         const auto& sd = global_data.session_data[pn];
         const ResultData& r = sd.result_data;
-        if (!sd.zdon_unsaved.empty() || !r.prev_known || r.score <= r.prev_score) {
+        if (!sd.zdon_unsaved.empty() || !r.new_best || r.score <= r.prev_score) {
             continue;
         }
         std::string digits = std::to_string(r.score - r.prev_score);

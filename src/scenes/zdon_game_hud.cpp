@@ -50,9 +50,12 @@ void GameScreen::zdon_draw_hit_error_bar() const {
         const float good = easy ? Timing::GOOD_EASY : Timing::GOOD;
         const float ok = easy ? Timing::OK_EASY : Timing::OK;
         const float lane_y = i == 0 ? 184.0f * s : tex.get_skin_config(SC::GAME_P2_Y)->y;
-        const float cx = JudgePos::X;           // the judge circle's middle
-        const float cy = lane_y + (198.0f * s); // under the captions
-        const float half = 92.0f * s;           // the ok window's half width
+        const float cx = JudgePos::X; // the judge circle's middle
+        // under the captions; with two lanes, 1P's goes above its lane (2P's lane starts right under it), as the
+        // ghost chip does
+        const bool above_lane = i == 0 && players.size() == 2;
+        const float cy = above_lane ? lane_y - (19.0f * s) : lane_y + (198.0f * s);
+        const float half = 92.0f * s; // the ok window's half width
         const float px_per_ms = half / ok;
         const float bh = 14.0f * s;
         rect(cx - half - (3 * s), cy - (bh / 2) - (3 * s), (half * 2) + (6 * s), bh + (6 * s), Color{0, 0, 0, 150});

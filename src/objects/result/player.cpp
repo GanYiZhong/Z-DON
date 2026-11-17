@@ -243,7 +243,9 @@ void ResultPlayer::update_score_animation(double current_ms, bool is_skipped) {
     }
     if (!score.empty() && !high_score_sound_played) {
         SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
-        if (sd.result_data.score > sd.result_data.prev_score && !zdon_ai_result_lane(player_num)) {
+        // Z-DON: an unsaved run (auto, replay, ...) never looked its best up, so it has nothing to beat
+        if (sd.zdon_unsaved.empty() && sd.result_data.score > sd.result_data.prev_score &&
+            !zdon_ai_result_lane(player_num)) {
             audio.play_player_sound("high_score_voice_" + std::to_string(static_cast<int>(player_num)) + "p",
                                     player_num, VolumePreset::VOICE);
             high_score_sound_played = true;
