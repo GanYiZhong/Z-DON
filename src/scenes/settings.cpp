@@ -114,6 +114,8 @@ namespace {
                           b.option("general/zdon_remember_difficulty", "bool", "remember_difficulty",
                                    "remember_difficulty_desc", {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
                           b.a);
+        options.AddMember("random_song_key",
+                          b.option("keys/random_song_key", "keybind", "random_song_key", "random_song_key_desc"), b.a);
         b.insert("play_aid", "play_aid_box", options);
     }
 

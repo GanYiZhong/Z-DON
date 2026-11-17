@@ -245,6 +245,9 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "keys/restart_key") {
         return &c->keys.restart_key;
     }
+    if (path == "keys/random_song_key") { // Z-DON
+        return &c->keys.random_song_key;
+    }
     // keys_1p/2p / gamepad (vector<int>)
     if (path == "keys_1p/left_kat") {
         return &c->keys_1p.left_kat;

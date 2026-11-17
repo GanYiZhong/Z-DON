@@ -388,6 +388,10 @@ namespace zdon_usio {
         spdlog::info("USIO: using '{}' (thresholds {}, hold-off {} ms, poll {} us)", path.string(), th_text,
                      settings.holdoff_ms, settings.poll_us);
         set_thresholds(settings.threshold);
+        {
+            std::scoped_lock lock(state_mutex);
+            error_text.clear(); // a start that works forgets an earlier failure
+        }
         run.store(true, std::memory_order_release);
         worker = std::thread(loop, library, settings, std::move(sinks));
     }

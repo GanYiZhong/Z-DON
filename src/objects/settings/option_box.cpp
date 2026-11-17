@@ -223,6 +223,13 @@ std::string settings_builtin_text(const std::string& key) {
           {"ja", "判定枠の下に、直前の打撃が早い（左）か遅い（右）かを示すバーを表示します。"},
           {"zh", "在判定圈下方顯示一條橫條，標出最近幾下打得太早（左）或太晚（右）。"},
           {"ko", "판정 원 아래에 최근 타격이 빠른지(왼쪽) 느린지(오른쪽) 보여 주는 바를 표시합니다."}}},
+        {"random_song_key",
+         {{"en", "Random Song Key"}, {"ja", "ランダム選曲キー"}, {"zh", "隨機選曲鍵"}, {"ko", "랜덤 곡 키"}}},
+        {"random_song_key_desc",
+         {{"en", "On song select, this key jumps to a random song of the list. Unset: no key."},
+          {"ja", "選曲画面でこのキーを押すと、一覧からランダムに1曲選びます。未設定：キーなし。"},
+          {"zh", "在選曲畫面按這個鍵，從列表隨機跳到一首歌。未設定：不使用。"},
+          {"ko", "선곡 화면에서 이 키로 목록의 무작위 곡으로 이동합니다. 미설정: 키 없음."}}},
         {"remember_difficulty",
          {{"en", "Remember Difficulty per Song"},
           {"ja", "曲ごとに難易度を記憶"},
@@ -301,6 +308,7 @@ std::optional<std::vector<int>> default_binding(const std::string& path) {
         {"keys/exit_key", {SDL_SCANCODE_Q}},
         {"keys/fullscreen_key", {SDL_SCANCODE_F11}},
         {"keys/borderless_key", {SDL_SCANCODE_F10}},
+        {"keys/random_song_key", {}}, // Z-DON: unbound
         {"keys/pause_key", {SDL_SCANCODE_SPACE}},
         {"keys/back_key", {SDL_SCANCODE_ESCAPE}},
         {"keys/restart_key", {SDL_SCANCODE_F1}},
@@ -351,8 +359,9 @@ static bool p1_drum_key_taken(const std::string& path, int key) {
 }
 
 static std::vector<int> load_key_binding(const ConfigRef& ref) {
-    if (ref.is_int()) {
-        return {ref.get_int()};
+    if (ref.is_int()) { // 0 = unbound: an empty row, not a key named "0"
+        const int k = ref.get_int();
+        return k != 0 ? std::vector<int>{k} : std::vector<int>{};
     }
     return ref.get_vec();
 }
