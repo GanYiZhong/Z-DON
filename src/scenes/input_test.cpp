@@ -212,6 +212,6 @@ void InputTestScreen::draw_usio(double now) {
                      u.service_total < 0 ? std::string("-") : std::to_string(u.service_total), credits,
                      global_data.config->general.zdon_coin_mode ? "" : " (coin mode off)"),
          20, 668, 18, Color::WHITE);
-    text("yellow line: threshold   [ ] -/+250 (Shift 50)   S save   R reset   TEST or back key: return", 860, 690, 14,
+    text("yellow line: threshold   [ ] -/+250 (Shift 50)   S save   R reset   TEST or back key: return", 560, 690, 14,
          dim);
 }

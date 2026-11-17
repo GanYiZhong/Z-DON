@@ -34,6 +34,8 @@ void GameScreen::zdon_draw_hit_error_bar() const {
     auto rect = [](float x, float y, float w, float h, Color c) {
         draw_rectangle(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h), c);
     };
+    // a skin's "zdon_hit_error_bar": {x, y} = the 1P bar's middle; 2P's keeps the same place relative to its lane
+    const auto bar_cfg = tex.skin_config_by_name.find("zdon_hit_error_bar");
     for (size_t i = 0; i < players.size() && i < 2; i++) {
         const Player& p = *players[i];
         // auto play records no hits (unless ZDON_RECORD_AUTO_OFFSETS, for tests): an empty bar says nothing
@@ -50,11 +52,15 @@ void GameScreen::zdon_draw_hit_error_bar() const {
         const float good = easy ? Timing::GOOD_EASY : Timing::GOOD;
         const float ok = easy ? Timing::OK_EASY : Timing::OK;
         const float lane_y = i == 0 ? 184.0f * s : tex.get_skin_config(SC::GAME_P2_Y)->y;
-        const float cx = JudgePos::X; // the judge circle's middle
+        float cx = JudgePos::X; // the judge circle's middle
         // under the captions; with two lanes, 1P's goes above its lane (2P's lane starts right under it), as the
         // ghost chip does
         const bool above_lane = i == 0 && players.size() == 2;
-        const float cy = above_lane ? lane_y - (19.0f * s) : lane_y + (198.0f * s);
+        float cy = above_lane ? lane_y - (19.0f * s) : lane_y + (198.0f * s);
+        if (bar_cfg != tex.skin_config_by_name.end()) {
+            cx = bar_cfg->second.x;
+            cy = bar_cfg->second.y + (lane_y - (184.0f * s));
+        }
         const float half = 92.0f * s; // the ok window's half width
         const float px_per_ms = half / ok;
         const float bh = 14.0f * s;

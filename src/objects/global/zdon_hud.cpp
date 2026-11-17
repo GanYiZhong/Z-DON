@@ -375,6 +375,8 @@ namespace zhud {
                   {"en", "New best   +{0}"},
                   {"zh", "刷新最佳　+{0}"},
                   {"ko", "최고 기록 갱신　+{0}"}}},
+                {"new_best_plain",
+                 {{"ja", "自己ベスト更新"}, {"en", "New best"}, {"zh", "刷新最佳"}, {"ko", "최고 기록 갱신"}}},
                 {"unsaved",
                  {{"ja", "この成績は保存されません（{0}）"},
                   {"en", "This score is not saved ({0})"},

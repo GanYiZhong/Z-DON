@@ -266,14 +266,19 @@ void ResultScreen::zdon_draw_new_best() const {
         }
         const auto& sd = global_data.session_data[pn];
         const ResultData& r = sd.result_data;
-        if (!sd.zdon_unsaved.empty() || !r.new_best || r.score <= r.prev_score) {
+        if (!sd.zdon_unsaved.empty() || !r.new_best) {
             continue;
         }
-        std::string digits = std::to_string(r.score - r.prev_score);
-        for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3) {
-            digits.insert(static_cast<size_t>(i), ",");
+        // a better crown with a lower score is a new best too: then without the difference
+        std::string label = zhud::text("new_best_plain");
+        if (r.score > r.prev_score) {
+            std::string digits = std::to_string(r.score - r.prev_score);
+            for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3) {
+                digits.insert(static_cast<size_t>(i), ",");
+            }
+            label = zhud::text("new_best", digits);
         }
-        OutlinedText& t = zhud::label(zhud::text("new_best", digits), 26, Color{255, 226, 120, 255});
+        OutlinedText& t = zhud::label(label, 26, Color{255, 226, 120, 255});
         const float s = tex.screen_scale;
         float cx = two ? tex.screen_width * (pn == 1 ? 0.25f : 0.75f) : tex.screen_width / 2.0f;
         float y = 12 * s;
