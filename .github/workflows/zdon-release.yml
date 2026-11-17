@@ -110,13 +110,18 @@ jobs:
 
   macos:
     name: macOS
-    runs-on: macos-26
+    # macos-15: macos-26 (arm64) jobs went unpicked for lack of runners (2026-11-18)
+    runs-on: macos-15
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
     steps:
-      - name: Select Xcode 26.6
-        run: sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+      - name: Select the newest Xcode
+        run: |
+          X="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "using $X"
+          sudo xcode-select --switch "$X/Contents/Developer"
+          clang++ --version
 
       - uses: actions/checkout@v4
 
