@@ -2528,6 +2528,7 @@ void Player::draw_notes(double current_ms, float y) {
     const float notes_y = tex.get_skin_config(SC::GAME_NOTES)->y;
     const float moji_y = tex.get_skin_config(SC::GAME_MOJI)->y;
     // Z-DON hidden / sudden: how much of a don / ka note (and its moji) shows at x
+    const bool ka_mark = global_data.config->general.zdon_ka_mark;
     auto zdon_fade_alpha = [&](float x) -> float {
         const int f = modifiers.zdon_fade;
         if (f <= 0) {
@@ -2620,6 +2621,18 @@ void Player::draw_notes(double current_ms, float y) {
                                                                          .y = pos->second + notes_y});
             if (note.type == NoteType::KUSUDAMA && t_kusudama_star) { // upstream
                 draw_kusudama_stars(current_ms, pos->first, pos->second + notes_y + t_notes_9->height / 2.0f);
+            }
+            if (ka_mark && (note.type == NoteType::KAT || note.type == NoteType::KAT_L)) {
+                // Z-DON [general] zdon_ka_mark: a white cross at the note's centre (big ka: larger)
+                const float big = note.type == NoteType::KAT_L ? 1.45f : 1.0f;
+                const int r = std::max(3, static_cast<int>(t_notes_9->width * 0.12f * big));
+                const int th = std::max(2, static_cast<int>(t_notes_9->width * 0.035f * big));
+                const int cx = static_cast<int>(pos->first);
+                const int cy = static_cast<int>(pos->second + notes_y + (t_notes_9->height / 2.0f));
+                const Color mark = fade(Color::WHITE, alpha * (dim ? 0.5f : 0.95f));
+                draw_rectangle(cx - r, cy - (th / 2), 2 * r, th, mark);
+                draw_rectangle(cx - (th / 2), cy - r, th, (r - (th / 2)), mark);
+                draw_rectangle(cx - (th / 2), cy + th - (th / 2), th, r - th + (th / 2), mark);
             }
         }
     }

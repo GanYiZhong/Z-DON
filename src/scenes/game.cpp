@@ -1092,6 +1092,7 @@ void GameScreen::draw_overlay_hud(bool with_song_info) {
         t.draw({.x = x + 12 * s, .y = y + 4 * s});
     }
     zdon_draw_ghost();
+    zdon_draw_target();
     if (!pause_menu.active()) {
         zdon_draw_hit_error_bar();
     }

@@ -6,6 +6,7 @@
 
 #include "../libs/judge.h"
 #include "../objects/game/zdon_lane3d.h"
+#include "../objects/global/zdon_hud.h"
 #include "game.h"
 
 // Z-DON 3D view: it turns about the judge circle (the lanes' middle with two)
@@ -91,5 +92,44 @@ void GameScreen::zdon_draw_hit_error_bar() const {
             const float mx = cx + (std::clamp(static_cast<float>(sum / count), -ok, ok) * px_per_ms);
             rect(mx - (3 * s), cy - (bh / 2) - (14 * s), 6 * s, 6 * s, Color{255, 255, 255, 230});
         }
+    }
+}
+
+// Z-DON target chip ([general] zdon_target_score, 0 = off): "Target 950,000   12,340 to go" by each lane, a row past
+// where the PB chip sits (zdon_draw_ghost); not for auto play or the AI
+void GameScreen::zdon_draw_target() const {
+    const int target = global_data.config->general.zdon_target_score;
+    if (target <= 0) {
+        return;
+    }
+    auto thousands = [](int v) {
+        std::string d = std::to_string(v);
+        for (int i = static_cast<int>(d.size()) - 3; i > 0; i -= 3) {
+            d.insert(static_cast<size_t>(i), ",");
+        }
+        return d;
+    };
+    const float s = tex.screen_scale;
+    for (size_t i = 0; i < players.size() && i < 2; i++) {
+        const Player& p = *players[i];
+        static const bool test_auto = std::getenv("ZDON_RECORD_AUTO_OFFSETS") != nullptr; // tests: show on auto
+        if (p.is_zdon_ai() || (p.get_modifiers().auto_play && !test_auto)) {
+            continue;
+        }
+        const int left = target - p.get_score();
+        const bool reached = left <= 0;
+        const Color c = reached ? Color{120, 236, 140, 255} : Color{255, 226, 120, 255};
+        OutlinedText& txt = zhud::label(reached ? zhud::text("target_reached", thousands(target))
+                                                : zhud::text("target", thousands(target), thousands(left)),
+                                        22, c);
+        const float w = txt.width + 24 * s;
+        const float h = txt.height + 8 * s;
+        const float lane_y = i == 0 ? 184 * s : tex.get_skin_config(SC::GAME_P2_Y)->y;
+        const float x = tex.screen_width - w - 12 * s;
+        // the PB chip's row is lane_y + 174 (2P: 1P's above its lane); this one goes one row further out
+        const float row = h + 6 * s;
+        const float y = players.size() == 2 && i == 0 ? lane_y - (2 * row) : lane_y + (174 * s) + row;
+        zhud::panel(x, y, w, h, 0.72f, fade(c, 0.7f));
+        txt.draw({.x = x + 12 * s, .y = y + 4 * s});
     }
 }

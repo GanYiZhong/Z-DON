@@ -351,6 +351,8 @@ Config get_config() {
     config.general.zdon_lane3d = config_file["general"]["zdon_lane3d"].value_or(false);
     config.general.zdon_hit_error_bar = config_file["general"]["zdon_hit_error_bar"].value_or(false);
     config.general.zdon_new_best_chip = config_file["general"]["zdon_new_best_chip"].value_or(false);
+    config.general.zdon_ka_mark = config_file["general"]["zdon_ka_mark"].value_or(false);
+    config.general.zdon_target_score = std::clamp(config_file["general"]["zdon_target_score"].value_or(0), 0, 9999999);
     config.general.zdon_remember_difficulty = config_file["general"]["zdon_remember_difficulty"].value_or(false);
     config.general.zdon_lane3d_preset = std::clamp(config_file["general"]["zdon_lane3d_preset"].value_or(0), 0, 3);
     config.general.zdon_lane3d_hint_shown = config_file["general"]["zdon_lane3d_hint_shown"].value_or(false);
@@ -611,6 +613,8 @@ void save_config(const Config& config) {
                                     {"zdon_lane3d_preset", config.general.zdon_lane3d_preset},
                                     {"zdon_hit_error_bar", config.general.zdon_hit_error_bar},
                                     {"zdon_new_best_chip", config.general.zdon_new_best_chip},
+                                    {"zdon_ka_mark", config.general.zdon_ka_mark},
+                                    {"zdon_target_score", config.general.zdon_target_score},
                                     {"zdon_remember_difficulty", config.general.zdon_remember_difficulty},
                                     {"zdon_lane3d_hint_shown", config.general.zdon_lane3d_hint_shown},
                                     {"zdon_coin_mode", config.general.zdon_coin_mode},

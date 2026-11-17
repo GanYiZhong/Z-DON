@@ -432,9 +432,14 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   - `dll`（預設 `bnusio.dll`，機台自己的，不隨 Z-DON 發佈）、`threshold`（2000）、`thresholds`（8 值：P1 左咔、左咚、右咚、右咔，再 P2；未設定則全用 `threshold`）、`holdoff_ms`（25）、`poll_us`（1000）。
   - 鼓、TEST／SERVICE／UP／DOWN／ENTER 與投幣計數都透過 bnusio.dll；按鍵位元與函式型別照 TaikoArcadeLoader，真機待驗證。
   - 投幣、SERVICE 加 `zdon_coin_credits`；`zdon_coin_mode` 開啟時開始遊戲扣 1 credit。
-  - 輸入測試畫面的 USIO 面板：感應器讀數、門檻線、按鍵、計數器、讀取頻率。
+  - 輸入測試畫面的 USIO 面板：感應器讀數、門檻線、按鍵、計數器、讀取頻率；`[` `]` 即時調整全部門檻（Shift 為 ±50），`R` 還原、`S` 存回 config.toml；載入失敗時顯示原因。真機驗證步驟見 [ZDON_USIO.md](ZDON_USIO.md)。
+  - 輸入測試畫面也顯示輸入執行緒的輪詢頻率。
 - **演奏輔助**（設定 →「演奏輔助」，皆預設關）
-  - `[general] zdon_hit_error_bar`：判定圈下方的誤差條（最近的打擊、良／可範圍、平均標記）；自動演奏與練習不顯示。
+  - `[general] zdon_hit_error_bar`：判定圈下方的誤差條（最近的打擊、良／可範圍、平均標記）；自動演奏與練習不顯示；2P 時 1P 的條放在跑道上方；skin 可用 `zdon_hit_error_bar` {x,y} 覆寫位置。
+  - `[general] zdon_new_best_chip`：結算畫面頂端「自己ベスト更新 +N」（皇冠變好也算）；高分語音只在真的存了新紀錄時播放。skin 覆寫 `zdon_new_best`。
+  - `[general] zdon_target_score`（整數，0 關）：演奏中在 PB 提示的下一列顯示「目標 N　還差 M」，達成變綠；自動演奏不顯示。只能在 config.toml 設定。
+  - `[general] zdon_ka_mark`：咔音符上畫白色十字（大咔較大），不靠顏色也能分辨咚咔。
+  - Lua：`hit_error_mean`、`usio_active`、`best_accuracy(_p2)`。
   - `[general] zdon_remember_difficulty`：同一次開啟遊戲內，每首歌重開時選回上次玩的難度。
   - `[keys] random_song_key`（預設不綁定，「演奏輔助」裡可設定）：選曲時跳到目前清單裡隨機一首歌。
 - **練習**：暫停時 M 鍵跳到最後一個失誤；A-B 循環列出最近幾輪與最佳一輪。

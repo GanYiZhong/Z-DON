@@ -106,6 +106,7 @@ public:
     void zdon_ghost_update();
     void zdon_draw_ghost() const;
     void zdon_draw_hit_error_bar() const; // Z-DON: [general] zdon_hit_error_bar
+    void zdon_draw_target() const;        // Z-DON: [general] zdon_target_score
 
     Screens on_screen_end(Screens next_screen) override;
 
