@@ -437,7 +437,8 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
 - **演奏輔助**（設定 →「演奏輔助」，皆預設關）
   - `[general] zdon_hit_error_bar`：判定圈下方的誤差條（最近的打擊、良／可範圍、平均標記）；自動演奏與練習不顯示；2P 時 1P 的條放在跑道上方；skin 可用 `zdon_hit_error_bar` {x,y} 覆寫位置。
   - `[general] zdon_new_best_chip`：結算畫面頂端「自己ベスト更新 +N」（皇冠變好也算）；高分語音只在真的存了新紀錄時播放。skin 覆寫 `zdon_new_best`。
-  - `[general] zdon_target_score`（整數，0 關）：演奏中在 PB 提示的下一列顯示「目標 N　還差 M」，達成變綠；自動演奏不顯示。只能在 config.toml 設定。
+  - `[general] zdon_target_score`（整數，0 關）：演奏中在 PB 提示的下一列顯示「目標 N　還差 M」，達成變綠；自動演奏、段位、暫停時不顯示。「演奏輔助」可設定（關、50 萬–100 萬每 1 萬）。
+  - `[general] zdon_hist_auto_open`：結算畫面一開始就打開打擊時間面板；沒有操作時照常自動前進（按咔開關過才停住計時）。
   - `[general] zdon_ka_mark`：咔音符上畫白色十字（大咔較大），不靠顏色也能分辨咚咔。
   - Lua：`hit_error_mean`、`usio_active`、`best_accuracy(_p2)`。
   - `[general] zdon_remember_difficulty`：同一次開啟遊戲內，每首歌重開時選回上次玩的難度。

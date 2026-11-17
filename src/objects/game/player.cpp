@@ -2624,11 +2624,19 @@ void Player::draw_notes(double current_ms, float y) {
             }
             if (ka_mark && (note.type == NoteType::KAT || note.type == NoteType::KAT_L)) {
                 // Z-DON [general] zdon_ka_mark: a white cross at the note's centre (big ka: larger)
-                const float big = note.type == NoteType::KAT_L ? 1.45f : 1.0f;
-                const int r = std::max(3, static_cast<int>(t_notes_9->width * 0.12f * big));
-                const int th = std::max(2, static_cast<int>(t_notes_9->width * 0.035f * big));
-                const int cx = static_cast<int>(pos->first);
-                const int cy = static_cast<int>(pos->second + notes_y + (t_notes_9->height / 2.0f));
+                const TextureObject* o = note_tex_ids[static_cast<int>(note.type)];
+                float w = t_notes_9->width;
+                float ncx = pos->first;
+                float ncy = pos->second + notes_y + (t_notes_9->height / 2.0f);
+                if (o != nullptr && !o->x.empty() && !o->x2.empty() && !o->y.empty() && !o->y2.empty()) {
+                    w = static_cast<float>(o->x2[0]);
+                    ncx = pos->first - (t_notes_9->width / 2.0f) + static_cast<float>(o->x[0]) + (w / 2.0f);
+                    ncy = pos->second + notes_y + static_cast<float>(o->y[0]) + (static_cast<float>(o->y2[0]) / 2.0f);
+                }
+                const int r = std::max(3, static_cast<int>(w * 0.12f));
+                const int th = std::max(2, static_cast<int>(w * 0.035f));
+                const int cx = static_cast<int>(ncx);
+                const int cy = static_cast<int>(ncy);
                 const Color mark = fade(Color::WHITE, alpha * (dim ? 0.5f : 0.95f));
                 draw_rectangle(cx - r, cy - (th / 2), 2 * r, th, mark);
                 draw_rectangle(cx - (th / 2), cy - r, th, (r - (th / 2)), mark);

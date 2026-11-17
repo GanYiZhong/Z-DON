@@ -1,6 +1,8 @@
 #include "settings.h"
 
+#include <algorithm>
 #include <initializer_list>
+#include <vector>
 
 #include "../libs/audio/audio.h"
 #include "../libs/file/filesystem.h"
@@ -116,6 +118,34 @@ namespace {
                           b.a);
         options.AddMember("new_best_chip",
                           b.option("general/zdon_new_best_chip", "bool", "new_best_chip", "new_best_chip_desc",
+                                   {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
+        {
+            // 0 (off), then 500,000-1,000,000 by 10,000, and the config's own value if it is none of those
+            std::vector<int> steps{0};
+            for (int v = 500000; v <= 1000000; v += 10000) {
+                steps.push_back(v);
+            }
+            const int now = global_data.config->general.zdon_target_score;
+            if (!std::ranges::contains(steps, now)) {
+                steps.push_back(now);
+            }
+            rapidjson::Value o = b.option("general/zdon_target_score", "int", "target_score", "target_score_desc");
+            rapidjson::Value v(rapidjson::kObjectType);
+            for (const int s : steps) {
+                std::string label = s == 0 ? settings_builtin_text("lane3d_off") : std::to_string(s);
+                for (int i = static_cast<int>(label.size()) - 3; s != 0 && i > 0; i -= 3) {
+                    label.insert(static_cast<size_t>(i), ",");
+                }
+                rapidjson::Value t(rapidjson::kObjectType);
+                t.AddMember("en", rapidjson::Value(label.c_str(), b.a), b.a);
+                v.AddMember(rapidjson::Value(std::to_string(s).c_str(), b.a), t, b.a);
+            }
+            o.AddMember("values", v, b.a);
+            options.AddMember("target_score", o, b.a);
+        }
+        options.AddMember("hist_auto_open",
+                          b.option("general/zdon_hist_auto_open", "bool", "hist_auto_open", "hist_auto_open_desc",
                                    {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
                           b.a);
         options.AddMember("remember_difficulty",

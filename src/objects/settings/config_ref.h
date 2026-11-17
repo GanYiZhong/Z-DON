@@ -311,6 +311,12 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "general/zdon_remember_difficulty") {
         return &c->general.zdon_remember_difficulty;
     }
+    if (path == "general/zdon_hist_auto_open") {
+        return &c->general.zdon_hist_auto_open;
+    }
+    if (path == "general/zdon_target_score") {
+        return &c->general.zdon_target_score;
+    }
     if (path == "general/zdon_ka_mark") {
         return &c->general.zdon_ka_mark;
     }

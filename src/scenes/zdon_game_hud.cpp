@@ -111,6 +111,9 @@ void GameScreen::zdon_draw_target() const {
     };
     const float s = tex.screen_scale;
     for (size_t i = 0; i < players.size() && i < 2; i++) {
+        if (!players[i] || players[i]->get_is_dan()) {
+            continue;
+        }
         const Player& p = *players[i];
         static const bool test_auto = std::getenv("ZDON_RECORD_AUTO_OFFSETS") != nullptr; // tests: show on auto
         if (p.is_zdon_ai() || (p.get_modifiers().auto_play && !test_auto)) {

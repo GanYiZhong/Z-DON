@@ -228,6 +228,7 @@ public:
         return lane_cover_tex_id ? virtual_to_screen_x(lane_cover_tex_id->scissor_right()) : 0;
     }
     void set_is_dan(bool v) { is_dan = v; }
+    bool get_is_dan() const { return is_dan; }
 
     // Z-DON AI battle (zdon_ai.cpp): this player's hits come from an AI instead of the drums
     void enable_zdon_ai(int level);
