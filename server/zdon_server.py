@@ -80,6 +80,8 @@ DEFAULT_CONFIG = {
 PROTECTED_INSTALL_NAMES = {"config.toml", "scores.db", "latest.log", "record.log"}
 PROTECTED_INSTALL_DIRS = {"cache", "Songs", "Records", "logs", ".zdon_update_tmp"}
 DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdon_update.bat"]
+# never published, whatever the patterns say: the USIO board's bnusio.dll is the cabinet maker's file (docs/ZDON_USIO.md)
+NEVER_PUBLISH_NAMES = {"bnusio.dll"}
 BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in the install zip only, not in updates (the user's choice 2026-11-11)
 
 
@@ -729,6 +731,9 @@ def collect(src: Path, patterns: list[str], excludes: list[str]) -> list[str]:
         rel = p.relative_to(src).as_posix()
         top = rel.split("/", 1)[0]
         if rel in PROTECTED_INSTALL_NAMES or top in PROTECTED_INSTALL_DIRS or rel.startswith(".zdon"):
+            continue
+        if p.name.lower() in NEVER_PUBLISH_NAMES:
+            log(f"skipped (never published): {rel}")
             continue
         if any(ch.isspace() for ch in rel):
             log(f"skipped (whitespace in path; the skin updater can't fetch it): {rel}")
