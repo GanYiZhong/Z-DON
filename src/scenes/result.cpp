@@ -253,6 +253,41 @@ std::optional<Screens> ResultScreen::update() {
 }
 
 // Z-DON: "this score is not saved (auto, constant speed)" under each player's board (GameScreen::save_score)
+// Z-DON: "New best +12,345" at the top when a saved play beat the stored best ([general] zdon_new_best_chip); not for
+// a first play (no stored best), unsaved runs, the AI's lane or a recording
+void ResultScreen::zdon_draw_new_best() const {
+    if (!global_data.config->general.zdon_new_best_chip || zdon_record::active()) {
+        return;
+    }
+    const bool two = zdon_two_boards();
+    for (int pn = 1; pn <= 2; ++pn) {
+        if (!two && pn != (global_data.player_num == PlayerNum::P2 ? 2 : 1)) {
+            continue;
+        }
+        const auto& sd = global_data.session_data[pn];
+        const ResultData& r = sd.result_data;
+        if (!sd.zdon_unsaved.empty() || !r.prev_known || r.score <= r.prev_score) {
+            continue;
+        }
+        std::string digits = std::to_string(r.score - r.prev_score);
+        for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3) {
+            digits.insert(static_cast<size_t>(i), ",");
+        }
+        OutlinedText& t = zhud::label(zhud::text("new_best", digits), 26, Color{255, 226, 120, 255});
+        const float s = tex.screen_scale;
+        float cx = two ? tex.screen_width * (pn == 1 ? 0.25f : 0.75f) : tex.screen_width / 2.0f;
+        float y = 12 * s;
+        if (auto cfg = tex.skin_config_by_name.find("zdon_new_best"); !two && cfg != tex.skin_config_by_name.end()) {
+            cx = cfg->second.x;
+            y = cfg->second.y;
+        }
+        const float w = t.width + 32 * s;
+        const float h = t.height + 12 * s;
+        zhud::panel(cx - w / 2, y, w, h, 0.85f, fade(Color{255, 226, 120, 255}, 0.8f));
+        t.draw({.x = cx - t.width / 2, .y = y + 6 * s});
+    }
+}
+
 void ResultScreen::draw_unsaved_note() const {
     if (zdon_record::active()) {
         return; // not in the video
@@ -459,6 +494,7 @@ void ResultScreen::draw_overlay() {
     }
     draw_unsaved_note();
     zdon_draw_hist();
+    zdon_draw_new_best();
     if (fade_in.has_value()) {
         fade_in->draw();
     }

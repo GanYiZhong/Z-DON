@@ -110,6 +110,10 @@ namespace {
                           b.option("general/zdon_hit_error_bar", "bool", "hit_error_bar", "hit_error_bar_desc",
                                    {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
                           b.a);
+        options.AddMember("new_best_chip",
+                          b.option("general/zdon_new_best_chip", "bool", "new_best_chip", "new_best_chip_desc",
+                                   {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
         options.AddMember("remember_difficulty",
                           b.option("general/zdon_remember_difficulty", "bool", "remember_difficulty",
                                    "remember_difficulty_desc", {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),

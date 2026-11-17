@@ -584,6 +584,7 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         auto prev_score = scores_manager.get_score(hash, session_data.selected_difficulty, player_id);
         if (prev_score.has_value()) {
             session_data.result_data.prev_score = prev_score->score;
+            session_data.result_data.prev_known = true;
         }
         const bool run_skipped = skipped;
         if (run_skipped) {

@@ -59,6 +59,7 @@ protected:
     bool zdon_play_all_pending() const;
     bool zdon_hist_input(); // true: the input went to an AI battle cut-in page
     void zdon_draw_hist() const;
+    void zdon_draw_new_best() const;                       // Z-DON: [general] zdon_new_best_chip
     virtual bool zdon_two_boards() const { return false; } // Z-DON: Result2PScreen
 
     void draw_song_info();

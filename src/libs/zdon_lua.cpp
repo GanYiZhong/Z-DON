@@ -346,7 +346,7 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // bar's) and how many; nothing before the first hit or for an invalid player
     tex.set_function("hit_error_mean", [](int player_num, sol::this_state s) {
         sol::variadic_results r;
-        if (!valid_player(player_num)) {
+        if (!valid_player(player_num) || !global_data.config->general.zdon_hit_timing) { // as tex.last_hit
             return r;
         }
         const ZdonLiveData& live = global_data.session_data[static_cast<size_t>(player_num)].zdon_live;

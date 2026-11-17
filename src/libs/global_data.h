@@ -201,6 +201,7 @@ struct ResultData {
     float gauge_length = 0.0f;
     bool cleared = true;
     int prev_score = 0;
+    bool prev_known = false; // Z-DON: prev_score is a stored best (not just "none yet")
     bool submitted = false;
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;
