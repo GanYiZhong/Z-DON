@@ -244,6 +244,8 @@ jobs:
             printf 'storeFile=zdon-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
               "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" "${{ secrets.ANDROID_KEY_ALIAS }}" \
               "${{ secrets.ANDROID_KEY_PASSWORD }}" > platform/android/keystore.properties
+            # signed with the fixed key: the APK knows its version and updates itself from the Z-DON server
+            echo "ZDON_BUILD_VERSION=${{ inputs.version || github.sha }}" >> "$GITHUB_ENV"
           else
             # no key: sign the release APK with a debug key made here (installable, but changes every run)
             keytool -genkeypair -keystore platform/android/zdon-debug.jks -storepass android -keypass android \

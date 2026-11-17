@@ -33,6 +33,7 @@ android {
                     "-DANDROID_PLATFORM=android-31",
                     "-DNETWORK_URL=${System.getenv('NETWORK_URL') ?: ''}",
                     "-DNETWORK_AUTH_KEY=${System.getenv('NETWORK_AUTH_KEY') ?: ''}",
+                    "-DZDON_BUILD_VERSION=${System.getenv('ZDON_BUILD_VERSION') ?: ''}",
                     "-DYATAIDON_GFX_BACKEND=${findProperty('gfxBackend') ?: 'raylib'}"
                 )
             }

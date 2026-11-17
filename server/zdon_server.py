@@ -83,7 +83,7 @@ DEFAULT_PUBLISH = ["YataiDON.exe", "*.dll", "shader/**", "zdon_update.ps1", "zdo
 # Linux / macOS builds (from the GitHub rolling release, publish-github): the executable, its bundled libraries,
 # the shaders and the updater script
 POSIX_PUBLISH = ["YataiDON", "lib/**", "shader/**", "zdon_update.sh"]
-GITHUB_PLATFORMS = {"linux": "Z-DON-linux.zip", "macos": "Z-DON-macos.zip"}
+GITHUB_PLATFORMS = {"linux": "Z-DON-linux.zip", "macos": "Z-DON-macos.zip", "android": "Z-DON-android.apk"}
 # never published, whatever the patterns say: the USIO board's bnusio.dll is the cabinet maker's file (docs/ZDON_USIO.md)
 NEVER_PUBLISH_NAMES = {"bnusio.dll"}
 BUNDLED_SONGS = ["Songs/TRIPLE HELIX"]  # in the install zip only, not in updates (the user's choice 2026-11-11)
@@ -1222,12 +1222,14 @@ def cmd_publish_github(cfg: dict, args) -> None:
             time.sleep(120)
         first = False
         updated = {}
-        if args.wait_for:  # only download an asset the workflow replaced since this wait began
-            try:
-                rel = json.loads(_github_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}"))
-                updated = {a["name"]: a.get("updated_at", "") for a in rel.get("assets", [])}
-            except (OSError, ValueError) as e:
-                log(f"publish-github: release info: {e}")
+        rel_name = ""
+        try:  # the release's title is "Z-DON <version>" (the windows publish); the APK carries no version file
+            rel = json.loads(_github_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}"))
+            updated = {a["name"]: a.get("updated_at", "") for a in rel.get("assets", [])}
+            rel_name = str(rel.get("name") or "").removeprefix("Z-DON ").strip()
+        except (OSError, ValueError) as e:
+            log(f"publish-github: release info: {e}")
+            if args.wait_for:
                 continue
         for plat in sorted(pending):
             asset = GITHUB_PLATFORMS[plat]
@@ -1240,6 +1242,10 @@ def cmd_publish_github(cfg: dict, args) -> None:
                 log(f"publish-github: {asset}: {e}")
                 if not args.wait_for:
                     pending.discard(plat)
+                continue
+            if plat == "android":
+                publish_android_apk(cfg, data, args, rel_name)
+                pending.discard(plat)
                 continue
             work = cfg["data_dir"] / f".publish_github_{plat}"
             shutil.rmtree(work, ignore_errors=True)
@@ -1286,6 +1292,33 @@ def cmd_publish_github(cfg: dict, args) -> None:
                 pending.discard(plat)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
+
+
+def publish_android_apk(cfg: dict, data: bytes, args, release_version: str) -> None:
+    """update/android: Z-DON-android.apk and version.txt ("<version>" then the APK's sha256), what the game's
+    Android update check reads (network.cpp)."""
+    version = args.wait_for or release_version
+    if not version:
+        log("publish-github: android: no version (the release title has none); not published")
+        return
+    dest = cfg["data_dir"] / "update" / "android"
+    have = (dest / "version.txt").read_text(encoding="utf-8").split() if (dest / "version.txt").is_file() else []
+    if have[:1] == [version] and not args.force:
+        log(f"publish-github: android is already {version}")
+        return
+    staging = dest.with_name("android.new")
+    old = dest.with_name("android.old")
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(old, ignore_errors=True)
+    staging.mkdir(parents=True)
+    (staging / "Z-DON-android.apk").write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    (staging / "version.txt").write_text(f"{version}\n{digest}\n", encoding="utf-8", newline="\n")
+    if dest.exists():
+        os.replace(dest, old if not old.exists() else old.with_name(f"android.old-{int(time.time())}"))
+    os.replace(staging, dest)
+    shutil.rmtree(old, ignore_errors=True)
+    log(f"publish-github: published android {version} ({len(data) / 1e6:.1f} MB)")
 
 
 def io_bytes(data: bytes):

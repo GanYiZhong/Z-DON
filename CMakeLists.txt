@@ -414,6 +414,13 @@ if(NOT WIN32 AND NOT EMSCRIPTEN)
   endif()
 endif()
 
+# Z-DON: the build's release version (the release workflow sets it; Android compares it with the server's
+# update/android/version.txt to update itself). Empty for local builds.
+set(ZDON_BUILD_VERSION "" CACHE STRING "Release version of this build (empty: none)")
+if(ZDON_BUILD_VERSION)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE ZDON_BUILD_VERSION="${ZDON_BUILD_VERSION}")
+endif()
+
 if(ZDON_NETWORK_CODE)
   target_compile_definitions(${PROJECT_NAME} PRIVATE
     NETWORK_ENABLED

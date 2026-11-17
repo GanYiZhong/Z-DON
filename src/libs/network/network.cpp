@@ -25,6 +25,7 @@
 #include "../notify.h"
 #include "../parsers/tja.h"
 #include "android_ca.h"
+#include "zdon_update.h"
 
 #if defined(NETWORK_ENABLED) && defined(__ANDROID__)
 #include <fstream>
@@ -472,10 +473,17 @@ std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_co
 
 #if defined(__ANDROID__)
 namespace {
-    constexpr char kUpdateChecksumUrl[] =
-        "https://github.com/yonokid/YataiDON/releases/download/updater/checksums-android.sha256";
-    constexpr char kUpdateApkUrl[] =
-        "https://github.com/yonokid/YataiDON/releases/download/updater/YataiDON-Android-Update.apk";
+    // Z-DON: the APK comes from the Z-DON server's update/android channel (server/zdon_server.py publish-github),
+    // not upstream's release (a different signing key: it would never install over this one). The build's own
+    // version (ZDON_BUILD_VERSION, set by the release workflow only when it signs with the fixed key) is
+    // compared with the channel's version.txt; a build without one never updates itself.
+#ifndef ZDON_BUILD_VERSION
+#define ZDON_BUILD_VERSION ""
+#endif
+    std::string android_channel() {
+        const std::string base = zdon_update::server_base();
+        return base.empty() ? std::string() : base + "/update/android";
+    }
     constexpr char kUpdateMarkerPath[] = "update_apk.sha256";
     constexpr char kUpdateApkPath[] = "/sdcard/YataiDON/update.apk";
     constexpr char kUpdateApkTmpPath[] = "/sdcard/YataiDON/update.apk.part";
@@ -499,7 +507,13 @@ void NetworkClient::check_and_install_android_update() {
         return;
     }
     android_update_checked = true;
-    pending_update_checksum = cpr::GetAsync(cpr::Url{kUpdateChecksumUrl}, cpr::Timeout{5000} NETWORK_CA_OPT);
+    const std::string channel = android_channel();
+    if (channel.empty() || std::string_view(ZDON_BUILD_VERSION).empty() || !global_data.config ||
+        !global_data.config->network.zdon_update_check) {
+        spdlog::info("Update check: off (no server, no build version or zdon_update_check = false)");
+        return;
+    }
+    pending_update_checksum = cpr::GetAsync(cpr::Url{channel + "/version.txt"}, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 #else
 void NetworkClient::check_and_install_android_update() {}
@@ -1406,28 +1420,35 @@ void NetworkClient::update(double current_ms) {
         cpr::Response response = pending_update_checksum->get();
         pending_update_checksum.reset();
 
+        // version.txt: "<version>" then "<sha256 of Z-DON-android.apk>"
+        std::string remote_version;
+        std::string expected_sha256;
+        if (response.status_code == 200) {
+            std::istringstream(response.text) >> remote_version >> expected_sha256;
+        }
+        std::string installed_sha256;
+        if (std::ifstream marker(kUpdateMarkerPath); marker) {
+            std::getline(marker, installed_sha256);
+        }
         if (response.status_code != 200) {
-            spdlog::warn("Update check: could not fetch checksums-android.sha256 (HTTP {})", response.status_code);
+            spdlog::warn("Update check: could not fetch {}/version.txt (HTTP {})", android_channel(),
+                         response.status_code);
+        } else if (remote_version.empty() || remote_version == ZDON_BUILD_VERSION) {
+            spdlog::info("Update check: APK up to date ({})", ZDON_BUILD_VERSION);
+        } else if (expected_sha256.size() != 64) {
+            spdlog::warn("Update check: {}/version.txt has no APK checksum", android_channel());
+        } else if (installed_sha256 == expected_sha256) {
+            // this APK was downloaded and handed to the installer already: the player declined or it failed
+            spdlog::info("Update check: {} was offered before; not again until a newer one", remote_version);
         } else {
-            std::string expected_sha256;
-            std::istringstream(response.text) >> expected_sha256;
-
-            std::string installed_sha256;
-            if (std::ifstream marker(kUpdateMarkerPath); marker) {
-                std::getline(marker, installed_sha256);
-            }
-
-            if (installed_sha256 == expected_sha256) {
-                spdlog::info("Update check: APK up to date");
-            } else {
-                spdlog::info("Update check: newer APK available, downloading");
-                notify("Update available, downloading");
-                pending_update_expected_sha256 = expected_sha256;
-                std::error_code mkdir_ec;
-                fs::create_directories(fs::path(kUpdateApkTmpPath).parent_path(), mkdir_ec);
-                pending_update_apk = cpr::DownloadAsync(fs::path(kUpdateApkTmpPath), cpr::Url{kUpdateApkUrl},
-                                                        cpr::Timeout{600000}, cpr::ConnectTimeout{5000} NETWORK_CA_OPT);
-            }
+            spdlog::info("Update check: {} available (this build {}), downloading", remote_version, ZDON_BUILD_VERSION);
+            notify("Update available, downloading");
+            pending_update_expected_sha256 = expected_sha256;
+            std::error_code mkdir_ec;
+            fs::create_directories(fs::path(kUpdateApkTmpPath).parent_path(), mkdir_ec);
+            pending_update_apk =
+                cpr::DownloadAsync(fs::path(kUpdateApkTmpPath), cpr::Url{android_channel() + "/Z-DON-android.apk"},
+                                   cpr::Timeout{600000}, cpr::ConnectTimeout{5000} NETWORK_CA_OPT);
         }
     }
 
