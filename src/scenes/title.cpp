@@ -16,6 +16,21 @@ static std::unique_ptr<card_reader::Reader> g_card_reader;
 static double g_next_card_start_ms = 0;
 #endif
 
+// Z-DON: with a USIO board and coin mode on, starting takes a credit (a coin or service press adds one)
+static bool zdon_take_credit() {
+    auto& c = *global_data.config;
+    if (!c.usio.enabled || !c.general.zdon_coin_mode) {
+        return true;
+    }
+    if (c.general.zdon_coin_credits <= 0) {
+        audio.play_sound("error", VolumePreset::ATTRACT_MODE);
+        return false;
+    }
+    c.general.zdon_coin_credits--;
+    save_config(c);
+    return true;
+}
+
 void TitleScreen::on_screen_start() {
     Screen::on_screen_start();
     kinotake_indicator = KinotakeIndicator("attract");
@@ -257,7 +272,7 @@ std::optional<Screens> TitleScreen::update() {
             g_card_reader->set_led_color(0, 255, 0);
             g_card_reader->stop_polling();
 
-            if (!fade_out->is_started) {
+            if (!fade_out->is_started && zdon_take_credit()) {
                 fade_out->start();
                 fade_out->unlock_input();
                 audio.play_sound("don", VolumePreset::HITSOUND);
@@ -274,6 +289,9 @@ std::optional<Screens> TitleScreen::update() {
 }
 
 void TitleScreen::start_entry() {
+    if (!fade_out->is_started && !zdon_take_credit()) {
+        return;
+    }
     if (!fade_out->is_started) {
         fade_out->start();
     }

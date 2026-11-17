@@ -4,6 +4,7 @@
 #include <atomic>
 #include <bc7decomp.h>
 #include <bc7enc.h>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -91,6 +92,9 @@ namespace texture_bc7 {
             std::unordered_map<uint64_t, Entry> entries;
             std::unordered_set<uint64_t> queued;
             std::unordered_map<std::string, FileRec> files; // by path
+            // Z-DON: files by ImagePrefetch::image_key (lexically normal, generic), rebuilt when files grows
+            std::unordered_map<std::string, std::string> files_by_key;
+            size_t files_by_key_n = SIZE_MAX;
             size_t files_dirty = 0;
             size_t queued_bytes = 0;
             size_t dirty = 0;
@@ -812,6 +816,46 @@ namespace texture_bc7 {
             return {};
         }
         return {size, static_cast<int64_t>(t.time_since_epoch().count())};
+    }
+
+    bool has_file(const std::string& key, uint64_t size) {
+        State& s = state();
+        if (!enabled() || !files_on() || size == 0) {
+            return false;
+        }
+        s.loaded.wait();
+        std::unique_lock lock(s.mutex);
+        if (s.files_by_key_n != s.files.size()) {
+            s.files_by_key.clear();
+            s.files_by_key.reserve(s.files.size());
+            for (const auto& [raw, rec] : s.files) {
+                s.files_by_key.emplace(fs::path(raw).lexically_normal().generic_string(), raw);
+            }
+            s.files_by_key_n = s.files.size();
+        }
+        auto kit = s.files_by_key.find(key);
+        if (kit == s.files_by_key.end()) {
+            return false;
+        }
+        auto fit = s.files.find(kit->second);
+        // the size only: a listing's write time is in another unit than stamp()'s (Windows FILETIME), and
+        // a file changed since it was cached just misses in cached_image and is read from the skin
+        if (fit == s.files.end() || fit->second.stamp.size != size) {
+            return false;
+        }
+        auto it = s.entries.find(fit->second.key);
+        return it != s.entries.end() && has_blocks(it->second.kind) && it->second.width == fit->second.width &&
+               it->second.height == fit->second.height;
+    }
+
+    size_t file_count() {
+        State& s = state();
+        if (!enabled() || !files_on() || !s.loaded.valid() ||
+            s.loaded.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return 0;
+        }
+        std::shared_lock lock(s.mutex);
+        return s.files.size();
     }
 
     bool cached_image(const fs::path& path, const FileStamp& st, Image& out) {

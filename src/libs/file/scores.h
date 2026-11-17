@@ -236,6 +236,7 @@ public:
     void remove_song_cache(const std::string& path);
     // the loading screen's scan result per chart (key: UTF-8 path), for Navigator::preload
     void set_song_meta(const std::string& path, const SongCacheEntry& entry);
+    void set_song_meta(const std::string& path, SongCacheEntry&& entry);
     std::optional<SongCacheEntry> get_song_meta(const std::string& path);
     // Z-DON table zdon_dan_note_counts: (UTF-8 path, difficulty) -> count, current SONG_CACHE_VERSION only
     std::map<std::pair<std::string, int>, DanNoteCount> load_dan_note_counts();

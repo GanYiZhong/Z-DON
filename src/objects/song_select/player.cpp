@@ -13,6 +13,7 @@
 #include "../../libs/network/network.h"
 #include "../../libs/notify.h"
 #include "../../libs/time.h"
+#include "../../libs/zdon_diff_memory.h"
 #include "../game/zdon_ai_board.h"
 #include "song_select_script.h"
 
@@ -181,6 +182,9 @@ void SongSelectPlayer::init_diff_cursor() {
     }
 
     int last = global_data.last_difficulty[static_cast<int>(player_num)];
+    if (SongBox* song = dynamic_cast<SongBox*>(navigator.get_current_item())) { // Z-DON: this song's own last
+        last = zdon_diff_memory::recall(static_cast<int>(player_num), song->path.string(), last);
+    }
     if (last < static_cast<int>(Difficulty::EASY)) {
         return;
     }

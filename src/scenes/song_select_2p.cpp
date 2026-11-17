@@ -5,6 +5,7 @@
 
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
+#include "../libs/zdon_diff_memory.h"
 
 void SongSelect2PScreen::on_screen_start() {
     SongSelectScreen::on_screen_start();
@@ -124,6 +125,8 @@ void SongSelect2PScreen::select_song(SongBox* song) {
 
     global_data.last_difficulty[p1_index] = sd1.selected_difficulty;
     global_data.last_difficulty[p2_index] = sd2.selected_difficulty;
+    zdon_diff_memory::remember(p1_index, song->path.string(), sd1.selected_difficulty);
+    zdon_diff_memory::remember(p2_index, song->path.string(), sd2.selected_difficulty);
 
     game_transition.emplace(song->text_name, song->text_subtitle, false);
     if (exists(sd1.selected_song.parent_path() / "Loading.png")) {

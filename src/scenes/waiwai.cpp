@@ -12,6 +12,7 @@
 
 #include "../libs/file/scores.h"
 #include "../libs/input/input.h"
+#include "../objects/game/zdon_lane3d.h"
 
 static const std::string WAIWAI_BEGIN_VOICE_1P = "voice_waiwai_begin_1p";
 
@@ -200,8 +201,14 @@ std::optional<Screens> WaiwaiGameScreen::update() {
 
 void WaiwaiGameScreen::draw_players() {
     Game2PScreen::draw_players();
-    for (auto& player : players) {
-        player->draw_stage_chara();
+    // Z-DON 3D view: draw_players runs once per layer; these belong to one each
+    if (zdon_lane3d::draws(zdon_lane3d::Layer::HUD)) {
+        for (auto& player : players) {
+            player->draw_stage_chara();
+        }
+    }
+    if (!zdon_lane3d::draws(zdon_lane3d::Layer::EFFECTS)) {
+        return;
     }
     if (overlay) {
         overlay->draw(clock.position() - start_delay);

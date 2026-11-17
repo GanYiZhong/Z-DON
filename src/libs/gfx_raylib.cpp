@@ -7,6 +7,7 @@
 #include <format>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <vector>
 
 #include "gfx.h"
 #include "gfx/mesh_bounds.h"
@@ -259,6 +260,96 @@ int get_screen_height() {
     return ray::GetScreenHeight() - (composited_borderless ? 1 : 0);
 }
 
+static bool quads_3d_open = false; // between begin_quads_3d and end_quads_3d
+
+void begin_quads_3d() {
+    ray::rlDrawRenderBatchActive();
+    ray::rlDisableDepthTest();
+    ray::rlDisableBackfaceCulling();
+    quads_3d_open = true;
+}
+
+void end_quads_3d() {
+    ray::rlDrawRenderBatchActive();
+    ray::rlEnableBackfaceCulling();
+    ray::rlEnableDepthTest(); // BeginMode3D's state, which EndMode3D turns off again
+    quads_3d_open = false;
+}
+
+bool draw_texture_quad_3d(Texture tex, const Vec3 corners[4], const Vec2 uvs[4], Color tint) {
+    // alone: drawn now, without depth or face culling (state changes apply when the batch is drawn, not when queued);
+    // between begin_quads_3d / end_quads_3d: added to the batch
+    const bool alone = !quads_3d_open;
+    if (alone) {
+        begin_quads_3d();
+    }
+    ray::rlCheckRenderBatchLimit(4);
+    ray::rlSetTexture(tex.id);
+    ray::rlBegin(RL_QUADS);
+    ray::rlColor4ub(tint.r, tint.g, tint.b, tint.a);
+    ray::rlNormal3f(0.0f, 0.0f, 1.0f);
+    // raylib quads go counter-clockwise: top-left, bottom-left, bottom-right, top-right
+    for (const int i : {0, 3, 2, 1}) {
+        ray::rlTexCoord2f(uvs[i].x, uvs[i].y);
+        ray::rlVertex3f(corners[i].x, corners[i].y, corners[i].z);
+    }
+    ray::rlEnd();
+    ray::rlSetTexture(0);
+    if (alone) {
+        end_quads_3d();
+    }
+    return true;
+}
+
+namespace {
+#if defined(PLATFORM_ANDROID) || defined(YATAIDON_PLATFORM_IOS)
+    constexpr const char* kSilhouetteHeader = "#version 300 es\nprecision highp float;\n";
+#else
+    constexpr const char* kSilhouetteHeader = "#version 330\n";
+#endif
+    // the texture's shape in the vertex colour, premultiplied (the 3D view composites premultiplied targets)
+    constexpr const char* kSilhouetteFragment = R"(
+in vec2 fragTexCoord;
+in vec4 fragColor;
+out vec4 finalColor;
+uniform sampler2D texture0;
+void main() {
+    float a = texture(texture0, fragTexCoord).a * fragColor.a;
+    finalColor = vec4(fragColor.rgb * a, a);
+}
+)";
+    ray::Shader silhouette_shader{};
+    bool silhouette_failed = false;
+} // namespace
+
+bool begin_silhouette_mode() {
+    if (silhouette_failed) {
+        return false;
+    }
+    if (silhouette_shader.id == 0) {
+        const std::string fs = std::string(kSilhouetteHeader) + kSilhouetteFragment;
+        silhouette_shader = ray::LoadShaderFromMemory(nullptr, fs.c_str());
+        if (silhouette_shader.id == 0 || silhouette_shader.id == ray::rlGetShaderIdDefault()) {
+            spdlog::warn("3D view: the silhouette shader did not compile; note sides are drawn darkened");
+            silhouette_shader = ray::Shader{};
+            silhouette_failed = true;
+            return false;
+        }
+    }
+    ray::BeginShaderMode(silhouette_shader);
+    return true;
+}
+
+void end_silhouette_mode() {
+    ray::EndShaderMode();
+}
+
+void gen_render_texture_mipmaps(RenderTarget& target) {
+    ray::rlDrawRenderBatchActive();
+    ray::GenTextureMipmaps(reinterpret_cast<ray::Texture2D*>(&target.texture));
+    ray::SetTextureFilter(reinterpret_cast<ray::Texture2D&>(target.texture), ray::TEXTURE_FILTER_TRILINEAR);
+}
+
 int get_render_width() {
     return zdon_density::on ? zdon_density::target.texture.width : ray::GetRenderWidth();
 }
@@ -316,7 +407,24 @@ void end_scissor_mode() {
     ray::EndScissorMode();
 }
 
+static bool additive_keeps_alpha = false;
+static bool additive_factors_set = false; // the custom-separate factors hold the additive ones
+
+void set_additive_keeps_alpha(bool on) {
+    additive_keeps_alpha = on;
+}
+
 void begin_blend_mode(int mode) {
+    if (mode == blend_mode::ADDITIVE && additive_keeps_alpha) {
+        ray::rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE, RL_ZERO, RL_ONE, RL_FUNC_ADD, RL_FUNC_ADD);
+        additive_factors_set = true;
+        ray::BeginBlendMode(blend_mode::CUSTOM_SEPARATE);
+        return;
+    }
+    if (additive_factors_set) { // back to the frame's own custom-separate factors
+        set_separate_alpha_blend();
+        additive_factors_set = false;
+    }
     ray::BeginBlendMode(mode);
 }
 
@@ -334,6 +442,10 @@ void set_cull_face(int face) {
 }
 
 void end_blend_mode() {
+    if (additive_factors_set) {
+        set_separate_alpha_blend();
+        additive_factors_set = false;
+    }
     ray::EndBlendMode();
 }
 
@@ -409,13 +521,23 @@ void unload_render_texture(RenderTarget target) {
     ray::UnloadRenderTexture(target);
 }
 
+// Z-DON: targets nest (an effect's own target inside the 3D lane's): ending one goes back to the one it was begun in,
+// then to the frame's density target, then to the window
+static std::vector<RenderTarget> texture_mode_stack;
+
 void begin_texture_mode(RenderTarget target) {
+    texture_mode_stack.push_back(target);
     ray::BeginTextureMode(target);
 }
 
 void end_texture_mode() {
     ray::EndTextureMode();
-    if (zdon_density::bound) { // back to the frame's target, not the window
+    if (!texture_mode_stack.empty()) {
+        texture_mode_stack.pop_back();
+    }
+    if (!texture_mode_stack.empty()) {
+        ray::BeginTextureMode(texture_mode_stack.back());
+    } else if (zdon_density::bound) { // back to the frame's target, not the window
         ray::BeginTextureMode(zdon_density::target);
     }
 }

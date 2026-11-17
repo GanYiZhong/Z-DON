@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "../../libs/gfx/text.h"
+#include "../../libs/index_map.h"
 #include "../../libs/network/network.h"
 #include "../../libs/parsers/song_parser.h"
 #include "../../libs/screen.h"
@@ -94,6 +95,8 @@ public:
                kusudama_partner->big_times.contains(big_key(note));
     }
     std::vector<std::string> rare_keys;
+    // Z-DON: rare_keys' textures and frame counts, resolved at the first draw (not a lookup per note per frame)
+    mutable std::vector<std::pair<TextureObject*, int>> rare_tex;
     std::unordered_map<long long, int> rare_notes;
     unsigned rare_hit_mask = 0;
     void set_rare_notes(std::vector<std::string> keys, int count, uint64_t seed);
@@ -116,8 +119,8 @@ public:
     // decides how autoplay lands each note; unset means every note is a Good
     std::function<Judgments(const Note&)> autoplay_judge;
     std::function<void(const Note&, Judgments)> on_note_judged;
-    const std::unordered_map<int, Judgments>& get_note_judgments() const { return note_judgments; }
-    const std::unordered_map<int, int>& get_roll_hits() const { return roll_hits; }
+    const IndexMap<Judgments>& get_note_judgments() const { return note_judgments; }
+    const IndexMap<int>& get_roll_hits() const { return roll_hits; }
     void hide_puchi();
     void hide_lane_badges() { show_lane_badges = false; }
     // Z-DON (zdon_upai_arena): the AI's lane in upstream's AI game takes Z-DON's AI lane (circuit cover / background,
@@ -147,17 +150,17 @@ public:
     int get_ok() const { return ok_count; }
     int get_bad() const { return bad_count; }
     std::optional<Judgments> get_note_judgment(int note_index) const {
-        auto it = note_judgments.find(note_index);
-        return it != note_judgments.end() ? std::optional<Judgments>(it->second) : std::nullopt;
+        const Judgments* j = note_judgments.get(note_index);
+        return j ? std::optional<Judgments>(*j) : std::nullopt;
     }
     // Z-DON: the hit's offset from the note (ms, + = late), for the practice pause view
     std::optional<float> get_note_offset(int note_index) const {
-        auto it = note_offsets.find(note_index);
-        return it != note_offsets.end() ? std::optional<float>(it->second) : std::nullopt;
+        const float* o = note_offsets.get(note_index);
+        return o ? std::optional<float>(*o) : std::nullopt;
     }
     std::optional<int> get_roll_hits(int head_index) const {
-        auto it = roll_hits.find(head_index);
-        return it != roll_hits.end() ? std::optional<int>(it->second) : std::nullopt;
+        const int* h = roll_hits.get(head_index);
+        return h ? std::optional<int>(*h) : std::nullopt;
     }
     bool is_auto_play() const { return modifiers.auto_play; }
     // Z-DON: auto play was on at some point of this run (the score is not saved; GameScreen::save_score)
@@ -293,11 +296,11 @@ private:
     int total_drumroll{0};
     double hit_offset_sum_ms = 0.0;
     int hit_offset_count = 0;
-    std::vector<float> hit_offsets; // Z-DON: each judged hit's offset (ResultData::hit_offsets)
-    std::unordered_map<int, Judgments> note_judgments;
-    std::unordered_map<int, float> note_offsets; // Z-DON: get_note_offset
-    bool auto_used = false;                      // Z-DON: zdon_auto_used
-    std::unordered_map<int, int> roll_hits;
+    std::vector<float> hit_offsets;     // Z-DON: each judged hit's offset (ResultData::hit_offsets)
+    IndexMap<Judgments> note_judgments; // Z-DON: by note index (was an unordered_map)
+    IndexMap<float> note_offsets;       // Z-DON: get_note_offset
+    bool auto_used = false;             // Z-DON: zdon_auto_used
+    IndexMap<int> roll_hits;
 
     float judge_x{0};
     float judge_y{0};

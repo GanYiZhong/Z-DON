@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 #include "gfx.h" // IWYU pragma: keep
 #include "raylib_ns.h"
@@ -32,6 +33,12 @@ namespace texture_bc7 {
     // The file's BC7 image without decoding it: a load compressed this file (same path, size and last write)
     // from the cache before. False: decode it and hand it to compress. cache/bc7/files.bin keeps the files.
     bool cached_image(const std::filesystem::path& path, const FileStamp& st, Image& out);
+
+    // Z-DON: cached_image should find this file (key: ImagePrefetch::image_key; size from a folder listing).
+    // Background threads; waits for the cache to be read.
+    bool has_file(const std::string& key, uint64_t size);
+    // the files cached_image knows; 0 while the cache is still being read
+    size_t file_count();
 
     // An image just decoded from a skin file (any thread): RGBA8 / RGB8 becomes BC7 when the cache has its blocks;
     // anything else stays as it is. With the file's path and stamp, the next load of it finds it by cached_image.

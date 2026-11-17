@@ -9,6 +9,7 @@
 #include "../objects/game/player.h"
 #include "../objects/game/zdon_ai.h"
 #include "../objects/game/zdon_ai_board.h"
+#include "../objects/game/zdon_lane3d.h"
 #include "density.h"
 #include "file/scores.h"
 #include "file/script.h"
@@ -327,6 +328,16 @@ void register_zdon_lua_bindings(sol::table& tex) {
     // arcade's aiCondition, rolled once per session). ai_level is the old name.
     tex.set_function("ai_level", [] -> int { return zdon_ai_condition(); });
     tex.set_function("ai_condition", [] -> int { return zdon_ai_condition(); });
+
+    // tex.zdon_lane3d(yaw, pitch[, distance[, ms]]) -> the play screen's 3D view ([general] zdon_lane3d; nothing when
+    // off): degrees (yaw -55..55, + turns the right side away; pitch -25..65, + tips the top away), distance 1 = as
+    // flat (0.4..3), reached over ms (default 0: at once). The mouse's turn adds to it. tex.zdon_lane3d_on() -> whether
+    // the view is enabled, so a script can leave it alone otherwise.
+    tex.set_function("zdon_lane3d",
+                     [](float yaw, float pitch, sol::optional<float> distance, sol::optional<double> ms) {
+                         zdon_lane3d::set_script_view(yaw, pitch, distance.value_or(1.0f), ms.value_or(0.0));
+                     });
+    tex.set_function("zdon_lane3d_on", [] -> bool { return zdon_lane3d::enabled(); });
 
     // tex.coin_mode() -> [general] zdon_coin_mode (default off): the skin shows the cabinet credit text instead of
     // the free-play text; tex.coin_credits() -> [general] zdon_coin_credits (0..99), a plain counter, no coin input

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <spdlog/spdlog.h>
 
+#include "texture_bc7.h"
 #include "zdon_os.h"
 
 namespace fs = std::filesystem;
@@ -337,6 +338,17 @@ namespace texture_pack {
         return fs::path("cache") / "texpack" / skin / (screen + ".pack");
     }
 
+    namespace {
+        // YATAIDON_TEXPACK_VERIFY=1: every file goes through the pack (texture.cpp compares it with the skin's)
+        bool verify_mode() {
+            static const bool on = [] {
+                const char* v = std::getenv("YATAIDON_TEXPACK_VERIFY");
+                return v && v[0] == '1';
+            }();
+            return on;
+        }
+    } // namespace
+
     bool read_file(const fs::path& path, std::vector<uint8_t>& bytes) {
         std::ifstream in(path, std::ios::binary | std::ios::ate);
         if (!in) {
@@ -386,10 +398,15 @@ namespace texture_pack {
                 dirty = true;
             }
         }
-        // the hits, read in pack order, nearby ones in one go
+        // the hits, read in pack order, nearby ones in one go. Z-DON: not the files whose BC7 image the
+        // cache holds -- the load takes that and never asks the pack (they are copied over on a rewrite)
+        const bool bc7 = texture_bc7::enabled() && !verify_mode();
         std::vector<Entry*> hit_list;
         for (Entry& e : entries) {
-            if (e.state == 1) {
+            if (e.state == 1 && bc7 && texture_bc7::has_file(e.key, e.stat.size)) {
+                e.state = 4;
+                ++bc7_skipped;
+            } else if (e.state == 1) {
                 hit_list.push_back(&e);
             }
         }
@@ -658,8 +675,8 @@ namespace texture_pack {
         if (planned == 0) {
             return; // everything was still loaded (texture_retain)
         }
-        spdlog::info("Texture pack for {}: {} of {} files from the pack, {} read from the skin", screen, used, planned,
-                     fresh_count);
+        spdlog::info("Texture pack for {}: {} of {} files from the pack, {} read from the skin, {} not read (BC7)",
+                     screen, used, planned, fresh_count, bc7_skipped);
         if (fresh_count == 0) {
             return; // nothing new to store
         }
@@ -681,7 +698,7 @@ namespace texture_pack {
                 it.owner = e.span;
                 it.hash = e.hash;
                 it.hashed = true;
-            } else if (!e.planned && e.carry && pack_ok) {
+            } else if ((!e.planned && e.carry && pack_ok) || (e.planned && e.state == 4)) {
                 it.old_offset = e.offset;
                 it.hash = e.hash;
                 it.hashed = true;

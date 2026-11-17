@@ -243,11 +243,11 @@ private:
     void rebuild_text();
 };
 
-// Z-DON: a row that opens the audio offset calibration screen on don.
+// Z-DON: a row that opens a screen on don: the audio offset calibration, the USIO test.
 class CalibrateOptionBox : public BaseOptionBox {
 public:
     CalibrateOptionBox(const std::string& name, const std::string& description, const std::string& path,
-                       Screens calibrate_screen);
+                       Screens calibrate_screen, const std::string& button_key = "calibrate_button");
 
     void confirm() override;
     std::optional<Screens> take_screen_change() override;

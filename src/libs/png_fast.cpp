@@ -361,7 +361,8 @@ namespace png_fast {
             return false; // truncated, or not enough pixels
         }
 
-        // unfilter in place, then drop the filter bytes
+        // unfilter in place, dropping the filter bytes as it goes (Z-DON: one pass, the rows still in cache).
+        // Row y-1 moves down once row y no longer needs it; its new place ends at y * stride, before row y.
         const size_t stride = static_cast<size_t>(w) * static_cast<size_t>(in_n);
         std::vector<uint8_t> zeros(stride, 0);
         const uint8_t* prev = zeros.data();
@@ -370,11 +371,13 @@ namespace png_fast {
             if (!unfilter_row(in_n, row[0], row + 1, prev, stride)) {
                 return false;
             }
+            if (y > 0) {
+                std::memmove(raw + static_cast<size_t>(y - 1) * stride, prev, stride);
+            }
             prev = row + 1;
         }
-        for (uint32_t y = 0; y < h; ++y) {
-            std::memmove(raw + static_cast<size_t>(y) * stride, raw + static_cast<size_t>(y) * (stride + 1) + 1,
-                         stride);
+        if (h > 0) {
+            std::memmove(raw + static_cast<size_t>(h - 1) * stride, prev, stride);
         }
         const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
 

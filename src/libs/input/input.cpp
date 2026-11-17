@@ -882,6 +882,66 @@ void submit_gamepad_button_press(int button, float strength) {
     pressed_keys.emplace(vkey, std::max(strength, 0.0f));
 }
 
+// Z-DON: a drum hit from a device that names the pad itself (USIO): it arrives as that player's first bound key,
+// so the game, the menus and the early hit sound see what a keyboard press of that key gives
+// the vkey each (player, pad) arrives as, resolved on the game thread (refresh_drum_hit_keys) so the USIO thread
+// never reads the config's binding vectors while the settings screen may rewrite them
+static std::array<std::atomic<int>, 8> drum_hit_keys{};
+
+void refresh_drum_hit_keys() {
+    if (!global_data.config) {
+        return;
+    }
+    const auto& c = *global_data.config;
+    for (int p = 0; p < 2; p++) {
+        const bool p2 = p == 1;
+        const DrumBindings& keys = p2 ? c.keys_2p : c.keys_1p;
+        const DrumBindings& pads = p2 ? c.gamepad_2p : c.gamepad_1p;
+        for (int pad = 0; pad < EARLY_HIT_PAD_COUNT; pad++) {
+            auto pick = [pad](const DrumBindings& b) -> const std::vector<int>& {
+                switch (pad) {
+                case EARLY_HIT_L_DON:
+                    return b.left_don;
+                case EARLY_HIT_R_DON:
+                    return b.right_don;
+                case EARLY_HIT_L_KAT:
+                    return b.left_kat;
+                default:
+                    return b.right_kat;
+                }
+            };
+            int vkey = 0;
+            for (int key : pick(keys)) {
+                if (key != 0) {
+                    vkey = key;
+                    break;
+                }
+            }
+            if (vkey == 0 && !pick(pads).empty()) {
+                vkey =
+                    separate_players() ? pad_slot_key(p, pick(pads).front()) : GAMEPAD_VKEY_BASE + pick(pads).front();
+            }
+            drum_hit_keys[static_cast<size_t>((p * 4) + pad)].store(vkey, std::memory_order_relaxed);
+        }
+    }
+}
+
+void submit_drum_hit(PlayerNum player, int pad, float strength) {
+    if (is_input_locked() || pad < 0 || pad >= EARLY_HIT_PAD_COUNT) {
+        return;
+    }
+    const int vkey = drum_hit_keys[static_cast<size_t>(((player == PlayerNum::P2 ? 1 : 0) * 4) + pad)].load(
+        std::memory_order_relaxed);
+    if (vkey == 0) {
+        return;
+    }
+    last_input_ms.store(get_current_ms(), std::memory_order_relaxed);
+    const std::array<int, 1> pressed{vkey};
+    early_hit_on_presses(pressed);
+    std::scoped_lock lock(input_mutex);
+    pressed_keys.emplace(vkey, std::max(strength, 0.0f));
+}
+
 // Z-DON: the note -> button mapping and the settings screen's learning live outside the port state, so they can
 // change while the port stays open and the YATAIDON_FAKE_MIDI hook works without a device
 namespace {

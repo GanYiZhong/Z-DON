@@ -117,9 +117,14 @@ namespace texture_lazy {
         // bands uploaded after that go to it directly (the longest warm-up frame 15 -> 2.4 ms).
         void warm_touch(const Texture& t) {
             static RenderTarget rt = ray::LoadRenderTexture(1, 1); // never unloaded, like the GL context
-            ray::BeginTextureMode(rt);
+            // back to whatever target was bound, with its matrices (a frame may be mid-draw)
+            const ray::Matrix proj = ray::rlGetMatrixProjection();
+            const ray::Matrix view = ray::rlGetMatrixModelview();
+            begin_texture_mode(rt);
             ray::DrawTexturePro(t, Rect{0, 0, 1, 1}, Rect{0, 0, 1, 1}, Vec2{0, 0}, 0, ray::Color{255, 255, 255, 255});
-            ray::EndTextureMode();
+            end_texture_mode();
+            ray::rlSetMatrixProjection(proj);
+            ray::rlSetMatrixModelview(view);
         }
 
         double warm_budget_ms() {

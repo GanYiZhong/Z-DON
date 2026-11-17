@@ -40,6 +40,7 @@ namespace texture_wrap {
 
 namespace blend_mode {
     inline constexpr int ADDITIVE = 1;
+    inline constexpr int ALPHA_PREMULTIPLY = 5; // Z-DON: a render target's premultiplied colours drawn over the frame
     inline constexpr int CUSTOM_SEPARATE = 7;
 } // namespace blend_mode
 
@@ -146,6 +147,9 @@ void begin_blend_mode(int mode);
 // Factors for blend_mode::CUSTOM_SEPARATE: color src_alpha/one_minus_src_alpha,
 // alpha one/one_minus_src_alpha (keeps render-target alpha correct).
 void set_separate_alpha_blend();
+// Z-DON: while on, blend_mode::ADDITIVE adds colour and leaves the target's alpha alone, so a glow drawn into a
+// transparent layer target (zdon_lane3d) is still additive once that target is composited premultiplied
+void set_additive_keeps_alpha(bool on);
 void set_backface_culling(bool enabled);
 void set_cull_face(int face);
 void end_blend_mode();
@@ -189,6 +193,18 @@ void unload_model_animations(ModelAnimation* anims, int count);
 void update_model_animation(Model model, ModelAnimation anim, float frame);
 bool get_mesh_bounds(const Mesh& mesh, Vec3& lower, Vec3& upper);
 void draw_mesh(Mesh mesh, Material material, Mat4 transform);
+// Z-DON: one textured quad in 3D (inside begin_mode_3d), corners and uvs in order top-left, top-right, bottom-right,
+// bottom-left; false where the backend has no such draw (the caller draws flat instead)
+bool draw_texture_quad_3d(Texture tex, const Vec3 corners[4], const Vec2 uvs[4], Color tint);
+// Z-DON: around many draw_texture_quad_3d calls: depth test and face culling off once, the quads batched together
+void begin_quads_3d();
+void end_quads_3d();
+// Z-DON: while on, textures draw as their silhouette in the tint colour (alpha kept, premultiplied colour), for the
+// 3D view's solid note and lane sides; false where the backend cannot (the caller then draws them darkened)
+bool begin_silhouette_mode();
+void end_silhouette_mode();
+// Z-DON: (re)builds a render target's mipmaps from what was drawn into it and samples them trilinearly
+void gen_render_texture_mipmaps(RenderTarget& target);
 void update_mesh_buffer(Mesh mesh, int index, const void* data, int data_size, int offset);
 void set_material_texture(Material* material, int map_type, Texture texture);
 void clear_background(Color color);

@@ -540,7 +540,7 @@ static std::vector<LibraryIndex::Entry> index_entries(const std::vector<Win32Dir
     std::vector<LibraryIndex::Entry> out;
     out.reserve(entries.size());
     for (const Win32DirEntry& e : entries) {
-        out.push_back({{}, e.is_dir, e.is_reparse, -1});
+        out.push_back({{}, e.is_dir, e.is_reparse, -1, e.ft_write});
     }
     return out;
 }

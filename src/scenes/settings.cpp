@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <initializer_list>
+
 #include "../libs/audio/audio.h"
 #include "../libs/file/filesystem.h"
 #include "../libs/file/scores.h"
@@ -10,52 +12,122 @@
 #include "../objects/settings/option_box.h"
 #include "../objects/song_select/file_navigator/navigator.h"
 
-#if defined(YATAIDON_HAS_MIDI)
-// Z-DON: the MIDI box (device, learn the drum) is the engine's: skins' templates do not know it. Added before "exit"
-// unless the template already has a "midi" box.
-static void zdon_add_midi_box(rapidjson::Document& tmpl) {
-    if (!tmpl.IsObject() || tmpl.HasMember("midi")) {
-        return;
-    }
-    auto& a = tmpl.GetAllocator();
-    auto text = [&](const std::string& key) {
-        rapidjson::Value v(rapidjson::kObjectType);
-        v.AddMember("en", rapidjson::Value(settings_builtin_text(key).c_str(), a), a);
-        return v;
-    };
-    auto option = [&](const char* path, const char* type, const std::string& name, const std::string& desc) {
-        rapidjson::Value o(rapidjson::kObjectType);
-        o.AddMember("path", rapidjson::Value(path, a), a);
-        o.AddMember("type", rapidjson::Value(type, a), a);
-        o.AddMember("name", text(name), a);
-        o.AddMember("description", text(desc), a);
-        return o;
-    };
-    rapidjson::Value options(rapidjson::kObjectType);
-    options.AddMember("device", option("midi/device", "zdon_mididevice", "midi_device", "midi_device_desc"), a);
-    options.AddMember("learn", option("midi/notes", "zdon_midilearn", "midi_learn", "midi_learn_desc"), a);
-    rapidjson::Value box(rapidjson::kObjectType);
-    box.AddMember("name", text("midi_box"), a);
-    box.AddMember("options", options, a);
+// Z-DON: engine boxes skins' templates do not know (MIDI, USIO), added before "exit" unless the template already
+// has a box of that key
+namespace {
+    struct ZdonBoxBuilder {
+        rapidjson::Document& tmpl;
+        rapidjson::Document::AllocatorType& a;
 
-    rapidjson::Value rebuilt(rapidjson::kObjectType);
-    bool added = false;
-    for (auto it = tmpl.MemberBegin(); it != tmpl.MemberEnd(); ++it) {
-        if (!added && std::string_view(it->name.GetString()) == "exit") {
-            rebuilt.AddMember("midi", box, a);
-            added = true;
+        rapidjson::Value text(const std::string& key) const {
+            rapidjson::Value v(rapidjson::kObjectType);
+            v.AddMember("en", rapidjson::Value(settings_builtin_text(key).c_str(), a), a);
+            return v;
         }
-        rebuilt.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
+        rapidjson::Value option(const char* path, const char* type, const std::string& name, const std::string& desc,
+                                std::initializer_list<std::pair<const char*, const char*>> values = {}) const {
+            rapidjson::Value o(rapidjson::kObjectType);
+            o.AddMember("path", rapidjson::Value(path, a), a);
+            o.AddMember("type", rapidjson::Value(type, a), a);
+            o.AddMember("name", text(name), a);
+            o.AddMember("description", text(desc), a);
+            if (values.size() > 0) { // value -> its label's builtin text key
+                rapidjson::Value v(rapidjson::kObjectType);
+                for (const auto& [value, label] : values) {
+                    v.AddMember(rapidjson::Value(value, a), text(label), a);
+                }
+                o.AddMember("values", v, a);
+            }
+            return o;
+        }
+        void insert(const char* key, const std::string& name_key, rapidjson::Value& options) const {
+            if (!tmpl.IsObject() || tmpl.HasMember(key)) {
+                return;
+            }
+            rapidjson::Value box(rapidjson::kObjectType);
+            box.AddMember("name", text(name_key), a);
+            box.AddMember("options", options, a);
+
+            rapidjson::Value rebuilt(rapidjson::kObjectType);
+            bool added = false;
+            for (auto it = tmpl.MemberBegin(); it != tmpl.MemberEnd(); ++it) {
+                if (!added && std::string_view(it->name.GetString()) == "exit") {
+                    rebuilt.AddMember(rapidjson::Value(key, a), box, a);
+                    added = true;
+                }
+                rebuilt.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
+            }
+            if (!added) {
+                rebuilt.AddMember(rapidjson::Value(key, a), box, a);
+            }
+            tmpl.SetObject();
+            for (auto it = rebuilt.MemberBegin(); it != rebuilt.MemberEnd(); ++it) {
+                tmpl.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
+            }
+        }
+    };
+
+#if defined(YATAIDON_HAS_MIDI)
+    void zdon_add_midi_box(rapidjson::Document& tmpl) {
+        if (!tmpl.IsObject()) {
+            return;
+        }
+        ZdonBoxBuilder b{tmpl, tmpl.GetAllocator()};
+        rapidjson::Value options(rapidjson::kObjectType);
+        options.AddMember("device", b.option("midi/device", "zdon_mididevice", "midi_device", "midi_device_desc"), b.a);
+        options.AddMember("learn", b.option("midi/notes", "zdon_midilearn", "midi_learn", "midi_learn_desc"), b.a);
+        b.insert("midi", "midi_box", options);
     }
-    if (!added) {
-        rebuilt.AddMember("midi", box, a);
-    }
-    tmpl.SetObject();
-    for (auto it = rebuilt.MemberBegin(); it != rebuilt.MemberEnd(); ++it) {
-        tmpl.AddMember(rapidjson::Value(it->name, a), rapidjson::Value(it->value, a), a);
-    }
-}
 #endif
+
+    // the 3D view: on / off and the view each song starts in
+    void zdon_add_lane3d_box(rapidjson::Document& tmpl) {
+        if (!tmpl.IsObject()) {
+            return;
+        }
+        ZdonBoxBuilder b{tmpl, tmpl.GetAllocator()};
+        rapidjson::Value options(rapidjson::kObjectType);
+        options.AddMember("enabled",
+                          b.option("general/zdon_lane3d", "bool", "lane3d_enabled", "lane3d_enabled_desc",
+                                   {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
+        options.AddMember(
+            "preset",
+            b.option("general/zdon_lane3d_preset", "int", "lane3d_preset", "lane3d_preset_desc",
+                     {{"0", "lane3d_flat"}, {"1", "lane3d_tilt"}, {"2", "lane3d_highway"}, {"3", "lane3d_angle"}}),
+            b.a);
+        b.insert("lane3d", "lane3d_box", options);
+    }
+
+    // play aids the engine draws: the hit error bar
+    void zdon_add_play_aid_box(rapidjson::Document& tmpl) {
+        if (!tmpl.IsObject()) {
+            return;
+        }
+        ZdonBoxBuilder b{tmpl, tmpl.GetAllocator()};
+        rapidjson::Value options(rapidjson::kObjectType);
+        options.AddMember("hit_error_bar",
+                          b.option("general/zdon_hit_error_bar", "bool", "hit_error_bar", "hit_error_bar_desc",
+                                   {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
+        options.AddMember("remember_difficulty",
+                          b.option("general/zdon_remember_difficulty", "bool", "remember_difficulty",
+                                   "remember_difficulty_desc", {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
+        b.insert("play_aid", "play_aid_box", options);
+    }
+
+    // only while [usio] is on: a cabinet without the board has nothing to test
+    void zdon_add_usio_box(rapidjson::Document& tmpl) {
+        if (!tmpl.IsObject() || !global_data.config->usio.enabled) {
+            return;
+        }
+        ZdonBoxBuilder b{tmpl, tmpl.GetAllocator()};
+        rapidjson::Value options(rapidjson::kObjectType);
+        options.AddMember("test", b.option("usio/enabled", "zdon_usiotest", "usio_test", "usio_test_desc"), b.a);
+        b.insert("usio", "usio_box", options);
+    }
+} // namespace
 
 void SettingsScreen::on_screen_start() {
     Screen::on_screen_start();
@@ -86,6 +158,9 @@ void SettingsScreen::on_screen_start() {
 #if defined(YATAIDON_HAS_MIDI)
         zdon_add_midi_box(tmpl); // Z-DON: a MIDI box before Exit, whatever the skin's template has
 #endif
+        zdon_add_play_aid_box(tmpl); // Z-DON: play aids (the hit error bar) before Exit
+        zdon_add_lane3d_box(tmpl);   // Z-DON: the 3D view's box before Exit
+        zdon_add_usio_box(tmpl);     // Z-DON: a USIO box before Exit while [usio] is on
         box_manager = std::make_unique<SettingsBoxManager>(tmpl);
     } catch (const std::exception& e) {
         spdlog::error("Failed to load settings template: {}", e.what());

@@ -24,10 +24,10 @@ namespace zhud {
                 {"branch_expert", {{"ja", "玄人"}, {"en", "Advanced"}, {"zh", "玄人"}, {"ko", "현인"}}},
                 {"branch_master", {{"ja", "達人"}, {"en", "Master"}, {"zh", "達人"}, {"ko", "달인"}}},
                 {"practice_keys",
-                 {{"ja", "数字キー：小節へ　F6／左右ドン同時：分岐"},
-                  {"en", "Number keys: bar   F6 / both dons: branch"},
-                  {"zh", "數字鍵：跳到小節　F6／左右咚同時：分歧"},
-                  {"ko", "숫자 키: 마디　F6/양쪽 쿵: 분기"}}},
+                 {{"ja", "数字キー：小節へ　M：最後のミスへ　F6／左右ドン同時：分岐"},
+                  {"en", "Number keys: bar   M: last miss   F6 / both dons: branch"},
+                  {"zh", "數字鍵：跳到小節　M：最後一個失誤　F6／左右咚同時：分歧"},
+                  {"ko", "숫자 키: 마디　M: 마지막 미스　F6/양쪽 쿵: 분기"}}},
                 {"practice_keys_drum",
                  {{"ja", "左右ドン同時：分岐"},
                   {"en", "Both dons: branch"},
@@ -46,6 +46,23 @@ namespace zhud {
                   {"en", "There is no bar {0}"},
                   {"zh", "沒有第{0}小節"},
                   {"ko", "{0}번째 마디가 없습니다"}}},
+                {"miss_bar",
+                 {{"ja", "最後のミス：{0}小節目"},
+                  {"en", "Last miss: bar {0}"},
+                  {"zh", "最後一個失誤：第{0}小節"},
+                  {"ko", "마지막 미스: {0}마디"}}},
+                {"no_miss",
+                 {{"ja", "ミスはありません"}, {"en", "No misses"}, {"zh", "沒有失誤"}, {"ko", "미스가 없습니다"}}},
+                {"loop_pass",
+                 {{"ja", "{0}回目　良{1} 可{2} 不可{3}"},
+                  {"en", "Pass {0}   Good {1} OK {2} Bad {3}"},
+                  {"zh", "第{0}輪　良{1} 可{2} 不可{3}"},
+                  {"ko", "{0}회차　양{1} 가{2} 불가{3}"}}},
+                {"loop_best",
+                 {{"ja", "ベスト：{0}回目　良{1} 可{2} 不可{3}"},
+                  {"en", "Best: pass {0}   Good {1} OK {2} Bad {3}"},
+                  {"zh", "最佳：第{0}輪　良{1} 可{2} 不可{3}"},
+                  {"ko", "최고: {0}회차　양{1} 가{2} 불가{3}"}}},
                 {"loop_to_end",
                  {{"ja", "{0}小節目から最後までくり返し"},
                   {"en", "Looping from bar {0} to the end"},
@@ -482,6 +499,17 @@ namespace zhud {
             s = l != it->second.end() ? l->second : it->second.at("en");
         }
         return replace_args(s, a0, a1);
+    }
+
+    std::string text(const std::string& key, const std::string& a0, const std::string& a1, const std::string& a2,
+                     const std::string& a3) {
+        std::string s = text(key, a0, a1);
+        for (const auto& [mark, value] : {std::pair<const char*, const std::string*>{"{2}", &a2}, {"{3}", &a3}}) {
+            for (size_t at = s.find(mark); at != std::string::npos; at = s.find(mark, at + value->size())) {
+                s.replace(at, 3, *value);
+            }
+        }
+        return s;
     }
 
     OutlinedText& label(const std::string& s, int size, Color color) {

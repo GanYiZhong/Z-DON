@@ -348,6 +348,11 @@ Config get_config() {
     config.general.zdon_early_hitsound = config_file["general"]["zdon_early_hitsound"].value_or(false);
     config.general.zdon_press_time_judge = config_file["general"]["zdon_press_time_judge"].value_or(false);
     config.general.zdon_branch_by_measure = config_file["general"]["zdon_branch_by_measure"].value_or(false);
+    config.general.zdon_lane3d = config_file["general"]["zdon_lane3d"].value_or(false);
+    config.general.zdon_hit_error_bar = config_file["general"]["zdon_hit_error_bar"].value_or(false);
+    config.general.zdon_remember_difficulty = config_file["general"]["zdon_remember_difficulty"].value_or(false);
+    config.general.zdon_lane3d_preset = std::clamp(config_file["general"]["zdon_lane3d_preset"].value_or(0), 0, 3);
+    config.general.zdon_lane3d_hint_shown = config_file["general"]["zdon_lane3d_hint_shown"].value_or(false);
     config.general.zdon_coin_mode = config_file["general"]["zdon_coin_mode"].value_or(false);
     config.general.zdon_coin_credits = std::clamp(config_file["general"]["zdon_coin_credits"].value_or(0), 0, 99);
     config.general.zdon_ai_level = std::clamp(config_file["general"]["zdon_ai_level"].value_or(5), 1, 10);
@@ -496,6 +501,12 @@ Config get_config() {
         config.midi.channel = 0;
     }
 
+    config.usio.enabled = config_file["usio"]["enabled"].value_or(false);
+    config.usio.dll = config_file["usio"]["dll"].value_or(std::string("bnusio.dll"));
+    config.usio.threshold = std::clamp(config_file["usio"]["threshold"].value_or(2000), 1, 65535);
+    config.usio.holdoff_ms = std::clamp(config_file["usio"]["holdoff_ms"].value_or(25), 0, 500);
+    config.usio.poll_us = std::clamp(config_file["usio"]["poll_us"].value_or(1000), 0, 20000);
+
     // Parse audio
     config.audio.device_type = config_file["audio"]["device_type"].value_or(0);
     config.audio.device = config_file["audio"]["device"].value_or("");
@@ -578,6 +589,11 @@ void save_config(const Config& config) {
                                     {"zdon_early_hitsound", config.general.zdon_early_hitsound},
                                     {"zdon_press_time_judge", config.general.zdon_press_time_judge},
                                     {"zdon_branch_by_measure", config.general.zdon_branch_by_measure},
+                                    {"zdon_lane3d", config.general.zdon_lane3d},
+                                    {"zdon_lane3d_preset", config.general.zdon_lane3d_preset},
+                                    {"zdon_hit_error_bar", config.general.zdon_hit_error_bar},
+                                    {"zdon_remember_difficulty", config.general.zdon_remember_difficulty},
+                                    {"zdon_lane3d_hint_shown", config.general.zdon_lane3d_hint_shown},
                                     {"zdon_coin_mode", config.general.zdon_coin_mode},
                                     {"zdon_coin_credits", config.general.zdon_coin_credits},
                                     {"zdon_ai_level", config.general.zdon_ai_level},
@@ -660,6 +676,11 @@ void save_config(const Config& config) {
                                             {"channel", config.midi.channel},
                                             {"notes", int_array(config.midi.notes)},
                                             {"buttons", int_array(config.midi.buttons)}});
+    config_table.insert("usio", toml::table{{"enabled", config.usio.enabled},
+                                            {"dll", config.usio.dll},
+                                            {"threshold", config.usio.threshold},
+                                            {"holdoff_ms", config.usio.holdoff_ms},
+                                            {"poll_us", config.usio.poll_us}});
 
     // Audio
     config_table.insert("audio", toml::table{{"device_type", config.audio.device_type},

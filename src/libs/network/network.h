@@ -401,6 +401,7 @@ private:
     std::optional<int> challenge_jump_result;
     std::optional<cpr::AsyncResponse> pending_challenges;
     std::map<int, cpr::AsyncResponse> pending_signed;
+    std::vector<cpr::AsyncResponse> forgotten_signed; // Z-DON: forget_signed's, until they end
     std::map<int, std::pair<long, std::string>> done_signed;
     int next_signed_ticket = 1;
     std::optional<ChallengeList> challenges_result;

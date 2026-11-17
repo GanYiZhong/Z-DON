@@ -6,6 +6,7 @@
 #include "../libs/input/input.h"
 #include "../libs/input/zdon_mouse.h"
 #include "../libs/network/network.h"
+#include "../libs/zdon_diff_memory.h"
 #include "../libs/zdon_online.h"
 #include "../objects/game/zdon_ai_board.h"
 #include "../objects/global/practice_timer.h"
@@ -147,6 +148,7 @@ void SongSelectScreen::select_song(SongBox* song) {
     session_data.genre_index = static_cast<int>(song->song_genre_index) - 1;
     session_data.genre_label = song->song_genre_label;
     global_data.last_difficulty[player_index] = session_data.selected_difficulty;
+    zdon_diff_memory::remember(player_index, song->path.string(), session_data.selected_difficulty);
     readahead::prepare_song(song->path); // Z-DON: the chart, audio and video, during the transition
     game_transition.emplace(song->text_name, song->text_subtitle, false);
     if (exists(session_data.selected_song.parent_path() / "Loading.png")) {

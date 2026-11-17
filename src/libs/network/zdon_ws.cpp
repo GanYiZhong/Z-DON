@@ -3,6 +3,24 @@
 #include <chrono>
 #include <curl/curl.h>
 #include <spdlog/spdlog.h>
+#ifndef _WIN32
+#include <sys/select.h> // curl.h brings winsock2.h on Windows
+#endif
+
+// Z-DON: waits up to `ms` for the connection's socket to have something to read, instead of a fixed sleep: a
+// message is taken as it arrives, not at the next ~1 ms (on Windows up to a 15.6 ms tick) wake-up. False when
+// there was no socket to wait on.
+static bool wait_readable(CURL* c, int ms) {
+    curl_socket_t sock = CURL_SOCKET_BAD;
+    if (curl_easy_getinfo(c, CURLINFO_ACTIVESOCKET, &sock) != CURLE_OK || sock == CURL_SOCKET_BAD) {
+        return false;
+    }
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(sock, &readable);
+    timeval tv{0, ms * 1000};
+    return select(static_cast<int>(sock) + 1, &readable, nullptr, nullptr, &tv) >= 0;
+}
 
 ZdonWs::~ZdonWs() {
     close();
@@ -111,7 +129,10 @@ void ZdonWs::run(std::string url, std::vector<std::string> headers) {
             }
         }
         if (!got && out.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // the outbox is looked at again within a millisecond; a reply wakes this at once
+            if (!wait_readable(c, 1)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
     }
     if (!stop_) {

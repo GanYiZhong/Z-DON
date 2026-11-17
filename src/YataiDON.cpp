@@ -1,4 +1,7 @@
 #include <algorithm>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +26,7 @@
 #include "libs/input/ime_ui.h"
 #include "libs/input/input.h"
 #include "libs/input/zdon_mouse.h"
+#include "libs/input/zdon_usio.h"
 #include "libs/math/animation.h"
 #include "libs/network/network.h"
 #include "libs/network/skin_updater.h"
@@ -96,6 +100,38 @@ void draw_outer_border(int screen_width, int screen_height, Color last_color) {
             }
         }
     }
+}
+
+// Z-DON: the USIO board's coins and buttons, on the game thread (libs/input/zdon_usio.h)
+static void zdon_usio_frame() {
+    if (!zdon_usio::running()) {
+        return;
+    }
+    refresh_drum_hit_keys(); // the bindings, as the USIO thread will send them
+    if (const int credits = zdon_usio::take_coins() + zdon_usio::take_service(); credits > 0) {
+        auto& g = global_data.config->general;
+        g.zdon_coin_credits = std::min(99, g.zdon_coin_credits + credits);
+        spdlog::info("USIO: credits now {}", g.zdon_coin_credits);
+        save_config(*global_data.config);
+    }
+    // TEST opens the settings from the attract screens, closes them back to the title and leaves the input test
+    if (zdon_usio::take_test_presses() > 0) {
+        const std::string& screen = global_data.current_screen;
+        if (screen == "TITLE" || screen == "ENTRY") {
+            debug_menu.requested_screen = Screens::SETTINGS;
+        } else if (screen == "SETTINGS") {
+            debug_menu.requested_screen = Screens::TITLE;
+        } else if (screen == "INPUT_TEST") {
+            debug_menu.requested_screen = Screens::SETTINGS; // the USIO test: TEST leaves it on a cabinet
+        }
+    }
+}
+
+// a spin-wait hint (x86 PAUSE); nothing elsewhere
+static inline void zdon_spin_pause() {
+#if defined(__SSE2__)
+    _mm_pause();
+#endif
 }
 
 static void draw_skin_update_status() {
@@ -833,7 +869,8 @@ static void run_frame() {
     seg_mark(SEG_UPDATE);
     sync_text_input();
 
-    // Dev hook: YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title|practice_select|settings|tutorial>;<ms>"
+    // Dev hook:
+    // YATAIDON_JUMP_SCREEN="<entry|song_select|dan_select|title|practice_select|settings|tutorial|input_test>;<ms>"
     // jumps there once, <ms> after the first frame (with YATAIDON_DUMP_SCREEN: screens the CLI can't start in)
     {
         const double since = dev_hook_clock(); // frames with YATAIDON_FIXED_STEP_MS
@@ -866,6 +903,8 @@ static void run_frame() {
                     debug_menu.requested_screen = Screens::SETTINGS;
                 } else if (name == "tutorial") {
                     debug_menu.requested_screen = Screens::TUTORIAL;
+                } else if (name == "input_test") {
+                    debug_menu.requested_screen = Screens::INPUT_TEST;
                 }
             }
         }
@@ -1137,6 +1176,7 @@ static void run_frame() {
             }
         }
         while (std::chrono::steady_clock::now() < L.next_frame_time) {
+            zdon_spin_pause(); // Z-DON: the same wait, gentler on the core's SMT sibling and its power
         }
     }
 #endif
@@ -1508,9 +1548,19 @@ static int game_main(int argc, char* argv[]) {
     input_thread = std::thread(input_polling_thread);
 #endif
     start_midi_input(global_data.config->midi);
+    if (global_data.config->usio.enabled) {
+        const auto& u = global_data.config->usio;
+        zdon_usio::Sinks sinks;
+        sinks.hit = [](int player, int pad, float strength) {
+            submit_drum_hit(player == 1 ? PlayerNum::P2 : PlayerNum::P1, pad, strength);
+        };
+        sinks.menu = [](int action) { inject_menu_press(action); };
+        zdon_usio::start({u.dll, u.threshold, u.holdoff_ms, u.poll_us}, std::move(sinks));
+    }
 
     while (!window_should_close() && !g_dump_screen_done && !g_quit_for_update) {
         process_midi_events();
+        zdon_usio_frame();
 
         // Consume buffered quit-key presses while editing to prevent a delayed game exit after the field closes.
         if (check_key_pressed(global_data.config->keys.exit_key) &&
@@ -1521,6 +1571,7 @@ static int game_main(int argc, char* argv[]) {
     }
 
     shutdown_midi_input();
+    zdon_usio::stop();
     input_thread_running = false;
     if (input_thread.joinable()) {
         input_thread.join();

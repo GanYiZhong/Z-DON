@@ -961,6 +961,11 @@ void ScoresManager::set_song_meta(const std::string& path, const SongCacheEntry&
     song_meta[path] = entry;
 }
 
+void ScoresManager::set_song_meta(const std::string& path, SongCacheEntry&& entry) {
+    std::scoped_lock lock(song_meta_mutex);
+    song_meta.insert_or_assign(path, std::move(entry));
+}
+
 std::optional<SongCacheEntry> ScoresManager::get_song_meta(const std::string& path) {
     std::scoped_lock lock(song_meta_mutex);
     auto it = song_meta.find(path);

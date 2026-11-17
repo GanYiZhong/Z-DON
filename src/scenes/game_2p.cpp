@@ -14,6 +14,7 @@
 #include "../libs/zdon_online.h"
 #include "../objects/game/ai_match.h"
 #include "../objects/game/zdon_ai.h"
+#include "../objects/game/zdon_lane3d.h"
 #include "../objects/global/zdon_hud.h"
 
 static double wall_ms() {
@@ -180,6 +181,7 @@ std::optional<Screens> Game2PScreen::update() {
     if (pause_menu.active()) {
         return update_pause_menu(select_screen()); // Z-DON: pause menu (pause_menu.h)
     }
+    zdon_lane3d::update_mouse(); // Z-DON: the 3D view (zdon_lane3d.h)
     // Z-DON live battle: the pause key asks to surrender this song (the song goes on meanwhile)
     if (zdon_online.live() && !live_wait_go && zdon_online.surrender == 0 && !zdon_sudden_over) {
         const bool pause_key = check_key_pressed(global_data.config->keys.pause_key);

@@ -55,6 +55,11 @@ struct GeneralConfig {
     bool zdon_press_time_judge = false; // Z-DON: judge a hit at the press time rather than the frame's time
     // Z-DON: a branch is decided one measure before its head at any speed (off: when its first note appears)
     bool zdon_branch_by_measure = false;
+    bool zdon_lane3d = false; // Z-DON: the lanes on a 3D plane the mouse and skin scripts turn (zdon_lane3d.h)
+    bool zdon_remember_difficulty = false; // Z-DON: each song reopens on the difficulty last played on it
+    bool zdon_hit_error_bar = false;       // Z-DON: a timing bar under the judge circle with the last hits' offsets
+    int zdon_lane3d_preset = 0;            // the view each song starts in: 0 flat, 1 tilt, 2 highway, 3 angle
+    bool zdon_lane3d_hint_shown = false;   // the controls' hint was shown once
     bool ignore_account_appearance = true;
 };
 
@@ -126,6 +131,15 @@ struct MidiConfig {
     std::vector<int> buttons;
 };
 
+// Z-DON: a cabinet's USIO board read through the cabinet's own bnusio.dll (libs/input/zdon_usio.cpp, Windows)
+struct UsioConfig {
+    bool enabled = false;
+    std::string dll = "bnusio.dll"; // absolute, or relative to the game folder
+    int threshold = 2000;           // analog value (0-65535) a drum sensor must reach to count as a hit
+    int holdoff_ms = 25;            // after a hit, that side of that drum ignores its sensors this long
+    int poll_us = 1000;             // between reads: under 1000 keeps a core busy; 0 = again at once
+};
+
 struct AudioConfig {
     int device_type = 0;
     std::string device; // Output device name (empty = system default)
@@ -167,6 +181,7 @@ struct Config {
     GamepadConfig gamepad_1p;
     GamepadConfig gamepad_2p;
     MidiConfig midi;
+    UsioConfig usio;
     AudioConfig audio;
     VolumeConfig volume;
     VideoConfig video;

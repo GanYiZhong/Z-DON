@@ -213,6 +213,10 @@ struct ZdonLiveData {
     double last_hit_at_ms = -1.0;                       // get_current_ms() of that hit; -1 = none yet
     double song_end_ms = 0.0;                           // the last playable note's time on the chart clock
     std::vector<std::pair<double, double>> gogo_ranges; // GOGO sections, chart ms (start, end)
+    // the last judged hits, oldest overwritten: (offset ms, get_current_ms() of the hit), for the hit error bar
+    std::array<std::pair<float, double>, 24> recent_hits{};
+    int recent_hits_next = 0;
+    int recent_hits_count = 0;
 };
 
 struct AISectionTally {
@@ -313,6 +317,13 @@ struct GlobalData {
         int passes = 0;
         bool has_last = false;
         int last_good = 0, last_ok = 0, last_bad = 0;
+        // the last passes' lines (a ring, formatted at each pass's end) and the best pass (good 2, ok 1)
+        static constexpr int HISTORY = 5;
+        std::array<std::string, HISTORY> history{};
+        int history_head = 0;
+        int history_count = 0;
+        int best_score = -1;
+        std::string best_line;
     } zdon_loop;
     // Z-DON AI battle (objects/game/zdon_ai.h): the 2P lane is played by an AI; the song is cut into sections,
     // each won by the higher section score (good 2, ok 1), the match by the most sections

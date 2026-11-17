@@ -1300,6 +1300,8 @@ void end_blend_mode() {
     begin_blend_mode(BLEND_ALPHA);
 }
 
+void set_additive_keeps_alpha(bool /*on*/) {} // Z-DON 3D layers: the raylib backend only
+
 void set_separate_alpha_blend() {
     custom_separate_blend = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA,
                                                            BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
@@ -2968,6 +2970,18 @@ void update_mesh_buffer(Mesh mesh, int index, const void* data, int data_size, i
 
 void set_material_texture(Material* material, int map_type, Texture texture) {
     material->maps[map_type].texture = texture;
+}
+
+void begin_quads_3d() {}
+void end_quads_3d() {}
+bool begin_silhouette_mode() {
+    return false; // Z-DON 3D view: sides drawn darkened here
+}
+void end_silhouette_mode() {}
+void gen_render_texture_mipmaps(RenderTarget& /*target*/) {} // Z-DON 3D layers: the raylib backend only
+
+bool draw_texture_quad_3d(Texture /*tex*/, const Vec3* /*corners*/, const Vec2* /*uvs*/, Color /*tint*/) {
+    return false; // Z-DON's 3D lane draws flat here
 }
 
 void draw_mesh(Mesh mesh, Material material, Mat4 transform) {

@@ -7,6 +7,7 @@
 #include "../libs/file/script.h"
 #include "../libs/gfx/text.h"
 #include "../libs/input/input.h"
+#include "../objects/game/zdon_lane3d.h"
 
 static const char* exam_bar_texture(float progress) {
     return progress >= 1.0f ? "exam_max" : progress >= 0.5f ? "exam_gold" : "exam_red";
@@ -15,6 +16,8 @@ static const char* exam_bar_texture(float progress) {
 void DanGameScreen::on_screen_start() {
     Screen::on_screen_start();
     reset_playback();
+    zdon_lane3d::reset(); // Z-DON 3D view
+    zdon_lane3d::show_hint_once();
     start_delay = 4000.0;
     song_index = 0;
     prev_good = prev_ok = prev_bad = prev_drumroll = 0;
@@ -645,6 +648,7 @@ std::optional<Screens> DanGameScreen::update() {
     transition->update(current_ms);
     between.update(current_ms);
     clock.update(current_ms);
+    zdon_lane3d::update_mouse(); // Z-DON 3D view
 
     if (transition->is_finished()) {
         reset_input_lock(); // same as GameScreen; locks left over from the previous screen
@@ -825,6 +829,48 @@ void DanGameScreen::push_dan_state() {
 }
 
 void DanGameScreen::draw() {
+    zdon_set_lane3d_pivot();
+    if (zdon_lane3d::begin_frame()) { // Z-DON 3D view: each layer on its own plane (zdon_lane3d.h)
+        using zdon_lane3d::Layer;
+        clear_background(Color::BLACK);
+        zdon_lane3d::begin_layer(Layer::BACKGROUND);
+        if (background.has_value()) {
+            background->draw_back();
+        }
+        zdon_lane3d::end_layer();
+        for (const Layer layer :
+             {Layer::LANE, Layer::TARGET, Layer::NOTES, Layer::JUDGMENTS, Layer::HUD, Layer::EFFECTS}) {
+            zdon_lane3d::begin_layer(layer);
+            if (layer == Layer::LANE) { // as flat: the exam panel, the dan gauge, then the lane
+                if (dan_info_cache.has_value() && draw_seq.has_value()) {
+                    const SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
+                    draw_seq->draw(*dan_info_cache, exam_failed, song_index, dan_color, sd.dan_rank, get_frame_ms());
+                }
+                if (dan_gauge) {
+                    dan_gauge->draw();
+                }
+                if (background.has_value()) {
+                    background->draw_gauge(PlayerNum::P1);
+                }
+            }
+            if (players.size() == 1) {
+                players[0]->draw(clock.position(), 0, 184 * tex.screen_scale);
+            }
+            zdon_lane3d::end_layer();
+        }
+        if (background.has_value()) {
+            zdon_lane3d::begin_layer(Layer::FOREGROUND);
+            background->draw_fore();
+            zdon_lane3d::end_layer();
+        }
+        zdon_lane3d::begin_layer(Layer::OVERLAY);
+        draw_overlay_hud(true);
+        zdon_lane3d::end_layer();
+        zdon_lane3d::end_frame();
+        between.draw(184 * tex.screen_scale); // the card between songs stays flat, like a transition
+        draw_overlay_flat();
+        return;
+    }
     if (background.has_value()) {
         background->draw_back();
     }

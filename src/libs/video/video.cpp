@@ -8,6 +8,7 @@
 #include "../fixed_step.h"
 #include "../gfx/texture.h"
 #include "../profiler.h"
+#include "../zdon_os.h"
 
 VideoPlayer::VideoPlayer(const fs::path& path) : is_finished_arr{false, false} {
     source_path = path;
@@ -95,6 +96,8 @@ void VideoPlayer::audio_manager() {
 void VideoPlayer::decode_loop() {
     PROFILE_THREAD_NAME("video decode");
 #ifndef __EMSCRIPTEN__
+    // Z-DON: below the main thread, CPU only (the frames are wanted on time, so not background I/O)
+    zdon_os::job_priority_background(true);
     SwsContext* sws = nullptr; // reused for every frame of this run
     try {
         container->seek(0);

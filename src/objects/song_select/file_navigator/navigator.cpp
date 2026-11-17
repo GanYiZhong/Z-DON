@@ -276,6 +276,22 @@ static bool alpha_less(const std::string& a, const std::string& b) {
     return a.size() < b.size();
 }
 
+// Z-DON: sorts boxes by alpha_less of key(box), each key made once (the comparator used to strip markup /
+// build a filename string twice per comparison)
+template<class KeyFn>
+static void sort_boxes_by(std::vector<std::unique_ptr<BaseBox>>& boxes, KeyFn key) {
+    std::vector<std::pair<std::string, std::unique_ptr<BaseBox>>> keyed;
+    keyed.reserve(boxes.size());
+    for (std::unique_ptr<BaseBox>& b : boxes) {
+        std::string k = key(*b);
+        keyed.emplace_back(std::move(k), std::move(b));
+    }
+    std::ranges::sort(keyed, [](const auto& a, const auto& b) { return alpha_less(a.first, b.first); });
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        boxes[i] = std::move(keyed[i].second);
+    }
+}
+
 static void apply_song_genre(SongBox* song, const BoxDef& box_def) {
     song->song_genre_index = box_def.genre_index;
     song->song_genre_label = box_def.genre_label;
@@ -946,9 +962,7 @@ void sort_items(std::vector<std::unique_ptr<BaseBox>>& items, int first_index, i
             }
         }
 
-        std::ranges::sort(sortable, [](const std::unique_ptr<BaseBox>& a, const std::unique_ptr<BaseBox>& b) {
-            return alpha_less(strip_text_markup(a->text_name), strip_text_markup(b->text_name));
-        });
+        sort_boxes_by(sortable, [](const BaseBox& b) { return strip_text_markup(b.text_name); });
 
         int sortable_idx = 0;
         for (int i = first_index; i <= last_index; i++) {
@@ -1017,9 +1031,7 @@ void Navigator::flush_pending_boxes() {
                     sortable.push_back(std::move(items[i]));
                 }
             }
-            std::ranges::sort(sortable, [](const std::unique_ptr<BaseBox>& a, const std::unique_ptr<BaseBox>& b) {
-                return alpha_less(a->path.filename().string(), b->path.filename().string());
-            });
+            sort_boxes_by(sortable, [](const BaseBox& b) { return b.path.filename().string(); });
             for (int j = 0; j < static_cast<int>(sortable_indices.size()); j++) {
                 items[sortable_indices[j]] = std::move(sortable[j]);
             }
@@ -1365,6 +1377,16 @@ std::vector<fs::path> Navigator::find_new_songs(const fs::path& path) const {
         index.push_back(path_str);
     }
     std::ranges::sort(index);
+    // Z-DON: a song folder's write time from the loading walk's listing of its parent (no stat per
+    // song); a folder the walk did not list (or one changed since) is stat'ed as before
+    const std::shared_ptr<const LibraryIndex> walk = library_index();
+    constexpr int64_t kUnixEpochIn1601 = 11644473600;
+    const int64_t unix_cutoff =
+        ch::duration_cast<ch::seconds>((ch::system_clock::now() - ch::weeks(2)).time_since_epoch()).count();
+    const uint64_t ft_cutoff = static_cast<uint64_t>((unix_cutoff + kUnixEpochIn1601) * 10000000);
+    fs::path listed_parent;
+    std::unordered_map<std::wstring, uint64_t> listed_folders; // name -> ft_write, of listed_parent
+    bool parent_listed = false;
     for (const auto& path_str : index) {
         if (abort_loading) {
             break;
@@ -1378,10 +1400,31 @@ std::vector<fs::path> Navigator::find_new_songs(const fs::path& path) const {
         if (sibling == path) {
             continue;
         }
-        std::error_code ec;
-        auto last_write = fs::last_write_time(song_path.parent_path(), ec);
-        if (ec || last_write < two_weeks_ago) {
-            continue;
+        const fs::path folder = song_path.parent_path();
+        if (walk && folder.parent_path() != listed_parent) {
+            listed_parent = folder.parent_path();
+            listed_folders.clear();
+            const LibraryIndex::Dir* d = walk->find(listed_parent);
+            parent_listed = d != nullptr;
+            if (d) {
+                for (const LibraryIndex::Entry& e : d->entries) {
+                    if (e.is_dir && !e.is_reparse && e.ft_write != 0) {
+                        listed_folders.emplace(e.name, e.ft_write);
+                    }
+                }
+            }
+        }
+        if (auto it = parent_listed ? listed_folders.find(folder.filename().wstring()) : listed_folders.end();
+            it != listed_folders.end()) {
+            if (it->second < ft_cutoff) {
+                continue;
+            }
+        } else {
+            std::error_code ec;
+            auto last_write = fs::last_write_time(folder, ec);
+            if (ec || last_write < two_weeks_ago) {
+                continue;
+            }
         }
         hits.push_back(song_path);
     }

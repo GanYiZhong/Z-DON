@@ -11,6 +11,9 @@ namespace zhud {
     // the string for key in the player's language ({0}, {1}: arguments)
     std::string text(const std::string& key);
     std::string text(const std::string& key, const std::string& a0, const std::string& a1 = "");
+    // Z-DON: four arguments ({0} to {3})
+    std::string text(const std::string& key, const std::string& a0, const std::string& a1, const std::string& a2,
+                     const std::string& a3);
 
     // a cached text (size in 1080p px, scaled to the screen); built on first use
     OutlinedText& label(const std::string& s, int size, Color color = Color::WHITE);

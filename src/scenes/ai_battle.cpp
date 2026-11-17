@@ -261,19 +261,18 @@ void AIGameScreen::update_tallies() {
             const auto it = note_section.find(index);
             return it == note_section.end() ? -1 : it->second;
         };
-        for (const auto& [index, judgment] : player.get_note_judgments()) {
+        player.get_note_judgments().for_each([&](int index, Judgments judgment) {
             const int section = section_of(index);
-            if (section < 0) {
-                continue;
+            if (section >= 0) {
+                ai_count_judgment(tally[section], judgment);
             }
-            ai_count_judgment(tally[section], judgment);
-        }
-        for (const auto& [index, hits] : player.get_roll_hits()) {
+        });
+        player.get_roll_hits().for_each([&](int index, int hits) {
             const int section = section_of(index);
             if (section >= 0) {
                 tally[section].drumroll += hits;
             }
-        }
+        });
     };
     recount(*human(), tallies[HUMAN]);
     recount(*ai(), tallies[AI]);
@@ -294,12 +293,12 @@ int AIGameScreen::current_territory() const {
     const int course = global_data.session_data[static_cast<int>(global_data.player_num)].selected_difficulty;
     auto judged_in_section = [&](const Player& player) {
         std::vector<std::pair<int, Judgments>> notes;
-        for (const auto& [index, judgment] : player.get_note_judgments()) {
+        player.get_note_judgments().for_each([&](int index, Judgments judgment) {
             const auto it = note_section.find(index);
             if (it != note_section.end() && it->second == section) {
                 notes.emplace_back(index, judgment);
             }
-        }
+        });
         std::ranges::sort(notes);
         std::vector<Judgments> judgments;
         judgments.reserve(notes.size());

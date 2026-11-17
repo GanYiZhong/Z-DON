@@ -105,6 +105,7 @@ public:
     std::array<ZdonGhost, 4> zdon_ghost; // by PlayerNum
     void zdon_ghost_update();
     void zdon_draw_ghost() const;
+    void zdon_draw_hit_error_bar() const; // Z-DON: [general] zdon_hit_error_bar
 
     Screens on_screen_end(Screens next_screen) override;
 
@@ -157,6 +158,10 @@ public:
     virtual bool hold_song_end() { return false; }
 
     void draw_overlay(bool with_song_info = true);
+    void draw_overlay_hud(bool with_song_info); // Z-DON: draw_overlay's two parts (the 3D view turns the first)
+    void draw_overlay_flat();
+    void draw_back();             // the movie or the background's back
+    void zdon_set_lane3d_pivot(); // Z-DON 3D view: about the judge circle
 
     void draw() override;
 

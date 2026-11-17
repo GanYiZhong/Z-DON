@@ -8,6 +8,7 @@
 #include "../jobs.h"
 #include "../profiler.h"
 #include "../test_mode.h"
+#include "../zdon_os.h"
 #include "loudness.h"
 #include "spdlog/spdlog.h"
 #ifdef SUPPORT_FUMEN
@@ -614,6 +615,24 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
                 break;
             }
 
+            if (pitch == 1.0f && route < 0) {
+                // Z-DON: the common case (hit sounds, effects at their own pitch) as one contiguous run up to the
+                // end: the same samples and sums as the frame-by-frame loop below (frame_f + n is exact)
+                const unsigned long n = std::min<unsigned long>(frames_to_process, end_frame - src_frame);
+                const float* f = data_ptr + static_cast<size_t>(src_frame) * channels;
+                float* o = out + output_index * 2;
+                for (unsigned long i = 0; i < n; i++) {
+                    float left, right;
+                    pan_frame(f + i * channels, channels, pan, left, right);
+                    o[i * 2] += left * volume;
+                    o[i * 2 + 1] += right * volume;
+                }
+                frame_f += static_cast<double>(n);
+                output_index += n;
+                frames_to_process -= n;
+                continue;
+            }
+
             unsigned long dst_index = output_index * 2;
             float left, right;
             if (route >= 0) {
@@ -732,12 +751,20 @@ void AudioEngine::mix_streams(float* out, unsigned int framesPerBuffer) {
         const unsigned long long rp = mus.read_pos.load(std::memory_order_relaxed);
         const unsigned long long avail = mus.write_pos.load(std::memory_order_acquire) - rp;
         const unsigned long n = static_cast<unsigned long>(std::min<unsigned long long>(framesPerBuffer, avail));
-        for (unsigned long i = 0; i < n; i++) {
-            const float* src = mus.ring.get() + ((rp + i) % mus.ring_frames) * channels;
-            float left, right;
-            pan_frame(src, channels, pan, left, right);
-            out[i * 2] += left * volume;
-            out[i * 2 + 1] += right * volume;
+        // Z-DON: at most two contiguous runs of the ring (no modulo per frame)
+        for (unsigned long done = 0; done < n;) {
+            const unsigned long long at = (rp + done) % mus.ring_frames;
+            const unsigned long run =
+                static_cast<unsigned long>(std::min<unsigned long long>(n - done, mus.ring_frames - at));
+            const float* src = mus.ring.get() + at * channels;
+            float* o = out + static_cast<size_t>(done) * 2;
+            for (unsigned long i = 0; i < run; i++) {
+                float left, right;
+                pan_frame(src + i * channels, channels, pan, left, right);
+                o[i * 2] += left * volume;
+                o[i * 2 + 1] += right * volume;
+            }
+            done += run;
         }
         mus.read_pos.store(rp + n, std::memory_order_release);
         mus.current_frame.fetch_add(n, std::memory_order_relaxed);
@@ -1612,6 +1639,8 @@ std::string AudioEngine::install_progressive(const std::shared_ptr<ProgressiveHe
     store_sound(name, snd);
 
     std::thread([dec, job, finish, path = file_path.string()] {
+        // Z-DON: below the main thread (CPU only: playback may be waiting for these frames, so not background I/O)
+        zdon_os::job_priority_background(true);
         const sf_count_t chunk = 1 << 15; // ~0.7 s at 44.1 kHz
         // writes only past frames_ready, which nothing else reads; an unload while this runs
         // leaves the buffer to this thread (SoundDecodeJob::orphaned)

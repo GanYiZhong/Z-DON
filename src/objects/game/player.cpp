@@ -17,6 +17,7 @@
 #include "../../libs/input/early_hit.h"
 #include "../../libs/input/input.h"
 #include "zdon_ai.h"
+#include "zdon_lane3d.h"
 
 // Z-DON: plays a resolved sound id as `who` (upstream routes a player's sounds by PlayerSoundScope)
 static void play_as(PlayerNum who, SoundId id, VolumePreset preset, float gain = 1.0f) {
@@ -327,7 +328,7 @@ void Player::handle_timeline(double ms_from_start) {
     }
     // Drain everything due: one per frame lets same-time commands trail by frames
     while (!timeline.empty() && ms_from_start > timeline.front().start_time) {
-        timeline_buffer.push_back(timeline.front());
+        timeline_buffer.push_back(std::move(timeline.front()));
         timeline.pop_front();
     }
 
@@ -792,24 +793,9 @@ void Player::draw_zdon_flashlight(double current_ms, float y) {
 
 void Player::draw(double ms_from_start, float x, float y) {
     PlayerSoundScope audio_owner(player_num);
-    tex.draw_texture(t_lane_background, {.y = y});
-    if (player_num == PlayerNum::AI || ai_lane ||
-        (((zdon_ai && zdon_ai_lane_game()) || upai_ai) && t_ai_lane_background)) {
-        tex.draw_texture(t_ai_lane_background, {.y = y});
-    }
-    if (branch_indicator.has_value()) {
-        branch_indicator->draw(y);
-    }
-    if (gauge.has_value() && !hide_gauge && !(zdon_ai && zdon_ai_arena_game())) { // Z-DON: the arena has no AI gauge
-        if (arc_player() == PlayerNum::P2) {                                      // the bottom gauge only when two play
-            gauge->draw(y + tex.get_skin_config(SC::GAME_GAUGE_2P_OFFSET)->y);
-        } else {
-            gauge->draw(y);
-        }
-        if (bg_hook) {
-            bg_hook->draw_gauge(player_num);
-        }
-    }
+    using zdon_lane3d::draws;
+    using zdon_lane3d::Layer;
+    // Z-DON: the 3D view draws this in layers (zdon_lane3d.h): the lane, the notes, the judgments, the HUD, the effects
     // Z-DON: skin_config "zdon_ai_judge_offset" {x, y} moves the hit circle and the hit flashes in the skin's AI battle
     // only (the cabinet's AI stage sets them a few px off the lane art's own spot); normal play is unchanged
     float cdx = 0.0f;
@@ -820,36 +806,62 @@ void Player::draw(double ms_from_start, float x, float y) {
             cdy = it->second.y;
         }
     }
-    tex.draw_texture(t_lane_hit_circle, {.x = judge_x + cdx, .y = y + judge_y + cdy});
-
-    if (gogo_time.has_value() && !hide_gogo_flame) {
-        gogo_time->draw(judge_x, y + judge_y);
-    }
-    if (lane_hit_effect.has_value()) {
-        lane_hit_effect->draw(y);
-    }
-    if (fireworks.has_value()) {
-        fireworks->draw();
-    }
-    draw_lane_cover(y);
-
-    if (!hide_judgment) {
-        for (Judgment& anim : draw_judge_list) {
-            anim.draw_effect(judge_x + cdx, y + judge_y + cdy);
+    if (draws(Layer::LANE)) {
+        tex.draw_texture(t_lane_background, {.y = y});
+        if (player_num == PlayerNum::AI || ai_lane ||
+            (((zdon_ai && zdon_ai_lane_game()) || upai_ai) && t_ai_lane_background)) {
+            tex.draw_texture(t_ai_lane_background, {.y = y});
+        }
+        if (branch_indicator.has_value()) {
+            branch_indicator->draw(y);
+        }
+        if (gauge.has_value() && !hide_gauge &&
+            !(zdon_ai && zdon_ai_arena_game())) { // Z-DON: the arena has no AI gauge
+            if (arc_player() == PlayerNum::P2) {  // the bottom gauge only when two play
+                gauge->draw(y + tex.get_skin_config(SC::GAME_GAUGE_2P_OFFSET)->y);
+            } else {
+                gauge->draw(y);
+            }
+            if (bg_hook) {
+                bg_hook->draw_gauge(player_num);
+            }
         }
     }
-    {
+    const bool target_layer = draws(Layer::TARGET);
+    const bool notes_layer = draws(Layer::NOTES);
+    if (target_layer) {
+        // the hit circle and what lights it share the notes' plane: a note meets its circle at any angle
+        tex.draw_texture(t_lane_hit_circle, {.x = judge_x + cdx, .y = y + judge_y + cdy});
+
+        if (gogo_time.has_value() && !hide_gogo_flame) {
+            gogo_time->draw(judge_x, y + judge_y);
+        }
+        if (lane_hit_effect.has_value()) {
+            lane_hit_effect->draw(y);
+        }
+        if (fireworks.has_value()) {
+            fireworks->draw();
+        }
+        draw_lane_cover(y);
+
+        if (!hide_judgment) {
+            for (Judgment& anim : draw_judge_list) {
+                anim.draw_effect(judge_x + cdx, y + judge_y + cdy);
+            }
+        }
+    }
+    if (target_layer || notes_layer) { // the notes in NOTES, their captions in TARGET (draw_notes)
         int scissor_x = virtual_to_screen_x(lane_cover_tex_id->scissor_right());
         int win_w = get_render_width();
         begin_scissor_mode(scissor_x, 0, win_w - scissor_x, get_render_height());
         draw_notes(ms_from_start, y);
-        if (modifiers.zdon_flashlight) { // the AI lane too: an AI battle gives it the player's options
+        if (notes_layer && modifiers.zdon_flashlight) { // the AI lane too: an AI battle gives it the player's options
             draw_zdon_flashlight(ms_from_start, y);
         }
         end_scissor_mode();
     }
 
-    if (!hide_judgment) {
+    if (!hide_judgment && draws(Layer::JUDGMENTS)) {
         for (Judgment& anim : draw_judge_list) {
             anim.draw_outer_effect(judge_x + cdx, y + judge_y + cdy);
             anim.draw_ray_effect(judge_x + cdx, y + judge_y + cdy);
@@ -859,9 +871,10 @@ void Player::draw(double ms_from_start, float x, float y) {
         }
     }
 
-    draw_overlays(y);
-
-    if (global_data.config->general.song_timer) {
+    if (draws(Layer::HUD) || draws(Layer::EFFECTS)) {
+        draw_overlays(y); // the HUD and the effects over it, each in its layer
+    }
+    if (draws(Layer::HUD) && global_data.config->general.song_timer) {
         draw_song_timer(ms_from_start, y);
     }
 }
@@ -993,8 +1006,11 @@ void Player::reset_chart() {
         if (note.type == NoteType::TAIL && last_note != nullptr) {
             note.load_ms = last_note->load_ms;
             last_note->unload_ms = note.unload_ms;
-            auto it = std::ranges::find_if(draw_note_list, [&](const Note& n) { return n.index == last_note->index; });
-            if (it != draw_note_list.end()) {
+            // Z-DON: from the back -- last_note was pushed a few notes ago (barlines between); the search from the
+            // front made a chart's load O(notes x rolls)
+            auto from_back = std::views::reverse(draw_note_list);
+            auto it = std::ranges::find_if(from_back, [&](const Note& n) { return n.index == last_note->index; });
+            if (it != from_back.end()) {
                 it->unload_ms = note.unload_ms;
             }
         }
@@ -1019,6 +1035,23 @@ void Player::reset_chart() {
     }
 
     std::ranges::sort(draw_note_list, {}, &Note::load_ms);
+
+    // Z-DON: room for every note's judgment up front, so judging allocates nothing
+    int max_index = -1;
+    auto widen = [&max_index](const NoteList& list) {
+        for (const Note& n : list.notes) {
+            max_index = std::max(max_index, n.index);
+        }
+    };
+    widen(notes);
+    for (const std::deque<NoteList>* branch : {&branch_m_temp, &branch_e_temp, &branch_n_temp}) {
+        for (const NoteList& list : *branch) {
+            widen(list);
+        }
+    }
+    note_judgments.reserve(max_index + 1);
+    note_offsets.reserve(max_index + 1);
+    roll_hits.reserve(max_index + 1);
 
     this->branch_m = std::move(branch_m_temp);
     this->branch_e = std::move(branch_e_temp);
@@ -1070,6 +1103,8 @@ void Player::reset_chart() {
         live.song_end_ms = end_time;
         live.gogo_ranges.clear();
         live.last_hit_at_ms = -1.0;
+        live.recent_hits_count = 0;
+        live.recent_hits_next = 0;
         std::vector<const TimelineObject*> gogo_events;
         for (const TimelineObject& t : notes.timeline) {
             if (t.gogo_time.has_value()) {
@@ -1548,7 +1583,7 @@ void Player::play_note_manager(double current_ms, std::optional<Background>& bac
             }
             bad_count++;
             on_miss();
-            note_judgments[lane->front().index] = Judgments::BAD;
+            note_judgments.set(lane->front().index, Judgments::BAD);
             if (Gauge* g = active_gauge()) {
                 g->add_bad();
             }
@@ -1717,7 +1752,7 @@ void Player::check_drumroll(double current_ms, DrumType drum_type, std::optional
         drumroll_counter.reset(); // an equal count left by the last roll would not restart the animations
     }
     if (!other_notes.empty()) {
-        roll_hits[other_notes.front().index] = curr_drumroll_count;
+        roll_hits.set(other_notes.front().index, curr_drumroll_count);
     }
     total_drumroll++;
     branch_r_count++;
@@ -1760,7 +1795,7 @@ void Player::check_balloon(double current_ms, DrumType drum_type, const Note& ba
         background->handle_balloon(PlayerNum(is_2p + 1), balloon.count.value() - curr_balloon_count - 1);
     }
     curr_balloon_count++;
-    roll_hits[balloon.index] = curr_balloon_count;
+    roll_hits.set(balloon.index, curr_balloon_count);
     total_drumroll++;
     score += 100;
     score_counter.add_popup(100);
@@ -1837,6 +1872,9 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
         ZdonLiveData& live = global_data.session_data[static_cast<int>(player_num)].zdon_live;
         live.last_hit_offset_ms = offset_ms;
         live.last_hit_at_ms = current_ms;
+        live.recent_hits[static_cast<size_t>(live.recent_hits_next)] = {static_cast<float>(offset_ms), current_ms};
+        live.recent_hits_next = (live.recent_hits_next + 1) % static_cast<int>(live.recent_hits.size());
+        live.recent_hits_count = std::min(live.recent_hits_count + 1, static_cast<int>(live.recent_hits.size()));
         // Z-DON AI battle: the AI learns the player's timing
         auto& ai = global_data.zdon_ai;
         if (ai.active && !zdon_ai && player_num == PlayerNum::P1) {
@@ -1905,7 +1943,7 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             combo = 0;
             bad_count++;
             on_miss();
-            note_judgments[curr_note.index] = Judgments::BAD;
+            note_judgments.set(curr_note.index, Judgments::BAD);
             if (Gauge* g = active_gauge()) {
                 g->add_bad();
             }
@@ -1934,8 +1972,8 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
                 draw_judge_list.emplace_back(Judgments::GOOD, big);
             }
             lane_hit_effect = LaneHitEffect(drum_type, Judgments::GOOD);
-            note_judgments[curr_note.index] = Judgments::GOOD;
-            note_offsets[curr_note.index] = static_cast<float>(ms_from_start - curr_note.hit_ms);
+            note_judgments.set(curr_note.index, Judgments::GOOD);
+            note_offsets.set(curr_note.index, static_cast<float>(ms_from_start - curr_note.hit_ms));
             good_count++;
             score += base_score;
             score_counter.add_popup(base_score, true);
@@ -1957,8 +1995,8 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             record_hit_offset(curr_note);
             draw_judge_list.emplace_back(Judgments::OK, big);
             lane_hit_effect = LaneHitEffect(drum_type, Judgments::OK);
-            note_judgments[curr_note.index] = Judgments::OK;
-            note_offsets[curr_note.index] = static_cast<float>(ms_from_start - curr_note.hit_ms);
+            note_judgments.set(curr_note.index, Judgments::OK);
+            note_offsets.set(curr_note.index, static_cast<float>(ms_from_start - curr_note.hit_ms));
             ok_count++;
             score += 10 * std::floor(base_score / 2 / 10);
             score_counter.add_popup(10 * std::floor(base_score / 2 / 10), true);
@@ -1986,8 +2024,8 @@ void Player::check_note(double ms_from_start, DrumType drum_type, double current
             const Note note = curr_note;
             record_hit_offset(note);
             lane.pop_front();
-            note_judgments[note.index] = Judgments::BAD;
-            note_offsets[note.index] = static_cast<float>(ms_from_start - note.hit_ms);
+            note_judgments.set(note.index, Judgments::BAD);
+            note_offsets.set(note.index, static_cast<float>(ms_from_start - note.hit_ms));
             auto it = std::ranges::lower_bound(draw_note_buffer, note.index, {}, &Note::index);
             if (it != draw_note_buffer.end() && *it == note) {
                 draw_note_buffer.erase(it);
@@ -2309,8 +2347,8 @@ void Player::draw_balloon(double current_ms, float y, const Note& head, int curr
 }
 
 int Player::miss_arm_frame(double current_ms, const Note& note) const {
-    auto judged = note_judgments.find(note.index);
-    if (judged == note_judgments.end() || judged->second != Judgments::BAD) {
+    const Judgments* judged = note_judgments.get(note.index);
+    if (judged == nullptr || *judged != Judgments::BAD) {
         return -1;
     }
     const double miss_window = (difficulty <= static_cast<int>(Difficulty::NORMAL)) ? Timing::BAD_EASY : Timing::BAD;
@@ -2320,6 +2358,7 @@ int Player::miss_arm_frame(double current_ms, const Note& note) const {
 
 void Player::set_rare_notes(std::vector<std::string> keys, int count, uint64_t seed) {
     rare_keys = std::move(keys);
+    rare_tex.clear();
     rare_notes.clear();
     rare_hit_mask = 0;
     if (rare_keys.empty() || count <= 0 || draw_note_list.empty()) {
@@ -2424,8 +2463,13 @@ void Player::draw_kusudama_stars(double current_ms, float cx, float cy) {
 
 void Player::draw_notes(double current_ms, float y) {
     current_ms += visual_offset;
-    for (auto& barline : std::views::reverse(barlines)) {
-        draw_bar(current_ms, y, barline);
+    // Z-DON 3D view: the notes and bar lines are the NOTES layer, the captions under them the TARGET layer
+    const bool notes_layer = zdon_lane3d::draws(zdon_lane3d::Layer::NOTES);
+    const bool captions_layer = zdon_lane3d::draws(zdon_lane3d::Layer::TARGET);
+    if (notes_layer) {
+        for (auto& barline : std::views::reverse(barlines)) {
+            draw_bar(current_ms, y, barline);
+        }
     }
 
     if (draw_note_buffer.empty()) {
@@ -2517,6 +2561,9 @@ void Player::draw_notes(double current_ms, float y) {
         }
         visible_notes.push_back({&note, *pos});
     }
+    if (!notes_layer) { // the captions' layer only: the notes themselves are another pass
+        visible_notes.clear();
+    }
 
     for (const auto& visible : visible_notes) {
         const Note& note = *visible.note;
@@ -2526,11 +2573,18 @@ void Player::draw_notes(double current_ms, float y) {
         } else if (note.type == NoteType::BALLOON_HEAD) {
             draw_balloon(current_ms, y, note, current_eighth, false);
         } else if (int rare = note.display ? rare_order(note) : -1; rare >= 0) {
-            TextureObject* t = tex.get_texture(rare_keys[rare % rare_keys.size()]);
-            int frames = 1;
-            if (auto* framed = dynamic_cast<FramedTexture*>(t)) {
-                frames = std::max<int>(1, static_cast<int>(framed->textures.size()));
+            if (rare_tex.size() != rare_keys.size()) {
+                rare_tex.clear();
+                for (const std::string& key : rare_keys) {
+                    TextureObject* rt = tex.get_texture(key);
+                    int n = 1;
+                    if (auto* framed = dynamic_cast<FramedTexture*>(rt)) {
+                        n = std::max<int>(1, static_cast<int>(framed->textures.size()));
+                    }
+                    rare_tex.emplace_back(rt, n);
+                }
             }
+            auto [t, frames] = rare_tex[rare % rare_tex.size()];
             tex.draw_texture(t, {.frame = static_cast<int>(current_ms / 150.0) % frames,
                                  .center = true,
                                  .x = pos->first - (t_notes_9->width / 2.0f),
@@ -2571,10 +2625,14 @@ void Player::draw_notes(double current_ms, float y) {
         }
 
         if (note.color.has_value()) {
-            draw_drumroll(current_ms, y, note, current_eighth, true);
+            if (notes_layer) {
+                draw_drumroll(current_ms, y, note, current_eighth, true);
+            }
         } else if (note.type == NoteType::BALLOON_HEAD) {
-            draw_balloon(current_ms, y, note, current_eighth, true);
-        } else if (const float alpha = zdon_fade_alpha(pos->first); alpha > 0.0f) {
+            if (notes_layer) {
+                draw_balloon(current_ms, y, note, current_eighth, true);
+            }
+        } else if (const float alpha = zdon_fade_alpha(pos->first); captions_layer && alpha > 0.0f) {
             tex.draw_texture(t_moji, {.color = fade(Color::WHITE, alpha),
                                       .frame = note.moji,
                                       .x = pos->first - (t_moji->width / 2.0f),
@@ -2717,8 +2775,17 @@ void Player::use_ai_lane() {
 }
 
 void Player::draw_overlays(float y) {
-    tex.draw_texture(t_drum, {.y = y});
-    if (ending_anim.has_value() && !hide_ending_anim) {
+    // Z-DON 3D view: the drum, its hit flashes, the soul arcs and flower, the ending, the score, combo, plate and
+    // labels and the combo announce are the HUD, in their usual order (the score and combo stay over the arcs); the
+    // counters over the lane are the EFFECTS. Drawn flat, the order is the usual one.
+    using zdon_lane3d::draws;
+    using zdon_lane3d::Layer;
+    const bool hud = draws(Layer::HUD);
+    const bool fx = draws(Layer::EFFECTS);
+    if (hud) {
+        tex.draw_texture(t_drum, {.y = y});
+    }
+    if (hud && ending_anim.has_value() && !hide_ending_anim) {
         if (ending_background && ending_background->wants_draw_ending()) {
             ending_background->draw_ending(player_num);
         } else {
@@ -2726,26 +2793,59 @@ void Player::draw_overlays(float y) {
         }
     }
 
-    for (auto& anim : draw_drum_hit_list) {
-        anim->draw(y);
+    if (hud) {
+        for (auto& anim : draw_drum_hit_list) {
+            anim->draw(y);
+        }
     }
     arc_y = y;
-    if (!hide_gauge) { // otherwise above the screen's gauge
+    if (hud && !hide_gauge) { // otherwise above the screen's gauge
         draw_arcs();
     }
-    if (!zdon_ai_arena_game()) { // Z-DON: the AI stage has no soul flower at the lanes' right end (cabinet footage)
+    if (hud && !zdon_ai_arena_game()) { // Z-DON: the AI stage has no soul flower at the lanes' right end (cabinet
+                                        // footage)
         for (GaugeHitEffect& anim : gauge_hit_effect) {
             anim.draw(y);
         }
+    }
+    auto draw_combo_announce = [&] {
+        if (combo_announce.has_value()) {
+            combo_announce->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
+        }
+    };
+    // the counters and popups over the lane (roll, balloon, kusudama, the lyric) belong with the effects
+    auto draw_counters = [&] {
+        // Z-DON: on the skin's AI stage with its own roll bubble spot (zdon_ai_drumroll) only the player's shows
+        const bool ai_bubble_hidden = zdon_ai && tex.skin_config_by_name.contains("zdon_ai_drumroll") &&
+                                      !tex.skin_config_by_name.contains("zdon_ai_drumroll_ai") && zdon_ai_arena_game();
+        if (drumroll_counter.has_value() && show_drumroll_count && !ai_bubble_hidden) {
+            drumroll_counter->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p),
+                                   zdon_ai != nullptr);
+        }
+        if (balloon_counter.has_value()) {
+            balloon_counter->draw(y);
+        }
+        if (papamama_popup.has_value()) {
+            papamama_popup->draw();
+        }
+        if (kusudama_counter.has_value() && kusudama_partner == nullptr) { // shared ones: GameScreen::draw_players
+            kusudama_counter->draw();
+        }
+        // Practice mode draws the lyric itself, after the large drums, so it is not hidden.
+        if (!practice_lyric) {
+            draw_lyric(y);
+        }
+    };
+    if (!hud) {
+        draw_counters(); // the effects layer alone
+        return;
     }
     if (!hide_score_counter) {
         score_counter.draw(y);
     }
 
     combo_display.draw(y);
-    if (combo_announce.has_value()) {
-        combo_announce->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p));
-    }
+    draw_combo_announce(); // over the combo, under the plate and labels, as always
     // Z-DON: in an arena the skin draws the AI lane's plate; skin_config "zdon_ai_arena_plate" (SimpleStyle, which
     // inherits Nijiiro's arena but has no arena plate of its own) leaves it to the engine
     const bool arena_ai =
@@ -2814,25 +2914,8 @@ void Player::draw_overlays(float y) {
         }
     }
 
-    // Z-DON: on the skin's AI stage with its own roll bubble spot (zdon_ai_drumroll) only the player's shows
-    const bool ai_bubble_hidden = zdon_ai && tex.skin_config_by_name.contains("zdon_ai_drumroll") &&
-                                  !tex.skin_config_by_name.contains("zdon_ai_drumroll_ai") && zdon_ai_arena_game();
-    if (drumroll_counter.has_value() && show_drumroll_count && !ai_bubble_hidden) {
-        drumroll_counter->draw(y + (tex.get_skin_config(SC::GAME_COMBO_ANNOUNCE_P2_Y_OFFSET)->y * is_2p),
-                               zdon_ai != nullptr);
-    }
-    if (balloon_counter.has_value()) {
-        balloon_counter->draw(y);
-    }
-    if (papamama_popup.has_value()) {
-        papamama_popup->draw();
-    }
-    if (kusudama_counter.has_value() && kusudama_partner == nullptr) { // shared ones: GameScreen::draw_players
-        kusudama_counter->draw();
-    }
-    // Practice mode draws the lyric itself, after the large drums, so it is not hidden.
-    if (!practice_lyric) {
-        draw_lyric(y);
+    if (fx) {
+        draw_counters();
     }
 }
 

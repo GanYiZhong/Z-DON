@@ -260,7 +260,7 @@ void main() {
         const Matrix proj = ray::rlGetMatrixProjection();
         const Matrix view = ray::rlGetMatrixModelview();
         RenderTarget rt = ray::LoadRenderTexture(w, h);
-        ray::BeginTextureMode(rt);
+        begin_texture_mode(rt); // paired with end_texture_mode below (the target stack)
         ray::ClearBackground(Color::BLACK);
         draw({0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)},
              {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)});

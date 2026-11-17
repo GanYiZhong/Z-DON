@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 
 #include "../libs/screen.h"
 #include "../objects/game/drum_hit_effect.h"
@@ -52,6 +54,10 @@ private:
     float drum_y_offset = 0;
     TextureObject* t_background = nullptr;
     TextureObject* t_large_drum = nullptr;
+    // Z-DON: the USIO panel ([usio] on): each sensor's loudest reading, held a moment so a hit can be read
+    std::array<uint16_t, 8> usio_hold{};
+    std::array<double, 8> usio_hold_until{};
+    void draw_usio(double now);
 
 public:
     InputTestScreen() : Screen("input_test") {}

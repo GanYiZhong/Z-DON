@@ -391,6 +391,18 @@ void PracticeGameScreen::zdon_loop_update() {
         loop.last_ok = r.ok;
         loop.last_bad = r.bad;
         loop.has_last = true;
+        // the pass history: the last few passes and the best one (good 2, ok 1), formatted once here
+        using Loop = std::remove_reference_t<decltype(loop)>;
+        const int pass = loop.passes + 1;
+        loop.history[static_cast<size_t>(loop.history_head)] = zhud::text(
+            "loop_pass", std::to_string(pass), std::to_string(r.good), std::to_string(r.ok), std::to_string(r.bad));
+        loop.history_head = (loop.history_head + 1) % Loop::HISTORY;
+        loop.history_count = std::min(loop.history_count + 1, Loop::HISTORY);
+        if (const int score = (r.good * 2) + r.ok; score > loop.best_score) {
+            loop.best_score = score;
+            loop.best_line = zhud::text("loop_best", std::to_string(pass), std::to_string(r.good), std::to_string(r.ok),
+                                        std::to_string(r.bad));
+        }
     }
     loop.passes++;
     pause_playback();
@@ -1541,6 +1553,26 @@ bool PracticeGameScreen::zdon_practice_keys() {
         zdon_cycle_branch();
         return true;
     }
+    // M: to the bar of the latest miss in this pass (a passed, unhit note is judged BAD too)
+    if (key_pressed(SDL_SCANCODE_M) && practice_player && !bars.empty()) {
+        const Note* last = nullptr;
+        for (const Note& note : scrobble_note_list) {
+            const auto j = practice_player->get_note_judgment(note.index);
+            if (j && *j == Judgments::BAD && (!last || note.hit_ms > last->hit_ms)) {
+                last = &note;
+            }
+        }
+        if (last) {
+            auto it = std::ranges::upper_bound(bars, last->hit_ms, {}, &Note::hit_ms);
+            const int bar = std::max(0, static_cast<int>(std::distance(bars.begin(), it)) - 1);
+            audio.play_sound("don", VolumePreset::HITSOUND);
+            animate_scrobble_to(bar);
+            zhud::toast(zhud::text("miss_bar", std::to_string(bar + 1)));
+        } else {
+            zhud::toast(zhud::text("no_miss"));
+        }
+        return true;
+    }
     return false;
 }
 
@@ -1635,6 +1667,18 @@ void PracticeGameScreen::zdon_draw_info() const {
     if (zdon_has_branches()) {
         lines.push_back(&zhud::label(zhud::text("branch", zhud::text(zdon_branch_key(zdon_branch_force))), 22,
                                      zdon_branch_force < 0 ? Color::WHITE : Color{255, 226, 120, 255}));
+    }
+    // the A-B loop's passes, newest first, and the best (while paused: the notes stay clear in play)
+    if (const auto& loop = global_data.zdon_loop; clock.is_paused() && !menu.open && loop.history_count > 0) {
+        using Loop = std::remove_cvref_t<decltype(loop)>;
+        for (int i = 0; i < loop.history_count; i++) {
+            const auto& line =
+                loop.history[static_cast<size_t>((loop.history_head - 1 - i + Loop::HISTORY) % Loop::HISTORY)];
+            lines.push_back(&zhud::label(line, 18, Color{200, 206, 220, 255}));
+        }
+        if (!loop.best_line.empty()) {
+            lines.push_back(&zhud::label(loop.best_line, 18, Color{255, 226, 120, 255}));
+        }
     }
     if (clock.is_paused() && !menu.open) {
         lines.push_back(&zhud::label(zhud::text("practice_keys"), 18, Color{200, 206, 220, 255}));

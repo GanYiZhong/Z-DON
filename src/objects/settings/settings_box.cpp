@@ -109,6 +109,10 @@ std::unique_ptr<BaseOptionBox> SettingsBox::make_option_box(const rapidjson::Val
     if (type == "zdon_midilearn") {
         return std::make_unique<MidiLearnOptionBox>(name, desc, path);
     }
+    // Z-DON: the USIO box SettingsScreen adds while [usio] is on; its test is the input test screen's USIO panel
+    if (type == "zdon_usiotest") {
+        return std::make_unique<CalibrateOptionBox>(name, desc, path, Screens::INPUT_TEST, "usio_test_button");
+    }
     throw std::runtime_error("unknown option type '" + type + "'");
 }
 

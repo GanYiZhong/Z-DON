@@ -78,7 +78,7 @@ namespace texture_pack {
             uint64_t offset = 0; // in the old pack's payload area
             uint64_t size = 0;
             uint64_t hash = 0;
-            int state = 0; // 0 none, 1 hit (in a span), 2 checked ok, 3 bad
+            int state = 0; // 0 none, 1 hit (in a span), 2 checked ok, 3 bad, 4 hit left unread (BC7 cache has it)
             std::shared_ptr<Span> span;
             size_t span_offset = 0;
             std::shared_ptr<std::vector<uint8_t>> fresh; // read from the skin this time
@@ -98,6 +98,7 @@ namespace texture_pack {
         bool pack_ok = false;
         size_t hits = 0;
         size_t fresh_count = 0;
+        size_t bc7_skipped = 0;
         uint64_t fresh_bytes = 0;
         bool dirty = false; // something stale or rejected
 

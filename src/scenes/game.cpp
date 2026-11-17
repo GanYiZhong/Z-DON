@@ -17,6 +17,7 @@
 #include "../libs/test_mode.h"
 #include "../libs/zdon_record.h"
 #include "../objects/game/zdon_ai.h"
+#include "../objects/game/zdon_lane3d.h"
 #include "../objects/global/zdon_hud.h"
 #include "../platform/vblank_pacing.h"
 
@@ -24,6 +25,8 @@ void GameScreen::on_screen_start() {
     Screen::on_screen_start();
     reset_playback();
     pause_menu.init_textures();
+    zdon_lane3d::reset();
+    zdon_lane3d::show_hint_once();
     start_delay = 1000.0f;
     JudgePos::X = tex.get_skin_config(SC::GAME_JUDGE_POS)->x;
     JudgePos::Y = tex.get_skin_config(SC::GAME_JUDGE_POS)->y;
@@ -85,6 +88,7 @@ void GameScreen::on_screen_start() {
 }
 
 Screens GameScreen::on_screen_end(Screens next_screen) {
+    zdon_lane3d::release();                     // Z-DON: the 3D view's targets go with the screen
     global_data.zdon_ai.don_draw_now = nullptr; // it points at this screen's player
     global_data.zdon_ai.ai_draw_now = nullptr;
     unload_song();
@@ -1026,6 +1030,7 @@ std::optional<Screens> GameScreen::update() {
         return update_pause_menu(select_screen()); // Z-DON: the song, its video and the notes wait
     }
     clock.update(current_ms);
+    zdon_lane3d::update_mouse();
 
     transition->update(current_ms);
     if (!pause_menu.active()) {
@@ -1061,6 +1066,12 @@ std::optional<Screens> GameScreen::update() {
 }
 
 void GameScreen::draw_overlay(bool with_song_info) {
+    draw_overlay_hud(with_song_info);
+    draw_overlay_flat();
+}
+
+// the overlay's part that sits on the screen like the lanes (the 3D view's front layer)
+void GameScreen::draw_overlay_hud(bool with_song_info) {
     if (with_song_info) {
         song_info.draw();
     }
@@ -1076,8 +1087,15 @@ void GameScreen::draw_overlay(bool with_song_info) {
         t.draw({.x = x + 12 * s, .y = y + 4 * s});
     }
     zdon_draw_ghost();
+    if (!pause_menu.active()) {
+        zdon_draw_hit_error_bar();
+    }
     zhud::draw_toast();
     draw_skip();
+}
+
+// what stays flat over the 3D view: transitions and the pause menu
+void GameScreen::draw_overlay_flat() {
     bool over_transition = false;
     if (!transition->is_finished()) {
         transition->draw();
@@ -1116,7 +1134,7 @@ void GameScreen::zdon_ghost_update() {
             g.rec.clear(); // restarted
             g.last = -1;
         }
-        const int score = player->get_result_score().score;
+        const int score = player->get_score(); // Z-DON: not get_result_score (copies every hit offset)
         if (score != g.last) {
             g.last = score;
             g.rec.emplace_back(static_cast<float>(t), score);
@@ -1132,9 +1150,9 @@ static std::string zdon_signed_thousands(int v) {
     return (v > 0 ? "+" : v < 0 ? "-" : "±") + d;
 }
 
-// "PB +1,230" at the right end of each lane (a skin's "zdon_ghost": {x, y} = the 1P chip's top left)
 void GameScreen::zdon_draw_ghost() const {
     const double t = clock.position();
+    const auto cfg = tex.skin_config_by_name.find("zdon_ghost");
     for (size_t i = 0; i < players.size(); ++i) {
         const auto& player = players[i];
         if (!player) {
@@ -1146,7 +1164,7 @@ void GameScreen::zdon_draw_ghost() const {
         }
         auto it = std::ranges::upper_bound(g.best, static_cast<float>(t), {}, &std::pair<float, int>::first);
         const int best = it == g.best.begin() ? 0 : std::prev(it)->second;
-        const int diff = player->get_result_score().score - best;
+        const int diff = player->get_score() - best;
         const Color c = diff > 0 ? Color{120, 236, 140, 255} : diff < 0 ? Color{255, 120, 110, 255} : Color::WHITE;
         OutlinedText& txt = zhud::label(zhud::text("ghost_diff", zdon_signed_thousands(diff)), 24, c);
         const float s = tex.screen_scale;
@@ -1156,7 +1174,7 @@ void GameScreen::zdon_draw_ghost() const {
         // under the lane (169 px tall at 720p in both arcade skins); 2P play: 1P's over its lane, 2P's lane stays clear
         float x = tex.screen_width - w - 12 * s;
         float y = players.size() == 2 && i == 0 ? lane_y - h - 6 * s : lane_y + 174 * s;
-        if (auto cfg = tex.skin_config_by_name.find("zdon_ghost"); cfg != tex.skin_config_by_name.end()) {
+        if (cfg != tex.skin_config_by_name.end()) {
             x = cfg->second.x;
             y = cfg->second.y + (lane_y - 184 * s);
         }
@@ -1172,8 +1190,10 @@ void GameScreen::draw_players() {
         players[0]->draw(lane_position(0), 0, 184 * tex.screen_scale);
         players[1]->draw(lane_position(1), 0, tex.get_skin_config(SC::GAME_P2_Y)->y);
         // the shared kusudama covers both lanes, so it goes over the 2P lane too
-        for (const auto& player : players) {
-            player->draw_shared_kusudama();
+        if (zdon_lane3d::draws(zdon_lane3d::Layer::EFFECTS)) {
+            for (const auto& player : players) {
+                player->draw_shared_kusudama();
+            }
         }
     } else {
         float gap = (tex.screen_height - (players.size() * 176 * tex.screen_scale)) / (players.size() + 1);
@@ -1184,7 +1204,7 @@ void GameScreen::draw_players() {
     }
 }
 
-void GameScreen::draw() {
+void GameScreen::draw_back() {
     if (movie) {
         movie->draw();
     } else if (has_movie()) {
@@ -1194,6 +1214,35 @@ void GameScreen::draw() {
     } else {
         clear_background(Color::BLACK);
     }
+}
+
+void GameScreen::draw() {
+    zdon_set_lane3d_pivot();
+    if (zdon_lane3d::begin_frame()) { // each layer on its own plane (zdon_lane3d.h)
+        using zdon_lane3d::Layer;
+        clear_background(Color::BLACK); // what a turned background leaves uncovered
+        zdon_lane3d::begin_layer(Layer::BACKGROUND);
+        draw_back();
+        zdon_lane3d::end_layer();
+        for (const Layer layer :
+             {Layer::LANE, Layer::TARGET, Layer::NOTES, Layer::JUDGMENTS, Layer::HUD, Layer::EFFECTS}) {
+            zdon_lane3d::begin_layer(layer);
+            draw_players();
+            zdon_lane3d::end_layer();
+        }
+        if (background.has_value()) {
+            zdon_lane3d::begin_layer(Layer::FOREGROUND);
+            background->draw_fore();
+            zdon_lane3d::end_layer();
+        }
+        zdon_lane3d::begin_layer(Layer::OVERLAY);
+        draw_overlay_hud(true);
+        zdon_lane3d::end_layer();
+        zdon_lane3d::end_frame();
+        draw_overlay_flat();
+        return;
+    }
+    draw_back();
     draw_players();
     if (background.has_value()) {
         background->draw_fore();

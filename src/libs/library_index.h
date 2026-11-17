@@ -31,6 +31,7 @@ public:
         bool is_dir = false;
         bool is_reparse = false; // a link: is_dir describes the link, not its target
         int32_t dir = -1;        // the folder's listing in this index, -1 = not listed by the walk
+        uint64_t ft_write = 0;   // Z-DON: last write as the listing gave it (Windows FILETIME), 0 = unknown
     };
     struct Dir {
         std::vector<Entry> entries; // in listing order

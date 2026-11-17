@@ -13,6 +13,7 @@
 
 #include "file/filesystem.h"
 #include "global_data.h"
+#include "texture_bc7.h"
 #include "texture_pack.h"
 #include "texture_retain.h"
 #include "zdon_os.h" // not <fcntl.h> here: glibc's readahead() would clash with this namespace
@@ -115,12 +116,17 @@ namespace readahead {
                     files.push_back(it->path());
                 }
             }
+            const bool bc7_warm = texture_bc7::file_count() > 0;
             for (const std::string& screen : req.screens) {
                 // A texture pack holds the screen's PNGs in one file: read that instead of the loose
                 // PNGs (a few hundred small reads, parent files the child overrides among them).
                 bool packed = false;
-                if (texture_pack::enabled() && !req.roots.empty() &&
-                    std::ranges::find(req.resident, screen) == req.resident.end()) {
+                // Z-DON: with the BC7 cache read, loads take the cached blocks and leave the pack unread
+                // (texture_pack::Session), so neither the pack nor the PNGs are worth reading ahead
+                if (bc7_warm && std::ranges::find(req.resident, screen) == req.resident.end()) {
+                    packed = true;
+                } else if (texture_pack::enabled() && !req.roots.empty() &&
+                           std::ranges::find(req.resident, screen) == req.resident.end()) {
                     const fs::path pack = texture_pack::pack_path(req.roots.front().filename(), screen);
                     std::error_code ec;
                     const uintmax_t size = fs::file_size(pack, ec);

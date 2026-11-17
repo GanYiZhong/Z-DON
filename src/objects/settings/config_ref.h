@@ -301,6 +301,23 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "midi/notes") {
         return &c->midi.notes;
     }
+    // Z-DON: the 3D view (settings' 3D box)
+    if (path == "general/zdon_lane3d") {
+        return &c->general.zdon_lane3d;
+    }
+    if (path == "general/zdon_remember_difficulty") {
+        return &c->general.zdon_remember_difficulty;
+    }
+    if (path == "general/zdon_hit_error_bar") {
+        return &c->general.zdon_hit_error_bar;
+    }
+    if (path == "general/zdon_lane3d_preset") {
+        return &c->general.zdon_lane3d_preset;
+    }
+    // Z-DON: USIO (settings' USIO box)
+    if (path == "usio/enabled") {
+        return &c->usio.enabled;
+    }
     // audio
     if (path == "audio/device_type") {
         return &c->audio.device_type;

@@ -57,6 +57,11 @@ int take_gamepad_button_pressed();
 // numbers use the same IDs stored in config.toml.
 void submit_gamepad_button_press(int button, float strength = 1.0f);
 
+// Z-DON: a hit on a pad (early_hit.h EARLY_HIT_*) of one player's drum, from any thread
+void submit_drum_hit(PlayerNum player, int pad, float strength = 1.0f);
+// game thread, once a frame while such a device is on: the keys submit_drum_hit sends (from the bindings)
+void refresh_drum_hit_keys();
+
 void start_midi_input(const MidiConfig& config);
 void process_midi_events();
 void shutdown_midi_input();

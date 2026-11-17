@@ -1392,7 +1392,9 @@ std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int ticke
 void NetworkClient::forget_signed(int ticket) {
     done_signed.erase(ticket);
     if (auto it = pending_signed.find(ticket); it != pending_signed.end()) {
-        it->second.wait(); // short (5 s timeout at most); keeps the request's buffers alive until it ends
+        // Z-DON: kept (with the request's buffers) until it ends, polled by update(): waiting here held the
+        // screen change for up to the 5 s timeout
+        forgotten_signed.push_back(std::move(it->second));
         pending_signed.erase(it);
     }
 }
@@ -1458,6 +1460,9 @@ void NetworkClient::update(double current_ms) {
     }
 #endif
 
+    std::erase_if(forgotten_signed, [](cpr::AsyncResponse& r) {
+        return r.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    });
     if (!network_enabled()) {
         online = false;
         probing_ = false;

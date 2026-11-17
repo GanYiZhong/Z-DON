@@ -1,6 +1,7 @@
 #include "loading.h"
 
 #include <future>
+#include <optional>
 #include <unordered_set>
 
 #include "../libs/file/filesystem.h"
@@ -15,6 +16,7 @@
 #include "../libs/parsers/song_parser.h"
 #include "../libs/song_library.h"
 #include "../libs/song_library_loader.h"
+#include "../libs/zdon_os.h"
 #include "../objects/song_select/file_navigator/navigator.h"
 #include "../objects/song_select/song_select_script.h"
 #include "../platform/platform.h"
@@ -132,6 +134,9 @@ void LoadingScreen::load_song_hashes() {
         // one worker parsed all of it); `ranges` below only orders the path bindings
         std::atomic<int> cursor{0};
         auto worker = [&] {
+            // Z-DON: below the main thread (it draws the loading screen); CPU only -- the loading screen
+            // waits for these reads, so not background I/O
+            zdon_os::job_priority_background(true);
             for (int i; (i = cursor.fetch_add(1)) < static_cast<int>(songs.size());) {
                 auto u8 = songs[i].u8string();
                 const std::string path(u8.begin(), u8.end());
@@ -221,16 +226,21 @@ void LoadingScreen::load_song_hashes() {
                 const bool library_file = populate_library && (listing_usable ? (ext == ".tja" || ext == ".osu")
                                                                               : is_library_song_file(songs[i]));
                 try {
+                    // Z-DON: built outside scores_mutex (set_song_meta has its own lock)
+                    std::optional<SongMetadata> library_meta;
+                    if (library_file) {
+                        library_meta.emplace(
+                            SongMetadata{meta.title, meta.subtitle, meta.titles, meta.subtitles, meta.levels});
+                    }
+                    scores_manager.set_song_meta(path, std::move(meta));
                     std::scoped_lock lock(scores_mutex);
                     // a cached file's songs row was written when it was parsed
                     if (!from_cache) {
                         scores_manager.add_song(hashes, title, subtitle);
                     }
                     bindings[i] = hashes;
-                    scores_manager.set_song_meta(path, meta);
-                    if (library_file) {
-                        library_entries.emplace_back(songs[i], SongMetadata{meta.title, meta.subtitle, meta.titles,
-                                                                            meta.subtitles, meta.levels});
+                    if (library_meta) {
+                        library_entries.emplace_back(songs[i], std::move(*library_meta));
                     }
 
                     progress = static_cast<float>(++songs_loaded) / songs.size();
