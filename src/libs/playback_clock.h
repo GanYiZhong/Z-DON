@@ -64,16 +64,28 @@ public:
         // of a ms around the refresh period, and only the notes would carry that jitter. Frames far
         // from a whole number of refreshes (no vsync, a limiter below the refresh rate) keep the
         // measured time; the loop below absorbs any rate error against the audio.
+        //
+        // Z-DON: what the snapping moved is kept as a debt that fades over ~2 s, and a snap that would take it
+        // past a few ms is skipped: snapping only takes jitter out, it never runs the chart at another rate. With a
+        // period that does not match the frames (the web build measures it from the frame steps, and a busy
+        // machine or a screen recorder leaves the median off), every frame would round to it, the chart ran tens
+        // of percent fast or slow, beyond what the loop below corrects, and jumped back to the audio each time it
+        // was 100 ms off (seen in the web build at 180 Hz with OBS recording: a jump every ~0.3 s).
         if (!sync.previous_ms) {
             const double refresh_hz = get_refresh_hz();
             sync.refresh_period_ms = refresh_hz > 0 ? 1000.0 / refresh_hz : 0.0;
         } else if (sync.refresh_period_ms > 0.0) {
             double advance = position_ms - sync.chart_ms;
             double refreshes = std::round(advance / sync.refresh_period_ms);
+            sync.snap_debt_ms -= sync.snap_debt_ms * std::clamp((current_ms - *sync.previous_ms) / 2000.0, 0.0, 1.0);
 
             if (refreshes >= 1.0 &&
                 std::abs(advance - refreshes * sync.refresh_period_ms) < 0.25 * sync.refresh_period_ms) {
-                position_ms = sync.chart_ms + refreshes * sync.refresh_period_ms;
+                double snapped = sync.chart_ms + refreshes * sync.refresh_period_ms;
+                if (std::abs(sync.snap_debt_ms + snapped - position_ms) <= kMaxSnapDebtMs) {
+                    sync.snap_debt_ms += snapped - position_ms;
+                    position_ms = snapped;
+                }
             }
         }
 
@@ -111,9 +123,11 @@ public:
     }
 
 private:
+    static constexpr double kMaxSnapDebtMs = 4.0;
     struct SyncState {
         std::optional<double> previous_ms;
         double chart_ms = 0.0;
+        double snap_debt_ms = 0.0;
         double drift_ema = 0.0;
         double rate_bias = 0.0;
         double refresh_period_ms = 0.0;
