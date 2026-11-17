@@ -76,6 +76,7 @@ int midi_take_learned_note();                       // -1 when none
 void dev_inject_midi_note(int note, int velocity);  // dev hook YATAIDON_FAKE_MIDI
 
 double get_last_input_ms();
+double input_poll_rate_hz(); // Z-DON: the input thread's polls a second (0 before the first two seconds)
 
 // Clear all buffered input events
 // Useful when changing screens or locking input

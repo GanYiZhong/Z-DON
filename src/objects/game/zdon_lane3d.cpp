@@ -127,8 +127,8 @@ namespace zdon_lane3d {
         constexpr float FOVY = 30.0f;
         constexpr double EASE_MS = 70.0; // the mouse's view follows with this time constant
 
-        constexpr std::array<View, 4> PRESETS{View{0.0f, 0.0f, 1.0f}, View{0.0f, 18.0f, 1.0f}, View{0.0f, 26.0f, 1.12f},
-                                              View{-18.0f, 14.0f, 1.15f}};
+        constexpr std::array<View, 4> PRESETS{View{0.0f, 0.0f, 1.0f}, View{0.0f, 14.0f, 1.05f},
+                                              View{0.0f, 22.0f, 1.12f}, View{-12.0f, 12.0f, 1.15f}};
         constexpr std::array<const char*, 4> PRESET_NAMES{"3D: flat", "3D: tilt", "3D: highway", "3D: angle"};
 
         View clamp_view(View v) {

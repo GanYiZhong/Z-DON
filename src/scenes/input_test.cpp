@@ -112,6 +112,13 @@ void InputTestScreen::draw() {
     if (global_data.config && global_data.config->usio.enabled) {
         draw_usio(get_current_ms());
     }
+    // Z-DON: how often the keyboard / controllers are read (the input thread)
+    if (const double hz = input_poll_rate_hz(); hz > 0.0) {
+        const std::string t = std::format("input {:.0f} polls/s ({:.2f} ms)", hz, 1000.0 / hz);
+        draw_text(t.c_str(), static_cast<int>(16 * tex.screen_scale),
+                  static_cast<int>(tex.screen_height - (28 * tex.screen_scale)),
+                  static_cast<int>(16 * tex.screen_scale), Color{230, 230, 230, 255});
+    }
 }
 
 // Z-DON: the USIO test: every drum sensor's reading against the threshold, the cabinet switches and the coin

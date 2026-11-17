@@ -14,6 +14,7 @@
 #include "file/scores.h"
 #include "file/script.h"
 #include "global_data.h"
+#include "input/zdon_usio.h"
 
 namespace {
     bool valid_player(int player_num) {
@@ -341,6 +342,29 @@ void register_zdon_lua_bindings(sol::table& tex) {
 
     // tex.coin_mode() -> [general] zdon_coin_mode (default off): the skin shows the cabinet credit text instead of
     // the free-play text; tex.coin_credits() -> [general] zdon_coin_credits (0..99), a plain counter, no coin input
+    // tex.hit_error_mean(player_num) -> the mean offset in ms of the player's recent hits (+ late, the hit error
+    // bar's) and how many; nothing before the first hit or for an invalid player
+    tex.set_function("hit_error_mean", [](int player_num, sol::this_state s) {
+        sol::variadic_results r;
+        if (!valid_player(player_num)) {
+            return r;
+        }
+        const ZdonLiveData& live = global_data.session_data[static_cast<size_t>(player_num)].zdon_live;
+        const int n = std::min(live.recent_hits_count, static_cast<int>(live.recent_hits.size()));
+        if (n <= 0) {
+            return r;
+        }
+        double sum = 0.0;
+        for (int i = 0; i < n; i++) {
+            sum += live.recent_hits[static_cast<size_t>(i)].first;
+        }
+        r.push_back({s, sol::in_place, sum / n});
+        r.push_back({s, sol::in_place, n});
+        return r;
+    });
+    // tex.usio_active() -> whether a cabinet's USIO board is being read ([usio], libs/input/zdon_usio.h)
+    tex.set_function("usio_active", [] -> bool { return zdon_usio::running(); });
+
     tex.set_function("coin_mode", [] -> bool { return global_data.config->general.zdon_coin_mode; });
     tex.set_function("coin_credits",
                      [] -> int { return std::clamp(global_data.config->general.zdon_coin_credits, 0, 99); });

@@ -1263,6 +1263,12 @@ void shutdown_midi_input() {
 #endif
 }
 
+// Z-DON: the input thread's polls per second over the last two seconds, for the input test screen
+static std::atomic<double> input_poll_hz{0.0};
+double input_poll_rate_hz() {
+    return input_poll_hz.load(std::memory_order_relaxed);
+}
+
 void input_polling_thread() {
     PROFILE_THREAD_NAME("input");
     // Z-DON: std::this_thread::sleep_for(500 us) overshoots to the 15.6 ms scheduler tick on
@@ -1276,10 +1282,20 @@ void input_polling_thread() {
     std::vector<double> intervals;
     auto last = std::chrono::steady_clock::now();
     auto window_start = last;
+    auto rate_start = last;
+    long long rate_polls = 0;
     while (input_thread_running) {
         poll_keyboard_once();
         if (plain_sleep || !zdon_os::precise_sleep_us(500)) {
             std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+        rate_polls++;
+        if (const auto now = std::chrono::steady_clock::now(); now - rate_start >= std::chrono::seconds(2)) {
+            input_poll_hz.store(static_cast<double>(rate_polls) /
+                                    std::chrono::duration<double>(now - rate_start).count(),
+                                std::memory_order_relaxed);
+            rate_polls = 0;
+            rate_start = now;
         }
         if (stats) {
             const auto now = std::chrono::steady_clock::now();
