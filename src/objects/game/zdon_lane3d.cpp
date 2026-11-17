@@ -301,6 +301,14 @@ namespace zdon_lane3d {
 
     bool begin_frame() {
         if (!enabled()) {
+            if (targets[0].id != 0) { // turned off mid-song: the memory back now
+                release_targets();
+            }
+            return false;
+        }
+        // a failed allocation (out of video memory): wait a second before trying again, flat meanwhile
+        static double failed_at_ms = -1e18;
+        if (get_current_ms() - failed_at_ms < 1000.0) {
             return false;
         }
         frame_view = current();
@@ -320,6 +328,7 @@ namespace zdon_lane3d {
         for (RenderTarget& t : targets) {
             if (!ensure_target(t, w, h)) {
                 release_targets();
+                failed_at_ms = get_current_ms();
                 return false;
             }
         }
