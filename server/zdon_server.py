@@ -63,6 +63,9 @@ DEFAULT_CONFIG = {
     "medals": {"per_play": 1, "daily_bonus": 3, "max": 9999},
     # [[shop]] type = 2 dress / 3 head / 4 body / 5 puchichara / 6 title, id, cost, name (titles)
     "shop": [],
+    # how many goods the shop shows at once (0 = all of them). The skins lay out 17 tiles, so a bigger lineup
+    # rotates: each day (server local date) the same random pick of shop_slots goods for everyone
+    "shop_slots": 0,
     "max_body_mb": 32,
     # skins put in the install zip (not in updates), e.g. "build/skins_standalone" from
     # tools/zdon_bundle_simplestyle.sh: every folder in it goes to Skins/ (relative to the repository)
@@ -624,12 +627,22 @@ class Api:
     def _owned(self, code: str, typ: int, item: int) -> bool:
         return self.s.one("SELECT 1 FROM owned WHERE access_code=? AND type=? AND id=?", (code, typ, item)) is not None
 
+    def _shop_today(self) -> list:
+        lineup = self.cfg["shop"]
+        slots = as_int(self.cfg.get("shop_slots"), 0)
+        if slots <= 0 or len(lineup) <= slots:
+            return lineup
+        rng = random.Random(f"shop-{dt.date.today().isoformat()}")
+        picked = sorted(rng.sample(range(len(lineup)), slots),
+                        key=lambda i: (as_int(lineup[i].get("type"), 0), as_int(lineup[i].get("id"), 0)))
+        return [lineup[i] for i in picked]
+
     def reward_shop(self, p):
         u = self._user(p)
         if u is None:
             return 404, {"detail": "unknown access code"}
         goods = []
-        for g in self.cfg["shop"]:
+        for g in self._shop_today():
             typ, item = as_int(g.get("type"), -1), as_int(g.get("id"), -1)
             entry = {"type": typ, "id": item, "cost": as_int(g.get("cost")),
                      "owned": self._owned(u["access_code"], typ, item)}

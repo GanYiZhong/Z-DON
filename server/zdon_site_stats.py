@@ -119,6 +119,7 @@ class StatsPages:
 
     _tables: Tables | None = None
     _board_cache: tuple[float, list] = (0.0, [])
+    _songs_cache: dict[str, tuple[float, list]] = {}  # /songs?q=, by q
 
     @property
     def tables(self) -> Tables:
@@ -160,6 +161,7 @@ class StatsPages:
     @staticmethod
     def invalidate_board():
         StatsPages._board_cache = (0.0, [])
+        StatsPages._songs_cache = {}
 
     def leaderboard_rows(self) -> list[dict]:
         """Every player with a rated play, best first (kept a minute)."""
@@ -302,13 +304,21 @@ B +0.4、C +0.3、D +0.2、E +0.1、F +0）。不在表上的譜面不計。</li
         if q:
             where = "WHERE g.title LIKE ? OR g.subtitle LIKE ?"
             args = [f"%{q}%", f"%{q}%"]
-        rows = self.s.q(f"""SELECT COALESCE(g.title, s.hash) AS title, COALESCE(g.subtitle, '') AS subtitle,
-                                   COUNT(*) AS plays, COUNT(DISTINCT s.access_code) AS players,
-                                   MAX(s.received_at) AS last, GROUP_CONCAT(DISTINCT s.difficulty) AS diffs,
-                                   MAX(s.hash) AS hash
-                            FROM scores s LEFT JOIN songs g ON g.hash = s.hash {where}
-                            GROUP BY COALESCE(g.title, s.hash), COALESCE(g.subtitle, '')
-                            ORDER BY plays DESC, last DESC LIMIT 300""", args)
+        # the same search within a minute is answered from memory (the query scans every score: LIKE '%q%')
+        hit = StatsPages._songs_cache.get(q)
+        if hit and time.time() - hit[0] < 60:
+            rows = hit[1]
+        else:
+            rows = self.s.q(f"""SELECT COALESCE(g.title, s.hash) AS title, COALESCE(g.subtitle, '') AS subtitle,
+                                       COUNT(*) AS plays, COUNT(DISTINCT s.access_code) AS players,
+                                       MAX(s.received_at) AS last, GROUP_CONCAT(DISTINCT s.difficulty) AS diffs,
+                                       MAX(s.hash) AS hash
+                                FROM scores s LEFT JOIN songs g ON g.hash = s.hash {where}
+                                GROUP BY COALESCE(g.title, s.hash), COALESCE(g.subtitle, '')
+                                ORDER BY plays DESC, last DESC LIMIT 300""", args)
+            if len(StatsPages._songs_cache) >= 64:
+                StatsPages._songs_cache.clear()
+            StatsPages._songs_cache[q] = (time.time(), rows)
         body = [f"""<h1>歌曲</h1><form method="get"><input type="text" name="q" value="{S.esc(q)}" placeholder="搜尋曲名">
 <button class="btn small sec">搜尋</button></form>"""]
         if not rows:
