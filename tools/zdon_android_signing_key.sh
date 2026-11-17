@@ -11,7 +11,6 @@
 # BACK UP THE KEYSTORE AND THE PASSWORD. Lost, no later APK can update the installed one: every player would
 # have to uninstall (losing the app's data) and install again.
 set -euo pipefail
-export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"  # Git Bash: keep "/CN=..." as it is
 
 KEYSTORE="${1:-$HOME/zdon-android-release.p12}"
 REPO="${2:-GanYiZhong/Z-DON}"
