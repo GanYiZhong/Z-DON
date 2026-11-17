@@ -24,9 +24,12 @@ void ResultScreen::on_screen_start() {
     retry_message.reset();
     retrying = false;
     zdon_freeze_exit = 0;
-    if (global_data.config->general.zdon_hist_auto_open && !zdon_record::active()) {
-        zdon_hist_auto = true;
-        zdon_hist_open[1] = zdon_hist_open[2] = true; // only players with offsets draw it
+    for (int pn = 1; pn <= 2; ++pn) {
+        zdon_hist_auto[pn] = global_data.config->general.zdon_hist_auto_open && !zdon_record::active() &&
+                             !global_data.session_data[pn].result_data.hit_offsets.empty();
+        if (zdon_hist_auto[pn]) {
+            zdon_hist_open[pn] = true;
+        }
     }
     density::freeze_release();
     quitting = false;
@@ -188,7 +191,7 @@ void ResultScreen::update_input_and_timeout(double current_ms) {
 
     double reveal_end = reveal_end_ms();
     // Z-DON: no timeout while it is read (opened by hand)
-    const bool hist_open = !zdon_hist_auto && (zdon_hist_open[1] || zdon_hist_open[2]);
+    const bool hist_open = (zdon_hist_open[1] && !zdon_hist_auto[1]) || (zdon_hist_open[2] && !zdon_hist_auto[2]);
     const double idle_from = std::max(reveal_end + kWaitEffectEndMs, zdon_play_all_ms); // Z-DON: play-all restarts it
     if (reveal_end > 0 && !exiting() && !hist_open && current_ms >= idle_from + kAutoNextSceneMs) {
         begin_exit();
@@ -357,7 +360,7 @@ bool ResultScreen::zdon_hist_input() {
         }
         if (is_l_kat_pressed(who) || is_r_kat_pressed(who)) {
             zdon_hist_open[pn] = !zdon_hist_open[pn];
-            zdon_hist_auto = false;
+            zdon_hist_auto[pn] = false;
             audio.play_sound("kat", VolumePreset::HITSOUND);
         }
     }

@@ -59,13 +59,12 @@ struct GeneralConfig {
     bool zdon_remember_difficulty = false; // Z-DON: each song reopens on the difficulty last played on it
     bool zdon_hit_error_bar = false;       // Z-DON: a timing bar under the judge circle with the last hits' offsets
     int zdon_target_score = 0;             // Z-DON: a "target / to go" chip during play (0 = off)
-    bool zdon_new_best_chip = false;
-    bool zdon_ka_mark = false;
-    bool zdon_hist_auto_open = false; // Z-DON: the result screen's hit timing panel starts open // Z-DON: a white cross
-                                      // on ka notes, so they differ by shape too (colour-blind aid) // Z-DON: the
-                                      // result screen shows "New best +N" when a saved play beats it
-    int zdon_lane3d_preset = 0;          // the view each song starts in: 0 flat, 1 tilt, 2 highway, 3 angle
-    bool zdon_lane3d_hint_shown = false; // the controls' hint was shown once
+    bool zdon_new_best_chip = false;       // Z-DON: "New best +N" on the result screen when a saved play beats it
+    bool zdon_ka_mark = false;             // Z-DON: a white cross on ka notes, so they differ by shape too
+    bool zdon_hist_auto_open = false;      // Z-DON: the result screen's hit timing panel starts open
+    bool zdon_practice_metronome = false;  // Z-DON: practice mode ticks on every beat
+    int zdon_lane3d_preset = 0;            // the view each song starts in: 0 flat, 1 tilt, 2 highway, 3 angle
+    bool zdon_lane3d_hint_shown = false;   // the controls' hint was shown once
     bool ignore_account_appearance = true;
 };
 
@@ -110,6 +109,8 @@ struct KeysConfig {
     int borderless_key = 0;
     int pause_key = 0; // Z-DON: opens the pause menu (upstream 5f369cc dropped it; Escape opens its menu)
     int back_key = 0;
+    int uncleared_song_key =
+        0;                   // Z-DON: song select jumps to the next song not cleared on this difficulty (0 = unbound)
     int random_song_key = 0; // Z-DON: song select jumps to a random song of the listing (0 = unbound)
     int restart_key = 0;
     // Menus use a fixed gamepad layout instead of the drum bindings (see input.cpp)

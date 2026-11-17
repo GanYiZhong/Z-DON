@@ -245,6 +245,9 @@ inline ConfigRef get_config_ref(const std::string& path) {
     if (path == "keys/restart_key") {
         return &c->keys.restart_key;
     }
+    if (path == "keys/uncleared_song_key") { // Z-DON
+        return &c->keys.uncleared_song_key;
+    }
     if (path == "keys/random_song_key") { // Z-DON
         return &c->keys.random_song_key;
     }
@@ -310,6 +313,9 @@ inline ConfigRef get_config_ref(const std::string& path) {
     }
     if (path == "general/zdon_remember_difficulty") {
         return &c->general.zdon_remember_difficulty;
+    }
+    if (path == "general/zdon_practice_metronome") {
+        return &c->general.zdon_practice_metronome;
     }
     if (path == "general/zdon_hist_auto_open") {
         return &c->general.zdon_hist_auto_open;

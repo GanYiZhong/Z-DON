@@ -144,6 +144,10 @@ namespace {
             o.AddMember("values", v, b.a);
             options.AddMember("target_score", o, b.a);
         }
+        options.AddMember("practice_metronome",
+                          b.option("general/zdon_practice_metronome", "bool", "practice_metronome",
+                                   "practice_metronome_desc", {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
+                          b.a);
         options.AddMember("hist_auto_open",
                           b.option("general/zdon_hist_auto_open", "bool", "hist_auto_open", "hist_auto_open_desc",
                                    {{"true", "lane3d_on"}, {"false", "lane3d_off"}}),
@@ -154,6 +158,9 @@ namespace {
                           b.a);
         options.AddMember("random_song_key",
                           b.option("keys/random_song_key", "keybind", "random_song_key", "random_song_key_desc"), b.a);
+        options.AddMember(
+            "uncleared_song_key",
+            b.option("keys/uncleared_song_key", "keybind", "uncleared_song_key", "uncleared_song_key_desc"), b.a);
         b.insert("play_aid", "play_aid_box", options);
     }
 

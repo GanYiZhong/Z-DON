@@ -442,6 +442,8 @@ j_ai_wt 未 commit）。SimpleStyle 全量重建會跟著拿到舊版，這次�
   - `[general] zdon_ka_mark`：咔音符上畫白色十字（大咔較大），不靠顏色也能分辨咚咔。
   - Lua：`hit_error_mean`、`usio_active`、`best_accuracy(_p2)`。
   - `[general] zdon_remember_difficulty`：同一次開啟遊戲內，每首歌重開時選回上次玩的難度。
+  - `[general] zdon_practice_metronome`：練習模式每拍一聲輕的咔（照譜面 tempo map，跟著變速；#DELAY 不響；跳轉、A-B 循環時不補響）。
+  - `[keys] uncleared_song_key`（預設不綁定）：選曲時跳到清單中下一首「目前難度還沒通關」的歌（還沒選過難度時以鬼為準）。
   - `[keys] random_song_key`（預設不綁定，「演奏輔助」裡可設定）：選曲時跳到目前清單裡隨機一首歌。
 - **練習**：暫停時 M 鍵跳到最後一個失誤；A-B 循環列出最近幾輪與最佳一輪。
 - **結算**：打擊時間面板多一行「開頭→結尾」四段平均偏差。

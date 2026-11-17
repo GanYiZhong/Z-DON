@@ -353,6 +353,7 @@ Config get_config() {
     config.general.zdon_new_best_chip = config_file["general"]["zdon_new_best_chip"].value_or(false);
     config.general.zdon_ka_mark = config_file["general"]["zdon_ka_mark"].value_or(false);
     config.general.zdon_hist_auto_open = config_file["general"]["zdon_hist_auto_open"].value_or(false);
+    config.general.zdon_practice_metronome = config_file["general"]["zdon_practice_metronome"].value_or(false);
     config.general.zdon_target_score = std::clamp(config_file["general"]["zdon_target_score"].value_or(0), 0, 9999999);
     config.general.zdon_remember_difficulty = config_file["general"]["zdon_remember_difficulty"].value_or(false);
     config.general.zdon_lane3d_preset = std::clamp(config_file["general"]["zdon_lane3d_preset"].value_or(0), 0, 3);
@@ -463,6 +464,14 @@ Config get_config() {
     config.keys.borderless_key = getKeyCodeOrDefault(config_file["keys"]["borderless_key"].value_or("f10"), "f10");
     config.keys.pause_key = getKeyCodeOrDefault(config_file["keys"]["pause_key"].value_or("space"), "space");
     config.keys.back_key = getKeyCodeOrDefault(config_file["keys"]["back_key"].value_or("escape"), "escape");
+    config.keys.uncleared_song_key = 0;
+    if (auto v = config_file["keys"]["uncleared_song_key"].value<std::string>(); v && !v->empty()) {
+        try {
+            config.keys.uncleared_song_key = getKeyCode(*v);
+        } catch (const std::runtime_error& e) {
+            spdlog::warn("[keys] uncleared_song_key: {}", e.what());
+        }
+    }
     config.keys.random_song_key = 0;
     if (auto v = config_file["keys"]["random_song_key"].value<std::string>(); v && !v->empty()) {
         try {
@@ -616,6 +625,7 @@ void save_config(const Config& config) {
                                     {"zdon_new_best_chip", config.general.zdon_new_best_chip},
                                     {"zdon_ka_mark", config.general.zdon_ka_mark},
                                     {"zdon_hist_auto_open", config.general.zdon_hist_auto_open},
+                                    {"zdon_practice_metronome", config.general.zdon_practice_metronome},
                                     {"zdon_target_score", config.general.zdon_target_score},
                                     {"zdon_remember_difficulty", config.general.zdon_remember_difficulty},
                                     {"zdon_lane3d_hint_shown", config.general.zdon_lane3d_hint_shown},
@@ -670,16 +680,20 @@ void save_config(const Config& config) {
                                              {"skin", instance_skin()}});
 
     // Keys
-    config_table.insert("keys", toml::table{{"exit_key", getKeyStringSafe(config.keys.exit_key)},
-                                            {"fullscreen_key", getKeyStringSafe(config.keys.fullscreen_key)},
-                                            {"borderless_key", getKeyStringSafe(config.keys.borderless_key)},
-                                            {"pause_key", getKeyStringSafe(config.keys.pause_key)},
-                                            {"back_key", getKeyStringSafe(config.keys.back_key)},
-                                            {"random_song_key", config.keys.random_song_key != 0
-                                                                    ? getKeyStringSafe(config.keys.random_song_key)
-                                                                    : std::string()},
-                                            {"restart_key", getKeyStringSafe(config.keys.restart_key)},
-                                            {"gamepad_menu_layout", config.keys.gamepad_menu_layout}});
+    config_table.insert(
+        "keys",
+        toml::table{{"exit_key", getKeyStringSafe(config.keys.exit_key)},
+                    {"fullscreen_key", getKeyStringSafe(config.keys.fullscreen_key)},
+                    {"borderless_key", getKeyStringSafe(config.keys.borderless_key)},
+                    {"pause_key", getKeyStringSafe(config.keys.pause_key)},
+                    {"back_key", getKeyStringSafe(config.keys.back_key)},
+                    {"uncleared_song_key", config.keys.uncleared_song_key != 0
+                                               ? getKeyStringSafe(config.keys.uncleared_song_key)
+                                               : std::string()},
+                    {"random_song_key",
+                     config.keys.random_song_key != 0 ? getKeyStringSafe(config.keys.random_song_key) : std::string()},
+                    {"restart_key", getKeyStringSafe(config.keys.restart_key)},
+                    {"gamepad_menu_layout", config.keys.gamepad_menu_layout}});
 
     // Keys 1P / 2P
     config_table.insert("keys_1p", toml::table{{"left_kat", key_names_array(config.keys_1p.left_kat)},

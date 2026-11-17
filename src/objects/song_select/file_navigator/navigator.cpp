@@ -3140,6 +3140,27 @@ void Navigator::set_positions(bool init, float duration) {
     }
 }
 
+bool Navigator::next_uncleared_in_listing(int difficulty) {
+    if (items.empty() || inline_streaming || is_processing || difficulty < static_cast<int>(Difficulty::EASY) ||
+        difficulty > static_cast<int>(Difficulty::URA)) {
+        return false;
+    }
+    const int n = static_cast<int>(items.size());
+    for (int step = 1; step < n; step++) {
+        const auto* song = dynamic_cast<const SongBox*>(items[static_cast<size_t>((open_index + step) % n)].get());
+        if (song == nullptr) {
+            continue;
+        }
+        const auto info = song->course_info(difficulty);
+        if (!info.has_course || info.crown != static_cast<int>(Crown::NONE)) {
+            continue;
+        }
+        navigate(step, true);
+        return true;
+    }
+    return false;
+}
+
 bool Navigator::random_song_in_listing() {
     if (items.empty() || inline_streaming || is_processing) {
         return false;

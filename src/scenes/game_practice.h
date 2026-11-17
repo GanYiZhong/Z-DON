@@ -279,6 +279,11 @@ private:
     bool zdon_practice_keys(); // true: the keys of this frame are used up
     void zdon_update_fade(double current_ms);
     double zdon_bpm_at(double hit_ms) const;
+    // Z-DON metronome ([general] zdon_practice_metronome): ticks when the tempo map's beat number changes
+    void zdon_metronome_update();
+    double metronome_last_beat = 0.0;
+    double metronome_last_ms = 0.0;
+    bool metronome_primed = false;
     void zdon_draw_info() const;
     void zdon_draw_bar_input() const;
     void zdon_draw_offset(const Note& note, float x) const;

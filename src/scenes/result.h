@@ -55,7 +55,7 @@ protected:
     void draw_overlay();
     void draw_unsaved_note() const; // Z-DON
     bool zdon_hist_open[3] = {};
-    bool zdon_hist_auto = false; // Z-DON: opened by zdon_hist_auto_open, not touched: the screen still times out    //
+    bool zdon_hist_auto[3] = {}; // Z-DON: opened by zdon_hist_auto_open, not touched: the screen still times out    //
                                  // Z-DON: the hit timing panel, by player
     double zdon_play_all_ms = 0; // Z-DON AI battle: when the play-all summary came up (0 = not yet)
     bool zdon_play_all_pending() const;

@@ -404,6 +404,17 @@ void SongSelectScreen::handle_input(double current_ms) {
         }
         return;
     }
+    // Z-DON: [keys] uncleared_song_key (unbound by default): the next song not cleared on the chosen difficulty
+    // (none chosen yet: oni)
+    if (state == SongSelectState::BROWSING && global_data.config->keys.uncleared_song_key != 0 &&
+        !game_transition.has_value() && check_key_pressed(global_data.config->keys.uncleared_song_key)) {
+        const int diff = player->selected_difficulty >= Difficulty::EASY ? static_cast<int>(player->selected_difficulty)
+                                                                         : static_cast<int>(Difficulty::ONI);
+        if (navigator.next_uncleared_in_listing(diff)) {
+            audio.play_sound("kat", VolumePreset::HITSOUND);
+        }
+        return;
+    }
     if (state == SongSelectState::BROWSING) {
         handle_input_browsing(current_ms);
     } else if (state == SongSelectState::SONG_SELECTED) {

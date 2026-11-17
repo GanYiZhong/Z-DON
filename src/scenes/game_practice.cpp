@@ -1028,6 +1028,12 @@ std::optional<Screens> PracticeGameScreen::update() {
     zdon_loop_update();
     sync_branch_display();
     zdon_update_fade(current_ms);
+    if (global_data.config->general.zdon_practice_metronome && !clock.is_paused() && !menu.open &&
+        phase == Phase::PRACTICE && !bars.empty()) {
+        zdon_metronome_update();
+    } else {
+        metronome_primed = false; // paused or off: no tick for the time it skipped
+    }
     if (practice_player) {
         const auto& loop = global_data.zdon_loop;
         if (loop.active && loop.a_bar >= 0 && loop.a_bar < static_cast<int>(bars.size()) &&
@@ -1657,6 +1663,19 @@ void PracticeGameScreen::zdon_update_fade(double current_ms) {
     if (t >= 1.0) {
         zdon_fade_start = -1.0;
     }
+}
+
+void PracticeGameScreen::zdon_metronome_update() {
+    // chart time, as the info strip's; the tempo map counts beats in it (a #DELAY holds the beat)
+    const double now = clock.position() + bars[0].hit_ms - start_delay;
+    const double beat = std::floor(base_chart.tempo_map.beat_at(now));
+    const bool jumped = !metronome_primed || std::abs(now - metronome_last_ms) > 250.0; // a seek or the A-B loop
+    if (!jumped && beat > metronome_last_beat) {
+        audio.play_sound("kat", VolumePreset::SOUND, 0.35f);
+    }
+    metronome_last_beat = beat;
+    metronome_last_ms = now;
+    metronome_primed = true;
 }
 
 double PracticeGameScreen::zdon_bpm_at(double hit_ms) const {

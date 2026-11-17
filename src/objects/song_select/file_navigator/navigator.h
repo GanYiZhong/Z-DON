@@ -176,6 +176,8 @@ private:
 
 public:
     bool random_song_in_listing(); // Z-DON: the cursor to a random song of the current listing
+    // Z-DON: the cursor forward (wrapping) to the next song that has `difficulty` and no crown on it
+    bool next_uncleared_in_listing(int difficulty);
     Navigator();
     ~Navigator();
 

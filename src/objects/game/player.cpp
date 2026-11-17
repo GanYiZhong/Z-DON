@@ -2623,7 +2623,7 @@ void Player::draw_notes(double current_ms, float y) {
                 draw_kusudama_stars(current_ms, pos->first, pos->second + notes_y + t_notes_9->height / 2.0f);
             }
             if (ka_mark && (note.type == NoteType::KAT || note.type == NoteType::KAT_L)) {
-                // Z-DON [general] zdon_ka_mark: a white cross at the note's centre (big ka: larger)
+                // Z-DON [general] zdon_ka_mark: a white cross at the note's centre, sized by its sprite
                 const TextureObject* o = note_tex_ids[static_cast<int>(note.type)];
                 float w = t_notes_9->width;
                 float ncx = pos->first;
