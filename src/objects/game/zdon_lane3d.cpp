@@ -200,6 +200,10 @@ namespace zdon_lane3d {
         return global_data.config && global_data.config->general.zdon_lane3d;
     }
 
+    bool layered() {
+        return in_frame;
+    }
+
     void reset() {
         user = user_target = {};
         last_ease_ms = get_current_ms() - 16.0; // the starting view eases in, not snaps
@@ -528,7 +532,7 @@ namespace zdon_lane3d {
                 }
             }
             // the background grows as the view turns, so it still fills the frame
-            const float grow = i == 0 ? 0.38f * turned : 0.0f;
+            const float grow = i == 0 ? 0.7f * turned : 0.0f;
             const float lit = (255.0f - ((255.0f - static_cast<float>(LIGHT[i])) * turned)) * shade_of(i);
             const auto l = static_cast<unsigned char>(std::clamp(lit, 0.0f, 255.0f));
             if (!quad(i, 0.0f, 0.0f, 0.0f, grow, Color{l, l, l, 255})) {

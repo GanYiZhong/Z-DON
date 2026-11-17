@@ -2873,7 +2873,8 @@ void Player::draw_overlays(float y) {
     if (show_lane_badges && !ai_lane) {
         draw_modifiers(y);
     }
-    if (judge_counter.has_value()) {
+    // practice's counter sits by its flat panel: in the 3D view the screen draws it flat after the layers
+    if (judge_counter.has_value() && !(practice_lyric && zdon_lane3d::layered())) {
         judge_counter->draw();
     }
 

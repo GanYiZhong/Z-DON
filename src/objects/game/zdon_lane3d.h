@@ -32,6 +32,7 @@ namespace zdon_lane3d {
     };
 
     bool enabled();
+    bool layered();        // between a begin_frame that returned true and its end_frame
     void reset();          // a new song: the starting view, mouse and script offsets cleared
     void release();        // the play screen ends: the targets' memory back
     void show_hint_once(); // the controls, the first time the view is used

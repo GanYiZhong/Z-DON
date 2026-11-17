@@ -530,7 +530,10 @@ namespace zhud {
                 cache_old.erase(old);
                 return *it->second;
             }
-            if (cache.size() > 512) {
+            // at most one flip a frame: a second would free labels handed out earlier in it
+            static double last_flip_ms = -1.0;
+            if (const double now = get_current_ms(); cache.size() > 512 && now != last_flip_ms) {
+                last_flip_ms = now;
                 cache_old = std::move(cache);
                 cache.clear();
             }

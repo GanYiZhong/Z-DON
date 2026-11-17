@@ -1291,6 +1291,9 @@ void PracticeGameScreen::draw() {
             zdon_lane3d::end_layer();
         }
         zdon_lane3d::end_frame();
+        if (players[0]->judge_counter.has_value()) {
+            players[0]->judge_counter->draw(); // flat, by the practice panel (Player::draw_overlays skips it)
+        }
     } else {
         if (movie) {
             movie->draw();
