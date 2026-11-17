@@ -79,6 +79,11 @@ namespace zhud {
                   {"en", "Early {0}   Late {1}"},
                   {"zh", "早 {0}　晚 {1}"},
                   {"ko", "빠름 {0}　느림 {1}"}}},
+                {"hist_trend",
+                 {{"ja", "前半→後半（ms）：{0}"},
+                  {"en", "Start → end (ms): {0}"},
+                  {"zh", "開頭→結尾（ms）：{0}"},
+                  {"ko", "처음→끝 (ms): {0}"}}},
                 {"hist_hint",
                  {{"ja", "カッ：判定分布"},
                   {"en", "Kat: hit timing"},
@@ -477,7 +482,10 @@ namespace zhud {
             return s;
         }
 
+        // two generations: when the newer fills up it becomes the older one and the oldest goes, so a label handed
+        // out earlier this frame (and kept until it is drawn) is never the one freed
         std::unordered_map<std::string, std::unique_ptr<OutlinedText>> cache;
+        std::unordered_map<std::string, std::unique_ptr<OutlinedText>> cache_old;
         std::string toast_text;
         double toast_at = -1e9;
 
@@ -517,7 +525,13 @@ namespace zhud {
                                 std::to_string(color.g) + ',' + std::to_string(color.b);
         auto it = cache.find(key);
         if (it == cache.end()) {
+            if (auto old = cache_old.find(key); old != cache_old.end()) { // still in use: back to the newer one
+                it = cache.emplace(key, std::move(old->second)).first;
+                cache_old.erase(old);
+                return *it->second;
+            }
             if (cache.size() > 512) {
+                cache_old = std::move(cache);
                 cache.clear();
             }
             const int px = std::max(1, static_cast<int>(size * tex.screen_scale));

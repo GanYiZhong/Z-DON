@@ -506,6 +506,15 @@ Config get_config() {
     config.usio.threshold = std::clamp(config_file["usio"]["threshold"].value_or(2000), 1, 65535);
     config.usio.holdoff_ms = std::clamp(config_file["usio"]["holdoff_ms"].value_or(25), 0, 500);
     config.usio.poll_us = std::clamp(config_file["usio"]["poll_us"].value_or(1000), 0, 20000);
+    config.usio.thresholds = parseIntArrayOrDefault(config_file["usio"].as_table(), "thresholds", {});
+    if (!config.usio.thresholds.empty() && config.usio.thresholds.size() != 8) {
+        spdlog::warn("[usio] thresholds needs 8 values (P1 left kat, left don, right don, right kat, then P2); "
+                     "using threshold for every sensor");
+        config.usio.thresholds.clear();
+    }
+    for (int& t : config.usio.thresholds) {
+        t = std::clamp(t, 1, 65535);
+    }
 
     // Parse audio
     config.audio.device_type = config_file["audio"]["device_type"].value_or(0);
@@ -676,11 +685,15 @@ void save_config(const Config& config) {
                                             {"channel", config.midi.channel},
                                             {"notes", int_array(config.midi.notes)},
                                             {"buttons", int_array(config.midi.buttons)}});
-    config_table.insert("usio", toml::table{{"enabled", config.usio.enabled},
-                                            {"dll", config.usio.dll},
-                                            {"threshold", config.usio.threshold},
-                                            {"holdoff_ms", config.usio.holdoff_ms},
-                                            {"poll_us", config.usio.poll_us}});
+    toml::table usio_table{{"enabled", config.usio.enabled},
+                           {"dll", config.usio.dll},
+                           {"threshold", config.usio.threshold},
+                           {"holdoff_ms", config.usio.holdoff_ms},
+                           {"poll_us", config.usio.poll_us}};
+    if (!config.usio.thresholds.empty()) { // only when set: unset, every sensor follows `threshold`
+        usio_table.insert("thresholds", int_array(config.usio.thresholds));
+    }
+    config_table.insert("usio", std::move(usio_table));
 
     // Audio
     config_table.insert("audio", toml::table{{"device_type", config.audio.device_type},

@@ -12,10 +12,11 @@
 namespace zdon_usio {
 
     struct Settings {
-        std::string dll;      // absolute, or relative to the game folder
-        int threshold = 2000; // a sensor at or above this is a hit
-        int holdoff_ms = 25;  // after a hit, that side of that drum is ignored this long
-        int poll_us = 1000;   // time between reads: under 1000 spins a core; 0 = read again at once
+        std::string dll; // absolute, or relative to the game folder
+        // a sensor at or above its threshold is a hit: P1 left kat, left don, right don, right kat, then P2
+        std::array<int, 8> threshold{2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000};
+        int holdoff_ms = 25; // after a hit, that side of that drum is ignored this long
+        int poll_us = 1000;  // time between reads: under 1000 spins a core; 0 = read again at once
     };
 
     struct Sinks {
@@ -42,7 +43,7 @@ namespace zdon_usio {
         bool connected = false;
         std::string board;
         uint64_t firmware = 0;
-        int threshold = 0;
+        std::array<int, 8> threshold{};
         std::array<uint16_t, 8> value{};     // the latest reading
         std::array<uint16_t, 8> max_since{}; // the loudest since the previous snapshot() (none is missed)
         std::array<int, 8> hits{};           // hits counted per sensor that won its side

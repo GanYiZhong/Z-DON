@@ -104,6 +104,7 @@ namespace zdon_usio {
         // for holdoff_ms (a piezo rings on after the stick leaves it) and must fall back below the threshold
         // before it counts again. A don hit also shakes the rim sensor, which the stronger-sensor pick absorbs.
         void loop(HMODULE lib, Settings s, Sinks sinks) {
+            const std::array<int, 8> th_all = s.threshold;
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             auto open = proc<OpenFn>(lib, "bnusio_Open");
             auto close = proc<CloseFn>(lib, "bnusio_Close");
@@ -141,7 +142,7 @@ namespace zdon_usio {
                     state.board = name ? name : "";
                 }
                 state.firmware = firmware ? static_cast<uint64_t>(firmware()) : 0;
-                state.threshold = s.threshold;
+                state.threshold = th_all;
                 state.has_switches = sw_in != nullptr;
             }
             spdlog::info("USIO: switches {}, coin counter {}, service counter {}", sw_in ? "yes" : "no",
@@ -171,7 +172,7 @@ namespace zdon_usio {
             auto connected_checked = started;
             bool connected_now = is_connected ? is_connected() != 0 : true;
             const auto holdoff = std::chrono::milliseconds(s.holdoff_ms);
-            const int threshold = s.threshold;
+            const std::array<int, 8> th = s.threshold;
 
             while (run.load(std::memory_order_acquire)) {
                 if (communication) {
@@ -191,8 +192,11 @@ namespace zdon_usio {
                         const int don_ch = (p * 4) + (side == 0 ? 1 : 2);
                         const int kat = v[kat_ch];
                         const int don = v[don_ch];
-                        const int top = std::max(kat, don);
-                        if (top < threshold) {
+                        const int kat_th = th[static_cast<size_t>(kat_ch)];
+                        const int don_th = th[static_cast<size_t>(don_ch)];
+                        const bool kat_over = kat >= kat_th;
+                        const bool don_over = don >= don_th;
+                        if (!kat_over && !don_over) {
                             armed[p][side] = true;
                             continue;
                         }
@@ -201,7 +205,10 @@ namespace zdon_usio {
                         }
                         armed[p][side] = false;
                         rest_until[p][side] = now + holdoff;
-                        const bool is_don = don >= kat;
+                        // both over: the one further over its own threshold (equal thresholds: the louder)
+                        const bool is_don = don_over && (!kat_over || static_cast<int64_t>(don) * kat_th >=
+                                                                          static_cast<int64_t>(kat) * don_th);
+                        const int top = is_don ? don : kat;
                         const int won_ch = is_don ? don_ch : kat_ch;
                         hits[won_ch]++;
                         last_hit[won_ch] = static_cast<uint16_t>(top);
@@ -338,7 +345,11 @@ namespace zdon_usio {
             library = nullptr;
             return;
         }
-        spdlog::info("USIO: using '{}' (threshold {}, hold-off {} ms, poll {} us)", path.string(), settings.threshold,
+        std::string th_text;
+        for (int t : settings.threshold) {
+            th_text += (th_text.empty() ? "" : " ") + std::to_string(t);
+        }
+        spdlog::info("USIO: using '{}' (thresholds {}, hold-off {} ms, poll {} us)", path.string(), th_text,
                      settings.holdoff_ms, settings.poll_us);
         run.store(true, std::memory_order_release);
         worker = std::thread(loop, library, settings, std::move(sinks));

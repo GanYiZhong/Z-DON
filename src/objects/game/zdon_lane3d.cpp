@@ -65,7 +65,7 @@ namespace zdon_lane3d {
         // the notes are coins: their face on the notes' plane, their body reaching back towards the lane, drawn as
         // slices of the notes' layer, darker towards the back
         constexpr int NOTE_SLICES = 12;
-        constexpr float NOTE_DEPTH = 0.8f;        // of the gap between the lane and the notes
+        constexpr float NOTE_DEPTH = 1.0f;        // of the gap between the lane and the notes
         constexpr float NOTE_SIDE_FRONT = 175.0f; // without the silhouette shader: the slices darkened
         constexpr float NOTE_SIDE_BACK = 105.0f;
         // with it: a solid side, lighter just behind the face (a rim) and darker towards the back
@@ -74,7 +74,7 @@ namespace zdon_lane3d {
         constexpr Color NOTE_SIDE_FAR{52, 30, 28, 255};
         // the lane is a board: a side wall behind it, its thickness a share of the gap behind the lane
         constexpr int LANE_SLICES = 6;
-        constexpr float LANE_THICK = 0.09f;
+        constexpr float LANE_THICK = 0.14f;
         constexpr Color LANE_EDGE{128, 84, 62, 255};
         constexpr Color LANE_SIDE_NEAR{120, 70, 56, 255};
         constexpr Color LANE_SIDE_FAR{70, 40, 36, 255};

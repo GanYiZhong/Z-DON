@@ -374,7 +374,25 @@ void ResultScreen::zdon_draw_hist() const {
             zhud::label(zhud::text("hist_stats", fmt1(mean), fmt1(sd_ms).substr(fmt1(sd_ms)[0] == '+' ? 1 : 0)), 20);
         OutlinedText& counts = zhud::label(zhud::text("hist_counts", std::to_string(early), std::to_string(late)), 20,
                                            Color{200, 206, 220, 255});
-        const float h = 14 * s + title.height + 6 * s + graph_h + 26 * s + stats.height + 4 * s + 12 * s;
+        // Z-DON: how the timing moved through the song: the mean of each quarter of the hits, in order
+        std::string trend_values;
+        if (off.size() >= 8) {
+            for (size_t q = 0; q < 4; q++) {
+                const size_t from = off.size() * q / 4;
+                const size_t to = off.size() * (q + 1) / 4;
+                double qsum = 0.0;
+                for (size_t k = from; k < to; k++) {
+                    qsum += off[k];
+                }
+                trend_values +=
+                    (q == 0 ? "" : " → ") + fmt1(qsum / static_cast<double>(std::max<size_t>(1, to - from)));
+            }
+        }
+        OutlinedText* trend = trend_values.empty()
+                                  ? nullptr
+                                  : &zhud::label(zhud::text("hist_trend", trend_values), 18, Color{200, 206, 220, 255});
+        const float h = 14 * s + title.height + 6 * s + graph_h + 26 * s + stats.height + 4 * s + 12 * s +
+                        (trend ? trend->height + 4 * s : 0.0f);
         const float cx = two ? tex.screen_width * (pn == 1 ? 0.25f : 0.75f) : tex.screen_width / 2.0f;
         float x = cx - w / 2;
         float y = (tex.screen_height - h) / 2;
@@ -420,6 +438,9 @@ void ResultScreen::zdon_draw_hist() const {
             tk.draw({.x = tx, .y = gy + graph_h + 4 * s});
         }
         stats.draw({.x = x + (w - stats.width) / 2, .y = gy + graph_h + 26 * s});
+        if (trend) {
+            trend->draw({.x = x + (w - trend->width) / 2, .y = gy + graph_h + 26 * s + stats.height + 4 * s});
+        }
     }
     if (hint) {
         OutlinedText& t = zhud::label(zhud::text("hist_hint"), 18, Color{200, 206, 220, 255});

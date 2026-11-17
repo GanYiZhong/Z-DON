@@ -881,33 +881,39 @@ void Player::draw(double ms_from_start, float x, float y) {
 
 void Player::draw_practice(double ms_from_start, float x, float y, bool draw_notes_on) {
     practice_lyric = true;
-    tex.draw_texture(t_lane_background, {.y = y});
-    if (player_num == PlayerNum::AI || ai_lane) {
-        tex.draw_texture(t_ai_lane_background, {.y = y});
+    using zdon_lane3d::draws; // Z-DON: the 3D view draws this in layers, as Player::draw
+    using zdon_lane3d::Layer;
+    if (draws(Layer::LANE)) {
+        tex.draw_texture(t_lane_background, {.y = y});
+        if (player_num == PlayerNum::AI || ai_lane) {
+            tex.draw_texture(t_ai_lane_background, {.y = y});
+        }
+        if (branch_indicator.has_value()) {
+            branch_indicator->draw(y);
+        }
     }
-    if (branch_indicator.has_value()) {
-        branch_indicator->draw(y);
-    }
-    if (lane_hit_effect.has_value()) {
-        lane_hit_effect->draw(y);
-    }
-    tex.draw_texture(t_lane_hit_circle, {.x = judge_x, .y = y + judge_y});
+    if (draws(Layer::TARGET)) {
+        if (lane_hit_effect.has_value()) {
+            lane_hit_effect->draw(y);
+        }
+        tex.draw_texture(t_lane_hit_circle, {.x = judge_x, .y = y + judge_y});
 
-    if (gogo_time.has_value()) {
-        gogo_time->draw(judge_x, y + judge_y);
-    }
-    if (fireworks.has_value()) {
-        fireworks->draw();
-    }
-    draw_lane_cover(y);
+        if (gogo_time.has_value()) {
+            gogo_time->draw(judge_x, y + judge_y);
+        }
+        if (fireworks.has_value()) {
+            fireworks->draw();
+        }
+        draw_lane_cover(y);
 
-    if (!hide_judgment) {
-        for (Judgment& anim : draw_judge_list) {
-            anim.draw_effect(judge_x, y + judge_y);
+        if (!hide_judgment) {
+            for (Judgment& anim : draw_judge_list) {
+                anim.draw_effect(judge_x, y + judge_y);
+            }
         }
     }
 
-    if (draw_notes_on) {
+    if (draw_notes_on && (draws(Layer::TARGET) || draws(Layer::NOTES))) {
         int scissor_x = virtual_to_screen_x(lane_cover_tex_id->scissor_right());
         int win_w = get_render_width();
         begin_scissor_mode(scissor_x, 0, win_w - scissor_x, get_render_height());
@@ -915,7 +921,7 @@ void Player::draw_practice(double ms_from_start, float x, float y, bool draw_not
         end_scissor_mode();
     }
 
-    if (!hide_judgment) {
+    if (!hide_judgment && draws(Layer::JUDGMENTS)) {
         for (Judgment& anim : draw_judge_list) {
             anim.draw_outer_effect(judge_x, y + judge_y);
             anim.draw_ray_effect(judge_x, y + judge_y);
@@ -923,7 +929,9 @@ void Player::draw_practice(double ms_from_start, float x, float y, bool draw_not
         }
     }
 
-    draw_overlays(y);
+    if (draws(Layer::HUD) || draws(Layer::EFFECTS)) {
+        draw_overlays(y);
+    }
 }
 
 void Player::get_load_time(Note& note) {

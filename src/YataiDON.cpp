@@ -1555,7 +1555,12 @@ static int game_main(int argc, char* argv[]) {
             submit_drum_hit(player == 1 ? PlayerNum::P2 : PlayerNum::P1, pad, strength);
         };
         sinks.menu = [](int action) { inject_menu_press(action); };
-        zdon_usio::start({u.dll, u.threshold, u.holdoff_ms, u.poll_us}, std::move(sinks));
+        zdon_usio::Settings settings{u.dll, {}, u.holdoff_ms, u.poll_us};
+        settings.threshold.fill(u.threshold);
+        if (u.thresholds.size() == settings.threshold.size()) { // per sensor
+            std::ranges::copy(u.thresholds, settings.threshold.begin());
+        }
+        zdon_usio::start(settings, std::move(sinks));
     }
 
     while (!window_should_close() && !g_dump_screen_done && !g_quit_for_update) {

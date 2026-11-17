@@ -136,8 +136,10 @@ struct UsioConfig {
     bool enabled = false;
     std::string dll = "bnusio.dll"; // absolute, or relative to the game folder
     int threshold = 2000;           // analog value (0-65535) a drum sensor must reach to count as a hit
-    int holdoff_ms = 25;            // after a hit, that side of that drum ignores its sensors this long
-    int poll_us = 1000;             // between reads: under 1000 keeps a core busy; 0 = again at once
+    // per sensor (P1 left kat, left don, right don, right kat, then P2); empty = `threshold` for all
+    std::vector<int> thresholds;
+    int holdoff_ms = 25; // after a hit, that side of that drum ignores its sensors this long
+    int poll_us = 1000;  // between reads: under 1000 keeps a core busy; 0 = again at once
 };
 
 struct AudioConfig {

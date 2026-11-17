@@ -8,6 +8,7 @@
 
 #include "../libs/input/input.h"
 #include "../libs/math/animation.h"
+#include "../objects/game/zdon_lane3d.h"
 #include "../objects/global/practice_timer.h"
 #include "../objects/global/zdon_hud.h"
 
@@ -1017,6 +1018,9 @@ std::optional<Screens> PracticeGameScreen::update() {
     if (next_screen.has_value()) {
         return next_screen;
     }
+    if (!clock.is_paused()) {
+        zdon_lane3d::update_mouse(); // Z-DON 3D view: turned while playing (paused, the mouse is the panel's)
+    }
 
     for (auto& player : players) {
         player->update(clock.position(), current_ms, background);
@@ -1263,16 +1267,42 @@ void PracticeGameScreen::draw_notes_scrobble(double current_ms) const {
 
 void PracticeGameScreen::draw() {
     clear_background(Color::BLACK);
-    if (movie) {
-        movie->draw();
-    } else if (!has_movie() && background.has_value()) {
-        background->draw_back();
-    }
+    // Z-DON 3D view: while playing, the background and the lane in layers (zdon_lane3d.h); paused, flat (its
+    // buttons take clicks). The drums and the practice panel below stay flat either way.
+    zdon_set_lane3d_pivot();
+    if (!clock.is_paused() && zdon_lane3d::begin_frame()) {
+        using zdon_lane3d::Layer;
+        zdon_lane3d::begin_layer(Layer::BACKGROUND);
+        if (movie) {
+            movie->draw();
+        } else if (!has_movie() && background.has_value()) {
+            background->draw_back();
+        }
+        zdon_lane3d::end_layer();
+        for (const Layer layer :
+             {Layer::LANE, Layer::TARGET, Layer::NOTES, Layer::JUDGMENTS, Layer::HUD, Layer::EFFECTS}) {
+            zdon_lane3d::begin_layer(layer);
+            players[0]->draw_practice(clock.position(), 0, 184 * tex.screen_scale, true);
+            zdon_lane3d::end_layer();
+        }
+        if (background.has_value()) {
+            zdon_lane3d::begin_layer(Layer::FOREGROUND);
+            background->draw_fore();
+            zdon_lane3d::end_layer();
+        }
+        zdon_lane3d::end_frame();
+    } else {
+        if (movie) {
+            movie->draw();
+        } else if (!has_movie() && background.has_value()) {
+            background->draw_back();
+        }
 
-    players[0]->draw_practice(clock.position(), 0, 184 * tex.screen_scale, !clock.is_paused());
+        players[0]->draw_practice(clock.position(), 0, 184 * tex.screen_scale, !clock.is_paused());
 
-    if (background.has_value()) {
-        background->draw_fore();
+        if (background.has_value()) {
+            background->draw_fore();
+        }
     }
 
     // Scrobble note overlay when paused

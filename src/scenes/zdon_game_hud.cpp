@@ -54,7 +54,7 @@ void GameScreen::zdon_draw_hit_error_bar() const {
         const float cy = lane_y + (198.0f * s); // under the captions
         const float half = 92.0f * s;           // the ok window's half width
         const float px_per_ms = half / ok;
-        const float bh = 12.0f * s;
+        const float bh = 14.0f * s;
         rect(cx - half - (3 * s), cy - (bh / 2) - (3 * s), (half * 2) + (6 * s), bh + (6 * s), Color{0, 0, 0, 150});
         rect(cx - half, cy - (bh / 2), half * 2, bh, Color{255, 200, 80, 200});
         rect(cx - (good * px_per_ms), cy - (bh / 2), good * px_per_ms * 2, bh, Color{90, 200, 255, 220});

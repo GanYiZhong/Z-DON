@@ -105,8 +105,10 @@ void InputTestScreen::draw_usio(double now) {
              Color{255, 120, 100, 255});
         return;
     }
+    const bool one_threshold = std::ranges::all_of(u.threshold, [&](int t) { return t == u.threshold[0]; });
     text(std::format("USIO  {}  fw {}  {}  {:.0f} reads/s  threshold {}", u.board.empty() ? "(no name)" : u.board,
-                     u.firmware, u.connected ? "connected" : "NOT CONNECTED", u.reads_per_sec, u.threshold),
+                     u.firmware, u.connected ? "connected" : "NOT CONNECTED", u.reads_per_sec,
+                     one_threshold ? std::to_string(u.threshold[0]) : std::string("per sensor")),
          20, 8, 20, Color::WHITE);
 
     // per player: left kat, left don, right don, right kat; bars over 0..32768 (a louder hit runs off the end)
@@ -138,7 +140,7 @@ void InputTestScreen::draw_usio(double now) {
             draw_rectangle(px(bx), px(y), px(hold_w), px(24), Color{fill.r, fill.g, fill.b, 110});
             const float now_w = std::min(1.0f, static_cast<float>(u.value[ch]) / full) * bar_w;
             draw_rectangle(px(bx), px(y), px(now_w), px(24), fill);
-            const float th_x = bx + (std::min(1.0f, static_cast<float>(u.threshold) / full) * bar_w);
+            const float th_x = bx + (std::min(1.0f, static_cast<float>(u.threshold[ch]) / full) * bar_w);
             draw_rectangle(px(th_x), px(y - 3), std::max(1, px(2)), px(30), Color{255, 230, 0, 255});
             const float tx = bx + bar_w + 12.0f;
             text(std::to_string(u.value[ch]), tx, y + 5, 15, Color::WHITE);
