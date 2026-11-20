@@ -172,6 +172,8 @@ void main() {
             int band_lanes = 0;     // --record-band: only this lane's band, scaled for a stack of that many
             bool backdrop = false;  // --record-backdrop: and the picture at a fifth of the size below it
             std::string fifo;       // --record-pipe: the raw frames go there (the stacking ffmpeg reads them)
+            double clip_first_s = 0, clip_end_s = -1; // --record-clip: a stacked recording of this span only
+            double lane_volume = 1.0; // --record-lane-volume: the lower lanes' sound in a stacked recording
 
             int enc_w = 0, enc_h = 0; // the encoded frame (the window's, or the band's)
             bool via_copy = false;    // the frame is put together in copy_rt (NV12 or a band)
@@ -489,6 +491,11 @@ void main() {
             } else if (a == "--record-range" && i + 2 < argc) {
                 s.range_first = std::max(0LL, std::atoll(argv[++i]));
                 s.range_end = std::atoll(argv[++i]);
+            } else if (a == "--record-clip" && i + 2 < argc) {
+                s.clip_first_s = std::max(0.0, std::atof(argv[++i]));
+                s.clip_end_s = std::atof(argv[++i]);
+            } else if (a == "--record-lane-volume" && i + 1 < argc) {
+                s.lane_volume = std::clamp(std::atof(argv[++i]), 0.0, 1.0);
             } else if (a == "--record-no-music") {
                 s.no_music = true;
             } else if (a == "--record-backdrop") {
@@ -545,11 +552,12 @@ void main() {
         }
         if (arg == "--record" || arg == "--record-fps" || arg == "--record-result" || arg == "--record-status" ||
             arg == "--record-jobs" || arg == "--record-part" || arg == "--record-tracks" ||
-            arg == "--record-sync-end" || arg == "--record-band" || arg == "--record-pipe") {
+            arg == "--record-sync-end" || arg == "--record-band" || arg == "--record-pipe" ||
+            arg == "--record-lane-volume") {
             i = std::min(i + 1, argc - 1);
             return true;
         }
-        if (arg == "--record-range") {
+        if (arg == "--record-range" || arg == "--record-clip") {
             i = std::min(i + 2, argc - 1);
             return true;
         }
@@ -909,6 +917,10 @@ void main() {
             std::vector<std::vector<std::string>> args;
             std::vector<fs::path> outs, wavs, sizes, statuses;
             std::vector<std::string> pipes;
+            // --record-clip: the courses run up to its start without their pictures, then record only it
+            const long long clip_first = std::llround(s.clip_first_s * s.fps);
+            const long long clip_end = s.clip_end_s > s.clip_first_s ? std::llround(s.clip_end_s * s.fps) : -1;
+            const double stack_start_s = kStackStartS + s.clip_first_s;
             for (size_t k = 0; k < n; k++) {
                 // the course's --record path: only its WAV and .size are written next to it
                 outs.push_back(dir / utf8_path(stem + ".track" + std::to_string(k) + ".mp4"));
@@ -926,8 +938,8 @@ void main() {
                                    "--record-part",
                                    std::to_string(k),
                                    "--record-range",
-                                   "0",
-                                   "-1",
+                                   std::to_string(clip_first),
+                                   std::to_string(clip_end),
                                    "--record-jobs",
                                    "1",
                                    "--record-fps",
@@ -1023,8 +1035,8 @@ void main() {
                     stacking = start_stacking();
                     const double waited =
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-                    if (!stacking && waited > kStackStartS) {
-                        spdlog::error("[record] the courses did not open their pipes in {:.0f} s", kStackStartS);
+                    if (!stacking && waited > stack_start_s) {
+                        spdlog::error("[record] the courses did not open their pipes in {:.0f} s", stack_start_s);
                         return false;
                     }
                 }
@@ -1046,12 +1058,18 @@ void main() {
 
             // every lane's hits over the song (the other lanes have no music): summed, then limited
             std::string cmd = "\"" + ffmpeg() + "\" -hide_banner -loglevel error -y -i " + quoted(video_tmp);
-            std::string mix;
+            std::string mix, lanes;
             for (size_t k = 0; k < n; k++) {
                 cmd += " -i " + quoted(wavs[k]);
-                mix += "[" + std::to_string(k + 1) + ":a]";
+                const std::string in = "[" + std::to_string(k + 1) + ":a]";
+                if (k > 0 && s.lane_volume < 1.0) { // the lower lanes' hits quieter than the top lane
+                    mix += in + "volume=" + std::to_string(s.lane_volume) + "[v" + std::to_string(k) + "];";
+                    lanes += "[v" + std::to_string(k) + "]";
+                } else {
+                    lanes += in;
+                }
             }
-            cmd += " -filter_complex \"" + mix + "amix=inputs=" + std::to_string(n) +
+            cmd += " -filter_complex \"" + mix + lanes + "amix=inputs=" + std::to_string(n) +
                    ":normalize=0:duration=longest,alimiter=limit=0.95:level=0:latency=1[a]\" -map 0:v -map \"[a]\" "
                    "-c:v copy " +
                    audio_codec() + " -shortest -movflags +faststart " + quoted(s.out);
