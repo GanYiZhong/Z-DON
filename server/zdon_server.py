@@ -925,11 +925,17 @@ def make_handler(cfg: dict, api: Api, site):
             size = st.st_size
             # the browser keeps a copy and asks whether it is still current (no-cache = revalidate): a later
             # visit gets 304 instead of the 100+ MB data package again; publish-web changes the size or time
+            # Cloudflare compresses the wasm and makes the ETag weak (W/"..."): the browser asks with that one
             etag = f'"{size:x}-{st.st_mtime_ns:x}"'
-            fresh = etag in [t.strip() for t in self.headers.get("If-None-Match", "").split(",")]
+            asked = [t.strip().removeprefix("W/") for t in self.headers.get("If-None-Match", "").split(",")]
+            fresh = etag in asked
+            # a URL with the file's content hash (?v=, written into the page by publish-web): kept a year,
+            # never asked again (each question goes through Cloudflare: seconds where its route is slow)
+            v = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("v", [""])[-1]
+            versioned = bool(v) and v == web_versions(data / "web").get(WEB_VERSION_OF.get(rel, ""))
             self.send_response(304 if fresh else 200)
             self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if versioned else "no-cache")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
@@ -1352,6 +1358,27 @@ def cmd_publish_skin(cfg: dict, args) -> None:
           f"  {args.branch}")
 
 
+# the web version's files -> the file whose content hash is their version (YataiDON.data.gz holds YataiDON.data)
+WEB_VERSION_OF = {"YataiDON.js": "YataiDON.js", "YataiDON.wasm": "YataiDON.wasm",
+                  "YataiDON.data": "YataiDON.data", "YataiDON.data.gz": "YataiDON.data"}
+_web_versions: dict = {}
+
+
+def web_versions(web: Path) -> dict:
+    """versions.json of the published web version (publish-web), read again when it changes"""
+    f = web / "versions.json"
+    try:
+        key = f.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _web_versions.get("key") != key:
+        try:
+            _web_versions.update(key=key, v=json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return {}
+    return _web_versions["v"]
+
+
 def cmd_publish_web(cfg: dict, args) -> None:
     # the web version's build folder (Z-DON-Web build-web/bin) -> data/web, served at /play
     src = Path(args.src).resolve()
@@ -1371,11 +1398,19 @@ def cmd_publish_web(cfg: dict, args) -> None:
         shutil.copy2(src / n, tmp / n)
     # the page asks for YataiDON.js?v=<its hash>: Cloudflare has browsers keep .js for hours, and an old
     # YataiDON.js does not instantiate a new YataiDON.wasm (the page's locateFile passes the version on)
-    ver = hashlib.sha256((tmp / "YataiDON.js").read_bytes()).hexdigest()[:12]
+    vers = {n: hashlib.sha256((tmp / n).read_bytes()).hexdigest()[:12]
+            for n in ("YataiDON.js", "YataiDON.wasm", "YataiDON.data")}
+    ver = vers["YataiDON.js"]
     page = (tmp / "YataiDON.html").read_text(encoding="utf-8")
     versioned = re.sub(r"src=(['\"]?)YataiDON\.js(?:\?v=[0-9a-f]+)?(?=\1)", lambda m: f"src={m.group(1)}YataiDON.js?v={ver}", page)
     if versioned == page:
         sys.exit("publish-web: the page has no <script src=YataiDON.js> to version")
+    # the wasm's and the data package's versions, for the page's zdonVer: their URLs carry them (kept a year)
+    # (the page's JSON.parse('{"_":"ZDON_VER"}'), the marker kept for the next publish)
+    page_ver = json.dumps({"_": "ZDON_VER", "wasm": vers["YataiDON.wasm"], "data": vers["YataiDON.data"]},
+                          separators=(",", ":"))
+    versioned = re.sub(r'\{"_":\s*"ZDON_VER"[^{}]*\}', lambda m: page_ver, versioned)
+    (tmp / "versions.json").write_text(json.dumps(vers), encoding="utf-8")
     (tmp / "YataiDON.html").write_text(versioned, encoding="utf-8")
     old = dest.with_name("web.old")
     if old.exists():
