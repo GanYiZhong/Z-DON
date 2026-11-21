@@ -232,6 +232,30 @@ namespace texture_lazy {
             }
         }
 
+        // A game texture that may wait for its first draw even though a song may be playing then: one that no
+        // earlier load of this screen drew (cache/warm_upload.txt; those upload at load as before, never ahead
+        // mid-song) and small enough to upload within a frame (ZDON_LAZY_GAME_MAX_KB, default 1024: a BC7
+        // 1024x1024 or RGBA 512x512, a fraction of a millisecond). A song draws about 170 of Nijiiro's 984 game
+        // textures; the rest used to take video memory and the driver's copy of it in RAM for nothing.
+        // ZDON_LAZY_GAMEPLAY=0: every game texture uploads at load again.
+        bool gameplay_lazy(const std::string& screen, const std::string& owner, const std::filesystem::path& source,
+                           size_t bytes) {
+            static const bool on = [] {
+                const char* v = std::getenv("ZDON_LAZY_GAMEPLAY");
+                return !(v && *v == '0');
+            }();
+            static const size_t max_bytes = [] {
+                const char* v = std::getenv("ZDON_LAZY_GAME_MAX_KB");
+                return static_cast<size_t>(v && *v ? std::max(0L, std::atol(v)) : 1024L) * 1024;
+            }();
+            if (!on || screen != "game" || bytes > max_bytes || owner.empty() || source.empty()) {
+                return false;
+            }
+            WarmRecords& r = warm_records();
+            auto it = r.known.find(owner);
+            return it == r.known.end() || !it->second.contains(source.generic_string());
+        }
+
         bool bandable(const Pending& p) {
             return p.image.mipmaps == 1 && p.image.format < ray::PIXELFORMAT_COMPRESSED_DXT1_RGB && p.image.height > 0;
         }
@@ -249,10 +273,13 @@ namespace texture_lazy {
 
     std::shared_ptr<Texture> make(const Image& image, const std::string& screen, const std::filesystem::path& source,
                                   const std::string& owner, uint64_t size, uint64_t mtime) {
-        if (!enabled() || !image.data || during_gameplay(screen)) {
+        if (!enabled() || !image.data) {
             return nullptr;
         }
         const size_t bytes = image_bytes(image.width, image.height, image.format);
+        if (during_gameplay(screen) && !gameplay_lazy(screen, owner, source, bytes)) {
+            return nullptr;
+        }
         ScreenStats& st = stats()[screen];
         if (pending_bytes + bytes > cap_bytes()) {
             if (!st.cap_logged) {
