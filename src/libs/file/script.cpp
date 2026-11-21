@@ -2,6 +2,7 @@
 
 #include "../fixed_step.h"
 #include "../input/zdon_mouse.h"
+#include "../zdon_lua_profile.h"
 #ifdef TRACY_ENABLE
 #include <tracy/TracyLua.hpp>
 #endif
@@ -515,6 +516,7 @@ void ScriptManager::init(const fs::path& script_path) {
     register_lua_bindings();
     // Draw parameters are short-lived; most skin modules and cached userdata live much longer.
     lua_gc(lua->lua_state(), LUA_GCGEN, 0, 0);
+    zdon_lua_profile::install(lua->lua_state()); // Z-DON dev hook: ZDON_LUA_PROFILE=1
 }
 
 bool ScriptManager::has_lua_script(const std::string& script_name) const {
