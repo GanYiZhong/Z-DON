@@ -45,6 +45,13 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-11-21 演奏貼圖用到才上傳、記憶體
+
+- 演奏畫面以前 984 張貼圖（Nijiiro）全部載入時上傳（歌曲中第一次畫到才傳會掉幀），但一整首歌只畫到約 170 張。現在「之前載入這個畫面時沒畫過」（cache/warm_upload.txt）且上傳量 ≤1 MB（BC7 1024×1024、RGBA 512×512；`ZDON_LAZY_GAME_MAX_KB`）的貼圖等第一次畫到才上傳；畫過的照舊載入時上傳，歌曲中不做提前上傳（量過：提前上傳在歌曲中一幀卡 196 ms）。其中 BC7 的影像載入完就不留在 RAM，第一次畫到時從 BC7 快取讀回（cached_image，不解 PNG）。`ZDON_LAZY_GAMEPLAY=0` 關。
+- 量測（Nijiiro、BC7 開、歌曲第 25 秒、各 3 次）：載入時上傳的演奏貼圖 198 → 90 MB；private 813–829 → 661–686 MB、working set 479–550 → 454–465 MB（862 張 104 MB 不留 RAM）。第一次玩（清單空）100 s 內 61 張讀回、單張最多 0.9 ms，最忙的一幀 3.2 ms 是演奏第一幀（載入幀），其後開場 1–2 ms，沒有失敗。演奏畫面貼圖載入（命令列開歌、4 次）中位數約 144 → 117 ms、第一幀約 337 → 298 ms。
+- 驗證：演奏／練習／暫停（Nijiiro、PyTaikoGreen；BC7 關與開；有無清單）截圖與改動前逐像素相同（BC7 開時要快取齊全：第一輪舊版有 4 張當場才編）。AI 對戰每次本來就不同，不比。
+- 查過沒改的：主執行緒每幀工作演奏約 0.25 ms、選曲約 0.5 ms，exe 內一半以上是 skin 的 Lua（luaV_execute、表查詢），引擎的 draw 參數解析已是 lua_next 走訪；限幀等待的實際忙等平均 0.016 ms/幀；不限幀時主執行緒大多在核心等翻頁（win32u），FPS 卡在 GPU/present。計時器解析度（NtSetTimerResolution／timeBeginPeriod）對高解析度 waitable timer 的晚醒沒有影響（p50 0.29、p90 0.49 ms）。BC7 高品質編碼（uber 1–4）讓保留 RGBA 的圖過門檻：1519 張裡只多 1 張，不做。
+
 ## 2026-11-21 安裝包縮小：只解碼的 FFmpeg、發版 strip
 
 - **FFmpeg**：`tools/build_ffmpeg_min.sh` 用 BtbN 同一個 FFmpeg commit（`3d16b774d7`，ABI 相同）在 MSYS2 編只解碼的版本：全部解碼器、demuxer、parser，只開 file/pipe 協定，沒有編碼器、muxer、濾鏡、裝置、網路；AV1 用靜態連結的 dav1d（跟 BtbN 一樣），zlib 也靜態。CMake `-DZDON_FFMPEG_DIR=<prefix>` 改用它（空的話照舊抓 BtbN）。五個 DLL 150 → 24 MB（avcodec 120.5 → 18.7、avformat 23.1 → 1.6）。
