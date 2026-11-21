@@ -45,6 +45,14 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-11-21 安裝包縮小：只解碼的 FFmpeg、發版 strip
+
+- **FFmpeg**：`tools/build_ffmpeg_min.sh` 用 BtbN 同一個 FFmpeg commit（`3d16b774d7`，ABI 相同）在 MSYS2 編只解碼的版本：全部解碼器、demuxer、parser，只開 file/pipe 協定，沒有編碼器、muxer、濾鏡、裝置、網路；AV1 用靜態連結的 dav1d（跟 BtbN 一樣），zlib 也靜態。CMake `-DZDON_FFMPEG_DIR=<prefix>` 改用它（空的話照舊抓 BtbN）。五個 DLL 150 → 24 MB（avcodec 120.5 → 18.7、avformat 23.1 → 1.6）。
+  - 驗證：36 個影音檔（skin 宣傳 mp4、歌曲 ogg、skin 音效，以及產生的 VP8/VP9/AV1/HEVC/H.264 4:4:4/MPEG-2/MPEG-4/WMV2/Theora、MP3/FLAC/Opus/AAC/WAV）逐幀解碼的雜湊：影像全部逐位元相同；Opus、WMA 浮點輸出有 76/144000 個樣本差在最低位（最大 1.5e-8，約 −156 dB，轉 16-bit 後相同）。解碼 CPU 時間相同或更少（少載入 120 MB DLL）。遊戲截圖（PyTaikoGreen、Nijiiro 的標題/選曲/演奏 34 張）對 BtbN 版逐像素相同。
+  - 一次測試 Nijiiro 標題/選曲結束時少了「Game closed」、exit 1，之後新舊各重跑 15 次都沒再出現，看起來是偶發的關閉競態，不是這次改動造成。
+- **exe 符號表**：YataiDON.exe 有 10.5 MB COFF 符號表。`server/zdon_server.py publish` 發版時 `strip --strip-unneeded`（33.8 → 23.2 MB），原本那份存到 `zdon_data/symbols/<版本>/`。當機紀錄多印每一幀的「模組＋位址」（cpptrace object_address，已扣掉重定位），strip 過的版本沒有函式名時用 `nm -C --numeric-sort` 對那份 exe 查。
+- 安裝包（package.zip）預估 91 → 約 45 MB。
+
 ## 2026-10-29 貼圖密度（texture_density，skin 出 2x 圖、4K 繪製）
 - skin_config `screen.texture_density`（整數 1–4，預設 1）。d > 1 時：**只有這個 skin 自己的** PNG 與它的 texture.json（x、y、x2、y2、crop）是實體像素，載入時乘 1/d，`TextureObject::width/height`、`get_texture_info` 都是邏輯值，source rect 照樣取整張圖（`TextureObject::density`；呼叫端給的 src 視為邏輯值）；祖先 skin 的貼圖照舊縮放；skin_config、animation.json 維持邏輯座標。
 - 每幀畫進 (寬·d)x(高·d) 的 render target（`src/libs/density.*`、ray.h 的 `zdon_density`）：`get_render_width/height` 回報 target 大小，所以 Camera2D（zoom d）、scissor、Chara3D、影片檢查等全部自動是實體大小；巢狀 `end_texture_mode` 回到 target；最後等比例貼進視窗。滑鼠座標換算到 target、IME 區域換回視窗；F12 截圖與 `YATAIDON_DUMP_*` 讀 target（1920x1080、d=2 → 3840x2160）。OutlinedText 以 font_size·d 點陣化、外框 ·d，畫在邏輯大小。

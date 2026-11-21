@@ -1174,6 +1174,7 @@ def cmd_publish(cfg: dict, args) -> None:
         url_file.parent.mkdir(parents=True, exist_ok=True)
         url_file.write_text(f"{site_url}/update/{args.channel}\n", encoding="utf-8", newline="\n")
         sources["zdon_update.url"] = url_file
+    strip_for_release(cfg, sources, version)
     publish_tree(sources, dest, version, package_only)
     size = sum(p.stat().st_size for p in sources.values())
     print(f"published {len(sources)} files ({size / 1e6:.1f} MB) as {args.channel} {version}"
@@ -1187,6 +1188,27 @@ def cmd_publish(cfg: dict, args) -> None:
             sys.exit(f"published, but the GitHub release failed: {e} {detail.strip()}")
         if cfg["github"].get("workflow"):
             spawn_publish_github(args, version)
+
+
+def strip_for_release(cfg: dict, sources: dict, version: str) -> None:
+    """The executable without its COFF symbol table (a third of YataiDON.exe: ~10 MB). The unstripped one is kept
+    in zdon_data/symbols/<version>/ so a crash log's "object addresses" can still be looked up (nm -C)."""
+    exe = sources.get("YataiDON.exe")
+    strip = shutil.which("strip") or next((p for p in (r"C:\msys64\mingw64\bin\strip.exe",) if Path(p).is_file()),
+                                          None)
+    if exe is None or strip is None:
+        if exe is not None:
+            print("strip not found: YataiDON.exe published with its symbols")
+        return
+    keep = cfg["data_dir"] / "symbols" / version
+    keep.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(exe, keep / "YataiDON.exe")
+    out = cfg["data_dir"] / ".strip" / "YataiDON.exe"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([strip, "--strip-unneeded", "-o", str(out), str(exe)], check=True)
+    print(f"YataiDON.exe stripped {exe.stat().st_size / 1e6:.1f} -> {out.stat().st_size / 1e6:.1f} MB "
+          f"(symbols kept in {keep})")
+    sources["YataiDON.exe"] = out
 
 
 def spawn_publish_github(args, version: str) -> None:

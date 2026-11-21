@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <format>
 #include <vector>
 #if defined(YATAIDON_HAS_CPPTRACE)
 #include <cpptrace/cpptrace.hpp>
@@ -30,8 +31,20 @@
 static void log_stacktrace() {
 #if defined(YATAIDON_HAS_CPPTRACE)
     try {
+        const cpptrace::raw_trace raw = cpptrace::generate_raw_trace(1);
         std::ostringstream oss;
-        cpptrace::generate_trace().print(oss, false);
+        raw.resolve().print(oss, false);
+        // Z-DON: each frame as module + address too. A release exe has no symbol table (stripped when published,
+        // 10 MB less) so the names above are missing; these addresses (the image's own, relocation undone) still
+        // point into the unstripped copy the server keeps (zdon_data/symbols/<version>): look them up with
+        // `nm -C --numeric-sort YataiDON.exe`.
+        oss << "\nobject addresses:\n";
+        for (const cpptrace::object_frame& f : raw.resolve_object_trace().frames) {
+            const std::string_view path = f.object_path;
+            const size_t slash = path.find_last_of("/\\");
+            oss << std::format("  {} 0x{:x}\n", slash == std::string_view::npos ? path : path.substr(slash + 1),
+                               f.object_address);
+        }
         spdlog::critical("Stack trace:\n{}", oss.str());
         spdlog::default_logger()->flush();
     } catch (...) {

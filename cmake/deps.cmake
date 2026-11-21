@@ -495,6 +495,14 @@ endif()
 
 # FFmpeg
 if(WIN32)
+  # Z-DON: a decode-only FFmpeg (tools/build_ffmpeg_min.sh: ~20 MB of DLLs instead of BtbN's ~150 MB) when
+  # ZDON_FFMPEG_DIR names its install prefix (include/, lib/, bin/); else BtbN's full build as upstream.
+  set(ZDON_FFMPEG_DIR "" CACHE PATH "Prefix of a decode-only FFmpeg build (tools/build_ffmpeg_min.sh); empty: BtbN")
+  if(ZDON_FFMPEG_DIR)
+    message(STATUS "FFmpeg: decode-only build in ${ZDON_FFMPEG_DIR}")
+    set(FFMPEG_INCLUDE_DIR "${ZDON_FFMPEG_DIR}/include")
+    set(FFMPEG_LIB_DIR     "${ZDON_FFMPEG_DIR}/lib")
+  else()
   FetchContent_Declare(
         ffmpeg_prebuilt
         URL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip
@@ -507,6 +515,7 @@ if(WIN32)
 
   set(FFMPEG_INCLUDE_DIR "${ffmpeg_prebuilt_SOURCE_DIR}/include")
   set(FFMPEG_LIB_DIR     "${ffmpeg_prebuilt_SOURCE_DIR}/lib")
+  endif()
 
   foreach(_lib avformat avcodec avutil swscale swresample)
     set(_libfile "${FFMPEG_LIB_DIR}/lib${_lib}.dll.a")
