@@ -669,6 +669,28 @@ namespace texture_lazy {
     }
 
     void log_screen(const std::string& screen_name) {
+        // Game textures left for their first draw (gameplay_lazy) whose image is BC7: not kept in RAM either. The
+        // first draw reads them back from the BC7 cache (no PNG decode: cached_image), a fraction of a
+        // millisecond for <= 1 MB; RGBA ones stay (decoding the PNG again would cost more).
+        if (screen_name == "game" && decoder && evict_enabled()) {
+            size_t n = 0, bytes = 0;
+            for (auto& [t, p] : pending_map()) {
+                if (p.screen == "game" && !p.evicted && p.gl_id == 0 && !p.source.empty() && p.image.data &&
+                    p.image.format >= ray::PIXELFORMAT_COMPRESSED_DXT1_RGB) {
+                    texture_retain::free_image_async(p.image);
+                    p.image = Image{};
+                    p.evicted = true;
+                    pending_bytes -= std::min(pending_bytes, p.bytes);
+                    ++n;
+                    bytes += p.bytes;
+                }
+            }
+            if (n > 0) {
+                spdlog::info("Lazy texture upload: {} compressed game images not kept in RAM ({} MB); read back from "
+                             "the BC7 cache on first draw",
+                             n, bytes / kMB);
+            }
+        }
         for (auto& [screen, st] : stats()) {
             if (st.uploaded > 0) {
                 spdlog::info("Lazy texture upload: {} pending textures of {} uploaded on first use since the last "
