@@ -286,7 +286,7 @@ class Site(StatsPages, MePages):
         elif path == "/download":
             self.download(req)
         elif path.startswith("/download/") and path.endswith(".zip"):
-            self.download_zip(req, path[len("/download/"):-4])
+            self.download_zip(req, path[len("/download/"):-4], query)
         elif path == "/skins":
             self.skins(req)
         elif path.startswith("/skins/") and path.endswith(".zip"):
@@ -650,10 +650,13 @@ class Site(StatsPages, MePages):
 <p class="small muted" style="text-align:center">之後有新版時，遊戲標題畫面會提示，按 <b>F9</b> 就會自動更新。{('<br>其他版本：' + others) if others else ''}</p>{play}"""
         self.page(req, "下載", body)
 
-    def download_zip(self, req, channel: str):
+    def download_zip(self, req, channel: str, query=None):
         for name, version, path in self.channels():
             if name == channel and (path / "package.zip").is_file():
-                req.send_file(path / "package.zip", f"Z-DON-{name}-{version}.zip")
+                # the download page's link carries ?v=<version>: that URL only ever means this build, so
+                # Cloudflare may keep it (fast for everyone after the first download)
+                versioned = bool(version) and (query or {}).get("v") == version
+                req.send_file(path / "package.zip", f"Z-DON-{name}-{version}.zip", versioned)
                 return
         self.page(req, "找不到", "<h1>找不到這個安裝包</h1>", 404)
 

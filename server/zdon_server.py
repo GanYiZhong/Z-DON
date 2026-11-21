@@ -891,12 +891,28 @@ def make_handler(cfg: dict, api: Api, site):
             if path is None or not path.is_file():
                 self._json(404, {"detail": "not found"})
                 return
-            size = path.stat().st_size
-            ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            self.send_response(200)
+            self.send_cached_file(path, mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+
+        def send_cached_file(self, path: Path, ctype: str, extra: dict | None = None, immutable: bool = False):
+            """A published file with an ETag. Cloudflare keeps a copy and asks whether it is still current
+            (no-cache): the answer is a 304 instead of the whole file again. Without it every download came over
+            the tunnel from here (Taiwan visitors are served from Cloudflare's San Jose: ~0.5 MB/s), with it only
+            the first one after a publish does. immutable: the URL names one version (?v=), kept a year."""
+            st = path.stat()
+            etag = f'"{st.st_size:x}-{st.st_mtime_ns:x}"'
+            asked = [t.strip().removeprefix("W/") for t in self.headers.get("If-None-Match", "").split(",")]
+            fresh = etag in asked
+            self.send_response(304 if fresh else 200)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            if fresh:
+                self.end_headers()
+                return
             self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(st.st_size))
             self.end_headers()
             if self.command == "HEAD":
                 return
@@ -1020,18 +1036,12 @@ def make_handler(cfg: dict, api: Api, site):
             self.headers_out = list(self.headers_out) + list(cookies or [])
             self.send(303, b"", "text/plain", {"Location": location, "Cache-Control": "no-store"})
 
-        def send_file(self, path: Path, download_name: str):
+        def send_file(self, path: Path, download_name: str, immutable: bool = False):
+            # no-cache unless the URL names the version: Cloudflare must never keep serving an old build
             self.headers_out = []
             quoted = urllib.parse.quote(download_name)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(path.stat().st_size))
-            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quoted}")
-            self.send_header("Cache-Control", "no-cache")  # Cloudflare would keep serving an old build
-            self.end_headers()
-            if self.command != "HEAD":
-                with open(path, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile, 1 << 20)
+            self.send_cached_file(path, "application/zip",
+                                  {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}, immutable)
 
         def _dispatch(self):
             url = urllib.parse.urlsplit(self.path)
