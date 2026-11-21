@@ -51,6 +51,7 @@
 - 量測（Nijiiro、BC7 開、歌曲第 25 秒、各 3 次）：載入時上傳的演奏貼圖 198 → 90 MB；private 813–829 → 661–686 MB、working set 479–550 → 454–465 MB（862 張 104 MB 不留 RAM）。第一次玩（清單空）100 s 內 61 張讀回、單張最多 0.9 ms，最忙的一幀 3.2 ms 是演奏第一幀（載入幀），其後開場 1–2 ms，沒有失敗。演奏畫面貼圖載入（命令列開歌、4 次）中位數約 144 → 117 ms、第一幀約 337 → 298 ms。
 - 驗證：演奏／練習／暫停（Nijiiro、PyTaikoGreen；BC7 關與開；有無清單）截圖與改動前逐像素相同（BC7 開時要快取齊全：第一輪舊版有 4 張當場才編）。AI 對戰每次本來就不同，不比。
 - Lua 剖析（`ZDON_LUA_PROFILE=1`，`src/libs/zdon_lua_profile.*`，預設關）：每 1000 條 VM 指令取樣正在跑的行、計數所有 C 函式呼叫，每 10 s 記一次前幾名。Nijiiro 演奏中一半以上的 Lua 取樣在街機背景動畫的 `packed_channel` 解碼（每秒 6 萬次呼叫）：動畫 60 Hz、畫面 180–240 Hz，同一個動畫幀每次畫都重解。Nijiiro skin（YataiDON/Skins/YataiDONNijiiro 3717599）`bg_anim`／`donbg/anim_player` 改成每個動畫幀解一次、留到幀號改變。固定步進 5 ms 同一背景：每幀解碼 488 → 138 次、draw_texture 不變（115／109），主執行緒每幀工作 p50 約 0.32 → 0.28 ms（4 次交替）；20 ms 與 5 ms 步進截圖（含連續幀）逐像素相同。只把這兩個檔套在已發佈的版本上 publish-skin（已發佈版本與 skin repo HEAD 差很多，不整個發）。
+- GPU 計時（`ZDON_GPU_TIMER=1`，`src/libs/zdon_gpu_timer.*`，預設關）：每幀在開始畫、畫面繪製前後、present 前打 GL_TIMESTAMP，每 2 s 記平均。Nijiiro 演奏、不限幀（`ZDON_VBLANK_PACING=0`）：GPU 每幀繪製只有 0.04–0.06 ms，主執行緒 work 約 0.2 ms，而一幀從開始到下一幀開始 0.6–1.2 ms，其餘是 present（SwapBuffers／DWM）本身。不限幀的 FPS 上限在系統的畫面交換，不在 GPU 或遊戲邏輯；限幀（預設）時就是螢幕刷新率。
 - 查過沒改的：主執行緒每幀工作演奏約 0.25 ms、選曲約 0.5 ms，exe 內一半以上是 skin 的 Lua（luaV_execute、表查詢），引擎的 draw 參數解析已是 lua_next 走訪；限幀等待的實際忙等平均 0.016 ms/幀；不限幀時主執行緒大多在核心等翻頁（win32u），FPS 卡在 GPU/present。計時器解析度（NtSetTimerResolution／timeBeginPeriod）對高解析度 waitable timer 的晚醒沒有影響（p50 0.29、p90 0.49 ms）。BC7 高品質編碼（uber 1–4）讓保留 RGBA 的圖過門檻：1519 張裡只多 1 張，不做。
 
 ## 2026-11-21 安裝包縮小：只解碼的 FFmpeg、發版 strip

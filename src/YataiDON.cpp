@@ -40,6 +40,7 @@
 #include "libs/texture_bc7.h"
 #include "libs/texture_lazy.h"
 #include "libs/video/webcam.h"
+#include "libs/zdon_gpu_timer.h"
 #include "libs/zdon_os.h"
 #include "libs/zdon_record.h"
 #include "objects/global/chara_3d.h"
@@ -817,6 +818,7 @@ static void run_frame() {
     }
 
     begin_drawing();
+    zdon_gpu_timer::mark(zdon_gpu_timer::FRAME_START); // Z-DON dev hook: ZDON_GPU_TIMER=1
 
     if (global_data.camera.border_color != L.last_color) {
         clear_background(global_data.camera.border_color);
@@ -1028,7 +1030,9 @@ static void run_frame() {
         PROFILE_SCOPE_N("screen draw");
         PROFILE_ZONE_TEXT(screen->screen_name);
         const auto t0 = std::chrono::steady_clock::now();
+        zdon_gpu_timer::mark(zdon_gpu_timer::DRAW_START);
         screen->_do_draw();
+        zdon_gpu_timer::mark(zdon_gpu_timer::DRAW_END);
         g_spike_draw_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     } else {
         g_spike_draw_ms = 0;
@@ -1102,6 +1106,7 @@ static void run_frame() {
     {
         PROFILE_SCOPE_N("present");
         const auto present_start = std::chrono::steady_clock::now();
+        zdon_gpu_timer::mark(zdon_gpu_timer::PRESENT);
         end_drawing();
         draw_stats_add(screen->screen_name);
         if (dump_done) {
@@ -1115,6 +1120,7 @@ static void run_frame() {
             swap_screen_buffer();
         }
         frame_spike_present(present_start);
+        zdon_gpu_timer::frame_end();
     }
 
     if (zdon_update_offered(L.current_screen) && key_pressed(SDL_SCANCODE_F9)) {
