@@ -19,6 +19,8 @@ WAIT_PID=""
 CHECK_ONLY=0
 RESTART=0
 FORCE=0
+NO_GZIP=0
+command -v gzip >/dev/null 2>&1 || NO_GZIP=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --url) URL="$2"; shift 2 ;;
@@ -26,6 +28,7 @@ while [ $# -gt 0 ]; do
         --check-only) CHECK_ONLY=1; shift ;;
         --restart) RESTART=1; shift ;;
         --force) FORCE=1; shift ;;
+        --no-gzip) NO_GZIP=1; shift ;;
         *) echo "[zdon-update] unknown option: $1"; exit 2 ;;
     esac
 done
@@ -163,6 +166,13 @@ while IFS=' ' read -r hash rel; do
     mkdir -p "$STAGE_DIR/$(dirname "$rel")"
     ok=0
     for try in 1 2 3; do
+        # the gzip copy the server keeps of a big file (less than half the download), else the file itself
+        if [ "$NO_GZIP" = 0 ] && curl -fsSL --max-time 600 "$URL/files/$rel.gz" -o "$STAGE_DIR/$rel.gz" 2>/dev/null &&
+            gzip -dc "$STAGE_DIR/$rel.gz" > "$STAGE_DIR/$rel" 2>/dev/null &&
+            [ "$(sha256 "$STAGE_DIR/$rel")" = "$hash" ]; then
+            rm -f "$STAGE_DIR/$rel.gz"; ok=1; break
+        fi
+        rm -f "$STAGE_DIR/$rel.gz"
         if curl -fsSL --max-time 600 "$URL/files/$rel" -o "$STAGE_DIR/$rel" &&
             [ "$(sha256 "$STAGE_DIR/$rel")" = "$hash" ]; then
             ok=1; break

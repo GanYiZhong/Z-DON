@@ -11,6 +11,7 @@
 #
 # Never touches config.toml, scores.db, cache\, Songs\, Records\ or anything the server didn't publish.
 # Files a previous update installed and the new release no longer lists are removed.
+# A big file comes as the .gz copy the server keeps beside it when there is one (-NoGzip: never).
 
 param(
     [string]$Url = "",
@@ -18,7 +19,8 @@ param(
     [switch]$CheckOnly,
     [switch]$Restart,
     [switch]$PauseOnError,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$NoGzip     # always download the plain files (not the server's .gz copies)
 )
 
 $ErrorActionPreference = "Stop"
@@ -188,7 +190,26 @@ try {
         $ok = $false
         for ($try = 1; $try -le 3 -and -not $ok; $try++) {
             try {
-                Invoke-WebRequest -Uri (Join-Url "$Url/files" $rel) -OutFile $dest -UseBasicParsing -TimeoutSec 600
+                # the gzip copy the server keeps of a big file (less than half the download), else the file itself
+                $gotGz = $false
+                if (-not $NoGzip) {
+                    try {
+                        Invoke-WebRequest -Uri ((Join-Url "$Url/files" $rel) + ".gz") -OutFile "$dest.gz" -UseBasicParsing -TimeoutSec 600
+                        $in = [System.IO.File]::OpenRead("$dest.gz")
+                        try {
+                            $gz = New-Object System.IO.Compression.GZipStream($in, [System.IO.Compression.CompressionMode]::Decompress)
+                            $out = [System.IO.File]::Create($dest)
+                            try { $gz.CopyTo($out) } finally { $out.Dispose(); $gz.Dispose() }
+                        } finally { $in.Dispose() }
+                        $gotGz = $true
+                    } catch {
+                        # no .gz for this file (HTTP 404) or a bad one: the plain file below
+                    }
+                    Remove-Item -LiteralPath "$dest.gz" -Force -ErrorAction SilentlyContinue
+                }
+                if (-not $gotGz) {
+                    Invoke-WebRequest -Uri (Join-Url "$Url/files" $rel) -OutFile $dest -UseBasicParsing -TimeoutSec 600
+                }
                 $ok = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower() -eq $manifest[$rel]
                 if (-not $ok) { Log "  checksum mismatch, retrying" }
             } catch { Log "  $($_.Exception.Message), retrying" }

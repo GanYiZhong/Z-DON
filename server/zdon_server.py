@@ -759,6 +759,22 @@ def make_zip(root: Path, files: list[str], out: Path, extra: dict[str, Path] | N
             z.write(src, rel)
 
 
+def gzip_copies(files_root: Path, rels: list[str]) -> None:
+    """files/<rel>.gz beside each update file that gzip makes at least 10% smaller (from 64 KB): the updaters
+    (zdon_update.ps1 / .sh) ask for it first and fall back to the plain file. Cloudflare doesn't compress .exe/.dll,
+    so an update used to download YataiDON.exe whole: 23 MB -> 9.7 MB. Not in the manifest, never in package.zip;
+    the checksums are still of the plain files."""
+    import gzip
+    for rel in rels:
+        f = files_root / rel
+        if f.stat().st_size < 64 * 1024:
+            continue
+        data = f.read_bytes()
+        packed = gzip.compress(data, compresslevel=9, mtime=0)
+        if len(packed) <= len(data) * 0.9:
+            (files_root / (rel + ".gz")).write_bytes(packed)
+
+
 def publish_tree(sources: dict[str, Path], dest: Path, version: str | None,
                  package_only: dict[str, Path] | None = None) -> None:
     """Copies sources (relative path -> file) into a fresh folder next to dest, writes its manifest, then swaps it in.
@@ -784,6 +800,7 @@ def publish_tree(sources: dict[str, Path], dest: Path, version: str | None,
         (staging / "version.txt").write_text(version + "\n", encoding="utf-8", newline="\n")
         # the website's first-install download: the same files as one zip
         make_zip(files_root, list(sources), staging / "package.zip", package_only)
+        gzip_copies(files_root, list(sources))
     else:
         # a skin: <name>/<branch>.zip beside the branch folder
         tmp_zip = dest.with_name(dest.name + ".zip.new")
