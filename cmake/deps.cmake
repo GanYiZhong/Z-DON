@@ -615,6 +615,8 @@ else()
                 ${_zdon_pkgconfig} --static --libs libavformat libavcodec libswscale libswresample libavutil
         OUTPUT_VARIABLE _zdon_ff_libs OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _zdon_ff_rc)
       if(_zdon_ff_rc EQUAL 0)
+        # "-framework X" (macOS) as one linker flag: split in two, CMake would take X for a library name
+        string(REGEX REPLACE "-framework[ \t]+([A-Za-z0-9_]+)" "-Wl,-framework,\\1" _zdon_ff_libs "${_zdon_ff_libs}")
         separate_arguments(_zdon_ff_libs UNIX_COMMAND "${_zdon_ff_libs}")
         list(FILTER _zdon_ff_libs EXCLUDE REGEX "^-l(avformat|avcodec|avutil|swscale|swresample)$")
         list(FILTER _zdon_ff_libs EXCLUDE REGEX "^-L${YATAIDON_FFMPEG_PREFIX}")
