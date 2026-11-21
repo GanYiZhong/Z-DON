@@ -51,7 +51,10 @@
   - 驗證：36 個影音檔（skin 宣傳 mp4、歌曲 ogg、skin 音效，以及產生的 VP8/VP9/AV1/HEVC/H.264 4:4:4/MPEG-2/MPEG-4/WMV2/Theora、MP3/FLAC/Opus/AAC/WAV）逐幀解碼的雜湊：影像全部逐位元相同；Opus、WMA 浮點輸出有 76/144000 個樣本差在最低位（最大 1.5e-8，約 −156 dB，轉 16-bit 後相同）。解碼 CPU 時間相同或更少（少載入 120 MB DLL）。遊戲截圖（PyTaikoGreen、Nijiiro 的標題/選曲/演奏 34 張）對 BtbN 版逐像素相同。
   - 一次測試 Nijiiro 標題/選曲結束時少了「Game closed」、exit 1，之後新舊各重跑 15 次都沒再出現，看起來是偶發的關閉競態，不是這次改動造成。
 - **exe 符號表**：YataiDON.exe 有 10.5 MB COFF 符號表。`server/zdon_server.py publish` 發版時 `strip --strip-unneeded`（33.8 → 23.2 MB），原本那份存到 `zdon_data/symbols/<版本>/`。當機紀錄多印每一幀的「模組＋位址」（cpptrace object_address，已扣掉重定位），strip 過的版本沒有函式名時用 `nm -C --numeric-sort` 對那份 exe 查。
-- 安裝包（package.zip）預估 91 → 約 45 MB。
+- 安裝包（package.zip）91 → 41.3 MB（20261121-1831-e411d60a 實際發佈）。
+- 更新下載（dfbaa01a）：`publish` 替每個 ≥64 KB、gzip 能省 10% 以上的更新檔多放 `files/<rel>.gz`（不在 manifest、不進 package.zip），`zdon_update.ps1`／`.sh` 先要 `.gz`、沒有就退回原檔（`-NoGzip`／`--no-gzip` 關）。Cloudflare 不壓縮 .exe/.dll，以前每次更新 YataiDON.exe 整個 23.3 MB，現在 9.7 MB；avcodec 18.7 → 8.1 MB。本機頻道測過兩支腳本的首次安裝、更新、-NoGzip，檔案逐位元相同、不留 .gz。舊版更新程式照舊抓原檔。
+- Linux／macOS（ddcf6da9）：`tools/build_ffmpeg_min_posix.sh`（同一個 FFmpeg commit、全部解碼器、靜態、dav1d），workflow 依腳本 hash 快取，`YATAIDON_FFMPEG_PREFIX` 的靜態分支多連 prefix 的 pkg-config 列出的相依（zlib、dav1d、macOS framework）。Linux 套件 178 → 57 MB、macOS 54 → 42 MB（以前帶著發行版 FFmpeg 拉進來的 x265、codec2、SVT-AV1、aom、rsvg、jxl…）。workflow 多一個 `upload` 輸入（關＝只編譯，不動 rolling release）。
+- 評估後不做：`-O2` 取代 `-O3`（stripped exe 23.3 → 21.6 MB，但每幀工作沒有比較快：O3 中位數約 0.28 ms、O2 約 0.31 ms）；package.zip 壓縮等級 9（41.35 → 41.13 MB、壓縮時間 3.2 → 8.8 s）；Android APK 改壓縮 .so（下載少約 20 MB，但手機上要多存一份解壓的 .so）。
 
 ## 2026-10-29 貼圖密度（texture_density，skin 出 2x 圖、4K 繪製）
 - skin_config `screen.texture_density`（整數 1–4，預設 1）。d > 1 時：**只有這個 skin 自己的** PNG 與它的 texture.json（x、y、x2、y2、crop）是實體像素，載入時乘 1/d，`TextureObject::width/height`、`get_texture_info` 都是邏輯值，source rect 照樣取整張圖（`TextureObject::density`；呼叫端給的 src 視為邏輯值）；祖先 skin 的貼圖照舊縮放；skin_config、animation.json 維持邏輯座標。
