@@ -16,6 +16,11 @@ on:
         description: "Version (as published, e.g. 20261113-0738-94afee80); empty = the commit"
         required: false
         default: ""
+      upload:
+        description: "Upload the builds to the rolling release (off: build only, the artifacts stay on the run)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -55,8 +60,7 @@ jobs:
           sudo apt-get install -y cmake ccache ninja-build pkg-config patchelf libssl-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxtst-dev libgl1-mesa-dev \
             libasound2-dev libpulse-dev libjack-dev liblua5.4-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
-            libavdevice-dev libogg-dev libvorbis-dev libflac-dev libopus-dev libmp3lame-dev libmpg123-dev \
+            nasm libdav1d-dev zlib1g-dev libogg-dev libvorbis-dev libflac-dev libopus-dev libmp3lame-dev libmpg123-dev \
             libspeex-dev libdw-dev
 
       - name: Setup SDL3
@@ -74,11 +78,21 @@ jobs:
           key: zdon-linux-${{ github.sha }}
           restore-keys: zdon-linux-
 
+      # decode-only static FFmpeg (instead of the distribution's, which bundled every encoder library: 178 MB)
+      - id: cache-ffmpeg-min
+        uses: actions/cache@v4
+        with:
+          path: .ffmpeg-min
+          key: ffmpeg-min-linux-${{ hashFiles('tools/build_ffmpeg_min_posix.sh') }}
+      - name: Build FFmpeg (decode-only)
+        if: steps.cache-ffmpeg-min.outputs.cache-hit != 'true'
+        run: bash tools/build_ffmpeg_min_posix.sh "$PWD/.ffmpeg-min"
+
       - name: Configure
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DYATAIDON_FFMPEG_PREFIX="$PWD/.ffmpeg-min" \
             -DNETWORK_URL="$NETWORK_URL" -DNETWORK_AUTH_KEY="${{ secrets.NETWORK_AUTH_KEY }}"
 
       - name: Build
@@ -94,7 +108,7 @@ jobs:
           chmod +x $P/YataiDON $P/zdon_update.sh
           echo "${{ inputs.version || github.sha }}" > $P/.zdon_version
           # the shared libraries the distribution may not have: FFmpeg, the sndfile codecs, SDL3 and what they need
-          ldd build/bin/YataiDON | grep -E "(libav|libsw|libsndfile|libogg|libvorbis|libFLAC|libopus|libmp3lame|libmpg123|libspeex|libSDL3).*=>" \
+          ldd build/bin/YataiDON | grep -E "(libav|libsw|libdav1d|libsndfile|libogg|libvorbis|libFLAC|libopus|libmp3lame|libmpg123|libspeex|libSDL3).*=>" \
             | awk '{print $3}' | grep -v '^$' | xargs -I{} cp -L {} $P/lib/ || true
           for so in $P/lib/*.so*; do
             ldd "$so" 2>/dev/null | grep "=>" | awk '{print $3}' | grep -v '^$' \
@@ -130,7 +144,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ccache ninja pkg-config ffmpeg sdl3 dylibbundler libogg libvorbis flac opus lame \
+          brew install cmake ccache ninja pkg-config nasm dav1d sdl3 dylibbundler libogg libvorbis flac opus lame \
             mpg123 speex libsndfile libidn2
 
       - uses: actions/cache@v4
@@ -141,12 +155,23 @@ jobs:
           key: zdon-macos-${{ github.sha }}
           restore-keys: zdon-macos-
 
+      - id: cache-ffmpeg-min
+        uses: actions/cache@v4
+        with:
+          path: .ffmpeg-min
+          key: ffmpeg-min-macos-${{ hashFiles('tools/build_ffmpeg_min_posix.sh') }}
+      - name: Build FFmpeg (decode-only)
+        if: steps.cache-ffmpeg-min.outputs.cache-hit != 'true'
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          bash tools/build_ffmpeg_min_posix.sh "$PWD/.ffmpeg-min"
+
       - name: Configure
         run: |
           export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DYATAIDON_FFMPEG_PREFIX="$PWD/.ffmpeg-min" \
             -DCMAKE_PREFIX_PATH="$(brew --prefix)" -DCMAKE_EXE_LINKER_FLAGS="-L$(brew --prefix)/lib" \
             -DNETWORK_URL="$NETWORK_URL" -DNETWORK_AUTH_KEY="${{ secrets.NETWORK_AUTH_KEY }}"
 
@@ -274,7 +299,7 @@ jobs:
   release:
     name: Upload to the rolling release
     needs: [linux, macos, android]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.upload != false }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

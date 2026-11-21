@@ -606,6 +606,22 @@ else()
     set_property(TARGET FFmpeg::swresample APPEND PROPERTY INTERFACE_LINK_LIBRARIES FFmpeg::avutil)
     set_property(TARGET FFmpeg::swscale APPEND PROPERTY INTERFACE_LINK_LIBRARIES FFmpeg::avutil)
     set_property(TARGET FFmpeg::avutil APPEND PROPERTY INTERFACE_LINK_LIBRARIES m pthread dl)
+    # Z-DON: what the static libraries themselves need (zlib, dav1d, ... from tools/build_ffmpeg_min_posix.sh),
+    # read from the prefix's own pkg-config files
+    find_program(_zdon_pkgconfig pkg-config)
+    if(_zdon_pkgconfig AND EXISTS "${YATAIDON_FFMPEG_PREFIX}/lib/pkgconfig/libavcodec.pc")
+      execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${YATAIDON_FFMPEG_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}"
+                ${_zdon_pkgconfig} --static --libs libavformat libavcodec libswscale libswresample libavutil
+        OUTPUT_VARIABLE _zdon_ff_libs OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _zdon_ff_rc)
+      if(_zdon_ff_rc EQUAL 0)
+        separate_arguments(_zdon_ff_libs UNIX_COMMAND "${_zdon_ff_libs}")
+        list(FILTER _zdon_ff_libs EXCLUDE REGEX "^-l(avformat|avcodec|avutil|swscale|swresample)$")
+        list(FILTER _zdon_ff_libs EXCLUDE REGEX "^-L${YATAIDON_FFMPEG_PREFIX}")
+        set_property(TARGET FFmpeg::avutil APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${_zdon_ff_libs})
+        message(STATUS "Static FFmpeg also links: ${_zdon_ff_libs}")
+      endif()
+    endif()
     message(STATUS "Using static FFmpeg from ${YATAIDON_FFMPEG_PREFIX}")
   else()
     find_package(PkgConfig REQUIRED)
