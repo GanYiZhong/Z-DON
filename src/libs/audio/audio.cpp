@@ -5,6 +5,7 @@
 #include "../asset_cache.h"
 #include "../audio_dev.h"
 #include "../fixed_step.h"
+#include "../global_data.h"
 #include "../jobs.h"
 #include "../profiler.h"
 #include "../test_mode.h"
@@ -21,6 +22,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -2060,9 +2063,80 @@ static std::unordered_set<std::string> skipped_sound_folders(const std::string& 
     return out;
 }
 
+// Z-DON: the most combo a .tja can give in any of its courses and branches: every note character (not 0) of its
+// note lines counted, all courses together (comments cut; a note line has no ':' and is not a command). Not a
+// readable .tja: no limit. Kept per file and write time.
+static int chart_combo_bound(const fs::path& chart) {
+    static std::mutex mutex;
+    static std::map<fs::path, std::pair<fs::file_time_type, int>> cache;
+    constexpr int kNoLimit = 1 << 30;
+    std::error_code ec;
+    const auto mtime = fs::last_write_time(chart, ec);
+    if (ec || chart.extension() != ".tja") {
+        return kNoLimit;
+    }
+    {
+        std::scoped_lock lock(mutex);
+        if (auto it = cache.find(chart); it != cache.end() && it->second.first == mtime) {
+            return it->second.second;
+        }
+    }
+    std::ifstream in(chart, std::ios::binary);
+    if (!in) {
+        return kNoLimit;
+    }
+    int notes = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (const size_t cut = line.find("//"); cut != std::string::npos) {
+            line.resize(cut);
+        }
+        const size_t start = line.find_first_not_of(" \t\r");
+        if (start == std::string::npos || line[start] == '#' || line.find(':') != std::string::npos) {
+            continue;
+        }
+        for (size_t i = start; i < line.size(); i++) {
+            const char ch = line[i];
+            notes += ch != '0' && ch != ',' && ch != ' ' && ch != '\t' && ch != '\r';
+        }
+    }
+    std::scoped_lock lock(mutex);
+    cache[chart] = {mtime, notes};
+    return notes;
+}
+
+AudioEngine::ComboVoices AudioEngine::combo_voices_for(const std::string& screen_name, const std::string& mode) {
+    ComboVoices out;
+    static const bool on = [] {
+        const char* v = std::getenv("ZDON_DEFER_MODE_FOLDERS");
+        return !(v && *v == '0');
+    }();
+    if (!on || screen_name != "game") {
+        return out;
+    }
+    // one player: only that side's voices (Player plays combo_<n>_<player_num>p)
+    if ((mode == "GAME" || mode == "GAME_PRACTICE" || mode == "GAME_DAN") &&
+        (global_data.player_num == PlayerNum::P1 || global_data.player_num == PlayerNum::P2)) {
+        out.side = static_cast<int>(global_data.player_num);
+    }
+    // one song (dan's combo runs across its songs): not past what its charts can give
+    if (mode == "GAME" || mode == "GAME_2P" || mode == "GAME_PRACTICE" || mode == "AI_GAME") {
+        int bound = -1;
+        for (const SessionData& sd : global_data.session_data) {
+            if (!sd.selected_song.empty()) {
+                bound = std::max(bound, chart_combo_bound(sd.selected_song));
+            }
+        }
+        if (bound >= 0) {
+            out.max_combo = bound;
+        }
+    }
+    return out;
+}
+
 std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::path& sounds_path,
                                                                       const std::string& screen_name, bool warn,
-                                                                      const std::string& mode) {
+                                                                      const std::string& mode, ComboVoices combo) {
     using Want = ScreenSound;
     static AssetCache<std::vector<Want>> manifests(asset_cache_budget(4u << 20));
     const std::unordered_set<std::string> skip = skipped_sound_folders(screen_name, mode);
@@ -2073,6 +2147,7 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
     for (const auto& root : skin_ancestor_roots()) {
         manifest_key += ":" + root.string();
     }
+    manifest_key += "|combo" + std::to_string(combo.max_combo) + "/" + std::to_string(combo.side);
     if (auto cached = manifests.get(manifest_key)) {
         return *cached;
     }
@@ -2091,6 +2166,16 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
         queue.push_back(Want{file, name, resident || name == "balloon_pop" || name == "kusudama_pop"});
     };
 
+    // combo/<n>_<side>p: past the chart's combo or for the other side, never played
+    auto combo_voice_wanted = [&](const std::string& stem) {
+        int n = 0;
+        int side = 0;
+        if (std::sscanf(stem.c_str(), "%d_%dp", &n, &side) != 2) {
+            return true;
+        }
+        return n <= combo.max_combo && (combo.side == 0 || side == combo.side);
+    };
+
     auto scan = [&](const fs::path& dir, bool resident = false) {
         if (!fs::exists(dir)) {
             return;
@@ -2101,7 +2186,11 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
                     if (skip.contains(entry.path().filename().string())) {
                         continue;
                     }
+                    const bool combo_dir = entry.path().filename() == "combo";
                     for (const auto& file : fs::directory_iterator(entry.path())) {
+                        if (combo_dir && !combo_voice_wanted(file.path().stem().string())) {
+                            continue;
+                        }
                         if (file.is_regular_file()) {
                             want(file.path(), entry.path().stem().string() + "_" + file.path().stem().string(),
                                  resident, true);
@@ -2184,11 +2273,12 @@ void AudioEngine::predecode_screen_sounds(const std::string& screen_name, const 
             kept.emplace(name, r.path);
         }
     }
+    const ComboVoices combo = combo_voices_for(screen_name, mode);
     jobs::submit(jobs::Priority::Background, [this, b, kept = std::move(kept), sounds = sounds_path,
-                                              rate = target_sample_rate, mode] {
+                                              rate = target_sample_rate, mode, combo] {
         const auto start = std::chrono::steady_clock::now();
         size_t n = 0;
-        for (const ScreenSound& w : screen_sound_files(sounds, b->screen, false, mode)) {
+        for (const ScreenSound& w : screen_sound_files(sounds, b->screen, false, mode, combo)) {
             if (b->cancel.load(std::memory_order_acquire)) {
                 break;
             }
@@ -2337,7 +2427,8 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
     if (auto b = current_batch(); b && b->screen != screen_name) {
         drop_batch("another screen loads"); // Z-DON predecode for another screen
     }
-    const std::vector<ScreenSound> queue = screen_sound_files(sounds_path, screen_name, true, mode);
+    const std::vector<ScreenSound> queue =
+        screen_sound_files(sounds_path, screen_name, true, mode, combo_voices_for(screen_name, mode));
     using Want = ScreenSound;
 
     std::atomic<int> reused{0};

@@ -332,8 +332,15 @@ private:
         std::string name;
         bool resident; // Z-DON: kept across screens (see load_resident_sound)
     };
+    // Z-DON: which combo voices (Sounds/game/combo/<n>_<side>p) the play can reach: none above max_combo, only
+    // side's when side is not 0. Made on the main thread (combo_voices_for), read by the predecode worker.
+    struct ComboVoices {
+        int max_combo = 1 << 30;
+        int side = 0;
+    };
+    static ComboVoices combo_voices_for(const std::string& screen_name, const std::string& mode);
     static std::vector<ScreenSound> screen_sound_files(const fs::path& sounds_path, const std::string& screen_name,
-                                                       bool warn, const std::string& mode = "");
+                                                       bool warn, const std::string& mode, ComboVoices combo);
     // true when the decoder took over freeing snd.data
     static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns
