@@ -93,8 +93,6 @@ namespace texture_bc7 {
             std::unordered_set<uint64_t> queued;
             std::unordered_map<std::string, FileRec> files; // by path
             // Z-DON: files by ImagePrefetch::image_key (lexically normal, generic), rebuilt when files grows
-            std::unordered_map<std::string, std::string> files_by_key;
-            size_t files_by_key_n = SIZE_MAX;
             size_t files_dirty = 0;
             size_t queued_bytes = 0;
             size_t dirty = 0;
@@ -122,6 +120,12 @@ namespace texture_bc7 {
         }
         fs::path files_path() {
             return fs::path("cache") / "bc7" / "files.bin";
+        }
+
+        // Z-DON: a file record's key: the same file named with \ (a folder listing) or / (a texture pack key,
+        // the predecode) is one record, so a load finds what the other way of naming it cached
+        std::string file_key(const std::string& path) {
+            return fs::path(path).lexically_normal().generic_string();
         }
 
         // ZDON_BC7_FILES=0: decode every file again (the cache found by the decoded pixels only)
@@ -340,7 +344,7 @@ namespace texture_bc7 {
                 }
                 auto it = s.entries.find(r.key);
                 if (it != s.entries.end() && has_blocks(it->second.kind)) {
-                    s.files[path] = r;
+                    s.files[file_key(path)] = r; // earlier builds kept each spelling of a path apart
                 }
             }
             std::fclose(f);
@@ -824,20 +828,8 @@ namespace texture_bc7 {
             return false;
         }
         s.loaded.wait();
-        std::unique_lock lock(s.mutex);
-        if (s.files_by_key_n != s.files.size()) {
-            s.files_by_key.clear();
-            s.files_by_key.reserve(s.files.size());
-            for (const auto& [raw, rec] : s.files) {
-                s.files_by_key.emplace(fs::path(raw).lexically_normal().generic_string(), raw);
-            }
-            s.files_by_key_n = s.files.size();
-        }
-        auto kit = s.files_by_key.find(key);
-        if (kit == s.files_by_key.end()) {
-            return false;
-        }
-        auto fit = s.files.find(kit->second);
+        std::shared_lock lock(s.mutex);
+        auto fit = s.files.find(file_key(key));
         // the size only: a listing's write time is in another unit than stamp()'s (Windows FILETIME), and
         // a file changed since it was cached just misses in cached_image and is read from the skin
         if (fit == s.files.end() || fit->second.stamp.size != size) {
@@ -873,7 +865,7 @@ namespace texture_bc7 {
         Entry e;
         {
             std::shared_lock lock(s.mutex);
-            auto fit = s.files.find(path.string());
+            auto fit = s.files.find(file_key(path.string()));
             if (fit == s.files.end() || fit->second.stamp.size != st.size || fit->second.stamp.mtime != st.mtime) {
                 return false;
             }
@@ -954,7 +946,7 @@ namespace texture_bc7 {
             if (files_on() && !path.empty() && st.size != 0) { // cached_image finds the file next time
                 const FileRec r{st, key, w, h, static_cast<uint8_t>(rgba ? 4 : 3), border};
                 std::unique_lock lock(s.mutex);
-                auto [it, added] = s.files.try_emplace(path.string(), r);
+                auto [it, added] = s.files.try_emplace(file_key(path.string()), r);
                 if (!added &&
                     (it->second.stamp.size != st.size || it->second.stamp.mtime != st.mtime || it->second.key != key)) {
                     it->second = r;
