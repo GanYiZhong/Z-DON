@@ -2037,7 +2037,9 @@ static bool lazy_long_sounds(const std::string& screen) {
 // Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
 // its textures: the tutorial's (Nijiiro 16 files, 19 MB of PCM) outside the tutorial and input calibration, enso
 // battle's (PyTaikoGreen 81 files, 28 MB) outside enso battle (BATTLE_GAME is not one of these modes: it loads
-// all). Played anyway, such a sound is just missing (has_sound false). ZDON_DEFER_MODE_FOLDERS=0 loads them all.
+// all), and the AI battle's (ai, aivoice, ai_battle: 8 MB) outside AI_GAME and GAME_2P, the modes whose
+// textures load ai_battle. Played anyway, such a sound is just missing (has_sound false).
+// ZDON_DEFER_MODE_FOLDERS=0 loads them all.
 static std::unordered_set<std::string> skipped_sound_folders(const std::string& screen, const std::string& mode) {
     static const bool on = [] {
         const char* v = std::getenv("ZDON_DEFER_MODE_FOLDERS");
@@ -2051,6 +2053,9 @@ static std::unordered_set<std::string> skipped_sound_folders(const std::string& 
     std::unordered_set<std::string> out{"enso_battle"};
     if (mode != "TUTORIAL" && mode != "INPUT_CALI") {
         out.insert("tutorial");
+    }
+    if (mode != "AI_GAME" && mode != "GAME_2P") {
+        out.insert({"ai", "aivoice", "ai_battle"});
     }
     return out;
 }
