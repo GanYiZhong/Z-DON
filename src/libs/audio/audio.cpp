@@ -2060,10 +2060,24 @@ static bool first_use_sound(const std::string& screen, const fs::path& file) {
         "song_select",     "title",         "result",        "entry",        "dan_select",
         "dan_result",      "battle_result", "waiwai_result", "total_result", "ai_section_result",
         "kinotake_result", "campaign",      "reward_shop",   "game_over"};
+    const fs::path dir = file.parent_path();
+    if (screen == "game") {
+        // the game screen's that only play once the notes are over (the clear / fail / full combo cues and voices,
+        // the result transition) or between dan songs: a first use there cannot touch the judging
+        static const std::unordered_set<std::string> after_notes = {"clear",
+                                                                    "fail",
+                                                                    "full_combo",
+                                                                    "full_combo_voice",
+                                                                    "donderful_combo",
+                                                                    "donderful_combo_voice",
+                                                                    "result_transition",
+                                                                    "dan_failed",
+                                                                    "dan_transition"};
+        return lazy_long_sounds("") && dir.filename() == screen && after_notes.contains(file.stem().string());
+    }
     if (!screens.contains(screen) || !lazy_long_sounds(screen)) {
         return false;
     }
-    const fs::path dir = file.parent_path();
     return dir.filename() == screen || dir.parent_path().filename() == screen; // the screen folder or one below
 }
 
