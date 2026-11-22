@@ -438,8 +438,21 @@ private:
         }
         for_each_voice(s, fn);
     }
+    // fn(slot, pcm) if loaded; load: a long sound a screen left for its first use (lazy_sounds) loads first
     template<class Fn>
-    bool with_sound(const std::string& name, Fn&& fn) const; // fn(slot, pcm) if loaded
+    bool with_sound(const std::string& name, Fn&& fn, bool load = true) const;
+
+    // Z-DON: a screen's long sounds (over kProgressiveMinSeconds, not resident) are only listed by load_screen_sounds
+    // and load on their first use (play, has_sound, a setter, the length, a seek; not stop or is_playing): a skin's
+    // folder holds music of modes a visit may never open (PyTaikoGreen's song_select: the AI battle story and intro,
+    // 80 MB of PCM). ZDON_LAZY_LONG_SOUNDS=0 loads them with the screen.
+    mutable std::mutex lazy_lock;
+    std::unordered_map<std::string, fs::path> lazy_sounds; // name -> file, under lazy_lock
+    std::atomic<size_t> lazy_count{0};
+    bool defer_long_sound(const fs::path& file_path, const std::string& name); // true: listed, not loaded
+    bool load_lazy_sound(const std::string& name) const;                       // true: it was listed (loaded now)
+    bool is_lazy_sound(const std::string& name) const;
+    void forget_lazy_sound(const std::string& name);
 
     // play_sound -> mixer: slots to add to the active voices (bounded MPMC queue)
     static constexpr size_t kActivateCap = 1024;

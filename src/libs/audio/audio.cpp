@@ -1369,7 +1369,10 @@ void AudioEngine::make_polyphonic(SoundId id) {
 // Runs fn(slot, pcm) for a loaded sound, holding names_lock (shared) so the PCM stays alive;
 // false if there is no such sound.
 template<class Fn>
-bool AudioEngine::with_sound(const std::string& name, Fn&& fn) const {
+bool AudioEngine::with_sound(const std::string& name, Fn&& fn, bool load) const {
+    if (load) {
+        load_lazy_sound(name);
+    }
     std::shared_lock<std::shared_mutex> g(names_lock);
     auto it = sound_ids.find(name);
     if (it == sound_ids.end()) {
@@ -1863,6 +1866,7 @@ bool AudioEngine::read_short_sound(SNDFILE* file, const SF_INFO& info, const fs:
 }
 
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
+    forget_lazy_sound(name); // Z-DON: loaded now (or replaced by another file)
     try {
         // Z-DON keeps decoded sounds across screens with resident sounds and predecode, not upstream's
         // decoded-sound asset cache
@@ -2239,6 +2243,85 @@ void AudioEngine::cancel_predecoded_sounds(const std::string& screen_name) {
     }
 }
 
+static bool lazy_long_sounds_on() {
+    static const bool on = [] {
+        const char* v = std::getenv("ZDON_LAZY_LONG_SOUNDS");
+        return !(v && *v == '0');
+    }();
+    return on;
+}
+
+bool AudioEngine::defer_long_sound(const fs::path& file_path, const std::string& name) {
+    // 8 s of the smallest Ogg a skin ships is still well over this; smaller files are not opened twice
+    constexpr uintmax_t kMinBytes = 48 * 1024;
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(file_path, ec);
+    if (ec || size < kMinBytes) {
+        return false;
+    }
+#ifdef SUPPORT_FUMEN
+    if (is_bank_file(file_path)) {
+        return false;
+    }
+#endif
+    SF_INFO info;
+    SNDFILE* file = open_sound_file(file_path, info);
+    if (!file) {
+        return false;
+    }
+    const bool is_long = info.frames > static_cast<sf_count_t>(info.samplerate) * kProgressiveMinSeconds;
+    sf_close(file);
+    if (!is_long) {
+        return false;
+    }
+    std::scoped_lock g(lazy_lock);
+    if (lazy_sounds.insert_or_assign(name, file_path).second) {
+        lazy_count.fetch_add(1, std::memory_order_release);
+    }
+    return true;
+}
+
+bool AudioEngine::load_lazy_sound(const std::string& name) const {
+    if (lazy_count.load(std::memory_order_acquire) == 0) {
+        return false;
+    }
+    auto* self = const_cast<AudioEngine*>(this); // NOLINT(cppcoreguidelines-pro-type-const-cast): never a const engine
+    fs::path file;
+    {
+        std::scoped_lock g(lazy_lock);
+        auto it = self->lazy_sounds.find(name);
+        if (it == self->lazy_sounds.end()) {
+            return false;
+        }
+        file = std::move(it->second);
+        self->lazy_sounds.erase(it);
+        self->lazy_count.fetch_sub(1, std::memory_order_release);
+    }
+    const auto start = std::chrono::steady_clock::now();
+    self->load_sound(file, name);
+    spdlog::info("Sound {} loaded on first use ({:.1f} ms)", name,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    return true;
+}
+
+bool AudioEngine::is_lazy_sound(const std::string& name) const {
+    if (lazy_count.load(std::memory_order_acquire) == 0) {
+        return false;
+    }
+    std::scoped_lock g(lazy_lock);
+    return lazy_sounds.contains(name);
+}
+
+void AudioEngine::forget_lazy_sound(const std::string& name) {
+    if (lazy_count.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    std::scoped_lock g(lazy_lock);
+    if (lazy_sounds.erase(name) > 0) {
+        lazy_count.fetch_sub(1, std::memory_order_release);
+    }
+}
+
 void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::string& mode) {
     if (auto b = current_batch(); b && b->screen != screen_name) {
         drop_batch("another screen loads"); // Z-DON predecode for another screen
@@ -2247,9 +2330,16 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
     using Want = ScreenSound;
 
     std::atomic<int> reused{0};
-    auto load = [this, &queue, &reused](size_t i) {
+    std::atomic<int> deferred{0};
+    // not the game screen's: a first play there would decode in the middle of a song
+    const bool lazy = lazy_long_sounds_on() && screen_name != "game";
+    auto load = [this, &queue, &reused, &deferred, lazy](size_t i) {
         const Want& w = queue[i];
         if (!w.resident) {
+            if (lazy && defer_long_sound(w.file, w.name)) {
+                deferred.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
             load_sound(w.file, w.name);
             return;
         }
@@ -2268,13 +2358,18 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
     }
     drop_batch(current_batch() ? "loaded" : nullptr); // Z-DON: what the load did not take
     std::scoped_lock g(resident_lock);
-    spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB)", screen_name, queue.size(),
-                 reused.load(), resident.size(), resident_bytes / 1048576.0);
+    spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB), {} long ones load on first use",
+                 screen_name, queue.size(), reused.load(), resident.size(), resident_bytes / 1048576.0,
+                 deferred.load());
 }
 
 void AudioEngine::unload_sound(const std::string& name) {
     if (fixed_step::on()) {
         fixed_step::audio_stop(name, false);
+    }
+    if (is_lazy_sound(name)) {
+        forget_lazy_sound(name); // Z-DON: never loaded
+        return;
     }
     const SoundId id = find_sound(name);
     SoundSlot* s = id == kNoSound ? nullptr : slot_at(id);
@@ -2306,6 +2401,11 @@ void AudioEngine::unload_all_sounds() {
     }
     for (const auto& name : names) {
         unload_sound(name);
+    }
+    {
+        std::scoped_lock g(lazy_lock);
+        lazy_sounds.clear();
+        lazy_count.store(0, std::memory_order_release);
     }
 
     spdlog::info("All sounds unloaded");
@@ -2424,6 +2524,7 @@ uint64_t AudioEngine::sound_play_count(const std::string& name) {
 }
 
 void AudioEngine::play_sound(const std::string& name, VolumePreset volume_preset, float gain) {
+    load_lazy_sound(name);
     if (fixed_step::on() && has_sound(name)) {
         fixed_step::audio_play(name, false);
     }
@@ -2517,14 +2618,17 @@ void AudioEngine::stop_sound(const std::string& name) {
     if (fixed_step::on()) {
         fixed_step::audio_stop(name, false);
     }
-    const bool found = with_sound(name, [this](SoundSlot& snd, const sound&) {
-        for_each_route_voice(snd, [](SoundSlot& v) {
-            v.is_playing.store(false, std::memory_order_relaxed);
-            v.current_frame.store(0, std::memory_order_relaxed);
-            v.frame_frac.store(0.0f, std::memory_order_relaxed);
-        });
-    });
-    if (!found) {
+    const bool found = with_sound(
+        name,
+        [this](SoundSlot& snd, const sound&) {
+            for_each_route_voice(snd, [](SoundSlot& v) {
+                v.is_playing.store(false, std::memory_order_relaxed);
+                v.current_frame.store(0, std::memory_order_relaxed);
+                v.frame_frac.store(0.0f, std::memory_order_relaxed);
+            });
+        },
+        false);
+    if (!found && !is_lazy_sound(name)) {
         spdlog::warn("Sound {} not found", name);
     }
 }
@@ -2543,11 +2647,14 @@ bool AudioEngine::is_sound_playing(const std::string& name) {
         return has_sound(name) && fixed_step::audio_playing(name, false, get_sound_time_length(name));
     }
     bool playing = false;
-    const bool found = with_sound(name, [this, &playing](SoundSlot& snd, const sound&) {
-        for_each_route_voice(
-            snd, [&playing](SoundSlot& v) { playing = playing || v.is_playing.load(std::memory_order_relaxed); });
-    });
-    if (!found) {
+    const bool found = with_sound(
+        name,
+        [this, &playing](SoundSlot& snd, const sound&) {
+            for_each_route_voice(
+                snd, [&playing](SoundSlot& v) { playing = playing || v.is_playing.load(std::memory_order_relaxed); });
+        },
+        false);
+    if (!found && !is_lazy_sound(name)) {
         spdlog::warn("Sound {} not found", name);
     }
     return playing;
@@ -2593,11 +2700,14 @@ float AudioEngine::get_sound_time_played(const std::string& name) const {
         return fixed_step::audio_time(name, false, get_sound_time_length(name));
     }
     float seconds = 0.0f;
-    const bool found = with_sound(name, [&](SoundSlot& snd, const sound&) {
-        unsigned int frame = latest_voice(route_slot(snd)).current_frame.load(std::memory_order_relaxed);
-        seconds = static_cast<float>(frame) / static_cast<float>(target_sample_rate);
-    });
-    if (!found) {
+    const bool found = with_sound(
+        name,
+        [&](SoundSlot& snd, const sound&) {
+            unsigned int frame = latest_voice(route_slot(snd)).current_frame.load(std::memory_order_relaxed);
+            seconds = static_cast<float>(frame) / static_cast<float>(target_sample_rate);
+        },
+        false);
+    if (!found && !is_lazy_sound(name)) {
         spdlog::warn("Sound {} not found", name);
     }
     return seconds;
@@ -3357,7 +3467,7 @@ void AudioEngine::dev_mix_offline(float* out, unsigned int frames) {
 void AudioEngine::dev_wait_decoded(const std::string& name) {
     for (;;) {
         std::shared_ptr<SoundDecodeJob> job;
-        with_sound(name, [&job](SoundSlot&, const sound& pcm) { job = pcm.decode_job; });
+        with_sound(name, [&job](SoundSlot&, const sound& pcm) { job = pcm.decode_job; }, false);
         if (!job || job->done.load(std::memory_order_acquire)) {
             return;
         }
