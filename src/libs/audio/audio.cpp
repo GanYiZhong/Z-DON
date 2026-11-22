@@ -2040,17 +2040,23 @@ static bool lazy_long_sounds(const std::string& screen) {
 // Z-DON: a screen's sound folders that wait for their first use whatever their length (with lazy_long_sounds):
 // song select's AI battle ones (PyTaikoGreen battle_story 52 voice clips, ai, ai_select, ai_intro: about 16 MB of
 // PCM), played only once an AI battle is picked, and the modifier voices (options, 16 clips, 4 MB) of the
-// options panel. A first play decodes the clip then (a few ms).
+// options panel; the title's gacha (17 clips, 4 MB); the result's AI battle ones (ai, aivoice: 4 MB). A first play
+// decodes the clip then (a few ms).
 static bool first_use_sound(const std::string& screen, const fs::path& file) {
-    if (!lazy_long_sounds(screen) || screen != "song_select") {
+    static const std::unordered_map<std::string, std::unordered_set<std::string>> folders = {
+        {"song_select", {"battle_story", "ai", "ai_select", "ai_intro", "options"}},
+        {"title", {"gacha"}},
+        {"result", {"ai", "aivoice"}},
+    };
+    const auto it = folders.find(screen);
+    if (it == folders.end() || !lazy_long_sounds(screen)) {
         return false;
     }
     const fs::path dir = file.parent_path();
     if (dir.parent_path().filename() != screen) {
         return false; // a file of the screen folder itself
     }
-    static const std::unordered_set<std::string> folders = {"battle_story", "ai", "ai_select", "ai_intro", "options"};
-    return folders.contains(dir.filename().string());
+    return it->second.contains(dir.filename().string());
 }
 
 // Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
