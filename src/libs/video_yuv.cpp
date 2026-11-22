@@ -114,7 +114,14 @@ void main() {
         if (w <= 0 || h <= 0) {
             return false;
         }
-        bytes.resize(static_cast<size_t>(w) * h + 2 * static_cast<size_t>(cw) * ch);
+        const size_t n = static_cast<size_t>(w) * h + 2 * static_cast<size_t>(cw) * ch;
+        if (bytes.capacity() < n || bytes.capacity() > n + n / 4) {
+            // exactly one frame: growing with resize would double the buffer (each queued frame held 5.9 MB
+            // for a 3 MB 1080p one)
+            std::vector<uint8_t>().swap(bytes);
+            bytes.reserve(n);
+        }
+        bytes.resize(n);
         uint8_t* out = bytes.data();
         const int widths[3] = {w, cw, cw}, heights[3] = {h, ch, ch};
         for (int p = 0; p < 3; ++p) {

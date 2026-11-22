@@ -66,7 +66,12 @@ namespace av {
             if (!ctx) {
                 throw std::runtime_error("sws_getCachedContext failed");
             }
-            out.resize(static_cast<std::size_t>(w) * h * 4);
+            const std::size_t n = static_cast<std::size_t>(w) * h * 4;
+            if (out.capacity() < n || out.capacity() > n + n / 4) { // Z-DON: exactly one frame (resize doubles)
+                std::vector<uint8_t>().swap(out);
+                out.reserve(n);
+            }
+            out.resize(n);
             uint8_t* dst[1] = {out.data()};
             const int dst_linesize[1] = {w * 4};
             sws_scale(ctx, frame_->data, frame_->linesize, 0, h, dst, dst_linesize);
