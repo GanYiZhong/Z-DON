@@ -2048,26 +2048,18 @@ static bool lazy_long_sounds(const std::string& screen) {
     return on && screen != "game";
 }
 
-// Z-DON: a screen's sound folders that wait for their first use whatever their length (with lazy_long_sounds):
-// song select's AI battle ones (PyTaikoGreen battle_story 52 voice clips, ai, ai_select, ai_intro: about 16 MB of
-// PCM), played only once an AI battle is picked, and the modifier voices (options, 16 clips, 4 MB) of the
-// options panel; the title's gacha (17 clips, 4 MB); the result's AI battle ones (ai, aivoice: 4 MB). A first play
-// decodes the clip then (a few ms).
+// Z-DON: the menu screens whose sounds all wait for their first use whatever their length (with
+// lazy_long_sounds), as the long ones do: a first use decodes the sound's first kFirstUseHeadSeconds there (about
+// 1.3 ms) and the rest in the background (load_sound). Most are never played on a visit: song select carries
+// PyTaikoGreen's AI battle story voices (52 clips), the AI select and intro sounds, the modifier and genre voices
+// (about 30 MB of PCM in all), the title the gacha's, the result one voice per outcome and the AI result's.
 static bool first_use_sound(const std::string& screen, const fs::path& file) {
-    static const std::unordered_map<std::string, std::unordered_set<std::string>> folders = {
-        {"song_select", {"battle_story", "ai", "ai_select", "ai_intro", "options", "genre_voice"}},
-        {"title", {"gacha"}},
-        {"result", {"ai", "aivoice"}},
-    };
-    const auto it = folders.find(screen);
-    if (it == folders.end() || !lazy_long_sounds(screen)) {
+    static const std::unordered_set<std::string> screens = {"song_select", "title", "result", "entry"};
+    if (!screens.contains(screen) || !lazy_long_sounds(screen)) {
         return false;
     }
     const fs::path dir = file.parent_path();
-    if (dir.parent_path().filename() != screen) {
-        return false; // a file of the screen folder itself
-    }
-    return it->second.contains(dir.filename().string());
+    return dir.filename() == screen || dir.parent_path().filename() == screen; // the screen folder or one below
 }
 
 // Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
