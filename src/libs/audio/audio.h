@@ -77,13 +77,18 @@ struct SoundDecodeJob {
     std::mutex state;
     bool decoder_exited = false;
     float* orphaned = nullptr;
+    int16_t* orphaned16 = nullptr;
 };
 
 // A decoded sound as a loader hands it to store_sound. Once stored, the PCM part (data,
 // frame_count, sample_rate, channels, normalization_gain, decode_job) is immutable and owned by
 // the engine; the playback part seeds the sound's slot.
 struct sound {
-    float* data = nullptr;        // Audio sample data (interleaved stereo or mono)
+    float* data = nullptr; // Audio sample data (interleaved stereo or mono)
+    // Z-DON: the same as 16-bit samples (data is null then): sample = pcm16[i] * pcm16_scale. Sounds are stored
+    // so once decoded (half the memory of float); ZDON_PCM16=0 keeps float.
+    int16_t* pcm16 = nullptr;
+    float pcm16_scale = 0.0f;
     unsigned int frame_count = 0; // Total number of frames in the sound
     unsigned int sample_rate = 0; // Original sample rate of the audio
     unsigned int channels = 0;    // Number of channels (1 = mono, 2 = stereo)
@@ -217,14 +222,16 @@ public:
 
     void queue_song_loudness(const fs::path& file_path, bool priority = false);
 
-    void load_screen_sounds(const std::string& screen_name);
+    // mode (global_data.current_screen): of the game screen, the sound folders that play mode never plays are
+    // left out (tutorial, enso_battle; see skipped_sound_folders in audio.cpp)
+    void load_screen_sounds(const std::string& screen_name, const std::string& mode = "");
     // Z-DON predecode: decodes what load_screen_sounds(screen_name) would decode (not the resident sounds already
     // kept; of a long one, a bgm, the first kProgressiveHeadSeconds it decodes before returning) on a background
     // job while the current screen idles; that load then takes the PCM instead of decoding the file again (same
     // decoder, the file's size and time checked; a long one's rest decodes in the background as before). A load of
     // another screen drops them; so does a new predecode. ZDON_PREDECODE=0 turns it off; at most 64 MB of PCM.
     // ZDON_PREDECODE_VERIFY=1 (dev) decodes every taken sound again and compares.
-    void predecode_screen_sounds(const std::string& screen_name);
+    void predecode_screen_sounds(const std::string& screen_name, const std::string& mode = "");
     void cancel_predecoded_sounds(const std::string& screen_name);
 
     std::string load_sound(const fs::path& file_path, const std::string& name);
@@ -326,7 +333,7 @@ private:
         bool resident; // Z-DON: kept across screens (see load_resident_sound)
     };
     static std::vector<ScreenSound> screen_sound_files(const fs::path& sounds_path, const std::string& screen_name,
-                                                       bool warn);
+                                                       bool warn, const std::string& mode = "");
     // true when the decoder took over freeing snd.data
     static bool stop_decode_job(sound& snd);
     // stops the decode job and frees the buffers a stored sound owns

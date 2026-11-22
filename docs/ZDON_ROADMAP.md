@@ -45,6 +45,19 @@
 | TJA 解析加速（指令表、無 regex、view） | — | notes_to_position 1.0–1.1 → 0.64–0.70 s（全曲庫） |
 | 全 src 精簡 | — | −2450 行 |
 
+## 2026-11-22 記憶體：16-bit 音效、模式用不到的資料夾、global/背景與選曲貼圖
+
+量測：Nijiiro、BC7 開（預設）、命令列開歌第 25 秒；private＝提交量，ws＝working set。
+
+- 先查清楚記憶體去哪：上傳貼圖的位元組在 Windows（WDDM）會再算進行程的提交量約 1.25 倍（測試程式：256 MB RGBA 上傳 private +316–331 MB，glTexImage2D／glTexStorage2D／PBO 都一樣），所以只能減少上傳的量；演奏中 Lua 堆積只有約 3 MB；最大的自有項目是解碼後的音效（float）。
+- **音效存 16-bit**（`ZDON_PCM16=0` 回 float）：整段解完的音效依峰值縮放存成 int16（峰值 >1 時照峰值，不會削波），8 秒以上邊播邊解的（歌曲、bgm）留 2 倍餘量；混音時把縮放併進音量。`YATAIDON_AUDIO_SELFTEST` 比對 float：播放狀態紀錄相同，樣本差最大 −99 dBFS、均方根 −118 dBFS。演奏中 private 674–688 → 582–603 MB、ws 473–489 → 368–395 MB。
+- **演奏模式用不到的音效資料夾不載入**：跟貼圖的 deferred_game_subsets 一樣，教學以外不載 `tutorial`（Nijiiro 19 MB），演奏對戰以外不載 `enso_battle`（PyTaikoGreen 81 個檔 28 MB）；貼圖也多延後 `enso_battle`（13 張都大於 1 MB，以前一律載入時上傳 26 MB）。`ZDON_DEFER_MODE_FOLDERS=0` 全載。選曲預讀用 `next_game_mode`（補上 BATTLE_SELECT → BATTLE_GAME）。演奏音效 255 → 158 個檔，演奏貼圖載入時上傳 108 → 83 MB；private → 496–520 MB、ws → 313–322 MB。
+- **global 與背景貼圖也等第一次畫到**：演奏貼圖那套規則（沒畫過、≤1 MB 才等）擴大到 global 和 background；BC7 圖等待時不留 RAM。global 載入時上傳 35 → 19 MB。private → 433–481 MB、ws → 293–322 MB。同一首歌 FRAME_STATS 每 2 s 最長一幀：舊 30–48 ms、新 12–14 ms，>4 ms 的視窗 7–9 vs 6–7。
+- **其他畫面沒畫過的 BC7 圖也不留 RAM**：選曲 1246 張等待上傳的貼圖只有 18 張畫過（會提前上傳），其餘 BC7 的影像載入後就釋放、第一次畫到時從 BC7 快取讀回。選曲畫面 private 690–705 → 555–565 MB、ws 533–539 → 397–402 MB；捲動 12 s 最長一幀 4.7/86 → 5.4/7.7 ms。
+- 合計（演奏中）：private 約 680 → 455 MB（−33%）、ws 約 480 → 305 MB（−37%）。
+- 驗證：固定步進截圖（Nijiiro、PyTaikoGreen；演奏／暫停／練習／結算，BC7 關）44 張與改前逐像素相同；BC7 開的標題／選曲／演奏／暫停另比（見下）。
+- 評估後不做：Nijiiro `gogo_time/explosion.png`（2352×3810，30 格，RGBA 34 MB，演奏中最大的一張）壓不過 BC7 門檻：bc7enc PSNR 44.2 dB（門檻 45）、最大誤差 162；basis_universal 的 bc7e 純 C++ 版（全部 8 種模式）各預設 44.2–44.8 dB、最大誤差 147–173，只算看得到的像素約 38 dB，不放寬。30 格沒有重複，各格裁掉透明邊只剩 42% 面積，但要引擎支援裁邊圖集（位移、旋轉中心、鏡像），先不做。
+
 ## 2026-11-21 演奏貼圖用到才上傳、記憶體
 
 - 演奏畫面以前 984 張貼圖（Nijiiro）全部載入時上傳（歌曲中第一次畫到才傳會掉幀），但一整首歌只畫到約 170 張。現在「之前載入這個畫面時沒畫過」（cache/warm_upload.txt）且上傳量 ≤1 MB（BC7 1024×1024、RGBA 512×512；`ZDON_LAZY_GAME_MAX_KB`）的貼圖等第一次畫到才上傳；畫過的照舊載入時上傳，歌曲中不做提前上傳（量過：提前上傳在歌曲中一幀卡 196 ms）。其中 BC7 的影像載入完就不留在 RAM，第一次畫到時從 BC7 快取讀回（cached_image，不解 PNG）。`ZDON_LAZY_GAMEPLAY=0` 關。

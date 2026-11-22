@@ -22,10 +22,51 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <unordered_set>
 
 #include "../file/filesystem.h"
+
+// Z-DON: decoded sounds are kept as 16-bit samples (sound::pcm16), half of float. A whole sound is scaled
+// by its peak (above 1.0 when a decode overshoots), so its step is 1/32767 of that; a long one decoded in
+// the background (ProgressiveHead) does not know its peak yet and keeps 2.0 of headroom. ZDON_PCM16=0: float.
+static bool pcm16_enabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("ZDON_PCM16");
+        return !(v && *v == '0');
+    }();
+    return on;
+}
+static constexpr float kProgressivePeak = 2.0f;
+
+static void float_to_pcm16(const float* in, size_t n, float peak, int16_t* out) {
+    const float k = 32767.0f / peak;
+    for (size_t i = 0; i < n; ++i) {
+        out[i] = static_cast<int16_t>(std::lrintf(std::clamp(in[i] * k, -32767.0f, 32767.0f)));
+    }
+}
+
+// the float samples of a whole decoded sound as pcm16 (frees data)
+static void compact_sound(sound& snd) {
+    if (!pcm16_enabled() || !snd.data || snd.decode_job || snd.pcm16) {
+        return;
+    }
+    const size_t n = static_cast<size_t>(snd.frame_count) * snd.channels;
+    float peak = 1.0f;
+    for (size_t i = 0; i < n; ++i) {
+        peak = std::max(peak, std::fabs(snd.data[i]));
+    }
+    snd.pcm16 = new int16_t[std::max<size_t>(n, 1)];
+    float_to_pcm16(snd.data, n, peak, snd.pcm16);
+    snd.pcm16_scale = peak / 32767.0f;
+    delete[] snd.data;
+    snd.data = nullptr;
+}
+
+static size_t pcm_bytes(const sound& snd) {
+    return static_cast<size_t>(snd.frame_count) * snd.channels * (snd.pcm16 ? sizeof(int16_t) : sizeof(float));
+}
 
 // Z-DON: sounds decoded ahead by predecode_screen_sounds, by path, until load_screen_sounds of that screen
 namespace {
@@ -479,13 +520,14 @@ AudioEngine::~AudioEngine() {
 }
 
 // Splits one source frame into left/right: mono by pan, stereo attenuated on the far side.
-static inline void pan_frame(const float* src, unsigned int channels, float pan, float& left, float& right) {
+template<class T>
+static inline void pan_frame(const T* src, unsigned int channels, float pan, float& left, float& right) {
     if (channels == 1) {
-        left = src[0] * (1.0f - pan);
-        right = src[0] * pan;
+        left = static_cast<float>(src[0]) * (1.0f - pan);
+        right = static_cast<float>(src[0]) * pan;
     } else {
-        left = src[0];
-        right = src[1];
+        left = static_cast<float>(src[0]);
+        right = static_cast<float>(src[1]);
         if (pan < 0.5f) {
             right *= (pan * 2.0f);
         } else if (pan > 0.5f) {
@@ -573,15 +615,16 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
             continue;
         }
 
+        // 16-bit PCM: the sample scale folds into the volume
         const float volume = base_volume(snd.category.load(std::memory_order_relaxed), snd.volume) *
-                             snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain;
+                             snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain *
+                             (pcm->pcm16 ? pcm->pcm16_scale : 1.0f);
 
         const float pan = snd.pan.load(std::memory_order_relaxed);
         const int route = snd.route.load(std::memory_order_relaxed); // two-player: one player's channel
         unsigned int frame = snd.current_frame.load(std::memory_order_relaxed);
 
         const float pitch = snd.pitch.load(std::memory_order_relaxed);
-        const float* data_ptr = pcm->data;
         const unsigned int channels = pcm->channels;
 
         unsigned long frames_to_process = framesPerBuffer;
@@ -600,58 +643,66 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
             end_frame = pcm->decode_job->frames_ready.load(std::memory_order_acquire);
         }
 
-        while (frames_to_process > 0 && still_playing) {
-            unsigned long src_frame = static_cast<unsigned long>(frame_f);
-            if (src_frame >= end_frame) {
-                if (decoding) {
+        auto run = [&](const auto* data_ptr) {
+            while (frames_to_process > 0 && still_playing) {
+                unsigned long src_frame = static_cast<unsigned long>(frame_f);
+                if (src_frame >= end_frame) {
+                    if (decoding) {
+                        break;
+                    }
+                    if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
+                        frame_f = 0.0;
+                        continue;
+                    }
+
+                    still_playing = false;
                     break;
                 }
-                if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
-                    frame_f = 0.0;
+
+                if (pitch == 1.0f && route < 0) {
+                    // Z-DON: the common case (hit sounds, effects at their own pitch) as one contiguous run up to the
+                    // end: the same samples and sums as the frame-by-frame loop below (frame_f + n is exact)
+                    const unsigned long n = std::min<unsigned long>(frames_to_process, end_frame - src_frame);
+                    const auto* f = data_ptr + static_cast<size_t>(src_frame) * channels;
+                    float* o = out + output_index * 2;
+                    for (unsigned long i = 0; i < n; i++) {
+                        float left, right;
+                        pan_frame(f + i * channels, channels, pan, left, right);
+                        o[i * 2] += left * volume;
+                        o[i * 2 + 1] += right * volume;
+                    }
+                    frame_f += static_cast<double>(n);
+                    output_index += n;
+                    frames_to_process -= n;
                     continue;
                 }
 
-                still_playing = false;
-                break;
-            }
-
-            if (pitch == 1.0f && route < 0) {
-                // Z-DON: the common case (hit sounds, effects at their own pitch) as one contiguous run up to the
-                // end: the same samples and sums as the frame-by-frame loop below (frame_f + n is exact)
-                const unsigned long n = std::min<unsigned long>(frames_to_process, end_frame - src_frame);
-                const float* f = data_ptr + static_cast<size_t>(src_frame) * channels;
-                float* o = out + output_index * 2;
-                for (unsigned long i = 0; i < n; i++) {
-                    float left, right;
-                    pan_frame(f + i * channels, channels, pan, left, right);
-                    o[i * 2] += left * volume;
-                    o[i * 2 + 1] += right * volume;
+                unsigned long dst_index = output_index * 2;
+                float left, right;
+                if (route >= 0) {
+                    // Preserve both source channels when folding a stereo effect
+                    // into its player's channel; do not drop half of the recording.
+                    const auto* f = data_ptr + src_frame * channels;
+                    const float mono = channels == 1 ? static_cast<float>(f[0])
+                                                     : 0.5f * (static_cast<float>(f[0]) + static_cast<float>(f[1]));
+                    left = route == 0 ? mono : 0.0f;
+                    right = route == 1 ? mono : 0.0f;
+                } else {
+                    pan_frame(data_ptr + src_frame * channels, channels, pan, left, right);
                 }
-                frame_f += static_cast<double>(n);
-                output_index += n;
-                frames_to_process -= n;
-                continue;
+
+                out[dst_index] += left * volume;
+                out[dst_index + 1] += right * volume;
+
+                frame_f += pitch;
+                output_index++;
+                frames_to_process--;
             }
-
-            unsigned long dst_index = output_index * 2;
-            float left, right;
-            if (route >= 0) {
-                // Preserve both source channels when folding a stereo effect
-                // into its player's channel; do not drop half of the recording.
-                const float* f = data_ptr + src_frame * channels;
-                const float mono = channels == 1 ? f[0] : 0.5f * (f[0] + f[1]);
-                left = route == 0 ? mono : 0.0f;
-                right = route == 1 ? mono : 0.0f;
-            } else {
-                pan_frame(data_ptr + src_frame * channels, channels, pan, left, right);
-            }
-
-            out[dst_index] += left * volume;
-            out[dst_index + 1] += right * volume;
-
-            frame_f += pitch;
-            output_index++;
-            frames_to_process--;
+        };
+        if (pcm->pcm16) {
+            run(pcm->pcm16);
+        } else {
+            run(pcm->data);
         }
         frame = static_cast<unsigned int>(frame_f);
 
@@ -1327,7 +1378,9 @@ void AudioEngine::store_sound(const std::string& name, const sound& snd) {
         free_sound(lost);
         return;
     }
-    publish_sound(name, id, new sound(snd));
+    sound* pcm = new sound(snd);
+    compact_sound(*pcm);
+    publish_sound(name, id, pcm);
 }
 
 // Installs pcm as name's sound, its playback part seeding the slot (as a fresh load would), and
@@ -1427,7 +1480,7 @@ std::string AudioEngine::load_resident_sound(const fs::path& file_path, const st
     if (!pcm || resident.contains(name)) {
         return loaded;
     }
-    const size_t bytes = static_cast<size_t>(pcm->frame_count) * pcm->channels * sizeof(float);
+    const size_t bytes = pcm_bytes(*pcm);
     if (resident_bytes + bytes > resident_cap_bytes()) {
         spdlog::info("Resident sounds: {} not kept, the {} MB cap is reached", name, resident_cap_bytes() >> 20);
         return loaded;
@@ -1465,8 +1518,10 @@ void AudioEngine::drop_resident_sounds() {
 void AudioEngine::free_sound(sound& snd) {
     if (!stop_decode_job(snd)) {
         delete[] snd.data;
+        delete[] snd.pcm16;
     }
     snd.data = nullptr;
+    snd.pcm16 = nullptr;
     if (snd.resampler) {
         src_delete(snd.resampler);
         snd.resampler = nullptr;
@@ -1486,6 +1541,7 @@ bool AudioEngine::stop_decode_job(sound& snd) {
         return false; // nothing writes into the buffer any more: the caller frees it
     }
     job->orphaned = snd.data; // the decoder frees it when it stops (after its current chunk)
+    job->orphaned16 = snd.pcm16;
     return true;
 }
 
@@ -1497,6 +1553,8 @@ struct ProgressiveHead {
         SNDFILE* file = nullptr;
         SRC_STATE* src = nullptr;
         float* out = nullptr;
+        int16_t* out16 = nullptr; // instead of out (pcm16_enabled): written through `scratch`
+        std::vector<float> scratch;
         size_t capacity = 0;
         size_t written = 0;
         unsigned int channels = 0;
@@ -1511,9 +1569,18 @@ struct ProgressiveHead {
             }
             if (!src) {
                 const sf_count_t room = static_cast<sf_count_t>(capacity - written);
-                const sf_count_t n = sf_readf_float(file, out + written * channels, std::min(frames, room));
-                written += static_cast<size_t>(std::max<sf_count_t>(n, 0));
-                eof = n < std::min(frames, room) || written >= capacity;
+                const sf_count_t want = std::min(frames, room);
+                if (out16) {
+                    scratch.resize(static_cast<size_t>(std::max<sf_count_t>(want, 0)) * channels);
+                }
+                float* dst = out16 ? scratch.data() : out + written * channels;
+                const sf_count_t n = sf_readf_float(file, dst, want);
+                const size_t got = static_cast<size_t>(std::max<sf_count_t>(n, 0));
+                if (out16) {
+                    float_to_pcm16(dst, got * channels, kProgressivePeak, out16 + written * channels);
+                }
+                written += got;
+                eof = n < want || written >= capacity;
                 return !eof;
             }
             in.resize(static_cast<size_t>(frames) * channels);
@@ -1524,12 +1591,23 @@ struct ProgressiveHead {
             d.input_frames = static_cast<long>(std::max<sf_count_t>(n, 0));
             d.src_ratio = ratio;
             d.end_of_input = eof ? 1 : 0;
+            constexpr long kScratchFrames = 1 << 15;
+            if (out16) {
+                scratch.resize(static_cast<size_t>(kScratchFrames) * channels);
+            }
             do {
-                d.data_out = out + written * channels;
+                d.data_out = out16 ? scratch.data() : out + written * channels;
                 d.output_frames = static_cast<long>(capacity - written);
+                if (out16) {
+                    d.output_frames = std::min(d.output_frames, kScratchFrames);
+                }
                 if (d.output_frames <= 0 || src_process(src, &d) != 0) {
                     eof = true;
                     return false;
+                }
+                if (out16) {
+                    float_to_pcm16(scratch.data(), static_cast<size_t>(d.output_frames_gen) * channels,
+                                   kProgressivePeak, out16 + written * channels);
                 }
                 written += static_cast<size_t>(d.output_frames_gen);
                 if (d.input_frames_used == 0 && d.output_frames_gen == 0) {
@@ -1558,6 +1636,7 @@ struct ProgressiveHead {
             src_delete(dec->src);
         }
         delete[] dec->out;
+        delete[] dec->out16;
     }
 
     // the first kProgressiveHeadSeconds of file (taken over); null when it cannot be decoded
@@ -1583,7 +1662,12 @@ struct ProgressiveHead {
                 return nullptr;
             }
         }
-        dec->out = new float[capacity * channels]; // only the frames_ready part is ever read
+        // only the frames_ready part is ever read
+        if (pcm16_enabled()) {
+            dec->out16 = new int16_t[capacity * channels];
+        } else {
+            dec->out = new float[capacity * channels];
+        }
 
         auto h = std::make_shared<ProgressiveHead>();
         h->dec = dec;
@@ -1618,6 +1702,8 @@ std::string AudioEngine::install_progressive(const std::shared_ptr<ProgressiveHe
 
     sound snd{};
     snd.data = dec->out;
+    snd.pcm16 = dec->out16;
+    snd.pcm16_scale = dec->out16 ? kProgressivePeak / 32767.0f : 0.0f;
     snd.frame_count = static_cast<unsigned int>(more ? h->expected : dec->written);
     snd.sample_rate = h->rate;
     snd.channels = dec->channels;
@@ -1655,12 +1741,15 @@ std::string AudioEngine::install_progressive(const std::shared_ptr<ProgressiveHe
         }
         finish(*dec);
         float* orphaned = nullptr;
+        int16_t* orphaned16 = nullptr;
         {
             std::scoped_lock lock(job->state);
             job->decoder_exited = true;
             orphaned = job->orphaned;
+            orphaned16 = job->orphaned16;
         }
         delete[] orphaned;
+        delete[] orphaned16;
     }).detach();
 
     spdlog::debug("Loading sound in the background: {} ({} frames ready of ~{})", name, dec->written, h->expected);
@@ -1777,7 +1866,10 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
                     const bool same =
                         v && v->dec->written == h->dec->written && v->more == h->more && v->expected == h->expected &&
                         v->rate == h->rate &&
-                        std::memcmp(v->dec->out, h->dec->out, h->dec->written * h->dec->channels * sizeof(float)) == 0;
+                        (h->dec->out16 ? std::memcmp(v->dec->out16, h->dec->out16,
+                                                     h->dec->written * h->dec->channels * sizeof(int16_t))
+                                       : std::memcmp(v->dec->out, h->dec->out,
+                                                     h->dec->written * h->dec->channels * sizeof(float))) == 0;
                     spdlog::info("Predecode verify: head of {} {} ({} frames)", file_path.filename().string(),
                                  same ? "identical" : "DIFFERS", h->dec->written);
                 }
@@ -1912,11 +2004,37 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
     }
 }
 
+// Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
+// its textures: the tutorial's (Nijiiro 16 files, 19 MB of PCM) outside the tutorial and input calibration, enso
+// battle's (PyTaikoGreen 81 files, 28 MB) outside enso battle (BATTLE_GAME is not one of these modes: it loads
+// all). Played anyway, such a sound is just missing (has_sound false). ZDON_DEFER_MODE_FOLDERS=0 loads them all.
+static std::unordered_set<std::string> skipped_sound_folders(const std::string& screen, const std::string& mode) {
+    static const bool on = [] {
+        const char* v = std::getenv("ZDON_DEFER_MODE_FOLDERS");
+        return !(v && *v == '0');
+    }();
+    static const std::unordered_set<std::string> modes = {"GAME",    "GAME_2P",  "GAME_DAN",  "GAME_PRACTICE",
+                                                          "AI_GAME", "TUTORIAL", "INPUT_CALI"};
+    if (!on || screen != "game" || !modes.contains(mode)) {
+        return {};
+    }
+    std::unordered_set<std::string> out{"enso_battle"};
+    if (mode != "TUTORIAL" && mode != "INPUT_CALI") {
+        out.insert("tutorial");
+    }
+    return out;
+}
+
 std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::path& sounds_path,
-                                                                      const std::string& screen_name, bool warn) {
+                                                                      const std::string& screen_name, bool warn,
+                                                                      const std::string& mode) {
     using Want = ScreenSound;
     static AssetCache<std::vector<Want>> manifests(asset_cache_budget(4u << 20));
+    const std::unordered_set<std::string> skip = skipped_sound_folders(screen_name, mode);
     std::string manifest_key = sounds_path.lexically_normal().string() + "/" + screen_name;
+    for (const std::string& s : std::set<std::string>(skip.begin(), skip.end())) {
+        manifest_key += "-" + s;
+    }
     for (const auto& root : skin_ancestor_roots()) {
         manifest_key += ":" + root.string();
     }
@@ -1945,6 +2063,9 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
         try {
             for (const auto& entry : fs::directory_iterator(dir)) {
                 if (entry.is_directory()) {
+                    if (skip.contains(entry.path().filename().string())) {
+                        continue;
+                    }
                     for (const auto& file : fs::directory_iterator(entry.path())) {
                         if (file.is_regular_file()) {
                             want(file.path(), entry.path().stem().string() + "_" + file.path().stem().string(),
@@ -2006,7 +2127,7 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
     return queue;
 }
 
-void AudioEngine::predecode_screen_sounds(const std::string& screen_name) {
+void AudioEngine::predecode_screen_sounds(const std::string& screen_name, const std::string& mode) {
     if (!predecode_enabled() || !is_ready) {
         return;
     }
@@ -2028,70 +2149,71 @@ void AudioEngine::predecode_screen_sounds(const std::string& screen_name) {
             kept.emplace(name, r.path);
         }
     }
-    jobs::submit(
-        jobs::Priority::Background, [this, b, kept = std::move(kept), sounds = sounds_path, rate = target_sample_rate] {
-            const auto start = std::chrono::steady_clock::now();
-            size_t n = 0;
-            for (const ScreenSound& w : screen_sound_files(sounds, b->screen, false)) {
-                if (b->cancel.load(std::memory_order_acquire)) {
-                    break;
-                }
-                if (w.resident) {
-                    auto it = kept.find(w.name);
-                    if (it != kept.end() && it->second == path_to_string(w.file.lexically_normal())) {
-                        continue;
-                    }
-                }
-#ifdef SUPPORT_FUMEN
-                if (is_bank_file(w.file)) {
-                    continue;
-                }
-#endif
-                PreSound ps;
-                if (!file_stat(w.file, ps.size, ps.mtime)) {
-                    continue;
-                }
-                SF_INFO info;
-                SNDFILE* file = open_sound_file(w.file, info);
-                if (!file) {
-                    continue;
-                }
-                if (info.frames <= 0 || info.channels <= 0) {
-                    sf_close(file);
-                    continue;
-                }
-                if (info.frames > static_cast<sf_count_t>(info.samplerate) * kProgressiveMinSeconds) {
-                    // a long one (a bgm): its first seconds, as load_sound_progressive decodes them
-                    ps.head = ProgressiveHead::begin(file, info, w.file, rate);
-                    if (!ps.head) {
-                        continue;
-                    }
-                    ps.bytes = ps.head->dec->written * ps.head->dec->channels * sizeof(float);
-                } else if (read_short_sound(file, info, w.file, rate, ps.snd)) {
-                    ps.bytes = static_cast<size_t>(ps.snd.frame_count) * ps.snd.channels * sizeof(float);
-                } else {
-                    continue;
-                }
-                const size_t bytes = ps.bytes;
-                std::scoped_lock lock(b->mutex);
-                if (b->cancel.load(std::memory_order_relaxed) || b->bytes + bytes > kPredecodeSoundCap) {
-                    delete[] ps.snd.data;
-                    break;
-                }
-                auto [it, inserted] = b->sounds.try_emplace(predecode_key(w.file), ps);
-                if (!inserted) {
-                    delete[] ps.snd.data;
-                    continue;
-                }
-                b->bytes += bytes;
-                ++n;
+    jobs::submit(jobs::Priority::Background, [this, b, kept = std::move(kept), sounds = sounds_path,
+                                              rate = target_sample_rate, mode] {
+        const auto start = std::chrono::steady_clock::now();
+        size_t n = 0;
+        for (const ScreenSound& w : screen_sound_files(sounds, b->screen, false, mode)) {
+            if (b->cancel.load(std::memory_order_acquire)) {
+                break;
             }
+            if (w.resident) {
+                auto it = kept.find(w.name);
+                if (it != kept.end() && it->second == path_to_string(w.file.lexically_normal())) {
+                    continue;
+                }
+            }
+#ifdef SUPPORT_FUMEN
+            if (is_bank_file(w.file)) {
+                continue;
+            }
+#endif
+            PreSound ps;
+            if (!file_stat(w.file, ps.size, ps.mtime)) {
+                continue;
+            }
+            SF_INFO info;
+            SNDFILE* file = open_sound_file(w.file, info);
+            if (!file) {
+                continue;
+            }
+            if (info.frames <= 0 || info.channels <= 0) {
+                sf_close(file);
+                continue;
+            }
+            if (info.frames > static_cast<sf_count_t>(info.samplerate) * kProgressiveMinSeconds) {
+                // a long one (a bgm): its first seconds, as load_sound_progressive decodes them
+                ps.head = ProgressiveHead::begin(file, info, w.file, rate);
+                if (!ps.head) {
+                    continue;
+                }
+                ps.bytes = ps.head->dec->written * ps.head->dec->channels *
+                           (ps.head->dec->out16 ? sizeof(int16_t) : sizeof(float));
+            } else if (read_short_sound(file, info, w.file, rate, ps.snd)) {
+                ps.bytes = static_cast<size_t>(ps.snd.frame_count) * ps.snd.channels * sizeof(float);
+            } else {
+                continue;
+            }
+            const size_t bytes = ps.bytes;
             std::scoped_lock lock(b->mutex);
-            b->done = true;
-            b->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-            spdlog::info("Sound predecode for {}: {} sounds decoded ahead in {:.0f} ms ({:.1f} MB)", b->screen, n,
-                         b->ms, b->bytes / 1048576.0);
-        });
+            if (b->cancel.load(std::memory_order_relaxed) || b->bytes + bytes > kPredecodeSoundCap) {
+                delete[] ps.snd.data;
+                break;
+            }
+            auto [it, inserted] = b->sounds.try_emplace(predecode_key(w.file), ps);
+            if (!inserted) {
+                delete[] ps.snd.data;
+                continue;
+            }
+            b->bytes += bytes;
+            ++n;
+        }
+        std::scoped_lock lock(b->mutex);
+        b->done = true;
+        b->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        spdlog::info("Sound predecode for {}: {} sounds decoded ahead in {:.0f} ms ({:.1f} MB)", b->screen, n, b->ms,
+                     b->bytes / 1048576.0);
+    });
 }
 
 void AudioEngine::cancel_predecoded_sounds(const std::string& screen_name) {
@@ -2100,11 +2222,11 @@ void AudioEngine::cancel_predecoded_sounds(const std::string& screen_name) {
     }
 }
 
-void AudioEngine::load_screen_sounds(const std::string& screen_name) {
+void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::string& mode) {
     if (auto b = current_batch(); b && b->screen != screen_name) {
         drop_batch("another screen loads"); // Z-DON predecode for another screen
     }
-    const std::vector<ScreenSound> queue = screen_sound_files(sounds_path, screen_name, true);
+    const std::vector<ScreenSound> queue = screen_sound_files(sounds_path, screen_name, true, mode);
     using Want = ScreenSound;
 
     std::atomic<int> reused{0};

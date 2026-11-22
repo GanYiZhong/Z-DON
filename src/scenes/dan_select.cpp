@@ -154,7 +154,7 @@ void DanSelectScreen::open_confirm(double current_ms) {
     state = SongSelectState::SONG_SELECTED;
     // Z-DON predecode: the game screen's textures and sounds while the player confirms
     tex.start_predecode("game");
-    audio.predecode_screen_sounds("game");
+    audio.predecode_screen_sounds("game", "GAME_DAN");
     confirm_index = CONFIRM_NO;
     modifier_selector.reset();
     confirm_opened_at = current_ms;

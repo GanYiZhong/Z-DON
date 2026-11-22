@@ -392,6 +392,10 @@ public:
     void draw_texture(TextureObject* tex_obj, const DrawTextureParams& = {});
 };
 
+// Z-DON: the play mode (global_data.current_screen to be) that a start_predecode("game") from the screen
+// showing leads to
+std::string next_game_mode(const std::string& showing);
+
 extern TextureWrapper tex;
 
 extern TextureWrapper global_tex;

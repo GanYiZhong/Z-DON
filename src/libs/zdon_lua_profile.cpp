@@ -33,7 +33,7 @@ namespace zdon_lua_profile {
             return out;
         }
 
-        void dump_if_due() {
+        void dump_if_due(lua_State* L) {
             const auto now = std::chrono::steady_clock::now();
             const double s = std::chrono::duration<double>(now - since).count();
             if (s < 10.0) {
@@ -47,10 +47,11 @@ namespace zdon_lua_profile {
             for (const auto& [k, v] : l_calls) {
                 lc += v;
             }
-            spdlog::info("[luaprof] {:.1f} s: {} samples, {:.0f} C calls/s, {:.0f} Lua calls/s\n  lines (samples):{}\n"
+            spdlog::info("[luaprof] {:.1f} s: {} samples, {:.0f} C calls/s, {:.0f} Lua calls/s, Lua heap {} KB\n  "
+                         "lines (samples):{}\n"
                          "  C functions (calls/s):{}\n  Lua functions (calls/s):{}",
-                         s, samples, cc / s, lc / s, top(lines, 25, 1.0, "smp"), top(c_calls, 25, 1.0 / s, "/s"),
-                         top(l_calls, 25, 1.0 / s, "/s"));
+                         s, samples, cc / s, lc / s, lua_gc(L, LUA_GCCOUNT, 0), top(lines, 25, 1.0, "smp"),
+                         top(c_calls, 25, 1.0 / s, "/s"), top(l_calls, 25, 1.0 / s, "/s"));
             lines.clear();
             c_calls.clear();
             l_calls.clear();
@@ -65,7 +66,7 @@ namespace zdon_lua_profile {
                     ++lines[std::string(d.short_src) + ":" + std::to_string(d.currentline)];
                     ++samples;
                 }
-                dump_if_due();
+                dump_if_due(L);
                 return;
             }
             if (ar->event == LUA_HOOKCALL || ar->event == LUA_HOOKTAILCALL) {

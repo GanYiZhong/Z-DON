@@ -237,7 +237,17 @@ namespace texture_lazy {
         // mid-song) and small enough to upload within a frame (ZDON_LAZY_GAME_MAX_KB, default 1024: a BC7
         // 1024x1024 or RGBA 512x512, a fraction of a millisecond). A song draws about 170 of Nijiiro's 984 game
         // textures; the rest used to take video memory and the driver's copy of it in RAM for nothing.
-        // ZDON_LAZY_GAMEPLAY=0: every game texture uploads at load again.
+        // The same for the global set and the game backgrounds (also drawn while a song plays): textures no
+        // earlier run drew (Nijiiro global: the AI battle and rainbow transitions...) wait for their first draw.
+        // ZDON_LAZY_GAMEPLAY=0: every game, global and background texture uploads at load again.
+        bool lazy_screen(const std::string& screen) {
+            return screen == "game" || screen == "global" || screen == "background";
+        }
+        bool warm_known(const std::string& owner, const std::filesystem::path& source) {
+            WarmRecords& r = warm_records();
+            auto it = r.known.find(owner);
+            return it != r.known.end() && it->second.contains(source.generic_string());
+        }
         bool gameplay_lazy(const std::string& screen, const std::string& owner, const std::filesystem::path& source,
                            size_t bytes) {
             static const bool on = [] {
@@ -248,7 +258,7 @@ namespace texture_lazy {
                 const char* v = std::getenv("ZDON_LAZY_GAME_MAX_KB");
                 return static_cast<size_t>(v && *v ? std::max(0L, std::atol(v)) : 1024L) * 1024;
             }();
-            if (!on || screen != "game" || bytes > max_bytes || owner.empty() || source.empty()) {
+            if (!on || !lazy_screen(screen) || bytes > max_bytes || owner.empty() || source.empty()) {
                 return false;
             }
             WarmRecords& r = warm_records();
@@ -669,14 +679,16 @@ namespace texture_lazy {
     }
 
     void log_screen(const std::string& screen_name) {
-        // Game textures left for their first draw (gameplay_lazy) whose image is BC7: not kept in RAM either. The
-        // first draw reads them back from the BC7 cache (no PNG decode: cached_image), a fraction of a
-        // millisecond for <= 1 MB; RGBA ones stay (decoding the PNG again would cost more).
-        if (screen_name == "game" && decoder && evict_enabled()) {
+        // Game, global and background textures left for their first draw (gameplay_lazy) whose image is BC7, and
+        // those of any other screen that no earlier run drew (not in the warm-up list; Nijiiro song select: about
+        // 1230 of 1250, 190 MB): not kept in RAM either. The first draw reads them back from the BC7 cache (no PNG
+        // decode: cached_image), a fraction of a millisecond for <= 1 MB; RGBA ones stay (decoding the PNG again would
+        // cost more).
+        if (decoder && evict_enabled()) {
             size_t n = 0, bytes = 0;
             for (auto& [t, p] : pending_map()) {
-                if (p.screen == "game" && !p.evicted && p.gl_id == 0 && !p.source.empty() && p.image.data &&
-                    p.image.format >= ray::PIXELFORMAT_COMPRESSED_DXT1_RGB) {
+                if ((lazy_screen(p.screen) || !warm_known(p.owner, p.source)) && !p.evicted && p.gl_id == 0 &&
+                    !p.source.empty() && p.image.data && p.image.format >= ray::PIXELFORMAT_COMPRESSED_DXT1_RGB) {
                     texture_retain::free_image_async(p.image);
                     p.image = Image{};
                     p.evicted = true;
@@ -686,8 +698,9 @@ namespace texture_lazy {
                 }
             }
             if (n > 0) {
-                spdlog::info("Lazy texture upload: {} compressed game images not kept in RAM ({} MB); read back from "
-                             "the BC7 cache on first draw",
+                spdlog::info("Lazy texture upload: {} compressed images of textures waiting for a first draw not kept "
+                             "in RAM ({} "
+                             "MB); read back from the BC7 cache on first draw",
                              n, bytes / kMB);
             }
         }

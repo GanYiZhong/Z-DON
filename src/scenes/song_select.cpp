@@ -552,7 +552,7 @@ std::optional<Screens> SongSelectScreen::update() {
         // difficulty (they do not depend on the song); backing out drops them
         if (state == SongSelectState::SONG_SELECTED) {
             tex.start_predecode("game");
-            audio.predecode_screen_sounds("game");
+            audio.predecode_screen_sounds("game", next_game_mode(global_data.current_screen));
         } else if (prev_state == SongSelectState::SONG_SELECTED && !game_transition.has_value()) {
             tex.cancel_predecode("game");
             audio.cancel_predecoded_sounds("game");

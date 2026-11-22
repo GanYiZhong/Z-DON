@@ -127,7 +127,7 @@ public:
     virtual void on_screen_start() {
         audio.set_two_player_mode(two_player_audio());
         tex.load_screen_textures(screen_name);
-        audio.load_screen_sounds(screen_name);
+        audio.load_screen_sounds(screen_name, global_data.current_screen);
     }
 
     virtual Screens on_screen_end(Screens next_screen) {

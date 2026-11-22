@@ -40,9 +40,10 @@
 namespace {
 
     // Z-DON: the game folders a play mode never draws, by the screen showing (global_data.current_screen):
-    // AI battle (GAME_2P, AI_GAME), dan (GAME_DAN) and the tutorial's (TUTORIAL, INPUT_CALI). Another mode, or
-    // ZDON_DEFER_MODE_FOLDERS=0: all of them load as before. practice always loads: every mode's pause menu
-    // draws its panel (left out, opening the menu loaded it: 46-386 ms).
+    // AI battle (GAME_2P, AI_GAME), dan (GAME_DAN), the tutorial's (TUTORIAL, INPUT_CALI) and enso battle's
+    // (PyTaikoGreen: 13 textures, 26 MB, all over the 1 MB a game texture may wait for its first draw). Another mode,
+    // or ZDON_DEFER_MODE_FOLDERS=0: all of them load as before. practice always loads: every mode's pause menu draws
+    // its panel (left out, opening the menu loaded it: 46-386 ms).
     std::unordered_set<std::string> deferred_game_subsets(const std::string& screen, const std::string& mode) {
         static const bool on = [] {
             const char* v = std::getenv("ZDON_DEFER_MODE_FOLDERS");
@@ -53,7 +54,7 @@ namespace {
         if (!on || screen != "game" || !modes.contains(mode)) {
             return {};
         }
-        std::unordered_set<std::string> out;
+        std::unordered_set<std::string> out{"enso_battle"}; // enso battle (BATTLE_GAME) is not one of the modes
         if (mode != "GAME_2P" && mode != "AI_GAME") {
             out.insert({"ai_battle", "gauge_ai"});
         }
@@ -64,23 +65,6 @@ namespace {
             out.insert("tutorial");
         }
         return out;
-    }
-
-    // the play mode a screen's start_predecode("game") leads to
-    std::string next_game_mode(const std::string& showing) {
-        if (showing == "SONG_SELECT_2P") {
-            return "GAME_2P";
-        }
-        if (showing == "DAN_SELECT") {
-            return "GAME_DAN";
-        }
-        if (showing == "PRACTICE_SELECT") {
-            return "GAME_PRACTICE";
-        }
-        if (showing == "AI_SELECT") {
-            return "AI_GAME";
-        }
-        return "GAME";
     }
 
     // the <subset> of a file under <skin>/Graphics/<screen>/<subset>/..., "" when it isn't one
@@ -2049,6 +2033,25 @@ namespace {
         }
     }
 } // namespace
+
+std::string next_game_mode(const std::string& showing) {
+    if (showing == "SONG_SELECT_2P") {
+        return "GAME_2P";
+    }
+    if (showing == "DAN_SELECT") {
+        return "GAME_DAN";
+    }
+    if (showing == "PRACTICE_SELECT") {
+        return "GAME_PRACTICE";
+    }
+    if (showing == "AI_SELECT") {
+        return "AI_GAME";
+    }
+    if (showing == "BATTLE_SELECT") {
+        return "BATTLE_GAME";
+    }
+    return "GAME";
+}
 
 void TextureWrapper::start_predecode(const std::string& target, std::vector<std::string> via) {
     const unsigned jobs_n = predecode_jobs();
