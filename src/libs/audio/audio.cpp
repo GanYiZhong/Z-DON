@@ -2053,8 +2053,13 @@ static bool lazy_long_sounds(const std::string& screen) {
 // 1.3 ms) and the rest in the background (load_sound). Most are never played on a visit: song select carries
 // PyTaikoGreen's AI battle story voices (52 clips), the AI select and intro sounds, the modifier and genre voices
 // (about 30 MB of PCM in all), the title the gacha's, the result one voice per outcome and the AI result's.
+// The other result and menu screens likewise; the screens with notes (game, waiwai, its tutorial, retry_game)
+// load theirs up front.
 static bool first_use_sound(const std::string& screen, const fs::path& file) {
-    static const std::unordered_set<std::string> screens = {"song_select", "title", "result", "entry"};
+    static const std::unordered_set<std::string> screens = {
+        "song_select",     "title",         "result",        "entry",        "dan_select",
+        "dan_result",      "battle_result", "waiwai_result", "total_result", "ai_section_result",
+        "kinotake_result", "campaign",      "reward_shop",   "game_over"};
     if (!screens.contains(screen) || !lazy_long_sounds(screen)) {
         return false;
     }
