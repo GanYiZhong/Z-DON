@@ -219,6 +219,12 @@ if(MINGW)
   target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
 
+# Z-DON: our own manifest (src/platform/zdon_windows.manifest: MinGW's default plus the segment heap)
+if(MINGW AND NOT ZDON_NO_MANIFEST)
+  enable_language(RC)
+  target_sources(${PROJECT_NAME} PRIVATE src/platform/zdon_windows.rc)
+endif()
+
 # Z-DON: precompiled headers for the game's C++ files. sol2 (through script.h) is in about half of
 # them and was most of their compile time. Only standard and third-party headers, none of which
 # include <windows.h> (card_reader.cpp / loudness.cpp set NOMINMAX etc. before including it).
