@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cwctype>
 #include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <span>
@@ -39,6 +40,55 @@
 
 namespace {
 
+    // Z-DON: what a chart can show, from its .tja text: any #GOGOSTART, any balloon (7) or kusudama (9) in a note
+    // line (a line with no ':' that is not a command, comments cut). All courses of the file count; anything that
+    // is not a readable .tja counts as having everything. Kept per file and write time.
+    struct ChartFeatures {
+        bool gogo = true, balloon = true, kusudama = true;
+    };
+    ChartFeatures chart_features(const fs::path& chart) {
+        static std::mutex mutex;
+        static std::map<fs::path, std::pair<fs::file_time_type, ChartFeatures>> cache;
+        std::error_code ec;
+        const auto mtime = fs::last_write_time(chart, ec);
+        if (ec || chart.extension() != ".tja") {
+            return {};
+        }
+        {
+            std::scoped_lock lock(mutex);
+            if (auto it = cache.find(chart); it != cache.end() && it->second.first == mtime) {
+                return it->second.second;
+            }
+        }
+        std::ifstream in(chart, std::ios::binary);
+        if (!in) {
+            return {};
+        }
+        ChartFeatures f{false, false, false};
+        std::string line;
+        while (std::getline(in, line)) {
+            if (const size_t c = line.find("//"); c != std::string::npos) {
+                line.resize(c);
+            }
+            const size_t start = line.find_first_not_of(" \t\r");
+            if (start == std::string::npos) {
+                continue;
+            }
+            if (line[start] == '#') {
+                f.gogo = f.gogo || line.compare(start, 10, "#GOGOSTART") == 0;
+                continue;
+            }
+            if (line.find(':') != std::string::npos) {
+                continue; // a header (TITLE:, BALLOON:, ...)
+            }
+            f.balloon = f.balloon || line.find('7') != std::string::npos;
+            f.kusudama = f.kusudama || line.find('9') != std::string::npos;
+        }
+        std::scoped_lock lock(mutex);
+        cache[chart] = {mtime, f};
+        return f;
+    }
+
     // Z-DON: the game folders a play mode never draws, by the screen showing (global_data.current_screen):
     // AI battle (GAME_2P, AI_GAME), dan (GAME_DAN), the tutorial's (TUTORIAL, INPUT_CALI) and enso battle's
     // (PyTaikoGreen: 13 textures, 26 MB, all over the 1 MB a game texture may wait for its first draw). Another mode,
@@ -63,6 +113,32 @@ namespace {
         }
         if (mode != "TUTORIAL" && mode != "INPUT_CALI") {
             out.insert("tutorial");
+        }
+        // Z-DON: and, for one song (not dan, tutorial or calibration), what its chart never shows: the gogo time
+        // art (Nijiiro 18 MB), the kusudama (18 MB) and the balloon (6 MB) are only drawn once one starts. A
+        // folder left out loads when first asked for (load_deferred), so a wrong guess only costs that load.
+        if (mode == "GAME" || mode == "GAME_2P" || mode == "GAME_PRACTICE" || mode == "AI_GAME") {
+            ChartFeatures any{false, false, false};
+            bool songs = false;
+            for (const SessionData& sd : global_data.session_data) {
+                if (sd.selected_song.empty()) {
+                    continue;
+                }
+                songs = true;
+                const ChartFeatures f = chart_features(sd.selected_song);
+                any.gogo = any.gogo || f.gogo;
+                any.balloon = any.balloon || f.balloon;
+                any.kusudama = any.kusudama || f.kusudama;
+            }
+            if (songs && !any.gogo) {
+                out.insert("gogo_time");
+            }
+            if (songs && !any.kusudama) {
+                out.insert("kusudama");
+            }
+            if (songs && !any.balloon && !any.kusudama) {
+                out.insert("balloon");
+            }
         }
         return out;
     }
