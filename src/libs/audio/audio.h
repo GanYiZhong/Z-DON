@@ -320,7 +320,7 @@ private:
     std::unique_ptr<song_loudness::Scanner> loudness_scanner;
 
     std::string load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
-                                       const std::string& name);
+                                       const std::string& name, double head_seconds = kProgressiveHeadSeconds);
     std::string install_progressive(const std::shared_ptr<ProgressiveHead>& h, const fs::path& file_path,
                                     const std::string& name);
     // reads a short sound whole (resampled to the device rate) into snd and closes file; false on failure

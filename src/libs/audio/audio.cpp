@@ -1660,7 +1660,8 @@ struct ProgressiveHead {
 
     // the first kProgressiveHeadSeconds of file (taken over); null when it cannot be decoded
     static std::shared_ptr<ProgressiveHead> begin(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
-                                                  double target_sample_rate) {
+                                                  double target_sample_rate,
+                                                  double head_seconds = AudioEngine::kProgressiveHeadSeconds) {
         const unsigned int channels = static_cast<unsigned int>(info.channels);
         const bool resample = static_cast<double>(info.samplerate) != target_sample_rate;
         const double ratio = resample ? target_sample_rate / static_cast<double>(info.samplerate) : 1.0;
@@ -1693,7 +1694,7 @@ struct ProgressiveHead {
         h->expected = expected;
         h->rate = resample ? static_cast<unsigned int>(target_sample_rate) : info.samplerate;
         // the first seconds now, so play_sound right after this has something to play
-        const sf_count_t head = static_cast<sf_count_t>(info.samplerate) * AudioEngine::kProgressiveHeadSeconds;
+        const auto head = static_cast<sf_count_t>(static_cast<double>(info.samplerate) * head_seconds);
         h->more = dec->step(head);
         return h;
     }
@@ -1701,8 +1702,9 @@ struct ProgressiveHead {
 
 // Takes ownership of file.
 std::string AudioEngine::load_sound_progressive(SNDFILE* file, const SF_INFO& info, const fs::path& file_path,
-                                                const std::string& name) {
-    std::shared_ptr<ProgressiveHead> h = ProgressiveHead::begin(file, info, file_path, target_sample_rate);
+                                                const std::string& name, double head_seconds) {
+    std::shared_ptr<ProgressiveHead> h =
+        ProgressiveHead::begin(file, info, file_path, target_sample_rate, head_seconds);
     if (!h) {
         return "";
     }
@@ -1868,6 +1870,12 @@ bool AudioEngine::read_short_sound(SNDFILE* file, const SF_INFO& info, const fs:
     return true;
 }
 
+// Z-DON: set while load_lazy_sound loads a sound on its first use (on whatever thread asked for it): any length
+// then decodes progressively from a kFirstUseHeadSeconds head, so the caller waits about a millisecond instead of
+// the whole clip (a genre voice: 10-12 ms) or the 2 s head of a bgm (8 ms); the rest decodes in the background.
+static thread_local bool tl_first_use_load = false;
+constexpr double kFirstUseHeadSeconds = 0.25;
+
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
     forget_lazy_sound(name); // Z-DON: loaded now (or replaced by another file)
     try {
@@ -2004,6 +2012,9 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
             sf_close(file);
             return "";
         }
+        if (tl_first_use_load) {
+            return load_sound_progressive(file, file_info, file_path, name, kFirstUseHeadSeconds);
+        }
         if (total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
             return load_sound_progressive(file, file_info, file_path, name);
         }
@@ -2044,7 +2055,7 @@ static bool lazy_long_sounds(const std::string& screen) {
 // decodes the clip then (a few ms).
 static bool first_use_sound(const std::string& screen, const fs::path& file) {
     static const std::unordered_map<std::string, std::unordered_set<std::string>> folders = {
-        {"song_select", {"battle_story", "ai", "ai_select", "ai_intro", "options"}},
+        {"song_select", {"battle_story", "ai", "ai_select", "ai_intro", "options", "genre_voice"}},
         {"title", {"gacha"}},
         {"result", {"ai", "aivoice"}},
     };
@@ -2431,7 +2442,9 @@ bool AudioEngine::load_lazy_sound(const std::string& name) const {
         self->lazy_count.fetch_sub(1, std::memory_order_release);
     }
     const auto start = std::chrono::steady_clock::now();
+    tl_first_use_load = true;
     self->load_sound(file, name);
+    tl_first_use_load = false;
     spdlog::info("Sound {} loaded on first use ({:.1f} ms)", name,
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     return true;
