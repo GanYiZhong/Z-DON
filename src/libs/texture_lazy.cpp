@@ -315,13 +315,22 @@ namespace texture_lazy {
         });
     }
 
-    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source) {
+    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source,
+                        int width, int height) {
         static const bool on = [] {
             const char* v = std::getenv("ZDON_LAZY_START_EVICTED");
             return !(v && *v == '0');
         }();
-        return on && enabled() && evict_enabled() && decoder && !during_gameplay(screen) && !lazy_screen(screen) &&
-               !owner.empty() && !source.empty() && !warm_known(owner, source);
+        if (!on || !enabled() || !evict_enabled() || !decoder || owner.empty() || source.empty()) {
+            return false;
+        }
+        if (lazy_screen(screen)) {
+            // the game / global / background textures that wait (gameplay_lazy) are let go too: a BC7 one is read
+            // from the cache on its first draw, a fraction of a millisecond within ZDON_LAZY_GAME_MAX_KB
+            return gameplay_lazy(screen, owner, source,
+                                 image_bytes(width, height, ray::PIXELFORMAT_COMPRESSED_BPTC_RGBA));
+        }
+        return !during_gameplay(screen) && !warm_known(owner, source);
     }
 
     std::shared_ptr<Texture> make_evicted(int width, int height, int format, const std::string& screen,

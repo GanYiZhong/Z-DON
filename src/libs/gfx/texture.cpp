@@ -1580,12 +1580,15 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     has_border[i] = got_border;
                     continue;
                 }
-                if (const DirIndex::Entry* e = dirs.file_entry(files[i]);
-                    e && texture_lazy::starts_evicted(screen_name, screen_loaded, files[i])) {
+                if (const DirIndex::Entry* e = dirs.file_entry(files[i])) {
                     uint32_t w = 0, h = 0;
-                    if (texture_bc7::has_file(ImagePrefetch::image_key(files[i]), e->size, &w, &h, &borders[i])) {
+                    Rect border{};
+                    if (texture_bc7::has_file(ImagePrefetch::image_key(files[i]), e->size, &w, &h, &border) &&
+                        texture_lazy::starts_evicted(screen_name, screen_loaded, files[i], static_cast<int>(w),
+                                                     static_cast<int>(h))) {
                         unread[i] = 1;
                         unread_size[i] = {w, h};
+                        borders[i] = border;
                         has_border[i] = 1;
                         continue;
                     }
@@ -2721,8 +2724,10 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
         for (auto& group : read_groups) {
             std::erase_if(group, [&](const fs::path& p) {
                 const DirIndex::Entry* e = dirs.file_entry(p);
-                return e && texture_lazy::starts_evicted(screen_name, screen_name, p) &&
-                       texture_bc7::has_file(ImagePrefetch::image_key(p), e->size);
+                uint32_t w = 0, h = 0;
+                return e && texture_bc7::has_file(ImagePrefetch::image_key(p), e->size, &w, &h) &&
+                       texture_lazy::starts_evicted(screen_name, screen_name, p, static_cast<int>(w),
+                                                    static_cast<int>(h));
             });
         }
         ImagePrefetch prefetch(read_groups, border_keys, kPrefetchBudgetBytes, pack.get());

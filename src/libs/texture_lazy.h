@@ -121,7 +121,8 @@ namespace texture_lazy {
     // Z-DON: a texture of screen_name's load whose BC7 image log_screen would let go right after the load (no
     // earlier load of owner drew it, not a texture drawn during play): make_evicted makes it without its image,
     // which the load then never reads; its first draw (or a prefill) decodes it as for any evicted texture.
-    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source);
+    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source,
+                        int width, int height);
     std::shared_ptr<Texture> make_evicted(int width, int height, int format, const std::string& screen,
                                           const std::filesystem::path& source, const std::string& owner, uint64_t size,
                                           uint64_t mtime);
