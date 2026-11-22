@@ -36,7 +36,7 @@ namespace texture_bc7 {
 
     // Z-DON: cached_image should find this file (key: ImagePrefetch::image_key; size from a folder listing).
     // Background threads; waits for the cache to be read.
-    bool has_file(const std::string& key, uint64_t size);
+    bool has_file(const std::string& key, uint64_t size, uint32_t* width = nullptr, uint32_t* height = nullptr);
     // the files cached_image knows; 0 while the cache is still being read
     size_t file_count();
 

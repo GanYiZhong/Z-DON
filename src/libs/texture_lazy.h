@@ -115,6 +115,9 @@ namespace texture_lazy {
 
     // Z-DON: the files an earlier load of owner drew (cache/warm_upload.txt), as generic paths; main thread, a copy
     std::unordered_set<std::string> warm_sources(const std::string& owner);
+    // the largest image a game / global / background texture no earlier load drew may wait for its first draw
+    // with (ZDON_LAZY_GAME_MAX_KB, default 1 MB); 0 with ZDON_LAZY_GAMEPLAY=0
+    size_t gameplay_lazy_max_bytes();
 
     // Z-DON predecode (TextureWrapper::start_predecode): an image uploaded the warm-up's way, a 1 MB band of rows
     // per call into a texture drawn once into a 1x1 target when allocated and once when complete. True once every

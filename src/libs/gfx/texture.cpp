@@ -1909,6 +1909,7 @@ namespace {
         // whole, for a screen whose textures wait for their first draw: the files an earlier load drew. A BC7 one
         // not among them is let go of right after the load (texture_lazy::log_screen), so it is not read ahead
         std::optional<std::unordered_set<std::string>> warm;
+        size_t wait_max = SIZE_MAX; // with warm: the largest such image that waits (the game screen's rule)
         // whole, for a screen whose textures upload at load (the game screen): the decoded images are also
         // uploaded ahead, on the main thread after the frame's present (predecode_tick); main thread only
         bool upload = false;
@@ -2299,7 +2300,10 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
         const char* v = std::getenv("ZDON_PREDECODE_COLD");
         return v && *v == '1';
     }();
-    if (!pf->upload && !read_cold && texture_bc7::enabled()) {
+    // the game screen uploads at load, except what no earlier load drew and is small enough to wait
+    // (texture_lazy gameplay_lazy): those wait for their first draw too, and a BC7 one lets its image go
+    pf->wait_max = pf->upload ? texture_lazy::gameplay_lazy_max_bytes() : SIZE_MAX;
+    if (!read_cold && texture_bc7::enabled() && pf->wait_max > 0) {
         pf->warm = texture_lazy::warm_sources(target);
     }
     pf->start = std::chrono::steady_clock::now();
@@ -2331,9 +2335,12 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
                 ++skipped; // a folder the coming play mode leaves out (deferred_game_subsets)
                 continue;
             }
+            uint32_t w = 0, h = 0;
             if (pf->warm && !pf->warm->contains(file.generic_string()) &&
-                texture_bc7::has_file(ImagePrefetch::image_key(file), p.stat.size)) {
-                ++cold; // never drawn before and BC7: the load lets its image go (Nijiiro song select: ~1230, 190 MB)
+                texture_bc7::has_file(ImagePrefetch::image_key(file), p.stat.size, &w, &h) &&
+                image_data_size(static_cast<int>(w), static_cast<int>(h), pixel_format::COMPRESSED_BPTC_RGBA) <=
+                    pf->wait_max) {
+                ++cold; // never drawn before and BC7: the load lets its image go (Nijiiro song select: ~900, 165 MB)
                 continue;
             }
             files.push_back({std::move(file), p.stat.size, p.stat.mtime, 0});

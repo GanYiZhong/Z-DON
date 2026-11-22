@@ -250,15 +250,8 @@ namespace texture_lazy {
         }
         bool gameplay_lazy(const std::string& screen, const std::string& owner, const std::filesystem::path& source,
                            size_t bytes) {
-            static const bool on = [] {
-                const char* v = std::getenv("ZDON_LAZY_GAMEPLAY");
-                return !(v && *v == '0');
-            }();
-            static const size_t max_bytes = [] {
-                const char* v = std::getenv("ZDON_LAZY_GAME_MAX_KB");
-                return static_cast<size_t>(v && *v ? std::max(0L, std::atol(v)) : 1024L) * 1024;
-            }();
-            if (!on || !lazy_screen(screen) || bytes > max_bytes || owner.empty() || source.empty()) {
+            const size_t max_bytes = gameplay_lazy_max_bytes();
+            if (max_bytes == 0 || !lazy_screen(screen) || bytes > max_bytes || owner.empty() || source.empty()) {
                 return false;
             }
             WarmRecords& r = warm_records();
@@ -676,6 +669,18 @@ namespace texture_lazy {
         done.format = image.format;
         warm_touch(done);
         return true;
+    }
+
+    size_t gameplay_lazy_max_bytes() {
+        static const size_t max_bytes = [] {
+            const char* off = std::getenv("ZDON_LAZY_GAMEPLAY");
+            if (off && *off == '0') {
+                return size_t{0};
+            }
+            const char* v = std::getenv("ZDON_LAZY_GAME_MAX_KB");
+            return static_cast<size_t>(v && *v ? std::max(0L, std::atol(v)) : 1024L) * 1024;
+        }();
+        return max_bytes;
     }
 
     std::unordered_set<std::string> warm_sources(const std::string& owner) {
