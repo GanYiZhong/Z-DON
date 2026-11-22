@@ -334,10 +334,11 @@ namespace zdon_os {
                 ++b.n;
                 b.bytes += e.cbData;
                 busy += e.cbData;
-                if (b.n % (c >= 8192 ? 41 : 499) == 1 && b.sample.size() < (c >= 8192 ? 2000u : 300u)) { // a few blocks' first bytes, printable
+                if (b.n % (c >= 8192 ? 41 : 997) == 1 &&
+                    b.sample.size() < 2000u) { // a few blocks' first bytes, printable
                     const auto* p = static_cast<const unsigned char*>(e.lpData);
                     std::string t;
-                    for (size_t j = 0; j < std::min<size_t>(e.cbData, c >= 8192 ? 96 : 40); ++j) {
+                    for (size_t j = 0; j < std::min<size_t>(e.cbData, c >= 8192 ? 96 : 64); ++j) {
                         t += (p[j] >= 32 && p[j] < 127) ? static_cast<char>(p[j]) : '.';
                     }
                     b.sample += " [" + t + "]";
