@@ -1570,14 +1570,28 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
             std::vector<fs::path> rest;
             std::vector<size_t> rest_index;
             std::vector<char> lazy_owned(files.size(), 0); // images now owned by a pending texture
+            // Z-DON: files whose texture starts evicted (texture_lazy::starts_evicted): not read, only the BC7
+            // cache's size and border of them
+            std::vector<char> unread(files.size(), 0);
+            std::vector<std::pair<uint32_t, uint32_t>> unread_size(files.size());
             for (size_t i = 0; i < files.size(); ++i) {
                 bool got_border = false;
                 if (image_prefetch && image_prefetch->take(files[i], images[i], borders[i], got_border)) {
                     has_border[i] = got_border;
-                } else {
-                    rest.push_back(files[i]);
-                    rest_index.push_back(i);
+                    continue;
                 }
+                if (const DirIndex::Entry* e = dirs.file_entry(files[i]);
+                    e && texture_lazy::starts_evicted(screen_name, screen_loaded, files[i])) {
+                    uint32_t w = 0, h = 0;
+                    if (texture_bc7::has_file(ImagePrefetch::image_key(files[i]), e->size, &w, &h, &borders[i])) {
+                        unread[i] = 1;
+                        unread_size[i] = {w, h};
+                        has_border[i] = 1;
+                        continue;
+                    }
+                }
+                rest.push_back(files[i]);
+                rest_index.push_back(i);
             }
             // Z-DON: predecoded images (a folder a script loads while its screen starts)
             if (!rest.empty()) {
@@ -1650,6 +1664,13 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     for (size_t i = 0; i < p.file_count; ++i) {
                         size_t fi = p.first_file + i;
                         std::shared_ptr<Texture> tex = gpu[fi];
+                        if (!tex && unread[fi]) {
+                            tex = texture_lazy::make_evicted(static_cast<int>(unread_size[fi].first),
+                                                             static_cast<int>(unread_size[fi].second),
+                                                             pixel_format::COMPRESSED_BPTC_RGBA, screen_name, files[fi],
+                                                             screen_loaded, file_size(fi), file_mtime(fi));
+                            gpu[fi] = tex;
+                        }
                         if (!tex) {
                             const Image& img = images[fi];
                             if (!img.data) {
@@ -1699,7 +1720,7 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     if (!p.framed && !obj->crop_data.has_value() && p.mapping->IsObject() &&
                         !p.mapping->HasMember("x2")) {
                         const Image& img = images[p.first_file];
-                        if (img.data) {
+                        if (img.data || unread[p.first_file]) {
                             const Rect border =
                                 has_border[p.first_file] ? borders[p.first_file] : get_image_alpha_border(img, 0.0f);
                             if (border.width > 0.0f) {
@@ -1836,7 +1857,7 @@ void TextureWrapper::refill_evicted(ImagePrefetch& prefetch, const std::vector<f
     auto collect = [&](const std::shared_ptr<TextureObject>& obj) {
         for (int i = 0; obj && i < obj->frame_count(); ++i) {
             const Texture* t = obj->frame_texture_raw(i);
-            if (texture_lazy::evicted(t) && seen.insert(t).second) {
+            if (texture_lazy::evicted(t) && !texture_lazy::refill_wasted(t) && seen.insert(t).second) {
                 want[texture_lazy::source(t)].push_back(t);
                 ++count;
             }
@@ -2694,7 +2715,17 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
     }
 
     {
-        ImagePrefetch prefetch(groups, border_keys, kPrefetchBudgetBytes, pack.get());
+        // Z-DON: the files whose texture starts evicted are not read (load_folder makes them from the BC7 cache's
+        // size and border; texture_lazy::starts_evicted)
+        std::vector<std::vector<fs::path>> read_groups = groups;
+        for (auto& group : read_groups) {
+            std::erase_if(group, [&](const fs::path& p) {
+                const DirIndex::Entry* e = dirs.file_entry(p);
+                return e && texture_lazy::starts_evicted(screen_name, screen_name, p) &&
+                       texture_bc7::has_file(ImagePrefetch::image_key(p), e->size);
+            });
+        }
+        ImagePrefetch prefetch(read_groups, border_keys, kPrefetchBudgetBytes, pack.get());
         image_prefetch = &prefetch;
         struct Reset {
             ImagePrefetch*& p;

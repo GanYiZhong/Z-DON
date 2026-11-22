@@ -83,6 +83,9 @@ namespace texture_lazy {
     bool evicted(const Texture* t);
     // the file an evicted texture decodes from
     std::filesystem::path source(const Texture* t);
+    // Z-DON: an evicted texture whose image log_screen would let go again after the load (BC7, no earlier load
+    // drew it): a screen load does not give it its image back (refill_evicted)
+    bool refill_wasted(const Texture* t);
     // the files of the evicted textures a load of `owner` made
     std::vector<std::filesystem::path> evicted_sources(const std::string& owner);
     // gives an evicted texture its decoded image back (the texture owns it from then on; freed when no
@@ -115,6 +118,14 @@ namespace texture_lazy {
 
     // Z-DON: the files an earlier load of owner drew (cache/warm_upload.txt), as generic paths; main thread, a copy
     std::unordered_set<std::string> warm_sources(const std::string& owner);
+    // Z-DON: a texture of screen_name's load whose BC7 image log_screen would let go right after the load (no
+    // earlier load of owner drew it, not a texture drawn during play): make_evicted makes it without its image,
+    // which the load then never reads; its first draw (or a prefill) decodes it as for any evicted texture.
+    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source);
+    std::shared_ptr<Texture> make_evicted(int width, int height, int format, const std::string& screen,
+                                          const std::filesystem::path& source, const std::string& owner, uint64_t size,
+                                          uint64_t mtime);
+
     // the largest image a game / global / background texture no earlier load drew may wait for its first draw
     // with (ZDON_LAZY_GAME_MAX_KB, default 1 MB); 0 with ZDON_LAZY_GAMEPLAY=0
     size_t gameplay_lazy_max_bytes();

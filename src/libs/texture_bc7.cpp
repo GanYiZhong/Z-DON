@@ -822,7 +822,7 @@ namespace texture_bc7 {
         return {size, static_cast<int64_t>(t.time_since_epoch().count())};
     }
 
-    bool has_file(const std::string& key, uint64_t size, uint32_t* width, uint32_t* height) {
+    bool has_file(const std::string& key, uint64_t size, uint32_t* width, uint32_t* height, Rect* border) {
         State& s = state();
         if (!enabled() || !files_on() || size == 0) {
             return false;
@@ -841,6 +841,9 @@ namespace texture_bc7 {
         if (ok && width && height) {
             *width = it->second.width;
             *height = it->second.height;
+        }
+        if (ok && border) {
+            *border = fit->second.border;
         }
         return ok;
     }

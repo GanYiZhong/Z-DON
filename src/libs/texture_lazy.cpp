@@ -45,7 +45,8 @@ namespace texture_lazy {
             size_t lazy = 0, lazy_bytes = 0;         // left pending at load
             size_t uploaded = 0, uploaded_bytes = 0; // pending ones uploaded since the last log
             double upload_ms = 0;
-            size_t warmed = 0, warmed_bytes = 0; // uploaded ahead of their first use (warm_tick)
+            size_t warmed = 0, warmed_bytes = 0;                   // uploaded ahead of their first use (warm_tick)
+            size_t started_evicted = 0, started_evicted_bytes = 0; // make_evicted: never read at load
             double warm_ms = 0;
             bool cap_logged = false;
         };
@@ -314,6 +315,42 @@ namespace texture_lazy {
         });
     }
 
+    bool starts_evicted(const std::string& screen, const std::string& owner, const std::filesystem::path& source) {
+        static const bool on = [] {
+            const char* v = std::getenv("ZDON_LAZY_START_EVICTED");
+            return !(v && *v == '0');
+        }();
+        return on && enabled() && evict_enabled() && decoder && !during_gameplay(screen) && !lazy_screen(screen) &&
+               !owner.empty() && !source.empty() && !warm_known(owner, source);
+    }
+
+    std::shared_ptr<Texture> make_evicted(int width, int height, int format, const std::string& screen,
+                                          const std::filesystem::path& source, const std::string& owner, uint64_t size,
+                                          uint64_t mtime) {
+        auto* t = new Texture{};
+        t->id = 0;
+        t->width = width;
+        t->height = height;
+        t->mipmaps = 1;
+        t->format = format;
+        const size_t bytes = image_bytes(width, height, format);
+        pending_map().emplace(t, Pending{Image{}, -1, -1, screen, bytes, source, owner, size, mtime, true});
+        ScreenStats& st = stats()[screen];
+        ++st.lazy;
+        st.lazy_bytes += bytes;
+        ++st.started_evicted;
+        st.started_evicted_bytes += bytes;
+        return std::shared_ptr<Texture>(t, [](Texture* p) {
+            auto& m = pending_map();
+            if (auto it = m.find(p); it != m.end()) {
+                forget(it);
+            } else if (p->id != 0) {
+                ray::UnloadTexture(*p);
+            }
+            delete p;
+        });
+    }
+
     void count_eager(const std::string& screen, const Texture& t) {
         ScreenStats& st = stats()[screen];
         ++st.eager;
@@ -455,6 +492,20 @@ namespace texture_lazy {
         }
         auto it = pending_map().find(t);
         return it != pending_map().end() && it->second.evicted;
+    }
+
+    bool refill_wasted(const Texture* t) {
+        if (!t || t->id != 0 || !decoder || !evict_enabled()) {
+            return false;
+        }
+        auto it = pending_map().find(t);
+        if (it == pending_map().end() || !it->second.evicted || it->second.source.empty()) {
+            return false;
+        }
+        const Pending& p = it->second;
+        // log_screen's test: such an image would be let go again right after the load
+        return t->format >= ray::PIXELFORMAT_COMPRESSED_DXT1_RGB &&
+               (lazy_screen(p.screen) || !warm_known(p.owner, p.source));
     }
 
     std::filesystem::path source(const Texture* t) {
@@ -772,7 +823,13 @@ namespace texture_lazy {
                      "pending, {} MB in RAM (cap {} MB)",
                      screen_name, st.eager, st.eager_bytes / kMB, st.lazy, st.lazy_bytes / kMB, pending_map().size(),
                      pending_bytes / kMB, cap_bytes() / kMB);
+        if (st.started_evicted > 0) {
+            spdlog::info("Lazy texture upload for {}: {} of the pending BC7 images not read at load ({} MB); read from "
+                         "the BC7 cache on first draw",
+                         screen_name, st.started_evicted, st.started_evicted_bytes / kMB);
+        }
         st.eager = st.eager_bytes = st.lazy = st.lazy_bytes = 0;
+        st.started_evicted = st.started_evicted_bytes = 0;
         st.cap_logged = false;
     }
 
