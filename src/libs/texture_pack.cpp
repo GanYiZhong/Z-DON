@@ -677,7 +677,20 @@ namespace texture_pack {
         }
         spdlog::info("Texture pack for {}: {} of {} files from the pack, {} read from the skin, {} not read (BC7)",
                      screen, used, planned, fresh_count, bc7_skipped);
-        if (fresh_count == 0) {
+        // Z-DON: a file the BC7 cache serves is not kept in the pack (the load never reads it there; were the
+        // cache lost or turned off, the load reads it from the skin once and the pack takes it again).
+        // ZDON_TEXPACK_KEEP_BC7=1 copies them over as before. A pack holding 8 MB or more of them is rewritten once for
+        // that.
+        static const bool keep_bc7 = [] {
+            const char* v = std::getenv("ZDON_TEXPACK_KEEP_BC7");
+            return v && *v == '1';
+        }();
+        uint64_t bc7_bytes = 0;
+        for (const Entry& e : entries) {
+            bc7_bytes += (e.planned && e.state == 4) ? e.stat.size : 0;
+        }
+        const bool drop_bc7 = !keep_bc7 && bc7_bytes > 0;
+        if (fresh_count == 0 && (!drop_bc7 || bc7_bytes < 8 * kMB)) {
             return; // nothing new to store
         }
         Job job;
@@ -698,7 +711,7 @@ namespace texture_pack {
                 it.owner = e.span;
                 it.hash = e.hash;
                 it.hashed = true;
-            } else if ((!e.planned && e.carry && pack_ok) || (e.planned && e.state == 4)) {
+            } else if ((!e.planned && e.carry && pack_ok) || (e.planned && e.state == 4 && !drop_bc7)) {
                 it.old_offset = e.offset;
                 it.hash = e.hash;
                 it.hashed = true;
