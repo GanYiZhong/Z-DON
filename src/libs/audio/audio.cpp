@@ -2024,6 +2024,16 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
     }
 }
 
+// Z-DON: whether a screen's long sounds wait for their first use (AudioEngine::lazy_sounds): all but the game
+// screen's, where a first play would decode in the middle of a song. ZDON_LAZY_LONG_SOUNDS=0: none.
+static bool lazy_long_sounds(const std::string& screen) {
+    static const bool on = [] {
+        const char* v = std::getenv("ZDON_LAZY_LONG_SOUNDS");
+        return !(v && *v == '0');
+    }();
+    return on && screen != "game";
+}
+
 // Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
 // its textures: the tutorial's (Nijiiro 16 files, 19 MB of PCM) outside the tutorial and input calibration, enso
 // battle's (PyTaikoGreen 81 files, 28 MB) outside enso battle (BATTLE_GAME is not one of these modes: it loads
@@ -2202,6 +2212,10 @@ void AudioEngine::predecode_screen_sounds(const std::string& screen_name, const 
                 continue;
             }
             if (info.frames > static_cast<sf_count_t>(info.samplerate) * kProgressiveMinSeconds) {
+                if (lazy_long_sounds(b->screen)) {
+                    sf_close(file);
+                    continue; // loads on first use, not with the screen
+                }
                 // a long one (a bgm): its first seconds, as load_sound_progressive decodes them
                 ps.head = ProgressiveHead::begin(file, info, w.file, rate);
                 if (!ps.head) {
@@ -2241,14 +2255,6 @@ void AudioEngine::cancel_predecoded_sounds(const std::string& screen_name) {
     if (auto b = current_batch(); b && b->screen == screen_name) {
         drop_batch("cancelled");
     }
-}
-
-static bool lazy_long_sounds_on() {
-    static const bool on = [] {
-        const char* v = std::getenv("ZDON_LAZY_LONG_SOUNDS");
-        return !(v && *v == '0');
-    }();
-    return on;
 }
 
 bool AudioEngine::defer_long_sound(const fs::path& file_path, const std::string& name) {
@@ -2331,8 +2337,7 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
 
     std::atomic<int> reused{0};
     std::atomic<int> deferred{0};
-    // not the game screen's: a first play there would decode in the middle of a song
-    const bool lazy = lazy_long_sounds_on() && screen_name != "game";
+    const bool lazy = lazy_long_sounds(screen_name);
     auto load = [this, &queue, &reused, &deferred, lazy](size_t i) {
         const Want& w = queue[i];
         if (!w.resident) {
