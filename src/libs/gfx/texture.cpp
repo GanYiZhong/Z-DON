@@ -118,6 +118,123 @@ namespace {
         return crops;
     }
 
+    // Z-DON: a big RGBA image cut into "crop" frames (Nijiiro gogo_time/explosion: 2352x3810, 30 frames, 34 MB,
+    // no BC7: its alpha gradients miss the quality bar) is mostly empty: each frame keeps only the rect around its
+    // non-zero pixels, 2 pixels wider on every side (so the kept rect's edge pixels are zero, like everything
+    // the frame leaves out: a sample at or past the edge reads zeros either way), packed in rows into a smaller
+    // image that replaces `img`. Only images of at least ZDON_TRIM_ATLAS_MB (default 8; 0 = off) whose frames
+    // are all inside the image, when the packed one is at most 3/4 of it. nullopt: img unchanged.
+    std::optional<std::vector<TextureObject::CropTrim>> trim_crop_atlas(Image& img, const Value& mapping,
+                                                                        const std::string& name) {
+        static const size_t min_bytes = [] {
+            const char* v = std::getenv("ZDON_TRIM_ATLAS_MB");
+            return static_cast<size_t>(v && *v ? std::max(0L, std::atol(v)) : 8L) << 20;
+        }();
+        if (min_bytes == 0 || !img.data || img.format != pixel_format::RGBA8 || img.mipmaps != 1 ||
+            static_cast<size_t>(img.width) * img.height * 4 < min_bytes) {
+            return std::nullopt;
+        }
+        const Value* first = mapping.IsArray() ? (mapping.Size() > 0 ? &mapping[0] : nullptr) : &mapping;
+        if (!first || !first->IsObject() || !first->HasMember("crop") || !(*first)["crop"].IsArray()) {
+            return std::nullopt;
+        }
+        const std::vector<Rect> crops = parse_crops((*first)["crop"], name);
+        if (crops.empty()) {
+            return std::nullopt;
+        }
+        const int W = img.width, H = img.height;
+        const auto* px = static_cast<const uint32_t*>(img.data);
+        constexpr int kMargin = 2;
+        struct Keep {
+            int x0, y0, x1, y1; // in the image, x1/y1 exclusive; x1 == x0: empty
+        };
+        std::vector<Keep> keep;
+        keep.reserve(crops.size());
+        for (const Rect& c : crops) {
+            const int cx = static_cast<int>(c.x), cy = static_cast<int>(c.y);
+            const int cw = static_cast<int>(c.width), ch = static_cast<int>(c.height);
+            if (static_cast<float>(cx) != c.x || static_cast<float>(cy) != c.y || static_cast<float>(cw) != c.width ||
+                static_cast<float>(ch) != c.height || cx < 0 || cy < 0 || cw <= 1 || ch <= 1 || cx + cw > W ||
+                cy + ch > H) {
+                return std::nullopt;
+            }
+            int x0 = cx + cw, y0 = cy + ch, x1 = cx, y1 = cy;
+            for (int y = cy; y < cy + ch; ++y) {
+                const uint32_t* row = px + static_cast<size_t>(y) * W;
+                for (int x = cx; x < cx + cw; ++x) {
+                    if (row[x] != 0) {
+                        x0 = std::min(x0, x);
+                        x1 = std::max(x1, x + 1);
+                        y0 = std::min(y0, y);
+                        y1 = std::max(y1, y + 1);
+                    }
+                }
+            }
+            if (x1 <= x0) {
+                keep.push_back({cx, cy, cx, cy});
+                continue;
+            }
+            keep.push_back({std::max(cx, x0 - kMargin), std::max(cy, y0 - kMargin), std::min(cx + cw, x1 + kMargin),
+                            std::min(cy + ch, y1 + kMargin)});
+        }
+        // rows of rects, tallest first, 1 empty pixel between them, as wide as the image
+        std::vector<size_t> order(keep.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        std::ranges::stable_sort(order,
+                                 [&](size_t l, size_t r) { return keep[l].y1 - keep[l].y0 > keep[r].y1 - keep[r].y0; });
+        std::vector<std::pair<int, int>> at(keep.size(), {0, 0});
+        int pen_x = 0, pen_y = 0, row_h = 0;
+        for (const size_t i : order) {
+            const int w = keep[i].x1 - keep[i].x0, h = keep[i].y1 - keep[i].y0;
+            if (w <= 0) {
+                continue;
+            }
+            if (pen_x > 0 && pen_x + w > W) {
+                pen_x = 0;
+                pen_y += row_h + 1;
+                row_h = 0;
+            }
+            at[i] = {pen_x, pen_y};
+            pen_x += w + 1;
+            row_h = std::max(row_h, h);
+        }
+        const int new_h = std::max(1, pen_y + row_h);
+        if (static_cast<size_t>(new_h) * 4 > static_cast<size_t>(H) * 3) {
+            return std::nullopt;
+        }
+        auto* out = static_cast<uint32_t*>(std::calloc(static_cast<size_t>(W) * new_h, 4));
+        if (!out) {
+            return std::nullopt;
+        }
+        std::vector<TextureObject::CropTrim> trims(keep.size());
+        for (size_t i = 0; i < keep.size(); ++i) {
+            const Keep& k = keep[i];
+            const int w = k.x1 - k.x0, h = k.y1 - k.y0;
+            if (w <= 0) {
+                continue;
+            }
+            for (int y = 0; y < h; ++y) {
+                std::memcpy(out + static_cast<size_t>(at[i].second + y) * W + at[i].first,
+                            px + static_cast<size_t>(k.y0 + y) * W + k.x0, static_cast<size_t>(w) * 4);
+            }
+            trims[i] = {static_cast<float>(k.x0) - crops[i].x,
+                        static_cast<float>(k.y0) - crops[i].y,
+                        static_cast<float>(w),
+                        static_cast<float>(h),
+                        static_cast<float>(at[i].first),
+                        static_cast<float>(at[i].second)};
+        }
+        spdlog::info("Texture {}: {} crop frames packed without their empty margins, {}x{} -> {}x{} ({:.1f} -> "
+                     "{:.1f} MB)",
+                     name, crops.size(), W, H, W, new_h, static_cast<double>(W) * H * 4 / 1048576.0,
+                     static_cast<double>(W) * new_h * 4 / 1048576.0);
+        unload_image(img);
+        img = Image{out, W, new_h, 1, pixel_format::RGBA8};
+        return trims;
+    }
+
     void apply_frame_order(TextureObject* tex_obj, const Value& mapping) {
         if (!mapping.HasMember("frame_order") || !mapping["frame_order"].IsArray()) {
             return;
@@ -1431,8 +1548,30 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                 // GPU textures indexed by file, so keys that share one atlas PNG
                 // (via "file" + "crop") upload it once and share the texture.
                 std::vector<std::shared_ptr<Texture>> gpu(files.size());
+                std::vector<int> file_uses(files.size(), 0);
+                for (const auto& p : pending) {
+                    for (size_t i = 0; i < p.file_count; ++i) {
+                        ++file_uses[p.first_file + i];
+                    }
+                }
                 for (const auto& p : pending) {
                     bool ok = true;
+                    // Z-DON: trim_crop_atlas; uploaded here (not left for a first draw: a refill would read the
+                    // whole file again)
+                    std::optional<std::vector<TextureObject::CropTrim>> trim;
+                    if (!p.framed && p.file_count == 1 && density == 1 && file_uses[p.first_file] == 1 &&
+                        !gpu[p.first_file]) {
+                        trim = trim_crop_atlas(images[p.first_file], *p.mapping, p.name);
+                        if (trim) {
+                            Texture t = load_texture_from_image(images[p.first_file]);
+                            if (is_texture_valid(t)) {
+                                texture_lazy::count_eager(screen_name, t);
+                                gpu[p.first_file] = shared_texture(t);
+                            } else {
+                                trim.reset();
+                            }
+                        }
+                    }
                     std::vector<std::shared_ptr<Texture>> texs;
                     texs.reserve(p.file_count);
                     for (size_t i = 0; i < p.file_count; ++i) {
@@ -1477,6 +1616,9 @@ void TextureWrapper::load_folder(const std::string& screen_name, const std::stri
                     }
 
                     read_tex_obj_data(*p.mapping, obj.get(), tex_scale, density);
+                    if (trim && obj->crop_data && obj->crop_data->size() == trim->size()) {
+                        obj->crop_trim = std::move(trim);
+                    }
                     obj->json_path = tex_json;
                     obj->json_key = p.name;
                     obj->json_scale = tex_scale;
@@ -2640,6 +2782,25 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
     const Color final_color = (params.fade != 1.1f) ? fade(params.color, params.fade) : params.color;
 
     Rect source_rect;
+    const TextureObject::CropTrim* trim = nullptr; // Z-DON: trim_crop_atlas
+    if (tex_obj->crop_trim.has_value()) {
+        if (params.src.has_value()) { // a caller's rect of the whole image: not in the packed one
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                spdlog::warn("draw_texture: {} is packed without its empty margins, a source rect is not drawn",
+                             tex_obj->name);
+            }
+            return;
+        }
+        if (params.frame < 0 || static_cast<size_t>(params.frame) >= tex_obj->crop_trim->size()) {
+            return;
+        }
+        trim = &(*tex_obj->crop_trim)[params.frame];
+        if (trim->w <= 0) {
+            return; // an empty frame
+        }
+    }
     if (params.src.has_value()) {
         source_rect = params.src.value();
         if (tex_obj->density != 1) { // a caller's src is logical, like the texture's width / height
@@ -2713,12 +2874,46 @@ void TextureWrapper::draw_texture(TextureObject* tex_obj, const DrawTextureParam
         log_lua_site(debug_draw_log.back(), script_lua_state());
     }
 
+    Vec2 origin = params.origin;
+    if (trim) {
+        // The crop drew source pixel u = c0 + 0.5 + (c - 1) * t / D at t along a destination side D (mirrored:
+        // from the far end). Draw the part of the destination whose u falls in the kept rect, with the packed
+        // texture's pixels there, rotated about the same point.
+        const Rect& c = tex_obj->crop_data->at(params.frame);
+        const auto axis = [](float c0, float cn, float k0, float kn, float p0, float dn, bool mirrored, float& t_lo,
+                             float& t_hi, float& s0, float& sn) {
+            const float per = (cn - 1.0f) / dn; // source pixels per destination unit
+            const float first = c0 + 0.5f, last = c0 + cn - 0.5f;
+            const float a = c0 + k0, b = a + kn; // the kept rect
+            const auto t_of = [&](float u) { return mirrored ? (last - u) / per : (u - first) / per; };
+            const auto u_of = [&](float t) { return mirrored ? last - t * per : first + t * per; };
+            t_lo = std::max(0.0f, mirrored ? t_of(b) : t_of(a));
+            t_hi = std::min(dn, mirrored ? t_of(a) : t_of(b));
+            const float u_lo = u_of(t_lo), u_hi = u_of(t_hi);
+            s0 = p0 + (std::min(u_lo, u_hi) - a);
+            sn = (mirrored ? -1.0f : 1.0f) * std::abs(u_hi - u_lo);
+        };
+        if (dest_rect.width <= 0.0f || dest_rect.height <= 0.0f || c.width <= 1.0f || c.height <= 1.0f) {
+            return;
+        }
+        float tx0, tx1, ty0, ty1;
+        axis(c.x, c.width, trim->ox, trim->w, trim->px, dest_rect.width, mirror_x < 0, tx0, tx1, source_rect.x,
+             source_rect.width);
+        axis(c.y, c.height, trim->oy, trim->h, trim->py, dest_rect.height, mirror_y < 0, ty0, ty1, source_rect.y,
+             source_rect.height);
+        if (tx1 <= tx0 || ty1 <= ty0) {
+            return;
+        }
+        dest_rect.width = tx1 - tx0;
+        dest_rect.height = ty1 - ty0;
+        origin = Vec2{origin.x - tx0, origin.y - ty0};
+    }
     const Texture* frame_tex = tex_obj->frame_texture(params.frame);
     if (frame_tex) {
         if (params.blend.has_value()) {
             begin_blend_mode(params.blend.value());
         }
-        draw_texture_pro(*frame_tex, source_rect, dest_rect, params.origin, params.rotation, final_color);
+        draw_texture_pro(*frame_tex, source_rect, dest_rect, origin, params.rotation, final_color);
         if (params.blend.has_value()) {
             end_blend_mode();
         }

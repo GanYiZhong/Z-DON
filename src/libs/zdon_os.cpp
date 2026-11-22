@@ -1,7 +1,9 @@
 #include "zdon_os.h"
 
 #include <cstdint>
+#include <map>
 #include <spdlog/spdlog.h>
+#include <string>
 
 #if defined(_WIN32)
 #include "../platform/platform_windows.h"
@@ -26,6 +28,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+#include <sys/mman.h>
+#include <sys/stat.h>
+#endif
 #if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -241,5 +247,113 @@ namespace zdon_os {
         return true;
     }
 #endif
+
+    bool FileBytes::open(const std::filesystem::path& path, std::vector<unsigned char> (*read)(const char* path)) {
+        clear();
+#if defined(_WIN32)
+        // FILE_SHARE_DELETE: the file can still be renamed while mapped (the skin updater moves it aside to
+        // put a new version in place: skin_updater.cpp write_atomically)
+        HANDLE f = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER size{};
+            if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (int64_t{1} << 31)) {
+                HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr);
+                if (m) {
+                    view_ = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
+                    CloseHandle(m); // the view keeps the mapping
+                    if (view_) {
+                        data_ = static_cast<const unsigned char*>(view_);
+                        size_ = static_cast<size_t>(size.QuadPart);
+                    }
+                }
+            }
+            CloseHandle(f);
+        }
+#elif (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            struct stat st{};
+            if (::fstat(fd, &st) == 0 && st.st_size > 0) {
+                void* v = ::mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
+                if (v != MAP_FAILED) {
+                    view_ = v;
+                    data_ = static_cast<const unsigned char*>(v);
+                    size_ = static_cast<size_t>(st.st_size);
+                }
+            }
+            ::close(fd);
+        }
+#endif
+        if (!view_) {
+            bytes_ = read(path.string().c_str());
+            data_ = bytes_.data();
+            size_ = bytes_.size();
+        }
+        return size_ > 0;
+    }
+
+    void FileBytes::clear() {
+        if (view_) {
+#if defined(_WIN32)
+            UnmapViewOfFile(view_);
+#elif (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+            ::munmap(view_, size_);
+#endif
+            view_ = nullptr;
+        }
+        bytes_ = {};
+        data_ = nullptr;
+        size_ = 0;
+    }
+
+    void heap_histogram_log(const char* where) {
+#if defined(_WIN32)
+        struct Bucket {
+            size_t n = 0, bytes = 0;
+            std::string sample;
+        };
+        std::map<size_t, Bucket> by; // by size class (powers of two)
+        size_t busy = 0;
+        HANDLE heaps[64];
+        const DWORD n = GetProcessHeaps(64, heaps);
+        for (DWORD k = 0; k < n && k < 64; ++k) {
+            if (!HeapLock(heaps[k])) {
+                continue;
+            }
+            PROCESS_HEAP_ENTRY e{};
+            while (HeapWalk(heaps[k], &e)) {
+                if (!(e.wFlags & PROCESS_HEAP_ENTRY_BUSY)) {
+                    continue;
+                }
+                size_t c = 16;
+                while (c < e.cbData) {
+                    c *= 2;
+                }
+                Bucket& b = by[c];
+                ++b.n;
+                b.bytes += e.cbData;
+                busy += e.cbData;
+                if (b.n % (c >= 8192 ? 41 : 499) == 1 && b.sample.size() < (c >= 8192 ? 2000u : 300u)) { // a few blocks' first bytes, printable
+                    const auto* p = static_cast<const unsigned char*>(e.lpData);
+                    std::string t;
+                    for (size_t j = 0; j < std::min<size_t>(e.cbData, c >= 8192 ? 96 : 40); ++j) {
+                        t += (p[j] >= 32 && p[j] < 127) ? static_cast<char>(p[j]) : '.';
+                    }
+                    b.sample += " [" + t + "]";
+                }
+            }
+            HeapUnlock(heaps[k]);
+        }
+        spdlog::info("[heap] {}: {:.1f} MB in use", where, busy / 1048576.0);
+        for (const auto& [c, b] : by) {
+            if (b.bytes >= (size_t{1} << 20)) {
+                spdlog::info("[heap] {} <= {} B: {} blocks {:.1f} MB{}", where, c, b.n, b.bytes / 1048576.0, b.sample);
+            }
+        }
+#else
+        (void)where;
+#endif
+    }
 
 } // namespace zdon_os

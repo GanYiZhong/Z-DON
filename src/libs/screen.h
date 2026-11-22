@@ -14,6 +14,7 @@
 #include "input/input.h"
 #include "readahead.h"
 #include "time.h"
+#include "zdon_os.h"
 
 // One axis of the virtual -> window mapping: dim/win_dim are the skin's and the window's size along the axis,
 // stretch is the camera's h_scale or v_scale, cam_offset the camera offset along it
@@ -128,6 +129,10 @@ public:
         audio.set_two_player_mode(two_player_audio());
         tex.load_screen_textures(screen_name);
         audio.load_screen_sounds(screen_name, global_data.current_screen);
+        static const bool heap_hist = std::getenv("ZDON_HEAP_HIST") != nullptr;
+        if (heap_hist) {
+            zdon_os::heap_histogram_log(screen_name.c_str());
+        }
     }
 
     virtual Screens on_screen_end(Screens next_screen) {

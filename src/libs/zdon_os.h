@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +41,34 @@ namespace zdon_os {
     // posix_fadvise(WILLNEED), macOS/iOS fcntl(F_RDADVISE) (an int count, so 1 GB per advisory).
     // false where there is no such hint: the caller reads the file itself.
     bool prefetch_file(const std::filesystem::path& path);
+
+    // A file's bytes, read only: mapped where the platform can (Windows MapViewOfFile, POSIX mmap), so they are
+    // file-backed pages the system can drop and read again instead of private memory; read into memory
+    // otherwise (the web, an Android asset, a failed mapping). Used for the skin's fonts (Nijiiro: 26 + 4 MB),
+    // which FreeType/stb read glyphs from for the whole run.
+    class FileBytes {
+    public:
+        FileBytes() = default;
+        FileBytes(const FileBytes&) = delete;
+        FileBytes& operator=(const FileBytes&) = delete;
+        ~FileBytes() { clear(); }
+        // false when the file cannot be read (empty then)
+        bool open(const std::filesystem::path& path, std::vector<unsigned char> (*read)(const char* path));
+        void clear();
+        bool empty() const { return size_ == 0; }
+        std::span<const unsigned char> span() const { return {data_, size_}; }
+        operator std::span<const unsigned char>() const { return span(); }
+
+    private:
+        const unsigned char* data_ = nullptr;
+        size_t size_ = 0;
+        std::vector<unsigned char> bytes_; // when not mapped
+        void* view_ = nullptr;             // the mapping, when mapped
+    };
+
+    // Dev hook (ZDON_HEAP_HIST=1, Windows): logs the C heap's blocks in use by size class, with a few blocks'
+    // first bytes, at each screen start (Screen::on_screen_start).
+    void heap_histogram_log(const char* where);
 
     // Physical memory in MB, 0 when it cannot be read.
     uint64_t physical_memory_mb();

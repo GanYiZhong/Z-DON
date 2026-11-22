@@ -11,6 +11,7 @@
 
 #include "../gfx.h"
 #include "../jobs.h"
+#include "../zdon_os.h"
 #include "color_utils.h"
 #include "texture.h"
 
@@ -47,10 +48,10 @@ private:
         int pen_x = 0, pen_y = 0, row_h = 0;
     };
 
-    std::vector<unsigned char> font_data; // the .ttf bytes, read once
+    zdon_os::FileBytes font_data; // the .ttf bytes (Z-DON: mapped, not read into memory)
     // Z-DON: the base font's bytes when font_data is a language overlay (screen.font_base): glyphs the
     // overlay lacks come from here (same metrics: the skin builds both from one family)
-    std::vector<unsigned char> fallback_data;
+    zdon_os::FileBytes fallback_data;
 
     bool rasterize_new(SizedFont& entry, int font_size, const std::vector<int>& cps);   // font_mutex held
     void update_atlas(SizedFont& entry, int font_size);                                 // font_mutex held

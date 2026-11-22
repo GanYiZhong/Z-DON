@@ -60,6 +60,7 @@ public:
             obj->x2 = src->x2;
             obj->y2 = src->y2;
             obj->crop_data = src->crop_data;
+            obj->crop_trim = src->crop_trim; // the image read back is the packed one
             obj->opaque_right = src->opaque_right;
             result = std::move(obj);
         }

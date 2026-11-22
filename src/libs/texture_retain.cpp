@@ -82,6 +82,7 @@ namespace texture_retain {
             int height = 0;
             std::vector<int> x, y, x2, y2;
             std::optional<std::vector<Rect>> crop_data;
+            std::optional<std::vector<TextureObject::CropTrim>> crop_trim;
             float opaque_right = 0.0f;
             std::vector<std::shared_ptr<Texture>> frames; // FramedTexture order
         };
@@ -168,6 +169,7 @@ namespace texture_retain {
             s.x2 = obj.x2;
             s.y2 = obj.y2;
             s.crop_data = obj.crop_data;
+            s.crop_trim = obj.crop_trim;
             s.opaque_right = obj.opaque_right;
             if (auto* framed = dynamic_cast<const FramedTexture*>(&obj)) {
                 s.frames = framed->textures;
@@ -183,6 +185,7 @@ namespace texture_retain {
             obj.x2 = s.x2;
             obj.y2 = s.y2;
             obj.crop_data = s.crop_data;
+            obj.crop_trim = s.crop_trim;
             obj.opaque_right = s.opaque_right;
             if (auto* framed = dynamic_cast<FramedTexture*>(&obj)) {
                 framed->textures = s.frames;

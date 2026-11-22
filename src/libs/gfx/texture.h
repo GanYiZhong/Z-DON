@@ -86,6 +86,13 @@ struct TextureObject {
     std::vector<int> x2;
     std::vector<int> y2;
     std::optional<std::vector<Rect>> crop_data;
+    // Z-DON (trim_crop_atlas, texture.cpp): crop frames packed without their empty margins. Per frame the part of
+    // the crop kept (ox, oy from the crop's corner, w x h; w == 0: the frame is empty) and where it sits in the
+    // packed texture (px, py). draw_texture draws only that part, where the whole crop would have drawn it.
+    struct CropTrim {
+        float ox = 0, oy = 0, w = 0, h = 0, px = 0, py = 0;
+    };
+    std::optional<std::vector<CropTrim>> crop_trim;
 
     // Where x/y/x2/y2 came from, so the debug menu can write edits back.
     std::filesystem::path json_path;

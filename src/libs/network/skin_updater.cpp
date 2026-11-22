@@ -213,6 +213,23 @@ namespace {
             if (!ec) {
                 return true;
             }
+            // Z-DON: a file the game has mapped (its fonts, zdon_os::FileBytes) cannot be replaced on Windows,
+            // but it can be renamed: move it aside, put the new one in place, and delete the old one when
+            // nothing maps it any more (now, or the next time this file is updated)
+            fs::path aside = target;
+            aside += ".zdon-old";
+            fs::remove(aside, ec);
+            if (fs::exists(target, ec) && !fs::exists(aside, ec)) {
+                fs::rename(target, aside, ec);
+                if (!ec) {
+                    fs::rename(tmp, target, ec);
+                    if (!ec) {
+                        fs::remove(aside, ec);
+                        return true;
+                    }
+                    fs::rename(aside, target, ec); // put the old one back
+                }
+            }
         }
         fs::remove(tmp, ec);
         return false;

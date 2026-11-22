@@ -68,6 +68,13 @@ static size_t pcm_bytes(const sound& snd) {
     return static_cast<size_t>(snd.frame_count) * snd.channels * (snd.pcm16 ? sizeof(int16_t) : sizeof(float));
 }
 
+static void free_pcm(sound& snd) {
+    delete[] snd.data;
+    delete[] snd.pcm16;
+    snd.data = nullptr;
+    snd.pcm16 = nullptr;
+}
+
 // Z-DON: sounds decoded ahead by predecode_screen_sounds, by path, until load_screen_sounds of that screen
 namespace {
     struct PreSound {
@@ -105,7 +112,7 @@ namespace {
     }
     void free_batch_locked(SoundBatch& b) {
         for (auto& [key, ps] : b.sounds) {
-            delete[] ps.snd.data;
+            free_pcm(ps.snd);
         }
         b.sounds.clear();
         b.bytes = 0;
@@ -153,7 +160,7 @@ namespace {
         uint64_t size = 0;
         int64_t mtime = 0;
         if (!file_stat(file_path, size, mtime) || size != ps.size || mtime != ps.mtime) {
-            delete[] ps.snd.data; // changed since: decoded again (a head frees itself)
+            free_pcm(ps.snd); // changed since: decoded again (a head frees itself)
             return false;
         }
         {
@@ -176,8 +183,14 @@ namespace {
         return on;
     }
     bool same_pcm(const sound& a, const sound& b, size_t frames) {
-        return a.channels == b.channels && a.sample_rate == b.sample_rate && a.data && b.data &&
-               std::memcmp(a.data, b.data, frames * a.channels * sizeof(float)) == 0;
+        if (a.channels != b.channels || a.sample_rate != b.sample_rate) {
+            return false;
+        }
+        if (a.pcm16 && b.pcm16) {
+            return a.pcm16_scale == b.pcm16_scale &&
+                   std::memcmp(a.pcm16, b.pcm16, frames * a.channels * sizeof(int16_t)) == 0;
+        }
+        return a.data && b.data && std::memcmp(a.data, b.data, frames * a.channels * sizeof(float)) == 0;
     }
 } // namespace
 
@@ -1880,9 +1893,12 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
                 SF_INFO vi;
                 SNDFILE* vf = open_sound_file(file_path, vi);
                 sound v{};
-                const bool same = vf && read_short_sound(vf, vi, file_path, target_sample_rate, v) &&
-                                  v.frame_count == pre.frame_count && same_pcm(v, pre, pre.frame_count);
-                delete[] v.data;
+                const bool read = vf && read_short_sound(vf, vi, file_path, target_sample_rate, v);
+                if (read && pre.pcm16) {
+                    compact_sound(v); // as the predecode stored it
+                }
+                const bool same = read && v.frame_count == pre.frame_count && same_pcm(v, pre, pre.frame_count);
+                free_pcm(v);
                 if (!same) {
                     spdlog::error("Predecode verify: sound {} DIFFERS", file_path.string());
                 } else {
@@ -2190,19 +2206,20 @@ void AudioEngine::predecode_screen_sounds(const std::string& screen_name, const 
                 ps.bytes = ps.head->dec->written * ps.head->dec->channels *
                            (ps.head->dec->out16 ? sizeof(int16_t) : sizeof(float));
             } else if (read_short_sound(file, info, w.file, rate, ps.snd)) {
-                ps.bytes = static_cast<size_t>(ps.snd.frame_count) * ps.snd.channels * sizeof(float);
+                compact_sound(ps.snd); // as store_sound keeps it
+                ps.bytes = pcm_bytes(ps.snd);
             } else {
                 continue;
             }
             const size_t bytes = ps.bytes;
             std::scoped_lock lock(b->mutex);
             if (b->cancel.load(std::memory_order_relaxed) || b->bytes + bytes > kPredecodeSoundCap) {
-                delete[] ps.snd.data;
+                free_pcm(ps.snd);
                 break;
             }
             auto [it, inserted] = b->sounds.try_emplace(predecode_key(w.file), ps);
             if (!inserted) {
-                delete[] ps.snd.data;
+                free_pcm(ps.snd);
                 continue;
             }
             b->bytes += bytes;

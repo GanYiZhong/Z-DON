@@ -74,9 +74,8 @@ void FontManager::init(const fs::path& font_path, const fs::path& fallback_path)
     }
     this->font_path = font_path;
     release_all_fonts();
-    auto read_font = [](const fs::path& p, std::vector<unsigned char>& out) {
-        out = load_file_bytes(p.string().c_str());
-        if (out.empty()) {
+    auto read_font = [](const fs::path& p, zdon_os::FileBytes& out) {
+        if (!out.open(p, load_file_bytes)) {
             throw std::runtime_error("Failed to read font data: " + p.string());
         }
     };
