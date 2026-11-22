@@ -2037,6 +2037,21 @@ static bool lazy_long_sounds(const std::string& screen) {
     return on && screen != "game";
 }
 
+// Z-DON: a screen's sound folders that wait for their first use whatever their length (with lazy_long_sounds):
+// song select's AI battle ones (PyTaikoGreen battle_story 52 voice clips, ai, ai_select, ai_intro: about 16 MB of
+// PCM), played only once an AI battle is picked. A first play decodes the clip then (a few ms).
+static bool first_use_sound(const std::string& screen, const fs::path& file) {
+    if (!lazy_long_sounds(screen) || screen != "song_select") {
+        return false;
+    }
+    const fs::path dir = file.parent_path();
+    if (dir.parent_path().filename() != screen) {
+        return false; // a file of the screen folder itself
+    }
+    static const std::unordered_set<std::string> folders = {"battle_story", "ai", "ai_select", "ai_intro"};
+    return folders.contains(dir.filename().string());
+}
+
 // Z-DON: the game screen's sound folders a play mode never plays, as deferred_game_subsets (texture.cpp) does for
 // its textures: the tutorial's (Nijiiro 16 files, 19 MB of PCM) outside the tutorial and input calibration, enso
 // battle's (PyTaikoGreen 81 files, 28 MB) outside enso battle (BATTLE_GAME is not one of these modes: it loads
@@ -2293,6 +2308,9 @@ void AudioEngine::predecode_screen_sounds(const std::string& screen_name, const 
                 continue;
             }
 #endif
+            if (first_use_sound(b->screen, w.file)) {
+                continue; // loads on first use, not with the screen
+            }
             PreSound ps;
             if (!file_stat(w.file, ps.size, ps.mtime)) {
                 continue;
@@ -2382,6 +2400,13 @@ bool AudioEngine::defer_long_sound(const fs::path& file_path, const std::string&
     return true;
 }
 
+void AudioEngine::defer_sound(const fs::path& file_path, const std::string& name) {
+    std::scoped_lock g(lazy_lock);
+    if (lazy_sounds.insert_or_assign(name, file_path).second) {
+        lazy_count.fetch_add(1, std::memory_order_release);
+    }
+}
+
 bool AudioEngine::load_lazy_sound(const std::string& name) const {
     if (lazy_count.load(std::memory_order_acquire) == 0) {
         return false;
@@ -2434,9 +2459,14 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
     std::atomic<int> reused{0};
     std::atomic<int> deferred{0};
     const bool lazy = lazy_long_sounds(screen_name);
-    auto load = [this, &queue, &reused, &deferred, lazy](size_t i) {
+    auto load = [this, &queue, &reused, &deferred, lazy, &screen_name](size_t i) {
         const Want& w = queue[i];
         if (!w.resident) {
+            if (first_use_sound(screen_name, w.file)) {
+                defer_sound(w.file, w.name);
+                deferred.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
             if (lazy && defer_long_sound(w.file, w.name)) {
                 deferred.fetch_add(1, std::memory_order_relaxed);
                 return;
@@ -2459,7 +2489,7 @@ void AudioEngine::load_screen_sounds(const std::string& screen_name, const std::
     }
     drop_batch(current_batch() ? "loaded" : nullptr); // Z-DON: what the load did not take
     std::scoped_lock g(resident_lock);
-    spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB), {} long ones load on first use",
+    spdlog::info("Sounds for {}: {} files, {} resident reused ({} resident, {:.1f} MB), {} load on first use",
                  screen_name, queue.size(), reused.load(), resident.size(), resident_bytes / 1048576.0,
                  deferred.load());
 }

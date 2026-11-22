@@ -456,8 +456,9 @@ private:
     mutable std::mutex lazy_lock;
     std::unordered_map<std::string, fs::path> lazy_sounds; // name -> file, under lazy_lock
     std::atomic<size_t> lazy_count{0};
-    bool defer_long_sound(const fs::path& file_path, const std::string& name); // true: listed, not loaded
-    bool load_lazy_sound(const std::string& name) const;                       // true: it was listed (loaded now)
+    bool defer_long_sound(const fs::path& file_path, const std::string& name);
+    void defer_sound(const fs::path& file_path, const std::string& name); // true: listed, not loaded
+    bool load_lazy_sound(const std::string& name) const;                  // true: it was listed (loaded now)
     bool is_lazy_sound(const std::string& name) const;
     void forget_lazy_sound(const std::string& name);
 
