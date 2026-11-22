@@ -141,8 +141,18 @@ Image gen_image_color(int w, int h, Color color) {
     return image;
 }
 
+size_t image_data_size(int width, int height, int format) {
+    if (format == pixel_format::COMPRESSED_BPTC_RGBA) {
+        if (width <= 0 || height <= 0) {
+            return 0;
+        }
+        return static_cast<size_t>((width + 3) / 4) * static_cast<size_t>((height + 3) / 4) * 16;
+    }
+    return static_cast<size_t>(std::max(0, get_pixel_data_size(width, height, format)));
+}
+
 Image image_copy(Image image) { // CPU images are always a single level
-    const int size = get_pixel_data_size(image.width, image.height, image.format);
+    const size_t size = image_data_size(image.width, image.height, image.format);
     Image out = image;
     out.data = image.data && size > 0 ? std::malloc(size) : nullptr;
     if (out.data) {

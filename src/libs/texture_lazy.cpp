@@ -678,6 +678,12 @@ namespace texture_lazy {
         return true;
     }
 
+    std::unordered_set<std::string> warm_sources(const std::string& owner) {
+        WarmRecords& r = warm_records();
+        auto it = r.known.find(owner);
+        return it == r.known.end() ? std::unordered_set<std::string>{} : it->second;
+    }
+
     void log_screen(const std::string& screen_name) {
         // Game, global and background textures left for their first draw (gameplay_lazy) whose image is BC7, and
         // those of any other screen that no earlier run drew (not in the warm-up list; Nijiiro song select: about

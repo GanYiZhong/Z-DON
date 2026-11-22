@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -111,6 +112,9 @@ namespace texture_lazy {
 
     // Once per frame, after its present: uploads queued warm-up textures for up to ZDON_WARM_UPLOAD_MS.
     void warm_tick();
+
+    // Z-DON: the files an earlier load of owner drew (cache/warm_upload.txt), as generic paths; main thread, a copy
+    std::unordered_set<std::string> warm_sources(const std::string& owner);
 
     // Z-DON predecode (TextureWrapper::start_predecode): an image uploaded the warm-up's way, a 1 MB band of rows
     // per call into a texture drawn once into a 1x1 target when allocated and once when complete. True once every

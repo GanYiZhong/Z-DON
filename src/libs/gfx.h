@@ -178,6 +178,9 @@ void image_format(Image* image, int new_format);
 void image_rotate_cw(Image* image);
 Rect get_image_alpha_border(Image image, float threshold);
 int get_pixel_data_size(int width, int height, int format);
+// Z-DON: the bytes of an image's data, compressed formats too (BC7: 16 per 4x4 block). get_pixel_data_size is 0 for
+// those, so the per-pixel functions above turn them down; sizes and copies of whole images use this one.
+size_t image_data_size(int width, int height, int format);
 void update_texture(Texture tex, const void* pixels);
 bool is_texture_valid(Texture tex);
 // Whole file, or empty on failure.

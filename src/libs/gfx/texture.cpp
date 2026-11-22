@@ -587,7 +587,7 @@ void TextureWrapper::unload_textures() {
                 if (!t || t->id == 0 || !seen.insert(t).second) {
                     continue;
                 }
-                const double mb = get_pixel_data_size(t->width, t->height, t->format) / 1048576.0;
+                const double mb = static_cast<double>(image_data_size(t->width, t->height, t->format)) / 1048576.0;
                 if (TextureObject::zdon_tex_used().contains(t)) {
                     ++used_n;
                     used_mb += mb;
@@ -913,12 +913,10 @@ namespace {
         Image image = load_image_unchecked(path, key, pack);
         if (verify_enabled()) {
             Image ref = ::load_image(path.string().c_str());
-            const bool same =
-                ref.width == image.width && ref.height == image.height && ref.format == image.format &&
-                (ref.data == nullptr) == (image.data == nullptr) &&
-                (!ref.data ||
-                 std::memcmp(ref.data, image.data,
-                             static_cast<size_t>(get_pixel_data_size(ref.width, ref.height, ref.format))) == 0);
+            const bool same = ref.width == image.width && ref.height == image.height && ref.format == image.format &&
+                              (ref.data == nullptr) == (image.data == nullptr) &&
+                              (!ref.data || std::memcmp(ref.data, image.data,
+                                                        image_data_size(ref.width, ref.height, ref.format)) == 0);
             ++verify_counts.checked;
             if (!same) {
                 ++verify_counts.mismatched;
@@ -1217,7 +1215,7 @@ namespace {
         }
         // hands an image out (mutex held): its uploaded texture waits for take_gl
         void give_locked(const std::string& key, Image& im) {
-            given_bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+            given_bytes += image_data_size(im.image.width, im.image.height, im.image.format);
             ++given;
             if (im.gl_id != 0) {
                 uploaded[key] = {im.gl_id, im.image.width, im.image.height, im.image.format};
@@ -1420,8 +1418,7 @@ private:
             it.image = image;
             it.border = border;
             it.has_border = has_border;
-            it.bytes =
-                image.data ? static_cast<size_t>(get_pixel_data_size(image.width, image.height, image.format)) : 0;
+            it.bytes = image.data ? image_data_size(image.width, image.height, image.format) : 0;
             it.state = State::Done;
             held += it.bytes;
             cv.notify_all();
@@ -1909,6 +1906,9 @@ namespace {
         std::vector<std::string> via;
         std::string mode;                         // whole: the play mode it is for (next_game_mode)
         std::unordered_set<std::string> deferred; // whole: owner's folders that mode leaves out
+        // whole, for a screen whose textures wait for their first draw: the files an earlier load drew. A BC7 one
+        // not among them is let go of right after the load (texture_lazy::log_screen), so it is not read ahead
+        std::optional<std::unordered_set<std::string>> warm;
         // whole, for a screen whose textures upload at load (the game screen): the decoded images are also
         // uploaded ahead, on the main thread after the frame's present (predecode_tick); main thread only
         bool upload = false;
@@ -2017,8 +2017,7 @@ namespace {
                 spdlog::error("Lazy texture prefill: failed to decode {}: {}", path.string(), e.what());
             }
             if (img.data) {
-                pf->held.fetch_add(static_cast<size_t>(get_pixel_data_size(img.width, img.height, img.format)),
-                                   std::memory_order_relaxed);
+                pf->held.fetch_add(image_data_size(img.width, img.height, img.format), std::memory_order_relaxed);
             }
             std::scoped_lock lock(pf->mutex);
             if (pf->taken.load(std::memory_order_relaxed)) {
@@ -2183,7 +2182,7 @@ namespace {
             pre.owner = pf->owner;
             pre.given = pre.given_bytes = 0;
             for (auto& [key, im] : got) {
-                bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+                bytes += image_data_size(im.image.width, im.image.height, im.image.format);
                 if (auto it = evicted.find(key); it != evicted.end()) {
                     refill.emplace_back(it->second, im.image);
                     Predecoded::unload_gl(im.gl_id); // a lazy texture: uploaded on first use
@@ -2296,6 +2295,13 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
     pf->upload = target == "game"; // the screens whose textures upload at load (texture_lazy: gameplay)
     pf->mode = next_game_mode(global_data.current_screen);
     pf->deferred = deferred_game_subsets(target, pf->mode);
+    static const bool read_cold = [] {
+        const char* v = std::getenv("ZDON_PREDECODE_COLD");
+        return v && *v == '1';
+    }();
+    if (!pf->upload && !read_cold && texture_bc7::enabled()) {
+        pf->warm = texture_lazy::warm_sources(target);
+    }
     pf->start = std::chrono::steady_clock::now();
     slot = pf;
     // the first job reads the pack's index (file I/O), opens the pack, then starts the others
@@ -2318,10 +2324,16 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
         std::vector<texture_lazy::EvictedFile> files;
         files.reserve(planned.size());
         size_t skipped = 0;
+        size_t cold = 0;
         for (const texture_pack::Session::Planned& p : planned) {
             fs::path file(p.key);
             if (!pf->deferred.empty() && pf->deferred.contains(graphics_subset(file, pf->owner))) {
                 ++skipped; // a folder the coming play mode leaves out (deferred_game_subsets)
+                continue;
+            }
+            if (pf->warm && !pf->warm->contains(file.generic_string()) &&
+                texture_bc7::has_file(ImagePrefetch::image_key(file), p.stat.size)) {
+                ++cold; // never drawn before and BC7: the load lets its image go (Nijiiro song select: ~1230, 190 MB)
                 continue;
             }
             files.push_back({std::move(file), p.stat.size, p.stat.mtime, 0});
@@ -2329,6 +2341,9 @@ void TextureWrapper::start_predecode(const std::string& target, std::vector<std:
         if (skipped > 0) {
             spdlog::info("Texture predecode for {}: {} files of folders {} leaves out not decoded", pf->owner, skipped,
                          pf->mode);
+        }
+        if (cold > 0) {
+            spdlog::info("Texture predecode for {}: {} BC7 files no earlier load drew not read ahead", pf->owner, cold);
         }
         try {
             // never finished: a predecode only reads the pack, the screen's own loads rewrite it
@@ -2372,7 +2387,7 @@ void TextureWrapper::end_predecode() {
     }
     size_t left_bytes = 0;
     for (const auto& [key, im] : pre.images) {
-        left_bytes += static_cast<size_t>(get_pixel_data_size(im.image.width, im.image.height, im.image.format));
+        left_bytes += image_data_size(im.image.width, im.image.height, im.image.format);
     }
     spdlog::info("Texture predecode for {}: {} images used instead of decoding ({} MB; {} textures uploaded ahead), {} "
                  "not needed ({} MB)",
@@ -2422,7 +2437,7 @@ void TextureWrapper::predecode_tick() {
         if (texture_lazy::upload_band(img, st)) {
             pf.up_state[pf.up_pos] = 1;
             ++pf.up_count;
-            pf.up_bytes += static_cast<size_t>(get_pixel_data_size(img.width, img.height, img.format));
+            pf.up_bytes += image_data_size(img.width, img.height, img.format);
             ++pf.up_pos;
         } else if (st.id == 0) {
             pf.up_state[pf.up_pos] = 2; // not bandable: uploaded at the load as before
