@@ -602,9 +602,7 @@ TJAParser::notes_to_position(int diff) {
         cached_cmds = std::vector<std::pair<std::string, CommandHandler>>(cmds.begin(), cmds.end());
         std::ranges::sort(cached_cmds,
                           [](const auto& a, const auto& b) { return a.first.length() > b.first.length(); });
-        for (auto& bucket : cmd_buckets) { // rebuilt for a copied parser: drop the previous owner's indices
-            bucket.clear();
-        }
+        cmd_buckets.assign(256, {}); // rebuilt for a copied parser: drop the previous owner's indices
         for (size_t i = 0; i < cached_cmds.size(); i++) {
             const std::string& cmd = cached_cmds[i].first;
             if (cmd.size() < 2) { // never: they are all '#NAME'

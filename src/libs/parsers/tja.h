@@ -419,8 +419,9 @@ private:
     void register_extended_commands(std::map<std::string, CommandHandler>& registry);
     std::vector<std::pair<std::string, CommandHandler>> cached_cmds;
     // cached_cmds indices by the command's second character (every command is '#' + a letter...), in
-    // cached_cmds order: a line can only start with the commands of its own bucket
-    std::array<std::vector<unsigned short>, 256> cmd_buckets;
+    // cached_cmds order: a line can only start with the commands of its own bucket. 256 buckets, made with
+    // cached_cmds (a parser that never reads notes, as the song select's, stays without them: 6 KB inline)
+    std::vector<std::vector<unsigned short>> cmd_buckets;
     // handlers capture `this`, so a copied or moved parser must not reuse the original's
     const TJAParser* cached_cmds_owner = nullptr;
 
