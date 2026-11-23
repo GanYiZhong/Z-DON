@@ -1,5 +1,6 @@
 #pragma once
 
+#include <future>
 #include <stop_token>
 
 #include "../libs/gfx/color_utils.h"
@@ -35,6 +36,8 @@ protected:
     Statistics cached_stats;
     std::stop_source stats_stop;
     std::future<Statistics> stats_future;
+    std::future<bool> song_download;
+    std::shared_ptr<const ReplayData> pending_replay;
 
     Shader shader;
     Color color;
@@ -75,11 +78,24 @@ protected:
     // Z-DON: when the difficulty timer runs out on back / options / neiro, the player gets the song's lowest course;
     // false if the song has none
     static bool pick_course_on_timeout(SongSelectPlayer& p);
+    void start_song_download(const fs::path& song);
+    bool song_download_pending() const;
     virtual void on_select_timeout();
     void on_diff_select_timeout();
     virtual SongSelectPlayer* second_player() { return nullptr; }
 
     virtual void handle_input(double current_ms);
+    void handle_touch();
+    // Steps the wheel once per box pitch in `travel`, leaving the remainder in it.
+    void step_wheel(float& travel);
+    void fling_wheel(double now);
+    std::optional<float> drag_start_x; // browsing drag: canvas position the wheel last stepped at
+    float drag_last = 0.0f;            // last finger position along the wheel, for its speed
+    double drag_last_ms = 0.0;
+    float drag_velocity = 0.0f;  // px per ms
+    float fling_velocity = 0.0f; // wheel momentum after a flick, px per ms
+    float fling_travel = 0.0f;
+    double fling_last_ms = 0.0;
 
     virtual void handle_input_browsing(double current_ms);
     virtual void handle_input_selecting();
@@ -94,7 +110,8 @@ protected:
     std::optional<Screens> start_replay(const ReplayData& replay);
     // Z-DON online challenge (zdon_online.h): play this record's chart against it, the record in the 2P lane
     std::optional<Screens> start_challenge(const ReplayData& replay);
-    bool replay_is_challenge = false; // the replay being fetched is for a challenge (the website's button)
+    bool replay_is_challenge = false;      // the replay being fetched is for a challenge (the website's button)
+    bool pending_replay_challenge = false; // merge 4917fdc8: pending_replay (waiting for its song download) is one
 
     virtual bool allows_second_player_join() { return true; }
     double join_request_ms = -1.0;
@@ -119,7 +136,7 @@ protected:
     bool diff_timer_extended = false;
     virtual bool popup_open() { return player->neiro_selector.has_value() || player->modifier_selector.has_value(); }
 
-    virtual bool hides_dan() { return tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
+    virtual bool hides_dan() { return tex.options[SCO::DISABLE_DAN] || tex.get_skin_config(SC::ENTRY_DAN) != nullptr; }
     virtual bool shows_ai_assigned() { return false; }
     virtual bool is_2p_screen() { return false; }
     virtual bool mutes_enter_voice() { return false; } // the AI select (skin zdon_ai_no_enter_voice)
@@ -131,6 +148,7 @@ protected:
     virtual Screens get_game_screen_target() { return Screens::GAME; }
 
 public:
+    TouchInput touch_input() const override { return TouchInput::SCREEN; }
     SongSelectScreen() : Screen("song_select") {}
 
     explicit SongSelectScreen(const std::string& name) : Screen(name) {}

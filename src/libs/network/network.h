@@ -18,6 +18,7 @@
 
 #include <array>
 #include <atomic>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -116,11 +117,15 @@ struct DonTitle {
     std::string name;
     int points = 0;
 };
+struct DonSong {
+    std::string title;
+    int points = 0;
+};
 struct DonSeat {
     bool answered = false;
-    std::vector<int> songs; // points per song, in play order
+    std::vector<DonSong> songs; // in answer order
     std::vector<DonTitle> titles;
-    int current = 0;
+    int current = 0; // meter before the first answer since the last reset
     int aim = -1;
     std::vector<DonPresent> presents;
 };
@@ -246,8 +251,7 @@ public:
                       const InputLog& input_log, int64_t played_at, const std::string& modifiers_json,
                       bool chara_is_costume, int chara_cos_index, const std::string& source_folder = "", int gauge = -1,
                       const std::optional<JudgeParams>& judge_params = std::nullopt);
-    void submit_dan(const std::string& access_code, const std::string& course_id, const DanResultData& rd,
-                    const std::vector<DanSongEntry>& dan_songs, int arrival);
+    void submit_dan(const std::string& access_code, const std::string& course_id, const DanResultData& rd, int arrival);
 
     void clear_import_flag(const std::string& access_code);
 
@@ -268,7 +272,7 @@ public:
     // One GET /user for the whole profile. Blocking; safe to call from a worker thread
     std::optional<RemoteUser> fetch_user(const std::string& access_code);
 
-    void check_and_install_android_update();
+    void check_for_client_update();
 
     // Non-blocking probe: sends a heartbeat now; is_online() updates when it lands
     void start_probe();
@@ -310,6 +314,13 @@ public:
         std::string genre;
     };
     const std::vector<PopularSong>* popular_songs();
+    // Hiroba's player leaderboard (by rating) and newest songs; nullptr until the first request answers
+    struct TopPlayer {
+        std::string name;
+        double rating = 0;
+    };
+    const std::vector<TopPlayer>* top_players();
+    const std::vector<PopularSong>* new_songs();
 
     void spin_gacha(const std::string& access_code);
     std::optional<GachaResult> take_gacha_result();
@@ -318,7 +329,7 @@ public:
     bool kinotake_pending() const { return kinotake_pending_count_ > 0; }
     const KinotakeTally& kinotake_tally() const { return kinotake_tally_; }
     void reset_kinotake_tally() { kinotake_tally_ = {}; }
-    void submit_don_points(int seat, const std::string& access_code, const std::vector<int>& gauges);
+    void submit_don_points(int seat, const std::string& access_code, int gauge, const std::string& title);
     bool don_points_pending() const {
 #if defined(NETWORK_ENABLED)
         return !pending_don_points.empty();
@@ -376,6 +387,7 @@ private:
 
     bool online = false;
     bool outdated = false;
+    bool outdated_notified = false;
     bool tournament = false;
     std::vector<std::string> campaigns;
     std::optional<GachaResult> gacha_result;
@@ -414,7 +426,12 @@ private:
     std::optional<cpr::AsyncResponse> pending_gacha;
 
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_kinotake;
-    std::vector<std::pair<int, cpr::AsyncResponse>> pending_don_points;
+    struct PendingDonPoints {
+        int seat;
+        std::string title;
+        cpr::AsyncResponse response;
+    };
+    std::vector<PendingDonPoints> pending_don_points;
     std::vector<std::pair<int, cpr::AsyncResponse>> pending_medals;
     std::vector<cpr::AsyncResponse> pending_ai_battle;
     std::vector<cpr::AsyncResponse> pending_battle;
@@ -431,8 +448,13 @@ private:
     std::optional<std::map<std::string, int>> popular_ranks;
     std::vector<PopularSong> popular_list;
     void request_popular();
+    std::optional<cpr::AsyncResponse> pending_top_players;
+    std::optional<std::vector<TopPlayer>> top_player_list;
+    std::optional<cpr::AsyncResponse> pending_new_songs;
+    std::optional<std::vector<PopularSong>> new_song_list;
     void start_leaderboard_fetch(const std::string& hash);
 
+    std::future<bool> pending_desktop_update;
 #if defined(__ANDROID__)
     std::optional<cpr::AsyncResponse> pending_update_checksum;
     std::optional<cpr::AsyncResponse> pending_update_apk;

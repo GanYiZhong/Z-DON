@@ -70,7 +70,8 @@ public:
     float left_bound = 0.0f;
     float right_bound = 0.0f;
 
-    float box_x() const { return vertical ? cross_pos : position; }
+    float ride = 0.0f;
+    float box_x() const { return vertical ? cross_pos : position + ride; }
     float box_y() const { return vertical ? position : 0.0f; }
 
     fs::path path;
@@ -96,8 +97,8 @@ public:
     virtual void enter_box();
     virtual void exit_box();
 
-    void fade_in(float delay);
-    void fade_out(float duration = 166.0f);
+    void fade_in(float delay, float duration = 266);
+    void fade_out(float duration = 166);
 
     void move_box(float target_position, float duration, float delay = 0.0f,
                   std::optional<EaseType> ease = EaseType::Cubic);

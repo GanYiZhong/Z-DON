@@ -18,7 +18,7 @@ void ResultScreen::on_screen_start() {
     song_subtitle = (session_data.song_subtitle_full_display && !session_data.song_subtitle.empty())
                         ? session_data.song_subtitle
                         : std::string();
-    song_number = global_data.songs_played; // the game already counted this song
+    song_number = global_data.credit.songs_played; // the game already counted this song
     audio.play_sound("bgm", VolumePreset::MUSIC);
     fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(0));
     retry_message.reset();
@@ -74,8 +74,8 @@ bool ResultScreen::run_failed() const {
 }
 
 bool ResultScreen::retry_pending() const {
-    const bool limit_reached =
-        global_data.config->limits.song_limit > 0 && global_data.config->limits.song_limit == global_data.songs_played;
+    const bool limit_reached = global_data.config->limits.song_limit > 0 &&
+                               global_data.config->limits.song_limit == global_data.credit.songs_played;
     return allow_retry && !tex.options[SCO::DISABLE_RETRY_GAME] && run_failed() && !limit_reached &&
            script_manager.has_lua_script("retry_game");
 }
@@ -90,7 +90,7 @@ bool ResultScreen::zdon_freeze_to_game_over() const {
         return global_data.zdon_ai.play_all;
     }
     return global_data.config->limits.song_limit > 0 &&
-           global_data.config->limits.song_limit == global_data.songs_played;
+           global_data.config->limits.song_limit == global_data.credit.songs_played;
 }
 
 bool ResultScreen::exiting() const {
@@ -101,7 +101,8 @@ bool ResultScreen::exiting() const {
 bool ResultScreen::zdon_play_all_pending() const {
     const auto& b = global_data.zdon_ai;
     return b.active && !b.play_all && global_data.config->limits.song_limit > 0 &&
-           global_data.songs_played >= global_data.config->limits.song_limit && !global_data.zdon_ai_credit.empty();
+           global_data.credit.songs_played >= global_data.config->limits.song_limit &&
+           !global_data.zdon_ai_credit.empty();
 }
 
 void ResultScreen::begin_exit() {
@@ -127,7 +128,7 @@ void ResultScreen::begin_exit() {
 
 void ResultScreen::start_fade_out() {
     const bool credit_end = quitting || (global_data.config->limits.song_limit > 0 &&
-                                         global_data.config->limits.song_limit == global_data.songs_played);
+                                         global_data.config->limits.song_limit == global_data.credit.songs_played);
     if (credit_end && credit_end_screen() == Screens::GAME_OVER && game_over_overlay()) {
         game_over.start();
         if (audio.has_sound("bgm")) {
@@ -142,7 +143,8 @@ void ResultScreen::handle_input(double current_ms) {
     if (!fade_out) {
         return;
     }
-    if (!menu_confirm_pressed()) {
+    const bool tapped = take_touch_tap().has_value();
+    if (!menu_confirm_pressed() && !tapped) {
         return;
     }
 
@@ -208,7 +210,7 @@ Screens ResultScreen::credit_end_screen() {
         !script_manager.has_lua_script("kinotake_result")) {
         return next;
     }
-    global_data.kinotake_next = static_cast<int>(next);
+    global_data.campaign.kinotake_next = static_cast<int>(next);
     credit_next = Screens::KINOTAKE_RESULT;
     return *credit_next;
 }
@@ -228,7 +230,7 @@ std::optional<Screens> ResultScreen::update() {
 
     if (zdon_freeze_exit == 2) {
         zdon_freeze_exit = 0;
-        global_data.songs_played = 0;
+        global_data.credit.songs_played = 0;
         return on_screen_end(Screens::GAME_OVER);
     }
     if (zdon_freeze_exit == 1) {

@@ -7,6 +7,7 @@
 
 #include "../libs/file/script.h"
 #include "../libs/input/input.h"
+#include "../libs/network/online_songs.h"
 #include "../objects/song_select/song_select_script.h"
 
 static constexpr double DAN_INTRO_MS = 80.0 * 1000.0 / 60.0;
@@ -144,7 +145,22 @@ std::optional<Screens> DanSelectScreen::tick_timer(double current_ms) {
     confirm_index = CONFIRM_YES;
     select_timer.reset();
     audio.play_sound("don", VolumePreset::HITSOUND);
-    return on_screen_end(Screens::GAME_DAN);
+    start_dan_download();
+    return std::nullopt;
+}
+
+void DanSelectScreen::start_dan_download() {
+    std::vector<fs::path> songs;
+    if (const DanBox* current = dan_navigator.get_current()) {
+        for (const auto& song : current->songs) {
+            songs.push_back(song.song_path);
+        }
+    }
+    dan_download = std::async(std::launch::async, [songs = std::move(songs)] {
+        for (const fs::path& song : songs) {
+            online_songs::fetch_song(song);
+        }
+    });
 }
 
 void DanSelectScreen::open_confirm(double current_ms) {
@@ -185,21 +201,20 @@ Screens DanSelectScreen::on_screen_end(Screens next_screen) {
     DanBox* current = dan_navigator.get_current();
     if (current && next_screen == Screens::GAME_DAN) {
         SessionData& sd = global_data.session_data[static_cast<int>(global_data.player_num)];
-        sd.selected_dan = current->songs;
-        sd.selected_dan_exam = current->exams;
+        sd.dan.songs = current->songs;
+        sd.dan.exams = current->exams;
         sd.song_title = current->dan_title;
-        sd.dan_color = current->dan_color;
-        sd.dan_rank = current->dan_rank;
-        sd.dan_index = current->dan_index;
-        sd.dan_index_max = -1;
+        sd.dan.color = current->dan_color;
+        sd.dan.rank = current->dan_rank;
+        sd.dan.index = current->dan_index;
+        sd.dan.index_max = -1;
         for (const auto& b : dan_navigator.boxes) {
-            sd.dan_index_max = std::max(sd.dan_index_max, b->dan_index);
+            sd.dan.index_max = std::max(sd.dan.index_max, b->dan_index);
         }
-        sd.dan_gaiden = current->gaiden;
-        // the version set Hiroba's is_profile_dan_version accepts
+        sd.dan.gaiden = current->gaiden;
         static const std::regex modern_version(R"(Arcade/3[0-5] Nijiiro 202[1-6]/)");
-        sd.dan_modern = std::regex_search(current->path.generic_string(), modern_version);
-        sd.dan_gen3 = current->gen3;
+        sd.dan.modern = std::regex_search(current->path.generic_string(), modern_version);
+        sd.dan.gen3 = current->gen3;
         if (!current->songs.empty()) {
             sd.selected_song = current->songs[0].song_path;
         }
@@ -308,7 +323,8 @@ std::optional<Screens> DanSelectScreen::handle_input_selected() {
     }
     if (confirm_index == CONFIRM_YES) {
         audio.play_sound("don", VolumePreset::HITSOUND);
-        return on_screen_end(Screens::GAME_DAN);
+        start_dan_download();
+        return std::nullopt;
     }
     audio.play_sound("cancel", VolumePreset::SOUND);
     state = SongSelectState::BROWSING;
@@ -344,6 +360,13 @@ std::optional<Screens> DanSelectScreen::update() {
             return on_screen_end(Screens::SONG_SELECT);
         }
         return std::nullopt;
+    }
+    if (dan_download.valid()) {
+        if (dan_download.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return std::nullopt;
+        }
+        dan_download.get();
+        return on_screen_end(Screens::GAME_DAN);
     }
     if (auto next = tick_timer(current_ms)) {
         return next;

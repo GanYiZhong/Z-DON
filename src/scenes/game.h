@@ -12,6 +12,9 @@
 #include "../objects/game/transition.h"
 #include "../objects/global/allnet_indicator.h"
 
+struct RemoteScoreSubmission;
+struct PlayerData;
+
 class GameScreen : public Screen {
 protected:
     GameScreen(const std::string& name) : Screen(name) {}
@@ -60,6 +63,7 @@ protected:
     bool focus_lost();
 
 public:
+    TouchInput touch_input() const override { return TouchInput::DRUM; }
     GameScreen() : Screen("game") {}
 
     double start_delay = 1000.0;
@@ -167,6 +171,8 @@ public:
     void draw() override;
 
 private:
+    void reward_score(const Player& player, const RemoteScoreSubmission& submission, const PlayerData& profile);
+
     void play_song_audio(double position_seconds);
 
     float paused_audio_time = 0.0f;

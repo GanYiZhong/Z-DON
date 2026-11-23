@@ -423,7 +423,7 @@ SongSelectState SongSelectPlayer::handle_input_browsing(double current_ms) {
     last_browse_ms = current_ms;
     BaseBox* current = navigator.get_current_item();
     open_frames = (current && std::string_view(current->draw_state()) != "closed") ? open_frames + 1 : 0;
-    if (l_don || r_don) {
+    if (l_don || r_don || std::exchange(touch_select, false)) {
         pending_select_ms = current_ms;
     }
     const bool settled = open_frames >= 2 || current_ms - pending_select_ms >= 500.0;
@@ -552,6 +552,7 @@ static bool neiro_slot_used() {
 void SongSelectPlayer::decide_course() {
     voice_played = true;
     start_background_diffs();
+    chara->set_anim(AnimIndex::DON_SELECT1P_OUT); // merge 4917fdc8 (upstream c44402e4)
     if (silent_start_voice) {
         // the AI battle's decide has no start voice (0vjiSUv61i4, 0wD5kkcN5WA, Tl7g8XXXvAM: none of the
         // battles has it, the normal play footage does); the transition still waits the voice's 2 s
@@ -635,6 +636,45 @@ void SongSelectPlayer::handle_level_select(bool l_kat, bool r_kat, bool l_don, b
     }
 }
 
+std::optional<Difficulty> SongSelectPlayer::difficulty_at(Vec2 world) {
+    if (script && script->has_difficulty_at()) {
+        const auto diff = script->difficulty_at(this, world);
+        if (!diff || *diff < static_cast<int>(Difficulty::BACK) || *diff > static_cast<int>(Difficulty::URA)) {
+            return std::nullopt;
+        }
+        return Difficulty(*diff);
+    }
+    const float s = tex.screen_scale;
+    float course_pitch = 115 * s;
+    float option_pitch = 70 * s;
+    if (const SkinInfo* pitch = tex.get_skin_config(SC::SONG_SELECT_DIFF_PITCH)) {
+        if (pitch->x > 0) {
+            course_pitch = pitch->x;
+        }
+        if (pitch->y > 0) {
+            option_pitch = pitch->y;
+        }
+    }
+    const std::string prefix = "diff_select/" + std::to_string(static_cast<int>(player_num)) + "p_outline";
+    const auto hit = [&](const TextureObject* t, float dx) {
+        return t && world.x >= t->x[0] + dx && world.x < t->x[0] + dx + t->x2[0] && world.y >= t->y[0] &&
+               world.y < t->y[0] + t->y2[0];
+    };
+    const TextureObject* course = tex.get_texture(prefix);
+    for (int d = static_cast<int>(Difficulty::EASY); d <= static_cast<int>(Difficulty::ONI); d++) {
+        if (hit(course, static_cast<float>(d) * course_pitch)) {
+            return d == static_cast<int>(Difficulty::ONI) && is_ura ? Difficulty::URA : Difficulty(d);
+        }
+    }
+    const TextureObject* option = tex.get_texture(prefix + "_back");
+    for (int d = static_cast<int>(Difficulty::BACK); d <= static_cast<int>(Difficulty::NEIRO); d++) {
+        if (hit(option, static_cast<float>(d + 3) * option_pitch)) {
+            return Difficulty(d);
+        }
+    }
+    return std::nullopt;
+}
+
 SongSelectState SongSelectPlayer::handle_input_selecting() {
     bool l_kat = is_l_kat_pressed(player_num);
     bool r_kat = is_r_kat_pressed(player_num);
@@ -678,6 +718,37 @@ SongSelectState SongSelectPlayer::handle_input_selecting() {
             }
             return SongSelectState::SONG_SELECTED;
         }
+    }
+
+    const bool ura_swipe = std::exchange(touch_ura_swipe, false);
+    if (ura_swipe && !modifier_selector && !neiro_selector && std::ranges::contains(curr_diffs, Difficulty::ONI) &&
+        std::ranges::contains(curr_diffs, Difficulty::URA)) {
+        walk_difficulty_to(Difficulty::ONI);
+        if (selected_difficulty == Difficulty::ONI || selected_difficulty == Difficulty::URA) {
+            toggle_ura_mode();
+            selected_diff_bounce->start();
+            selected_diff_fadein->start();
+        }
+        return SongSelectState::SONG_SELECTED;
+    }
+
+    // A tapped slot is walked to as the drum would, so skipped courses and the option slots behave the same.
+    // A course needs a second tap to start; option slots and back act on the first.
+    if (const auto target = std::exchange(touch_difficulty, std::nullopt);
+        target && !modifier_selector && !neiro_selector) {
+        const auto slot = [](Difficulty d) { return d == Difficulty::URA ? 3 : static_cast<int>(d); };
+        if (slot(*target) != slot(selected_difficulty)) {
+            walk_difficulty_to(*target);
+            audio.play_player_sound("kat", player_num, VolumePreset::HITSOUND);
+            if (selected_difficulty >= Difficulty::EASY) {
+                selected_diff_bounce->start();
+                selected_diff_fadein->start();
+            }
+            if (*target >= Difficulty::EASY || slot(*target) != slot(selected_difficulty)) {
+                return SongSelectState::SONG_SELECTED;
+            }
+        }
+        l_don = true;
     }
 
     if (l_kat) {
@@ -769,6 +840,21 @@ void SongSelectPlayer::navigate_difficulty_left() {
         prev_diff = selected_difficulty;
         auto it = std::ranges::find(curr_diffs, selected_difficulty);
         selected_difficulty = *std::prev(it);
+    }
+}
+
+void SongSelectPlayer::walk_difficulty_to(Difficulty target) {
+    const auto slot = [](Difficulty d) { return d == Difficulty::URA ? 3 : static_cast<int>(d); };
+    const int dir = slot(target) > slot(selected_difficulty) ? 1 : -1;
+    for (int step = 0; step < 8 && (slot(target) - slot(selected_difficulty)) * dir > 0; step++) {
+        const Difficulty before = selected_difficulty;
+        if (dir > 0 && selected_difficulty == curr_diffs.back()) {
+            break;
+        }
+        dir > 0 ? navigate_difficulty_right() : navigate_difficulty_left();
+        if (selected_difficulty == before) {
+            break;
+        }
     }
 }
 

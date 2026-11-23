@@ -16,6 +16,8 @@ void SongSelect2PScreen::on_screen_start() {
     select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { on_select_timeout(); });
     player->solo = false;
     player_2->solo = false;
+    player->shared_start_voice = player->own_start_voice();
+    player_2->shared_start_voice = player_2->own_start_voice();
 }
 
 static void init_player_diffs(SongSelectPlayer* p, SongBox* song) {
@@ -104,10 +106,13 @@ void SongSelect2PScreen::select_song(SongBox* song) {
     scores_manager.save_player_data(player->player_data);
     scores_manager.save_player_data(player_2->player_data);
     navigator.add_to_recent(song);
+    audio.play_sound(player->shared_start_voice, VolumePreset::VOICE);
+    audio.play_sound(player_2->shared_start_voice, VolumePreset::VOICE);
 
     const auto p1_index = static_cast<int>(PlayerNum::P1);
     auto& sd1 = global_data.session_data[p1_index];
     sd1.selected_song = song->path;
+    start_song_download(song->path);
     sd1.selected_collection = song->collection;
     sd1.selected_difficulty = static_cast<int>(player->selected_difficulty);
     sd1.song_hash = song->hash_for(sd1.selected_difficulty);
@@ -171,7 +176,8 @@ std::optional<Screens> SongSelect2PScreen::update() {
 
     if (game_transition.has_value()) {
         game_transition->update(current_time);
-        if (game_transition->is_finished() && !player->is_voice_playing() && !player_2->is_voice_playing()) {
+        if (game_transition->is_finished() && !player->is_voice_playing() && !player_2->is_voice_playing() &&
+            !song_download_pending()) {
             return on_screen_end(get_game_screen_target());
         }
     }

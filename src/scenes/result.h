@@ -68,6 +68,7 @@ protected:
     Screens credit_end_screen();
 
 public:
+    TouchInput touch_input() const override { return TouchInput::SCREEN; }
     ResultScreen() : Screen("result") {}
 
     void on_screen_start() override;

@@ -13,6 +13,38 @@
 #include "../global/nameplate.h"
 #include "config_ref.h"
 
+// Hit test on texture slot `index`, grown by `pad` on every side.
+inline bool texture_hit(const TextureObject* t, int index, Vec2 p, float pad = 0.0f) {
+    return t && index < std::ssize(t->x) && p.x >= t->x[index] - pad && p.x < t->x[index] + t->x2[index] + pad &&
+           p.y >= t->y[index] - pad && p.y < t->y[index] + t->y2[index] + pad;
+}
+
+enum class OptionTap {
+    None,
+    Handled,
+    Select, // toggle editing, like a confirm press
+};
+
+// Touch picker opened under an option's value button; drawn in the overlay pass.
+class ValueDropdown {
+    std::vector<std::unique_ptr<OutlinedText>> labels;
+    Rect area;
+    float row_height{0.0f};
+    float scroll{0.0f};
+
+    float max_scroll() const;
+
+public:
+    bool open{false};
+
+    void show(const std::vector<std::string>& texts, int current, Rect button);
+    // Row under the point, or nullopt outside the list.
+    std::optional<int> pick(Vec2 world) const;
+    void scroll_by(float dy);
+    void reveal(int index);
+    void draw(int current) const;
+};
+
 class BaseOptionBox {
 protected:
     std::string description_text;
@@ -35,6 +67,10 @@ protected:
     void draw_base() const;
     void draw_centered(OutlinedText& text, int index) const;
     void draw_value_box(OutlinedText& text, const FadeAnimation& flicker) const;
+    Rect button_rect(int index) const {
+        return {static_cast<float>(t_button_on->x[index]), static_cast<float>(t_button_on->y[index]),
+                static_cast<float>(t_button_on->x2[index]), static_cast<float>(t_button_on->y2[index])};
+    }
 
 public:
     virtual ~BaseOptionBox() = default;
@@ -60,6 +96,12 @@ public:
     virtual std::optional<Screens> take_screen_change() { return std::nullopt; }
     virtual std::string text_input_value() const { return {}; }
 
+    virtual OptionTap tap(Vec2 world);
+    // Touch drag while editing; true when the option used it (a dropdown scrolling).
+    virtual bool scroll(float /*dy*/) { return false; }
+    // While editing, taps left of this step the value down and right of it step it up.
+    virtual float value_center_x() const { return t_button_on->x[2] + (t_button_on->x2[2] / 2.0f); }
+
     virtual void update(double /*current_time*/) {}
     virtual void move_left() {}
     virtual void move_right() {}
@@ -77,6 +119,7 @@ public:
                   const std::string& true_label, const std::string& false_label);
 
     void confirm() override;
+    OptionTap tap(Vec2 world) override;
     void move_left() override;  // set false
     void move_right() override; // set true
     void update(double current_time) override;
@@ -89,6 +132,7 @@ class IntOptionBox : public BaseOptionBox {
     std::unique_ptr<FadeAnimation> flicker_fade;
     std::vector<std::pair<int, std::string>> value_list;
     int value_index{0};
+    ValueDropdown dropdown;
 
     void rebuild_text();
 
@@ -98,10 +142,13 @@ public:
 
     void confirm() override;
     bool repeats_on_hold() const override { return value_list.empty(); }
+    OptionTap tap(Vec2 world) override;
+    bool scroll(float dy) override;
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;
     void draw() override;
+    void draw_overlay() override;
 };
 
 class StrOptionBox : public BaseOptionBox {
@@ -111,6 +158,7 @@ class StrOptionBox : public BaseOptionBox {
     std::unique_ptr<FadeAnimation> flicker_fade;
     std::vector<std::pair<std::string, std::string>> value_list;
     int value_index{0};
+    ValueDropdown dropdown;
 
     void rebuild_text();
 
@@ -119,12 +167,15 @@ public:
                  const std::map<std::string, std::string>& values);
 
     void confirm() override;
+    OptionTap tap(Vec2 world) override;
+    bool scroll(float dy) override;
     bool needs_text_input() const override;
     std::string text_input_value() const override { return input_string; }
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;
     void draw() override;
+    void draw_overlay() override;
 };
 
 // Picks which saved account (scores.db player) an access code slot logs in as.
@@ -140,6 +191,9 @@ class AccountOptionBox : public BaseOptionBox {
     std::optional<Texture> qr_texture;
     Rect qr_rect;
     bool qr_visible{false};
+    bool code_revealed{false};
+    ValueDropdown dropdown;
+    std::vector<int> dropdown_accounts; // dropdown row -> accounts index
     // Held only while this option is on screen, so it never goes stale and opening settings stays fast
     std::unique_ptr<Nameplate> nameplate;
     std::unique_ptr<Chara3D> chara;
@@ -147,13 +201,18 @@ class AccountOptionBox : public BaseOptionBox {
 
     PlayerData& slot_data() const;
     void step(int direction);
+    void choose(int index);
+    int dropdown_row() const;
     void load_preview();
+    Rect code_box() const;
 
 public:
     AccountOptionBox(const std::string& name, const std::string& description, const std::string& path);
     ~AccountOptionBox() override;
 
     void confirm() override;
+    OptionTap tap(Vec2 world) override;
+    bool scroll(float dy) override;
     void update(double current_time) override;
     void move_left() override;
     void move_right() override;

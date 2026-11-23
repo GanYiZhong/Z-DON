@@ -63,3 +63,4 @@ server/__pycache__/
 server/zdon_secrets_*.env
 server/zdon_server.toml.bak-*
 .env.bak-*
+/platform/switch2/build/

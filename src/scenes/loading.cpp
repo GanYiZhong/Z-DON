@@ -12,6 +12,7 @@
 #include "../libs/input/input.h"
 #include "../libs/jobs.h"
 #include "../libs/library_index.h"
+#include "../libs/network/online_songs.h"
 #include "../libs/network/skin_updater.h"
 #include "../libs/parsers/song_parser.h"
 #include "../libs/song_library.h"
@@ -102,6 +103,9 @@ void LoadingScreen::load_song_hashes() {
     // navigator); false when it is already loaded or loading (a later loading screen)
     const bool populate_library = get_song_library().begin_loading();
     try {
+        // merge 4917fdc8 (upstream fd2e4c08): the online song roots are brought up to date first
+        online_songs::sync(global_data.config->paths.song_manifests, progress);
+        progress = 0.0f;
         // Listed here, not in on_screen_start: the screen keeps drawing while a large library is walked
         std::shared_ptr<const LibraryIndex> index;
         if (g_early_walk) { // walked while main loaded the skin
@@ -192,7 +196,9 @@ void LoadingScreen::load_song_hashes() {
                     try {
                         SongParser parser(songs[i]);
                         spdlog::debug("Parsing song: {}", path);
-                        if (songs[i].extension() == ".osu") {
+                        if (auto mirrored = online_songs::chart_hashes(songs[i])) {
+                            hashes = *mirrored; // merge 4917fdc8: an online song's hashes come from its manifest
+                        } else if (songs[i].extension() == ".osu") {
                             hashes[0] = parser.get_diff_hash(0);
                         } else {
                             for (const auto& [course, course_data] : parser.metadata.course_data) {

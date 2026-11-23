@@ -1077,7 +1077,7 @@ static void run_frame() {
 
     seg_mark(SEG_SWITCH);
     if (!global_data.skinless) {
-        draw_touch_drum();
+        draw_touch_drum(L.camera);
         zdon_mouse::draw_debug();
 
         if (global_data.config->general.fps_counter) {
@@ -1424,6 +1424,7 @@ static int game_main(int argc, char* argv[]) {
         flags |= ray::FLAG_WINDOW_HIDDEN;
     }
     set_window_flags(flags);
+    set_renderer_preference(global_data.config->video.renderer.c_str());
     quiet_raylib_log();
     setup_logging(global_data.config->general.log_level);
     if (zdon_record::coordinating()) {
@@ -1486,7 +1487,7 @@ static int game_main(int argc, char* argv[]) {
     }
 
 #ifdef PLATFORM_ANDROID
-    network.check_and_install_android_update();
+    network.check_for_client_update();
 #endif
     // YATAIDON_FIXED_STEP_MS: no skin update (a network job whose progress text shows on screen)
     if (global_data.config->general.skin_updater && !fixed_step::on()) {

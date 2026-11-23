@@ -121,6 +121,10 @@ void platform_begin_file_scan() {
 bool platform_present_paces_frames() {
     return true;
 }
+
+TextureUploadBudget platform_texture_upload_budget() {
+    return {SIZE_MAX, 32u << 20, false};
+}
 bool platform_threaded_renderer() {
     return true;
 }
@@ -393,6 +397,14 @@ bool platform_retains_assets() {
     return true;
 }
 
+void* platform_second_screen(int&, int&) {
+    return nullptr;
+}
+
+bool platform_hold_second_screen(void* window) {
+    return window == nullptr;
+}
+
 bool platform_offers_setting(std::string_view path, std::string_view value) {
     if (path == "audio/sample_rate") {
         return value.empty() || value == "48000";
@@ -427,4 +439,8 @@ void platform_load_config(Config& config, const toml::table& file) {
 
 void platform_save_config(const Config&, toml::table& out) {
     out.insert("switch", toml::table{{"controller_layout_version", 2}});
+}
+
+bool platform_touch_back_button() {
+    return false;
 }

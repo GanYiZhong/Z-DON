@@ -24,6 +24,7 @@ private:
     sol::protected_function fn_draw;
     void apply_x_extents();
     void start_move_if_idle();
+    sol::protected_function fn_contains;
 
 public:
     float width;
@@ -37,4 +38,7 @@ public:
     void move_up();
     void move_down();
     void draw(float fade, bool has_prev = false, bool has_next = false, bool disabled = false);
+    // Touch hit test on the board as drawn: the skin's EntryBox:contains when it has one, else the closed box,
+    // or the opened highlight while selected.
+    bool contains(Vec2 world, bool vertical);
 };

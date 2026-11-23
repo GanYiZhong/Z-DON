@@ -15,15 +15,14 @@ private:
     std::optional<RetryGameScene> scene;
     std::unique_ptr<Chara3D> chara;
     std::string chara_phase;
-
-    float chara_target = 0.0f;
-    float chara_progress = 0.0f;
-    double last_ms = 0;
+    bool chara_hit = false;
+    double face_ms = 0;
 
 protected:
     virtual Screens select_screen() const { return Screens::SONG_SELECT; }
 
 public:
+    TouchInput touch_input() const override { return TouchInput::DRUM; }
     static constexpr int needed_hits = 30;
 
     RetryGameScreen() : Screen("retry_game") {}

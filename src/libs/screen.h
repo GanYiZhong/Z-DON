@@ -122,8 +122,14 @@ public:
 
     virtual ~Screen() = default;
 
-    // Scene identity is independent of its shared skin name and login seat.
     virtual bool two_player_audio() const { return false; }
+
+    enum class TouchInput {
+        DRUM,         // gameplay: the touch drum is shown and played
+        SCREEN,       // the screen reads its own taps and gestures
+        TAPS_AS_DRUM, // drum hidden; a tap is a left kat, don or right kat by screen third
+    };
+    virtual TouchInput touch_input() const { return TouchInput::TAPS_AS_DRUM; }
 
     virtual void on_screen_start() {
         audio.set_two_player_mode(two_player_audio());
@@ -137,7 +143,7 @@ public:
 
     virtual Screens on_screen_end(Screens next_screen) {
         screen_init = false;
-        game_over.reset(); // its Lua object holds textures unloaded below
+        game_over.reset();
         spdlog::info("{} ended, transitioning to {} screen", screen_name, next_screen);
         if (next_screen == Screens::TITLE) {
             revert_user_appearance();
@@ -161,7 +167,6 @@ public:
         }
     }
 
-    // While the game over plays, the main loop runs this instead of update()
     bool in_game_over() const { return game_over.active(); }
     std::optional<Screens> update_game_over() {
         game_over.update(get_current_ms());
@@ -174,8 +179,7 @@ public:
 protected:
     GameOverOverlay game_over;
 
-    // Game over plays over the screen that ends the credit; a guests-only credit gets the GAME_OVER screen's ad
-    static bool game_over_overlay() { return !global_data.guest_credit; }
+    static bool game_over_overlay() { return !global_data.credit.guest; }
 
     std::optional<Screens> end_or_game_over(Screens next_screen) {
         if (next_screen == Screens::GAME_OVER && game_over_overlay()) {
@@ -209,6 +213,10 @@ protected:
     std::optional<Screens> _do_screen_start() {
         if (!screen_init) {
             screen_init = true;
+            set_touch_drum_enabled(touch_input() == TouchInput::DRUM);
+            set_touch_taps_as_drum(touch_input() == TouchInput::TAPS_AS_DRUM);
+            clear_touch_pointer(); // the finger that left the last screen is not a tap here
+            take_touch_tap();
             try {
                 readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
                 on_screen_start();

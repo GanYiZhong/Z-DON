@@ -1,6 +1,7 @@
 #include "chara_3d.h"
 
 #include <algorithm>
+#include <array>
 #include <cgltf.h>
 #include <cmath>
 #include <cstdlib>
@@ -9,6 +10,9 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <numbers>
+#include <numeric>
+#include <optional>
 #include <ranges>
 #include <rapidjson/document.h>
 
@@ -98,6 +102,7 @@ struct AnimSource {
     std::vector<std::string> bone_names; // the glb's skeleton; empty if it has none
     ModelAnimation* anims = nullptr;
     int count = 0;
+    std::vector<std::vector<int>> faces; // [animation][60 fps frame] expression index
 };
 
 // the bones LoadModel gives the glb: its first skin's joints, names cut to BoneInfo's 32 bytes
@@ -117,6 +122,88 @@ static std::vector<std::string> glb_bone_names(const fs::path& path) {
     }
     cgltf_free(data);
     return names;
+}
+
+static std::vector<std::vector<int>> read_glb_faces(const fs::path& path, const ModelAnimation* anims, int count) {
+    std::vector<std::vector<int>> faces(count);
+    std::ifstream f(path, std::ios::binary);
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto u32 = [&](size_t at) {
+        uint32_t v = 0;
+        std::memcpy(&v, data.data() + at, 4);
+        return v;
+    };
+    if (data.size() < 20 || u32(0) != 0x46546C67u || u32(16) != 0x4E4F534Au) {
+        return faces;
+    }
+    const size_t json_len = u32(12);
+    const size_t bin_at = 20 + json_len + 8;
+    if (bin_at > data.size()) {
+        return faces;
+    }
+    rapidjson::Document doc;
+    doc.Parse(data.data() + 20, json_len);
+    if (doc.HasParseError() || !doc.HasMember("nodes") || !doc.HasMember("animations")) {
+        return faces;
+    }
+    int extra = -1;
+    for (rapidjson::SizeType i = 0; i < doc["nodes"].Size(); i++) {
+        const auto& node = doc["nodes"][i];
+        if (node.HasMember("name") && std::strcmp(node["name"].GetString(), "EXTRA") == 0) {
+            extra = static_cast<int>(i);
+        }
+    }
+    if (extra < 0) {
+        return faces;
+    }
+    // first float of element k of a float accessor, or nullopt past the buffer
+    auto read = [&](int accessor, int k) -> std::optional<float> {
+        const auto& acc = doc["accessors"][accessor];
+        const auto& view = doc["bufferViews"][acc["bufferView"].GetInt()];
+        const int comps = std::strcmp(acc["type"].GetString(), "VEC3") == 0 ? 3 : 1;
+        const size_t stride = view.HasMember("byteStride") ? view["byteStride"].GetUint() : comps * 4;
+        const size_t at = bin_at + (view.HasMember("byteOffset") ? view["byteOffset"].GetUint() : 0) +
+                          (acc.HasMember("byteOffset") ? acc["byteOffset"].GetUint() : 0) + k * stride;
+        if (at + 4 > data.size()) {
+            return std::nullopt;
+        }
+        float v = 0;
+        std::memcpy(&v, data.data() + at, 4);
+        return v;
+    };
+    const auto& animations = doc["animations"];
+    for (int a = 0; a < std::min(count, static_cast<int>(animations.Size())); a++) {
+        const auto& anim = animations[a];
+        for (const auto& ch : anim["channels"].GetArray()) {
+            const auto& target = ch["target"];
+            if (!target.HasMember("node") || target["node"].GetInt() != extra ||
+                std::strcmp(target["path"].GetString(), "translation") != 0) {
+                continue;
+            }
+            const auto& sampler = anim["samplers"][ch["sampler"].GetInt()];
+            const int in = sampler["input"].GetInt();
+            const int out = sampler["output"].GetInt();
+            const int keys = doc["accessors"][in]["count"].GetInt();
+            auto& track = faces[a];
+            int k = 0;
+            for (int frame = 0; frame < anims[a].keyframeCount; frame++) {
+                const float t = static_cast<float>(frame) / 60.0f;
+                while (k + 1 < keys && read(in, k + 1).value_or(t) <= t) {
+                    k++;
+                }
+                float x = read(out, k).value_or(0.0f);
+                if (k + 1 < keys) {
+                    const float t0 = read(in, k).value_or(t), t1 = read(in, k + 1).value_or(t);
+                    if (t1 > t0) {
+                        x += (read(out, k + 1).value_or(x) - x) * std::clamp((t - t0) / (t1 - t0), 0.0f, 1.0f);
+                    }
+                }
+                track.push_back(std::clamp(static_cast<int>(std::lround(x * 100.0f)), 0, 11));
+            }
+            break;
+        }
+    }
+    return faces;
 }
 
 static const AnimSource& anim_source(const fs::path& path) {
@@ -141,6 +228,9 @@ static const AnimSource& anim_source(const fs::path& path) {
     src.size = size;
     src.bone_names = glb_bone_names(path);
     src.anims = load_model_animations(path.string().c_str(), &src.count);
+    if (src.anims) {
+        src.faces = read_glb_faces(path, src.anims, src.count);
+    }
     return src;
 }
 
@@ -288,6 +378,11 @@ static std::unordered_map<std::string, int> parse_glb_material_indices(const std
         }
         if (mat_name_raw) {
             std::string nl = name_lower(mat_name_raw);
+            // chibidon's static face plane mirrors the player's face
+            if (face_out == -1 && nl.starts_with("body_027000_02_")) {
+                face_out = raylib_idx;
+                std::erase(recolor_out, raylib_idx);
+            }
             if (nl.contains("_aa_add")) {
                 additive_out.push_back(raylib_idx);
             }
@@ -470,6 +565,11 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
                     ? p.model.materials[p.face_material_index].maps[material_map::DIFFUSE].texture
                     : Texture{});
             part_replaced_textures.emplace_back();
+            // merge 4917fdc8: a pooled part gets the expressions and the rotors as a fresh one
+            if (anim_faces.empty()) {
+                anim_faces = anim_source(anim_path).faces;
+            }
+            find_rotors(static_cast<int>(parts.size()) - 1);
             return;
         }
     }
@@ -494,10 +594,10 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     }
     std::erase_if(material_indices, [&](const auto& kv) { return !valid_material(kv.second); });
 
+    const bool mini_face = std::ranges::any_of(material_indices, [&](const auto& m) {
+        return m.second == face_material_index && name_lower(m.first.c_str()).starts_with("body_027000_02_");
+    });
     if (face_material_index != -1) {
-        // head/body parts always get the standard 0.137 plate; a costume keeps its own plate
-        // (some are deliberately small) but never a larger one -- cos 30 (鏡もち) and cos 9
-        // ship a 0.18 plate that overflows the drum head.
         constexpr float COS_FACE_PLANE_SIZE = 0.137f;
         for (int m = 0; m < model.meshCount; m++) {
             if (model.meshMaterial[m] != face_material_index) {
@@ -512,9 +612,12 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
                 maxy = std::max(maxy, mesh.vertices[v * 3 + 1]);
             }
             const float size = std::max(maxx - minx, maxy - miny);
-            if (normalize_face_scale || size > COS_FACE_PLANE_SIZE * 1.02f) {
-                normalize_face_mesh_size(mesh, COS_FACE_PLANE_SIZE);
-                update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * static_cast<int>(sizeof(float)), 0);
+            const float plate = normalize_face_scale || size > COS_FACE_PLANE_SIZE * 1.02f ? COS_FACE_PLANE_SIZE : size;
+            normalize_face_mesh_size(mesh, mini_face ? plate : plate * 4.0f / 3.0f);
+            update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * static_cast<int>(sizeof(float)), 0);
+            if (mesh.colors) {
+                std::memset(mesh.colors, 255, static_cast<size_t>(mesh.vertexCount) * 4);
+                update_mesh_buffer(mesh, 3, mesh.colors, mesh.vertexCount * 4, 0);
             }
         }
     }
@@ -528,6 +631,9 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
     const AnimSource& anim_src = anim_source(anim_path);
     ModelAnimation* anims = reindexed_animations(model, anim_src);
     int anim_count = anims ? anim_src.count : 0;
+    if (anim_faces.empty()) {
+        anim_faces = anim_src.faces;
+    }
 
     parts.push_back(model);
     part_material_indices.push_back(std::move(material_indices));
@@ -543,6 +649,108 @@ void Chara3D::load_part(const fs::path& model_path, const fs::path& anim_path, b
                                      ? model.materials[face_material_index].maps[material_map::DIFFUSE].texture
                                      : Texture{});
     part_replaced_textures.emplace_back();
+    find_rotors(static_cast<int>(parts.size()) - 1);
+}
+
+void Chara3D::find_rotors(int part_index) {
+    const Model& model = parts[part_index];
+    const ModelSkeleton& sk = model.skeleton;
+    int bone = -1;
+    for (int b = 0; b < static_cast<int>(sk.boneCount); b++) {
+        if (std::string_view(sk.bones[b].name) == "swing_puro_null") {
+            bone = b;
+        }
+    }
+    if (bone < 0 || !sk.bindPose || sk.bones[bone].parent < 0) {
+        return;
+    }
+    const Vec3 pivot = sk.bindPose[bone].translation;
+    const float hub_y = sk.bindPose[sk.bones[bone].parent].translation.y;
+    for (int m = 0; m < model.meshCount; m++) {
+        const Mesh& mesh = model.meshes[m];
+        if (!mesh.vertices) {
+            continue;
+        }
+        std::vector<int> root(mesh.vertexCount);
+        std::iota(root.begin(), root.end(), 0);
+        auto find = [&](int v) {
+            while (root[v] != v) {
+                v = root[v] = root[root[v]];
+            }
+            return v;
+        };
+        for (int t = 0; t < mesh.triangleCount; t++) {
+            int v[3];
+            for (int k = 0; k < 3; k++) {
+                v[k] = mesh.indices ? mesh.indices[t * 3 + k] : t * 3 + k;
+            }
+            root[find(v[1])] = find(v[0]);
+            root[find(v[2])] = find(v[0]);
+        }
+        std::map<std::array<float, 3>, int> seam; // UV seams split a piece into co-located verts
+        for (int v = 0; v < mesh.vertexCount; v++) {
+            const float* p = &mesh.vertices[v * 3];
+            const auto [it, added] = seam.try_emplace({p[0], p[1], p[2]}, v);
+            if (!added) {
+                root[find(v)] = find(it->second);
+            }
+        }
+        std::vector<bool> below(mesh.vertexCount, false);
+        for (int v = 0; v < mesh.vertexCount; v++) {
+            if (mesh.vertices[v * 3 + 1] <= hub_y) {
+                below[find(v)] = true;
+            }
+        }
+        Rotor rotor{part_index, m, pivot.x, pivot.z, {}, {}};
+        for (int v = 0; v < mesh.vertexCount; v++) {
+            if (below[find(v)]) {
+                continue;
+            }
+            rotor.verts.push_back(v);
+            for (int k = 0; k < 3; k++) {
+                rotor.rest.push_back(mesh.vertices[v * 3 + k]);
+            }
+            for (int k = 0; k < 3; k++) {
+                rotor.rest.push_back(mesh.normals ? mesh.normals[v * 3 + k] : 0.0f);
+            }
+        }
+        if (!rotor.verts.empty()) {
+            rotors.push_back(std::move(rotor));
+        }
+    }
+}
+
+void Chara3D::spin_rotors(double current_ms) {
+    if (rotors.empty()) {
+        return;
+    }
+    constexpr double TURNS_PER_MS = 2.0 / 1000.0;
+    const double angle = std::fmod(current_ms * TURNS_PER_MS, 1.0) * 2.0 * std::numbers::pi;
+    const float c = static_cast<float>(std::cos(angle));
+    const float s = static_cast<float>(std::sin(angle));
+    for (const Rotor& rotor : rotors) {
+        Mesh& mesh = parts[rotor.part].meshes[rotor.mesh];
+        for (size_t i = 0; i < rotor.verts.size(); i++) {
+            const float* r = &rotor.rest[i * 6];
+            float* pos = &mesh.vertices[rotor.verts[i] * 3];
+            const float dx = r[0] - rotor.pivot_x;
+            const float dz = r[2] - rotor.pivot_z;
+            pos[0] = rotor.pivot_x + dx * c + dz * s;
+            pos[2] = rotor.pivot_z - dx * s + dz * c;
+            if (mesh.normals) {
+                float* n = &mesh.normals[rotor.verts[i] * 3];
+                n[0] = r[3] * c + r[5] * s;
+                n[2] = -r[3] * s + r[5] * c;
+            }
+        }
+        const int bytes = mesh.vertexCount * 3 * static_cast<int>(sizeof(float));
+        update_mesh_buffer(mesh, 0, mesh.vertices, bytes, 0);
+        if (mesh.normals) {
+            update_mesh_buffer(mesh, 2, mesh.normals, bytes, 0);
+        }
+    }
+    applied_frame = -1;
+    apply_pose();
 }
 
 static void init_shaders(Shader& outline_fxaa_shader, int& outline_fxaa_size_loc, int& outline_fxaa_thickness_loc,
@@ -554,9 +762,6 @@ static void init_shaders(Shader& outline_fxaa_shader, int& outline_fxaa_size_loc
     float outline_thickness = 3.0f;
     set_shader_value(outline_fxaa_shader, outline_fxaa_thickness_loc, &outline_thickness, shader_uniform::FLOAT);
 
-    // bgfx uniforms are shared by name, while their values are cached per
-    // shader program. Untinted characters must submit neutral values too,
-    // otherwise a previous character/scene's Go-Go or miss tint remains active.
     const float tint_color[3] = {0.0f, 0.0f, 0.0f};
     const float tint_amount = 0.0f;
     set_shader_value(outline_fxaa_shader, get_shader_location(outline_fxaa_shader, "tintColor"), tint_color,
@@ -587,10 +792,7 @@ void Chara3D::init_common(bool mirror, bool use_skin_config) {
 
 void Chara3D::finish_load() {
     load_face_textures(resolve_skin_path("Models/face/face_000000.png")); // upstream: one face sheet
-
-    fs::path skin_anim_path = resolve_skin_path("Graphics/global/animation.json");
-    load_face_anims(skin_anim_path);
-
+    // merge 4917fdc8: the expressions come from the animations' EXTRA track (read_glb_faces), not animation.json
     set_anim(anim_index);
 }
 
@@ -761,30 +963,6 @@ void Chara3D::load_face_textures(const fs::path& sheet_path) {
     apply_face(std::max(current_face_index, 0));
 }
 
-static constexpr float PAINT_PLANE_SCALE = 4.0f / 3.0f;
-
-void Chara3D::scale_face_planes(float factor) {
-    for (size_t p = 0; p < parts.size(); p++) {
-        for (int m = 0; m < parts[p].meshCount; m++) {
-            if (parts[p].meshMaterial[m] != part_face_material_index[p]) {
-                continue;
-            }
-            Mesh& mesh = parts[p].meshes[m];
-            float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
-            for (int v = 0; v < mesh.vertexCount; v++) {
-                minx = std::min(minx, mesh.vertices[v * 3]);
-                maxx = std::max(maxx, mesh.vertices[v * 3]);
-                miny = std::min(miny, mesh.vertices[v * 3 + 1]);
-                maxy = std::max(maxy, mesh.vertices[v * 3 + 1]);
-            }
-            normalize_face_mesh_size(mesh, std::max(maxx - minx, maxy - miny) * factor);
-            update_mesh_buffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * static_cast<int>(sizeof(float)), 0);
-        }
-    }
-    applied_frame = -1;
-    render_dirty = true;
-}
-
 void Chara3D::set_paint(int index) {
     if (index == paint_index) {
         return;
@@ -794,9 +972,6 @@ void Chara3D::set_paint(int index) {
     if (!fs::exists(sheet)) {
         return;
     }
-    if ((index > 0) != (paint_index > 0)) {
-        scale_face_planes(index > 0 ? PAINT_PLANE_SCALE : 1.0f / PAINT_PLANE_SCALE);
-    }
     paint_index = index;
     for (auto& t : face_textures) {
         unload_texture(t);
@@ -805,17 +980,16 @@ void Chara3D::set_paint(int index) {
     load_face_textures(sheet);
 }
 
-void Chara3D::load_face_anims(fs::path& anim_path) {
-    if (!fs::exists(anim_path)) {
+void Chara3D::apply_anim_face() {
+    const int ai = static_cast<int>(anim_index);
+    if (ai < 0 || ai >= std::ssize(anim_faces) || anim_faces[ai].empty()) {
         return;
     }
-    std::ifstream f(anim_path.string());
-    if (!f.is_open()) {
-        return;
+    const auto& track = anim_faces[ai];
+    const int face = track[std::min(anim_frame, static_cast<int>(track.size()) - 1)];
+    if (face != current_face_index) {
+        apply_face(face);
     }
-    std::string json_str((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    AnimationParser parser;
-    face_anims = parser.parseAnimationsFromString(json_str);
 }
 
 void Chara3D::apply_face(int face_index) {
@@ -900,64 +1074,113 @@ void Chara3D::set_don_colors(Color body, Color face, Color rim) {
     render_dirty = true;
 }
 
-static constexpr int FACE_ANIM_IDS[] = {
-    13, 14, 15, 16, 65, 17, 22, 19, 30, 29, 23, 24, 25, 26, 40, 40, 42, 43, 44, 45, 46, 58, 59, 62, 60, 18,
-    13, 14, 15, 16, 64, 17, 22, 21, 36, 35, 23, 24, 25, 26, 40, 40, 42, 43, 44, 45, 46, 58, 59, 62, 61, 20,
-};
-
-static constexpr int FUKKATU_FACE = 8;
-
 static constexpr int MIRROR_OFFSET = static_cast<int>(AnimIndex::DON_BALLOON_FAILURE_MIRROR);
+static constexpr int EXTRA_START = static_cast<int>(AnimIndex::DON_ENTRY1P_COSCH_IN);
+static constexpr int EXTRA_OFFSET = static_cast<int>(AnimIndex::DON_ENTRY1P_COSCH_IN_MIRROR) - EXTRA_START;
+
 static int base_anim(AnimIndex idx) {
-    return static_cast<int>(idx) % MIRROR_OFFSET;
+    const int i = static_cast<int>(idx);
+    if (i >= EXTRA_START + EXTRA_OFFSET) {
+        return i - EXTRA_OFFSET;
+    }
+    return i >= EXTRA_START ? i : i % MIRROR_OFFSET;
+}
+
+static int mirror_of(int base) {
+    return base + (base >= EXTRA_START ? EXTRA_OFFSET : MIRROR_OFFSET);
+}
+
+static bool holds_last_frame(int base) {
+    using A = AnimIndex;
+    return base == static_cast<int>(A::DON_ENTRY1P_OUT) || base == static_cast<int>(A::DON_ENTRY2P_OUT) ||
+           base == static_cast<int>(A::DON_SELECT1P_OUT) || base == static_cast<int>(A::DON_SELECT2P_OUT);
+}
+
+static bool is_kusu_pump(int base) {
+    return base == static_cast<int>(AnimIndex::DON_KUSU1P_LOOP) || base == static_cast<int>(AnimIndex::DON_KUSU2P_LOOP);
+}
+
+static int two_player_of(int base) {
+    using A = AnimIndex;
+    switch (static_cast<A>(base)) {
+    case A::DON_ENTRY1P_COSCH_IN:
+    case A::DON_ENTRY1P_COSCH_OUT:
+    case A::DON_ENTRY1P_OUT:
+    case A::DON_ENTRY1P_SELECT:
+    case A::DON_ENTRY1P_SELECT_LOOP:
+        return base + static_cast<int>(A::DON_ENTRY2P_COSCH_IN) - static_cast<int>(A::DON_ENTRY1P_COSCH_IN);
+    case A::DON_FUKKATU1P_SUCCESS:
+        return static_cast<int>(A::DON_FUKKATU2P_SUCCESS);
+    case A::DON_GENERAL1P_FULLGAGE:
+    case A::DON_GENERAL1P_ITEM_IN:
+    case A::DON_GENERAL1P_ITEM_LOOP:
+    case A::DON_GENERAL1P_ITEM_OUT:
+        return base + static_cast<int>(A::DON_GENERAL2P_FULLGAGE) - static_cast<int>(A::DON_GENERAL1P_FULLGAGE);
+    case A::DON_KUSU1P_FAILURE:
+    case A::DON_KUSU1P_IN:
+    case A::DON_KUSU1P_LOOP:
+    case A::DON_KUSU1P_NOBEAT:
+    case A::DON_KUSU1P_SUCCESS01:
+    case A::DON_KUSU1P_SUCCESS02:
+        return base + static_cast<int>(A::DON_KUSU2P_FAILURE) - static_cast<int>(A::DON_KUSU1P_FAILURE);
+    case A::DON_RESULT_FAILURE:
+        return static_cast<int>(A::DON_RESULT2P_FAILURE);
+    case A::DON_RESULT_FAILURE_LOOP:
+        return static_cast<int>(A::DON_RESULT2P_FAILURE_LOOP);
+    case A::DON_SELECT1P_GIN:
+    case A::DON_SELECT1P_OUT:
+        return base + static_cast<int>(A::DON_SELECT2P_GIN) - static_cast<int>(A::DON_SELECT1P_GIN);
+    default:
+        return -1;
+    }
 }
 
 void Chara3D::set_anim(AnimIndex idx) {
-    const int base = base_anim(idx);
+    const AnimIndex requested = idx;
+    int base = base_anim(idx);
     if (base == static_cast<int>(AnimIndex::DON_ENTRY_IN)) {
         set_anim(AnimIndex::DON_ENTRY_LOOP);
     } else if (base == static_cast<int>(AnimIndex::DON_FUKKATU_START)) {
         set_anim(AnimIndex::DON_FUKKATU_LOOP);
     }
-    int i = base + (mirror ? MIRROR_OFFSET : 0);
+    int i = base;
+    if (mirror) {
+        if (const int two_p = two_player_of(base); two_p >= 0) {
+            i = base = two_p;
+        } else {
+            i = mirror_of(base);
+        }
+    }
     if (mirror && (base == static_cast<int>(AnimIndex::DON_MISS) || base == static_cast<int>(AnimIndex::DON_MISS6))) {
         i = static_cast<int>(AnimIndex::DON_MISS6_MIRROR) + static_cast<int>(AnimIndex::DON_MISS_MIRROR) - i;
     }
     idx = static_cast<AnimIndex>(i);
     int anim_count = part_anim_count.empty() ? 0 : part_anim_count[0];
+    if (i >= anim_count && anim_count > 0 && base != static_cast<int>(AnimIndex::DON_NORMAL)) {
+        set_anim(AnimIndex::DON_NORMAL);
+        return;
+    }
     if (i >= 0 && i < anim_count) {
         if (base == static_cast<int>(AnimIndex::DON_NORMAL) || base == static_cast<int>(AnimIndex::DON_SABI) ||
             base == static_cast<int>(AnimIndex::DON_BALLOON_NOBEAT) || base == static_cast<int>(AnimIndex::DON_MISS6) ||
-            get_anim_name(i).contains("loop")) {
+            base == static_cast<int>(AnimIndex::DON_KUSU1P_NOBEAT) ||
+            base == static_cast<int>(AnimIndex::DON_KUSU2P_NOBEAT) ||
+            base == static_cast<int>(AnimIndex::DON_FUKKATU_FACE01) ||
+            (get_anim_name(i).contains("loop") && !is_kusu_pump(base))) {
             is_looping = true;
         } else {
             if (is_looping) {
-                prev_anim_idx = anim_index; // not while chaining one-shots, or one would return to itself
+                prev_anim_idx = requested_anim; // not while chaining one-shots, or one would return to itself
             }
             is_looping = false;
         }
         anim_index = idx;
+        requested_anim = requested;
         anim_frame = 0;
+        holding = false;
         last_frame_ms = 0;
         render_dirty = true;
-        if (frozen) {
-            apply_pose();
-        }
-    }
-
-    if (base == static_cast<int>(AnimIndex::DON_FUKKATU_LOOP) ||
-        base == static_cast<int>(AnimIndex::DON_FUKKATU_START)) {
-        // the revive sequence holds one face instead of running a face animation
-        current_face_anim = nullptr;
-        apply_face(FUKKATU_FACE);
-    } else if (i >= 0 && i < static_cast<int>(sizeof(FACE_ANIM_IDS) / sizeof(FACE_ANIM_IDS[0]))) {
-        auto it = face_anims.find(FACE_ANIM_IDS[i]);
-        if (it != face_anims.end()) {
-            current_face_anim = it->second.get();
-            current_face_anim->reset();
-            current_face_anim->start();
-            apply_face(static_cast<int>(current_face_anim->attribute));
-        }
+        apply_anim_face();
     }
 }
 
@@ -999,35 +1222,10 @@ void Chara3D::apply_pose() {
         }
         update_model_animation(parts[p], part_anims[p][ai], anim_frame);
     }
+    apply_anim_face();
     applied_anim = ai;
     applied_frame = anim_frame;
     render_dirty = true;
-}
-
-void Chara3D::set_frozen(bool value) {
-    if (frozen == value) {
-        return;
-    }
-    frozen = value;
-    if (frozen) {
-        apply_pose();
-    } else {
-        last_frame_ms = 0;
-    }
-}
-
-void Chara3D::set_anim_progress(float progress) {
-    const int ai = static_cast<int>(anim_index);
-    if (part_anim_count.empty() || ai < 0 || ai >= part_anim_count[0]) {
-        return;
-    }
-    const int loop_frames = part_anims[0][ai].keyframeCount - 1;
-    if (loop_frames <= 0) {
-        return;
-    }
-    const float cycle = progress - std::floor(progress);
-    anim_frame = std::min(loop_frames - 1, static_cast<int>(cycle * loop_frames));
-    apply_pose();
 }
 
 void Chara3D::set_rotation(float x, float y, float z) {
@@ -1047,7 +1245,7 @@ void Chara3D::set_mirror(bool value) {
     mirror = value;
     const int frame = anim_frame;
     const double frame_ms = last_frame_ms;
-    set_anim(anim_index);
+    set_anim(requested_anim);
     anim_frame = frame;
     last_frame_ms = frame_ms;
 }
@@ -1059,12 +1257,17 @@ void Chara3D::use_default_pose(bool new_mirror) {
     rot_y = cfg.rot_y;
     rot_z = cfg.rot_z;
     mirror = new_mirror;
-    set_anim(anim_index);
+    set_anim(requested_anim);
     render_dirty = true;
 }
 
 void Chara3D::set_bpm(float bpm) {
     this->bpm = bpm;
+}
+
+void Chara3D::set_beat(double chart_beat) {
+    beat_advanced = chart_beat > beat;
+    beat = chart_beat;
 }
 
 int Chara3D::get_anim_count() const {
@@ -1073,17 +1276,18 @@ int Chara3D::get_anim_count() const {
 
 void Chara3D::update(double current_ms) {
     puchi_ms = current_ms;
-    if (frozen) {
-        return;
-    }
+    spin_rotors(current_ms);
     int anim_count = part_anim_count.empty() ? 0 : part_anim_count[0];
     if (anim_count > 0) {
         int ai = static_cast<int>(anim_index);
         const int kf = part_anims[0][ai].keyframeCount;
-        if (bpm > 0.0f && kf > 0) {
+        if (bpm > 0.0f && kf > 0 && !holding) {
             double ms_per_beat = 60000.0 / bpm;
             const int base = base_anim(anim_index);
-            if (base == static_cast<int>(AnimIndex::DON_NORMAL)) {
+            const bool beat_synced = base < EXTRA_START || kf <= 2;
+            if (!beat_synced) {
+                ms_per_beat = (kf - 1) * 1000.0 / 60.0;
+            } else if (base == static_cast<int>(AnimIndex::DON_NORMAL)) {
                 ms_per_beat *= 3;
             } else if (base == static_cast<int>(AnimIndex::DON_SABI)) {
                 ms_per_beat *= 6;
@@ -1091,36 +1295,50 @@ void Chara3D::update(double current_ms) {
             if (base == static_cast<int>(AnimIndex::DON_BALLOON_LOOP)) {
                 ms_per_beat /= 2;
             }
-            double ms_per_frame = ms_per_beat / kf;
-            if (current_ms - last_frame_ms >= ms_per_frame) {
-                int loop_frames = kf - 1;
+            const int loop_frames = kf - 1;
+            if (loop_frames <= 0) {
+                if (current_ms - last_frame_ms >= ms_per_beat && !is_looping) {
+                    last_frame_ms = current_ms;
+                    set_anim(prev_anim_idx);
+                    is_looping = true;
+                }
+            } else if (is_looping && beat_synced && beat_advanced) {
+                const double beats_per_loop = ms_per_beat * bpm / 60000.0;
+                double phase = std::fmod(beat, beats_per_loop);
+                if (phase < 0.0) {
+                    phase += beats_per_loop;
+                }
+                const int frame = std::min(static_cast<int>(phase / beats_per_loop * loop_frames), loop_frames - 1);
                 last_frame_ms = current_ms;
-
-                if (loop_frames <= 0) {
-                    if (!is_looping) {
-                        set_anim(prev_anim_idx);
-                        is_looping = true;
-                    }
-                } else {
-                    anim_frame = (anim_frame + 1) % loop_frames;
-                    // UpdateModelAnimation CPU-skins and uploads position/normal
-                    // buffers to the GPU itself; no manual UpdateMeshBuffer needed
+                if (frame != anim_frame) {
+                    anim_frame = frame;
                     apply_pose();
-
+                }
+            } else {
+                const double ms_per_frame = ms_per_beat / loop_frames;
+                int steps = static_cast<int>((current_ms - last_frame_ms) / ms_per_frame);
+                if (steps > loop_frames * 2) {
+                    steps = 1;
+                    last_frame_ms = current_ms - ms_per_frame;
+                }
+                for (int i = 0; i < steps; ++i) {
+                    last_frame_ms += ms_per_frame;
+                    anim_frame = (anim_frame + 1) % loop_frames;
+                    if (!is_looping && anim_frame == loop_frames - 1 && holds_last_frame(base)) {
+                        anim_frame = loop_frames;
+                        holding = true;
+                        break;
+                    }
                     if (!is_looping && anim_frame == loop_frames - 1) {
                         set_anim(prev_anim_idx);
                         is_looping = true;
+                        break;
                     }
                 }
+                if (steps > 0) {
+                    apply_pose();
+                }
             }
-        }
-    }
-
-    if (current_face_anim) {
-        current_face_anim->update(current_ms);
-        int new_face = static_cast<int>(current_face_anim->attribute);
-        if (new_face != current_face_index) {
-            apply_face(new_face);
         }
     }
 }

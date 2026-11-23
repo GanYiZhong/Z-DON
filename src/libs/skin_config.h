@@ -61,6 +61,7 @@ enum class SC : unsigned int {
     SONG_NUM_MAX_GAME,
     GAME_SONG_INFO_MAX_WIDTH,
     GAME_SONG_INFO_CENTER,
+    SONG_SELECT_DIFF_PITCH,
     AI_GAME_SONG_INFO,
     GAME_AI_DRUMROLL_COUNTER_SCALE,
 };
@@ -100,6 +101,7 @@ const std::unordered_map<std::string, SC> skin_config_map{
     {"game_song_info_center", SC::GAME_SONG_INFO_CENTER},
     {"game_song_info", SC::GAME_SONG_INFO},
     {"game_song_info_subtitle", SC::GAME_SONG_INFO_SUBTITLE},
+    {"song_select_diff_pitch", SC::SONG_SELECT_DIFF_PITCH},
     {"ai_game_song_info", SC::AI_GAME_SONG_INFO},
     {"dan_select_exam_info", SC::DAN_SELECT_EXAM_INFO},
     {"dan_select_subtitle", SC::DAN_SELECT_SUBTITLE},
@@ -163,6 +165,7 @@ enum class SCO : unsigned int {
     AI_GAME_CHARA_3D,          // Z-DON: the arena's AI is the 3D AI Don (tex.ai_draw_rival)
     AI_LOADING_CHARA_3D,       // Z-DON: the loading VS window shows both 3D Dons (tex.ai_vs_chara_draw)
     DISABLE_ENSO_BATTLE,
+    DISABLE_DAN,
 };
 
 namespace std {
@@ -194,6 +197,8 @@ const std::unordered_map<std::string, SCO> screen_options_map{
     {"ai_select_chara_3d", SCO::AI_SELECT_CHARA_3D},
     {"ai_keep_preview", SCO::AI_KEEP_PREVIEW},
     {"disable_enso_battle", SCO::DISABLE_ENSO_BATTLE},
+    {"disable_dan", SCO::DISABLE_DAN},
+    {"ai_no_support_levels", SCO::AI_NO_SUPPORT_LEVELS},
     {"ai_wait_loading_card", SCO::AI_WAIT_LOADING_CARD},
     {"ai_start_voice", SCO::AI_START_VOICE},
     {"ai_list_fade_in_place", SCO::AI_LIST_FADE_IN_PLACE},

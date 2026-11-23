@@ -83,6 +83,8 @@ void draw_texture_pro(Texture tex, Rect src, Rect dst, Vec2 origin, float rotati
 void draw_text(const char* text, int x, int y, int font_size, Color color);
 int measure_text(const char* text, int font_size);
 void set_window_flags(unsigned flags);
+// "auto", or a backend renderer name; ignored by backends with a single renderer.
+void set_renderer_preference(const char* name);
 void quiet_raylib_log();
 void init_window(int width, int height, const char* title);
 void close_window();
@@ -118,6 +120,8 @@ int get_monitor_refresh_rate();
 void begin_drawing();
 void end_drawing();
 void swap_screen_buffer();
+bool begin_second_screen();
+void end_second_screen();
 Texture load_texture(const char* path);
 Texture load_texture_from_image(Image image, bool mipmaps = false);
 void unload_texture(Texture tex);

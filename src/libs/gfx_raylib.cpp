@@ -140,6 +140,8 @@ void set_window_flags(unsigned flags) {
     ray::SetConfigFlags(flags);
 }
 
+void set_renderer_preference(const char*) {}
+
 void quiet_raylib_log() {
     ray::SetTraceLogLevel(ray::LOG_ERROR);
 }
@@ -374,6 +376,12 @@ void end_drawing() {
 void swap_screen_buffer() {
     ray::SwapScreenBuffer();
 }
+
+bool begin_second_screen() {
+    return false;
+}
+
+void end_second_screen() {}
 
 Texture load_texture_from_image(Image image, bool mipmaps) {
     ray::Texture2D tex = ray::LoadTextureFromImage(to<ray::Image>(image));

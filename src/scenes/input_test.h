@@ -60,6 +60,7 @@ private:
     void draw_usio(double now);
 
 public:
+    TouchInput touch_input() const override { return TouchInput::DRUM; }
     InputTestScreen() : Screen("input_test") {}
 
     void on_screen_start() override;

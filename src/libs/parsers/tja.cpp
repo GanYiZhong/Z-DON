@@ -188,10 +188,14 @@ static int base_score_of(size_t n, At notes_at) {
 
     for (size_t i = 0; i < n; i++) {
         const Note& note = notes_at(i);
-        const Note& next_note = notes_at(std::min(i + 1, n - 1));
 
         if (note.color.has_value()) { // is drumroll
-            drumroll_msec += (next_note.hit_ms - note.hit_ms);
+            for (size_t j = i + 1; j < n; j++) {
+                if (notes_at(j).type == NoteType::TAIL) {
+                    drumroll_msec += notes_at(j).hit_ms - note.hit_ms;
+                    break;
+                }
+            }
         } else if (note.count.has_value()) { // is balloon
             balloon_count += std::min(100, note.count.value());
         } else {

@@ -1134,12 +1134,12 @@ void ScriptManager::register_lua_bindings() {
         return genre_to_ref_frame(static_cast<GenreIndex>(static_cast<int>(genre_index)));
     });
 
-    tex.set_function("songs_played", [] -> int { return global_data.songs_played; });
+    tex.set_function("songs_played", [] -> int { return global_data.credit.songs_played; });
 
     tex.set_function("song_limit", [] -> int { return global_data.config->limits.song_limit; });
 
     tex.set_function("last_input_ms", [] -> double { return get_last_input_ms(); });
-    tex.set_function("guest_credit", [] { return global_data.guest_credit; }); // every seat is a guest
+    tex.set_function("guest_credit", [] { return global_data.credit.guest; }); // every seat is a guest
 
     tex.set_function("log", [](const std::string& msg) { spdlog::info("[lua] {}", msg); });
 
@@ -1170,7 +1170,7 @@ void ScriptManager::register_lua_bindings() {
         PlayerSoundScope audio_owner(preset == VolumePreset::MUSIC
                                          ? PlayerNum::ALL
                                          : static_cast<PlayerNum>(player.value_or(PlayerSoundScope::player())));
-        audio.set_sound_loop(name, loop.value_or(is_bgm_sound(name)));
+        audio.set_sound_loop(name, loop.value_or(is_bgm_sound(name) || audio.has_loop_intro(name)));
         audio.play_sound(name, preset);
     });
 
@@ -1225,6 +1225,32 @@ void ScriptManager::register_lua_bindings() {
     network_tbl.set_function("popular_songs", [](sol::this_state state) -> sol::object {
         sol::state_view lua_view(state);
         const auto* songs = network.popular_songs();
+        if (!songs) {
+            return sol::lua_nil;
+        }
+        sol::table out = lua_view.create_table();
+        for (const auto& song : *songs) {
+            out.add(lua_view.create_table_with("title", song.title, "genre", song.genre));
+        }
+        return out;
+    });
+    // {name, rating} rows of Hiroba's player leaderboard (top 20, rated players), or nil while loading / offline
+    network_tbl.set_function("top_players", [](sol::this_state state) -> sol::object {
+        sol::state_view lua_view(state);
+        const auto* players = network.top_players();
+        if (!players) {
+            return sol::lua_nil;
+        }
+        sol::table out = lua_view.create_table();
+        for (const auto& player : *players) {
+            out.add(lua_view.create_table_with("name", player.name, "rating", player.rating));
+        }
+        return out;
+    });
+    // {title, genre} rows of Hiroba's two newest songs, or nil while loading / offline
+    network_tbl.set_function("new_songs", [](sol::this_state state) -> sol::object {
+        sol::state_view lua_view(state);
+        const auto* songs = network.new_songs();
         if (!songs) {
             return sol::lua_nil;
         }

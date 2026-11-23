@@ -27,7 +27,9 @@ class ResultPlayer : public LuaScript {
     std::string score, good, ok, bad, max_combo, total_drumroll;
     std::optional<ScoreAnimator> score_animator;
     bool high_score_sound_played = false;
-    bool miss_loop_started = false;
+    bool miss_loop_started = false; // Z-DON: skins that set chara_miss_loop (Nijiiro)
+    bool chara_revealed = false;
+    std::optional<AnimIndex> chara_koshibai;
     bool count_up_instant = false;
     bool count_up_parallel = false; // every row counts up at the same time (the Green AI battle result)
     std::vector<ScoreAnimator> parallel_animators;

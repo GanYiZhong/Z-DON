@@ -757,6 +757,10 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
         spdlog::info("Sudden death: player {} out at {:.0f} ms (ok {} bad {})", static_cast<int>(player_num),
                      ms_from_start, ok_count, bad_count);
     }
+    // merge 4917fdc8 (upstream b215a0b3): the 3D Don keeps the chart's beat
+    if (!tempo_map.points.empty()) {
+        chara->set_beat(tempo_map.beat_at(ms_from_start));
+    }
     chara->update(current_ms);
 }
 
@@ -1841,6 +1845,14 @@ void Player::check_kusudama(double current_ms, DrumType drum_type, const Note& b
     score_counter.add_popup(100);
     owner->kusudama_shared_hits++;
     owner->kusudama_counter->update(current_ms, owner->kusudama_shared_hits);
+    // merge 4917fdc8 (upstream c44402e4): the Don's kusudama animation
+    if (!kusu_anim) {
+        kusu_anim = true;
+        chara->set_anim(AnimIndex::DON_KUSU1P_NOBEAT);
+        chara->set_anim(AnimIndex::DON_KUSU1P_IN);
+    } else {
+        chara->set_anim(AnimIndex::DON_KUSU1P_LOOP);
+    }
 
     if (owner->kusudama_shared_hits == balloon.count.value()) {
         play_as(PlayerNum::ALL, kusudama_pop_id, VolumePreset::HITSOUND); // shared by both players
@@ -1857,6 +1869,17 @@ void Player::check_kusudama(double current_ms, DrumType drum_type, const Note& b
         }
 
         owner->kusudama_shared_hits = 0;
+        owner->end_kusu_anim();
+    }
+}
+
+void Player::end_kusu_anim() {
+    for (Player* p : {this, kusudama_partner}) {
+        if (p && p->kusu_anim) {
+            p->kusu_anim = false;
+            p->chara->set_anim(p->rest_anim());
+            p->chara->set_anim(AnimIndex::DON_KUSU1P_FAILURE);
+        }
     }
 }
 
@@ -2097,6 +2120,7 @@ void Player::kusudama_counter_manager(double current_ms) {
     if (!is_balloon && kusudama_counter.has_value() && !kusudama_counter->has_popped()) {
         if (kusudama_counter->can_miss()) {
             kusudama_counter->miss(current_ms);
+            end_kusu_anim();
             audio.play_player_sound("kusudama_fail", PlayerNum::ALL, VolumePreset::SOUND);
             if (kusudama_partner) {
                 audio.play_sound("kusudama_fail_voice_1p", VolumePreset::VOICE);
@@ -2106,6 +2130,7 @@ void Player::kusudama_counter_manager(double current_ms) {
             }
         } else {
             kusudama_counter.reset();
+            end_kusu_anim();
         }
     }
     if (kusudama_counter.has_value()) {
@@ -2127,6 +2152,7 @@ void Player::cut_to_end(double now, int prev_good, int prev_ok, int prev_bad) {
     drumroll_counter.reset();
     balloon_counter.reset();
     kusudama_counter.reset();
+    kusu_anim = false;
     end_time = now - 1000.0;
 
     skipped_run = true;

@@ -119,7 +119,7 @@ std::optional<Screens> Result2PScreen::update() {
         zdon_freeze_exit = 0;
         global_data.zdon_ai.play_all = false;
         global_data.zdon_ai.active = false;
-        global_data.songs_played = 0;
+        global_data.credit.songs_played = 0;
         return on_screen_end(Screens::GAME_OVER);
     }
     if (zdon_freeze_exit == 1) {
@@ -133,7 +133,7 @@ std::optional<Screens> Result2PScreen::update() {
             if (global_data.zdon_ai.play_all) {
                 global_data.zdon_ai.play_all = false;
                 global_data.zdon_ai.active = false;
-                global_data.songs_played = 0;
+                global_data.credit.songs_played = 0;
                 return on_screen_end(Screens::GAME_OVER);
             }
             if (quitting || credit_next.has_value()) {

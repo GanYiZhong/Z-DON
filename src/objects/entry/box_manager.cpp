@@ -162,6 +162,16 @@ bool BoxManager::check_board_list_change() const {
 void BoxManager::change_board_list() {
     build_board_list();
     selected_box_index = 0;
+    target_box_index = -1;
+}
+
+std::optional<int> BoxManager::box_at(Vec2 world) {
+    for (int i = 0; i < num_boxes; i++) {
+        if (boxes[i]->contains(world, is_vertical)) {
+            return i;
+        }
+    }
+    return std::nullopt;
 }
 
 // practice, the AI battle, the enso battle and recording have no 2P mode: with two players in, their boards are
@@ -280,6 +290,11 @@ void BoxManager::update(double current_time_ms, bool two_player) {
         }
     }
     fade_out->update(current_time_ms);
+    if (target_box_index == selected_box_index || fade_out->is_started) {
+        target_box_index = -1;
+    } else if (target_box_index >= 0) {
+        target_box_index > selected_box_index ? move_right() : move_left();
+    }
     for (int i = 0; i < num_boxes; i++) {
         boxes[i]->update(current_time_ms, i == selected_box_index);
     }

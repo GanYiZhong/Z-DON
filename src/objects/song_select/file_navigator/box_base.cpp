@@ -97,8 +97,8 @@ void BaseBox::move_box(float target_position, float duration, float delay, std::
     move->start();
 }
 
-void BaseBox::fade_in(float delay) {
-    fade = std::make_unique<FadeAnimation>(266, 0.0f, false, false, 1.0f, delay);
+void BaseBox::fade_in(float delay, float duration) {
+    fade = std::make_unique<FadeAnimation>(duration, 0.0f, false, false, 1.0f, delay);
     fade->start();
 }
 

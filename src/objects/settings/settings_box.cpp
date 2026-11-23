@@ -122,6 +122,7 @@ static constexpr float WRAP_TOP_BASE = -50.0f;
 static constexpr float BOX_STEP_BASE = 100.0f;
 static constexpr int LABEL_FONT_SIZE_BASE = 35;
 static constexpr float LABEL_OUTLINE_BASE = 5.0f;
+static constexpr float ARROW_TAP_PAD_BASE = 20.0f;
 
 static float wrap_top() {
     return WRAP_TOP_BASE * tex.screen_scale;
@@ -194,6 +195,19 @@ void SettingsBox::set_box_count(int box_count) {
         return;
     }
     wrap_bottom = wrap_top() + box_count * box_step();
+}
+
+bool SettingsBox::contains(Vec2 world) const {
+    return t_box && world.x >= x + t_box->x[0] && world.x < right() && world.y >= y + t_box->y[0] &&
+           world.y < y + t_box->y[0] + t_box->y2[0];
+}
+
+void SettingsBox::scroll_by(float dy) {
+    const float ring = wrap_bottom - wrap_top();
+    const float low = wrap_top() - box_step();
+    y = low + std::fmod(std::fmod(y + dy - low, ring) + ring, ring);
+    start_position = y;
+    target_position = y;
 }
 
 bool SettingsBox::can_move() const {
@@ -280,6 +294,38 @@ bool SettingsBox::take_capture_done() {
 
 bool SettingsBox::adjusting_number() const {
     return !options.empty() && options[option_index]->is_highlighted && options[option_index]->repeats_on_hold();
+}
+
+BoxTap SettingsBox::tap(Vec2 world) {
+    if (options.empty()) {
+        return BoxTap::None;
+    }
+    BaseOptionBox& opt = *options[option_index];
+    switch (opt.tap(world)) {
+    case OptionTap::Select:
+        select_option();
+        return BoxTap::None;
+    case OptionTap::Handled:
+        return BoxTap::None;
+    case OptionTap::None:
+        break;
+    }
+    if (opt.is_highlighted) {
+        world.x < opt.value_center_x() ? opt.move_left() : opt.move_right();
+        return BoxTap::None;
+    }
+    const float pad = ARROW_TAP_PAD_BASE * tex.screen_scale;
+    if (texture_hit(t_blue_arrow, 0, world, pad)) {
+        return BoxTap::Left;
+    }
+    if (option_index != std::ssize(options) - 1 && texture_hit(t_blue_arrow, 1, world, pad)) {
+        return BoxTap::Right;
+    }
+    return BoxTap::None;
+}
+
+bool SettingsBox::scroll_option(float dy) {
+    return !options.empty() && options[option_index]->is_highlighted && options[option_index]->scroll(dy);
 }
 
 bool SettingsBox::editing_text() const {

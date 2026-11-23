@@ -667,7 +667,7 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
                         break;
                     }
                     if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
-                        frame_f = 0.0;
+                        frame_f = pcm->loop_start_frame < end_frame ? static_cast<double>(pcm->loop_start_frame) : 0.0;
                         continue;
                     }
 
@@ -1876,15 +1876,62 @@ bool AudioEngine::read_short_sound(SNDFILE* file, const SF_INFO& info, const fs:
 static thread_local bool tl_first_use_load = false;
 constexpr double kFirstUseHeadSeconds = 0.25;
 
+// merge 4917fdc8 (upstream 0450546b "add looping audio"): <stem>_start<ext> beside a sound is its intro. The
+// sound is loaded with the intro joined in front and loops back to the intro's end; the intro file is not loaded
+// as a sound of its own.
+static fs::path loop_intro_path(const fs::path& file) {
+    return file.parent_path() / (file.stem().string() + "_start" + file.extension().string());
+}
+
+static bool is_loop_intro_file(const fs::path& file) {
+    const std::string stem = file.stem().string();
+    if (!stem.ends_with("_start")) {
+        return false;
+    }
+    std::error_code ec;
+    return fs::exists(file.parent_path() / (stem.substr(0, stem.size() - 6) + file.extension().string()), ec);
+}
+
+// snd (float, fully decoded) gets intro (float, same channel count) in front of it and loops after it
+static bool join_loop_intro(sound& snd, const sound& intro) {
+    if (!snd.data || !intro.data || snd.channels != intro.channels || intro.frame_count == 0) {
+        return false;
+    }
+    const size_t head = static_cast<size_t>(intro.frame_count) * intro.channels;
+    const size_t body = static_cast<size_t>(snd.frame_count) * snd.channels;
+    auto* joined = new float[head + body];
+    std::memcpy(joined, intro.data, head * sizeof(float));
+    std::memcpy(joined + head, snd.data, body * sizeof(float));
+    delete[] snd.data;
+    snd.data = joined;
+    snd.loop_start_frame = intro.frame_count;
+    snd.frame_count += intro.frame_count;
+    snd.loop = true;
+    return true;
+}
+
+bool AudioEngine::has_loop_intro(const std::string& name) {
+    const SoundId id = sound_id(name);
+    if (id == kNoSound) {
+        return false;
+    }
+    const sound* pcm = slot_at(id)->pcm.load(std::memory_order_acquire);
+    return pcm && pcm->loop_start_frame > 0;
+}
+
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
     forget_lazy_sound(name); // Z-DON: loaded now (or replaced by another file)
+    std::error_code intro_ec;
+    const fs::path intro_file = loop_intro_path(file_path);
+    // a sound with an intro is decoded whole (the intro is joined to it), never progressively or predecoded
+    const bool has_intro = !is_song_sound(name) && fs::exists(intro_file, intro_ec);
     try {
         // Z-DON keeps decoded sounds across screens with resident sounds and predecode, not upstream's
         // decoded-sound asset cache
         auto install_sound = [&](const sound& snd) { store_sound(name, snd); };
         if (is_song_sound(name)) {
             queue_song_loudness(file_path, true);
-        } else if (PreSound ps; take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
+        } else if (PreSound ps; !has_intro && take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
             if (std::shared_ptr<ProgressiveHead> h = std::move(ps.head)) {
                 if (predecode_verify()) {
                     SF_INFO vi;
@@ -2012,15 +2059,26 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
             sf_close(file);
             return "";
         }
-        if (tl_first_use_load) {
+        if (tl_first_use_load && !has_intro) {
             return load_sound_progressive(file, file_info, file_path, name, kFirstUseHeadSeconds);
         }
-        if (total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
+        if (!has_intro && total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
             return load_sound_progressive(file, file_info, file_path, name);
         }
         sound snd{};
         if (!read_short_sound(file, file_info, file_path, target_sample_rate, snd)) {
             return "";
+        }
+        if (has_intro) {
+            SF_INFO intro_info;
+            sound intro{};
+            if (SNDFILE* f = open_sound_file(intro_file, intro_info);
+                f && read_short_sound(f, intro_info, intro_file, target_sample_rate, intro)) {
+                if (!join_loop_intro(snd, intro)) {
+                    spdlog::warn("Sound {} and its _start differ in channel count; playing the loop alone", name);
+                }
+            }
+            free_pcm(intro);
         }
 
         snd.normalization_gain = loaded_sound_gain(file_path, name);
@@ -2203,6 +2261,10 @@ std::vector<AudioEngine::ScreenSound> AudioEngine::screen_sound_files(const fs::
             return;
         }
         if (!known_file && !fs::exists(file)) {
+            claimed.erase(name);
+            return;
+        }
+        if (is_loop_intro_file(file)) { // merge 4917fdc8: joined to its sound by load_sound
             claimed.erase(name);
             return;
         }

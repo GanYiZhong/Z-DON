@@ -38,14 +38,13 @@
 #endif
 #endif
 
-// Only Windows and iOS have platform-specific keyboard helpers that input.cpp
-// still calls directly: win32_is_key_down_native (native key state) on Windows,
-// and the iOS screen-keyboard/touch-navigation functions. The Linux text-input
-// handling used to live in platform_linux.cpp and has been folded into this
-// file (handle_linux_text_input below).
-#include "../../platform/platform_ios.h"
+// Only Windows has a platform-specific keyboard helper that input.cpp still calls
+// directly: win32_is_key_down_native (native key state).
 #include "../../platform/platform_windows.h"
+#include "../gfx/camera_utils.h"
 #include "../gfx/sdl_compat.h"
+#include "../gfx/text.h"
+#include "../screen.h"
 std::atomic<bool> input_thread_running{true};
 std::thread input_thread;
 
@@ -130,11 +129,20 @@ static const int TOUCH_R_DON = 40004;
 
 static std::unordered_map<SDL_FingerID, int> touch_id_to_vkey;
 static std::optional<Vec2> last_touch_tap;
+static std::optional<TouchPointer> touch_pointer;
+static std::optional<SDL_FingerID> touch_pointer_id;
+static std::optional<Rect> back_button_hit; // 0..1 across the window, set while the button is drawn
 
 std::atomic<bool> touch_drum_pressed{false};
 
 // Track if touch drum is enabled (drawing + input, controlled by screens)
 static std::atomic<bool> touch_drum_enabled{true};
+static std::atomic<bool> drum_on_second_screen{false};
+static std::atomic<bool> touch_taps_as_drum{false};
+
+void set_touch_taps_as_drum(bool enabled) {
+    touch_taps_as_drum.store(enabled, std::memory_order_relaxed);
+}
 
 void set_touch_drum_enabled(bool enabled) {
     touch_drum_enabled.store(enabled, std::memory_order_relaxed);
@@ -424,16 +432,68 @@ static int touch_quadrant_vkey(Vec2 pos, int sw, int sh) {
     float rx = tex.screen_width * 0.262f * render_scale * touch_drum_size();
     float ry = tex.screen_width * 0.242f * render_scale * touch_drum_size();
 
-    float dx = pos.x - cx;
-    float dy = pos.y - cy;
-
-    float nx = dx / rx;
-    float ny = dy / ry;
+    float nx = (pos.x - cx) / rx;
+    float ny = (pos.y - cy) / ry;
     bool in_drum = (nx * nx + ny * ny) <= 1.0f;
     if (in_drum) {
         return left ? TOUCH_L_DON : TOUCH_R_DON;
     }
     return left ? TOUCH_L_KAT : TOUCH_R_KAT;
+}
+
+// Second screen: the drum's bottom centre sits on the screen's bottom edge, as large as the screen allows.
+static float second_drum_zoom(int sw, int sh) {
+    const auto w = static_cast<float>(tex.screen_width);
+    return std::min(static_cast<float>(sw) / (w * 0.6f), static_cast<float>(sh) / (w * 0.25f));
+}
+
+static int second_screen_vkey(Vec2 pos, int sw, int sh) {
+    const float zoom = second_drum_zoom(sw, sh);
+    const float nx = (pos.x - sw * 0.5f) / (tex.screen_width * 0.262f * zoom);
+    const float ny = (pos.y - static_cast<float>(sh)) / (tex.screen_width * 0.242f * zoom);
+    const bool left = pos.x < sw * 0.5f;
+    if (nx * nx + ny * ny <= 1.0f) {
+        return left ? TOUCH_L_DON : TOUCH_R_DON;
+    }
+    return left ? TOUCH_L_KAT : TOUCH_R_KAT;
+}
+
+// A drum on a dual-screen device's second screen is always on: that screen is only ever the drum, so the
+// per-screen touch modes (hidden drum, taps, gestures) leave it alone.
+static bool touch_drum_accepts() {
+    return global_data.config && global_data.config->general.touch_input &&
+           (touch_drum_enabled.load(std::memory_order_relaxed) ||
+            drum_on_second_screen.load(std::memory_order_relaxed));
+}
+
+static void press_touch(SDL_FingerID id, int vkey) {
+    if (!touch_id_to_vkey.try_emplace(id, vkey).second) {
+        return;
+    }
+    touch_drum_pressed.store(true, std::memory_order_relaxed);
+    last_input_ms.store(get_current_ms(), std::memory_order_relaxed);
+    pressed_keys.emplace(vkey, 1.0f);
+}
+
+static void release_touch(SDL_FingerID id) {
+    auto it = touch_id_to_vkey.find(id);
+    if (it != touch_id_to_vkey.end()) {
+        touch_id_to_vkey.erase(it);
+    }
+    touch_drum_pressed.store(!touch_id_to_vkey.empty(), std::memory_order_relaxed);
+}
+
+void push_second_screen_touch(bool down, int id, float x, float y, int w, int h) {
+    if (is_input_locked()) {
+        return;
+    }
+    const SDL_FingerID key = (SDL_FingerID{1} << 63) | static_cast<uint32_t>(id); // apart from SDL's finger ids
+    std::scoped_lock lock(input_mutex);
+    if (!down) {
+        release_touch(key);
+    } else if (touch_drum_accepts()) {
+        press_touch(key, second_screen_vkey({x, y}, w, h));
+    }
 }
 
 static bool touch_watch_registered = false;
@@ -498,14 +558,32 @@ static YD_EventFilterRet SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event
     }
 
     if (event->type == SDL_EVENT_FINGER_DOWN) {
-        {
-            std::scoped_lock lock(input_mutex);
-            last_touch_tap = Vec2{event->tfinger.x, event->tfinger.y};
-        }
-        if (!global_data.config || !global_data.config->general.touch_input) {
+        if (drum_on_second_screen.load(std::memory_order_relaxed)) {
             return true;
         }
-        if (!touch_drum_enabled.load(std::memory_order_relaxed)) {
+        {
+            std::scoped_lock lock(input_mutex);
+            const float fx = event->tfinger.x;
+            const float fy = event->tfinger.y;
+            if (const auto& hit = back_button_hit; hit && global_data.config && fx >= hit->x &&
+                                                   fx < hit->x + hit->width && fy >= hit->y &&
+                                                   fy < hit->y + hit->height) {
+                pressed_keys.emplace(global_data.config->keys.back_key, 1.0f);
+                return true;
+            }
+            last_touch_tap = Vec2{event->tfinger.x, event->tfinger.y};
+            touch_pointer_id = yd_finger_id(*event);
+            touch_pointer = TouchPointer{*last_touch_tap, *last_touch_tap, true};
+        }
+        if (!touch_drum_accepts() && touch_taps_as_drum.load(std::memory_order_relaxed)) {
+            const int vkey = event->tfinger.x < 1.0f / 3.0f    ? TOUCH_L_KAT
+                             : event->tfinger.x >= 2.0f / 3.0f ? TOUCH_R_KAT
+                                                               : TOUCH_L_DON;
+            std::scoped_lock lock(input_mutex);
+            pressed_keys.emplace(vkey, 1.0f);
+            return true;
+        }
+        if (!touch_drum_accepts() || drum_on_second_screen.load(std::memory_order_relaxed)) {
             return true;
         }
         SDL_FingerID id = yd_finger_id(*event);
@@ -514,23 +592,21 @@ static YD_EventFilterRet SDLCALL touch_event_watch(void* /*userdata*/, SDL_Event
             int sw = get_screen_width();
             int sh = get_screen_height();
             Vec2 pos = {event->tfinger.x * sw, event->tfinger.y * sh};
-            int vkey = touch_quadrant_vkey(pos, sw, sh);
-#ifdef YATAIDON_PLATFORM_IOS
-            vkey = ios_handle_touch_navigation(vkey, event->tfinger.x, event->tfinger.y);
-#endif
-            touch_id_to_vkey[id] = vkey;
-            touch_drum_pressed.store(true, std::memory_order_relaxed);
-            last_input_ms.store(get_current_ms(), std::memory_order_relaxed);
-            pressed_keys.emplace(vkey, 1.0f);
+            press_touch(id, touch_quadrant_vkey(pos, sw, sh));
+        }
+    } else if (event->type == SDL_EVENT_FINGER_MOTION) {
+        std::scoped_lock lock(input_mutex);
+        if (touch_pointer && touch_pointer_id == yd_finger_id(*event)) {
+            touch_pointer->pos = {event->tfinger.x, event->tfinger.y};
         }
     } else if (event->type == SDL_EVENT_FINGER_UP || event->type == SDL_EVENT_FINGER_CANCELED) {
-        SDL_FingerID id = yd_finger_id(*event);
         std::scoped_lock lock(input_mutex);
-        auto it = touch_id_to_vkey.find(id);
-        if (it != touch_id_to_vkey.end()) {
-            touch_id_to_vkey.erase(it);
+        release_touch(yd_finger_id(*event));
+        if (touch_pointer && touch_pointer_id == yd_finger_id(*event)) {
+            touch_pointer->pos = {event->tfinger.x, event->tfinger.y};
+            touch_pointer->down = false;
+            touch_pointer_id.reset();
         }
-        touch_drum_pressed.store(!touch_id_to_vkey.empty(), std::memory_order_relaxed);
     }
     return true;
 }
@@ -540,17 +616,28 @@ std::optional<Vec2> take_touch_tap() {
     return std::exchange(last_touch_tap, std::nullopt);
 }
 
-bool draw_touch_drum() {
-    if (!touch_drum_enabled.load(std::memory_order_relaxed)) {
-        return false;
+std::optional<TouchPointer> take_touch_pointer() {
+    std::scoped_lock lock(input_mutex);
+    if (touch_pointer && !touch_pointer->down) {
+        return std::exchange(touch_pointer, std::nullopt);
     }
-    if (!global_data.config || !global_data.config->general.touch_input) {
-        return false;
+    return touch_pointer;
+}
+
+void clear_touch_pointer() {
+    std::scoped_lock lock(input_mutex);
+    touch_pointer.reset();
+    touch_pointer_id.reset();
+}
+
+static void draw_drum_texture(float size, double fade) {
+    if (!touch_drum_accepts()) {
+        return;
     }
 
     auto* touch_drum_resize = static_cast<TextureResizeAnimation*>(global_tex.get_animation(66));
     if (!touch_drum_resize) {
-        return false;
+        return;
     }
 
     if (!touch_drum_resize->isStarted()) {
@@ -560,18 +647,107 @@ bool draw_touch_drum() {
         touch_drum_resize->restart();
     }
     touch_drum_resize->update(get_current_ms());
-    const float scale = touch_drum_resize->attribute * touch_drum_size();
+    const float scale = touch_drum_resize->attribute * size;
     float y_fix = 0.0f;
     auto drum_it = global_tex.textures.find("overlay/touch_drum");
     if (drum_it != global_tex.textures.end()) {
         y_fix = drum_it->second->height * 0.5f * (1.0f - scale);
     }
     global_tex.draw_texture(global_tex.get_texture("overlay/touch_drum"),
-                            {.scale = scale, .center = true, .y = y_fix, .fade = 0.5f});
-#ifdef YATAIDON_PLATFORM_IOS
-    ios_draw_touch_navigation_labels(static_cast<float>(get_screen_width()), static_cast<float>(get_screen_height()));
-#endif
-    return true;
+                            {.scale = scale, .center = true, .y = y_fix, .fade = fade});
+}
+
+// The camera works in render pixels, which differ from window units on high-density displays.
+Vec2 touch_to_world(Vec2 normalized) {
+    return get_screen_to_world_2d(
+        {normalized.x * static_cast<float>(get_render_width()), normalized.y * static_cast<float>(get_render_height())},
+        compute_camera2d(tex.screen_width, tex.screen_height));
+}
+
+std::optional<TouchPointer> take_touch_pointer_world() {
+    auto pointer = take_touch_pointer();
+    if (!pointer) {
+        return std::nullopt;
+    }
+    pointer->start = touch_to_world(pointer->start);
+    pointer->pos = touch_to_world(pointer->pos);
+    return pointer;
+}
+
+bool touch_is_tap(const TouchPointer& pointer) {
+    static constexpr float TAP_SLOP_BASE = 20.0f;
+    return !pointer.down && std::hypot(pointer.pos.x - pointer.start.x, pointer.pos.y - pointer.start.y) <=
+                                TAP_SLOP_BASE * tex.screen_scale;
+}
+
+void press_touch_drum(Vec2 world) {
+    const float third = tex.screen_width / 3.0f;
+    const int vkey = world.x < third ? TOUCH_L_KAT : world.x >= 2.0f * third ? TOUCH_R_KAT : TOUCH_L_DON;
+    std::scoped_lock lock(input_mutex);
+    pressed_keys.emplace(vkey, 1.0f);
+}
+
+// 1280x720 canvas values like the skins. Top right stays clear of the landscape notch, which sits mid-side.
+static constexpr float BACK_WIDTH_BASE = 150.0f;
+static constexpr float BACK_HEIGHT_BASE = 52.0f;
+static constexpr float BACK_MARGIN_BASE = 20.0f;
+static constexpr float BACK_FONT_BASE = 30.0f;
+static constexpr float BACK_LINE_BASE = 3.0f;
+
+static void draw_touch_back_button() {
+    if (!platform_touch_back_button()) {
+        return;
+    }
+    const float s = tex.screen_scale;
+    const Rect rect{tex.screen_width - ((BACK_WIDTH_BASE + BACK_MARGIN_BASE) * s), BACK_MARGIN_BASE * s,
+                    BACK_WIDTH_BASE * s, BACK_HEIGHT_BASE * s};
+    draw_rectangle_rounded(rect, 1.0f, 16, fade(Color::BLACK, 0.7f));
+    draw_rectangle_rounded_lines_ex(rect, 1.0f, 16, BACK_LINE_BASE * s, Color::WHITE);
+
+    const char* label = "Back";
+    const float size = std::floor(BACK_FONT_BASE * s);
+    const Font font = font_manager.get_font(label, static_cast<int>(size));
+    const Vec2 text_size = measure_text_ex(font, label, size, 1);
+    const Vec2 pos{rect.x + ((rect.width - text_size.x) / 2.0f), rect.y + ((rect.height - text_size.y) / 2.0f)};
+    const float outline = 2.0f * s;
+    for (const float dx : {-outline, 0.0f, outline}) {
+        for (const float dy : {-outline, 0.0f, outline}) {
+            draw_text_ex(font, label, {pos.x + dx, pos.y + dy}, size, 1, Color::BLACK);
+        }
+    }
+    draw_text_ex(font, label, pos, size, 1, Color::WHITE);
+
+    const auto sw = static_cast<float>(get_render_width());
+    const auto sh = static_cast<float>(get_render_height());
+    const float left = static_cast<float>(virtual_to_screen_x(rect.x)) / sw;
+    const float top = static_cast<float>(virtual_to_screen_y(rect.y)) / sh;
+    const Rect hit{left, top, (static_cast<float>(virtual_to_screen_x(rect.x + rect.width)) / sw) - left,
+                   (static_cast<float>(virtual_to_screen_y(rect.y + rect.height)) / sh) - top};
+    std::scoped_lock lock(input_mutex);
+    back_button_hit = hit;
+}
+
+void draw_touch_drum(Camera2D camera) {
+    draw_touch_back_button();
+    const bool second = begin_second_screen();
+    drum_on_second_screen.store(second, std::memory_order_relaxed);
+    if (!second) {
+        draw_drum_texture(touch_drum_size(), 0.5);
+        return;
+    }
+    const auto sw = static_cast<float>(get_render_width());
+    const auto sh = static_cast<float>(get_render_height());
+    if (auto bg = global_tex.textures.find("overlay/touch_bg"); bg != global_tex.textures.end()) {
+        const auto bw = static_cast<float>(bg->second->width);
+        const auto bh = static_cast<float>(bg->second->height);
+        begin_mode_2d({{sw * 0.5f, sh * 0.5f}, {bw * 0.5f, bh * 0.5f}, 0.0f, std::max(sw / bw, sh / bh)});
+        global_tex.draw_texture(bg->second.get());
+    }
+    const float zoom = second_drum_zoom(static_cast<int>(sw), static_cast<int>(sh));
+    begin_mode_2d({{sw * 0.5f, sh}, {tex.screen_width * 0.5f, static_cast<float>(tex.screen_height)}, 0.0f, zoom});
+    draw_drum_texture(1.0f, 1.1);
+    end_second_screen();
+    begin_mode_2d(camera);
 }
 
 void poll_touch_once() {

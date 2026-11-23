@@ -6,6 +6,8 @@
 #include <toml++/toml.h>
 #include <vector>
 
+#include "../network/online_songs.h"
+
 namespace fs = std::filesystem;
 
 struct Config;
@@ -99,6 +101,7 @@ struct NetworkConfig {
 
 struct PathsConfig {
     std::vector<fs::path> tja_path;
+    online_songs::Manifests song_manifests; // tja_path entries that are manifest URLs, and the mirror each became
     fs::path start_path; // box folder song select opens in: absolute or relative to a tja_path; empty for the roots
     fs::path skin;
 };
@@ -174,6 +177,7 @@ struct VideoConfig {
     bool borderless = false;
     int target_fps = 60;
     bool vsync = true;
+    std::string renderer = "auto";
     bool zdon_texture_compression = true; // Z-DON: skin textures as BC7 (texture_bc7.h)
     // Z-DON (Windows, raylib): borderless is a window one pixel taller than the monitor, which keeps DWM composing
     bool zdon_composited_fullscreen = false;

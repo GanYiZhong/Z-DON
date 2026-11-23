@@ -7,7 +7,6 @@
 #include "../libs/audio/audio.h"
 #include "../libs/file/filesystem.h"
 #include "../libs/file/scores.h"
-#include "../libs/gfx/camera_utils.h"
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
 #include "../libs/network/network.h"
@@ -220,8 +219,6 @@ void SettingsScreen::on_screen_start() {
     accounts_on_entry = {
         AccountOnEntry{global_data.config->network.access_code_1, scores_manager.player_1_data.username},
         AccountOnEntry{global_data.config->network.access_code_2, scores_manager.player_2_data.username}};
-    set_touch_drum_enabled(false);
-    take_touch_tap();
     show_cursor(); // the access code boxes reveal on mouse hover
     assets_on_entry.emplace(*global_data.config);
 
@@ -234,7 +231,6 @@ void SettingsScreen::on_screen_start() {
 
 Screens SettingsScreen::on_screen_end(Screens next_screen) {
     apply_language_choice(*global_data.config); // Z-DON
-    set_touch_drum_enabled(true);
     save_config(*global_data.config);
     scores_manager.save_player_data(scores_manager.player_1_data);
     scores_manager.save_player_data(scores_manager.player_2_data);
@@ -298,14 +294,10 @@ std::optional<Screens> SettingsScreen::handle_input() {
         return std::nullopt;
     }
     const bool typing = box_manager->editing_text();
-    if (const auto tap = take_touch_tap(); tap && !typing) {
-        const Vec2 pixel{tap->x * get_screen_width(), tap->y * get_screen_height()};
-        const Vec2 world = get_screen_to_world_2d(pixel, compute_camera2d(tex.screen_width, tex.screen_height));
-        audio.play_sound("don", VolumePreset::HITSOUND);
-        if (box_manager->tap(world)) {
+    if (const auto touch = take_touch_pointer_world(); touch && !typing) {
+        if (box_manager->touch(touch->start, touch->pos, touch->down)) {
             return on_screen_end(Screens::ENTRY);
         }
-        return std::nullopt;
     }
     const bool numeric = box_manager->adjusting_number();
     if (numeric && hold_dir != 0) {
@@ -328,6 +320,7 @@ std::optional<Screens> SettingsScreen::handle_input() {
         hold_dir = 0;
     }
     if (is_l_kat_pressed() || (!typing && menu_left_pressed())) {
+        box_manager->use_keys();
         audio.play_sound("kat", VolumePreset::HITSOUND);
         box_manager->move_left();
         if (numeric) {
@@ -336,6 +329,7 @@ std::optional<Screens> SettingsScreen::handle_input() {
             next_repeat = now + 400.0;
         }
     } else if (is_r_kat_pressed() || (!typing && menu_right_pressed())) {
+        box_manager->use_keys();
         audio.play_sound("kat", VolumePreset::HITSOUND);
         box_manager->move_right();
         if (numeric) {
@@ -344,6 +338,7 @@ std::optional<Screens> SettingsScreen::handle_input() {
             next_repeat = now + 400.0;
         }
     } else if (is_l_don_pressed() || is_r_don_pressed() || (!typing && menu_confirm_pressed())) {
+        box_manager->use_keys();
         audio.play_sound("don", VolumePreset::HITSOUND);
         bool result = box_manager->select_box();
         if (result) {

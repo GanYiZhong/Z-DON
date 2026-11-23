@@ -9,12 +9,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <map>
 #include <random>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <spdlog/spdlog.h>
+#include <sstream>
 
 #include "../file/scores.h"
 #include "../fixed_step.h"
@@ -28,9 +30,7 @@
 #include "zdon_update.h"
 
 #if defined(NETWORK_ENABLED) && defined(__ANDROID__)
-#include <fstream>
 #include <jni.h>
-#include <sstream>
 #include <vector>
 
 #include "../gfx/sdl_compat.h"
@@ -502,7 +502,7 @@ namespace {
     }
 } // namespace
 
-void NetworkClient::check_and_install_android_update() {
+void NetworkClient::check_for_client_update() {
     if (android_update_checked) {
         return;
     }
@@ -516,7 +516,7 @@ void NetworkClient::check_and_install_android_update() {
     pending_update_checksum = cpr::GetAsync(cpr::Url{channel + "/version.txt"}, cpr::Timeout{5000} NETWORK_CA_OPT);
 }
 #else
-void NetworkClient::check_and_install_android_update() {}
+void NetworkClient::check_for_client_update() {}
 #endif
 
 void NetworkClient::update_costume(const std::string& access_code, int head_index, int body_index, int cos_index,
@@ -723,6 +723,55 @@ int NetworkClient::popular_rank(const std::string& hash) {
     return it == popular_ranks->end() ? 0 : it->second;
 }
 
+// a {lang: title} object: the UI language, then English, then any
+static std::string localized_title(const rapidjson::Value& t) {
+    if (!t.IsObject()) {
+        return t.IsString() ? t.GetString() : "";
+    }
+    const std::string& lang = global_data.config->general.language;
+    for (const char* key : {lang.c_str(), "en"}) {
+        if (t.HasMember(key) && t[key].IsString() && t[key].GetStringLength() > 0) {
+            return t[key].GetString();
+        }
+    }
+    for (auto it = t.MemberBegin(); it != t.MemberEnd(); ++it) {
+        if (it->value.IsString()) {
+            return it->value.GetString();
+        }
+    }
+    return "";
+}
+
+const std::vector<NetworkClient::TopPlayer>* NetworkClient::top_players() {
+    if (!network_enabled() || !online) {
+        return nullptr;
+    }
+    if (!top_player_list.has_value()) {
+        if (!pending_top_players.has_value()) {
+            pending_top_players =
+                cpr::GetAsync(cpr::Url{network_url("/leaderboard")}, signed_headers("GET", "/leaderboard", {}),
+                              cpr::Timeout{5000} NETWORK_CA_OPT);
+        }
+        return nullptr;
+    }
+    return &*top_player_list;
+}
+
+const std::vector<NetworkClient::PopularSong>* NetworkClient::new_songs() {
+    if (!network_enabled() || !online) {
+        return nullptr;
+    }
+    if (!new_song_list.has_value()) {
+        if (!pending_new_songs.has_value()) {
+            pending_new_songs = cpr::GetAsync(cpr::Url{network_url("/new_songs")},
+                                              signed_headers("GET", "/new_songs", {{"limit", "2"}}),
+                                              cpr::Parameters{{"limit", "2"}}, cpr::Timeout{5000} NETWORK_CA_OPT);
+        }
+        return nullptr;
+    }
+    return &*new_song_list;
+}
+
 void NetworkClient::request_popular() {
     if (!pending_popular.has_value()) {
         pending_popular =
@@ -912,7 +961,7 @@ void NetworkClient::submit_score(const std::string& hash, int difficulty, const 
 }
 
 void NetworkClient::submit_dan(const std::string& access_code, const std::string& course_id, const DanResultData& rd,
-                               const std::vector<DanSongEntry>& dan_songs, int arrival) {
+                               int arrival) {
     if (!network_enabled() || is_guest_id(access_code) || !online) {
         return;
     }
@@ -921,7 +970,7 @@ void NetworkClient::submit_dan(const std::string& access_code, const std::string
     auto& allocator = doc.GetAllocator();
     for (std::size_t i = 0; i < rd.songs.size(); i++) {
         const DanResultSong& song = rd.songs[i];
-        const std::string hash = i < dan_songs.size() ? dan_song_hash(dan_songs[i]) : "";
+        const std::string hash = i < rd.course.songs.size() ? dan_song_hash(rd.course.songs[i]) : "";
         rapidjson::Value entry(rapidjson::kObjectType);
         entry.AddMember("hash", rapidjson::Value(hash.c_str(), allocator), allocator);
         entry.AddMember("difficulty", song.selected_difficulty, allocator);
@@ -941,11 +990,11 @@ void NetworkClient::submit_dan(const std::string& access_code, const std::string
         {"access_code", access_code},
         {"course_id", course_id},
         {"title", rd.dan_title},
-        {"dan_index", std::to_string(rd.dan_index)},
-        {"dan_index_max", std::to_string(rd.dan_index_max)},
-        {"dan_color", std::to_string(rd.dan_color)},
-        {"dan_rank", std::to_string(rd.dan_rank)},
-        {"is_gaiden", rd.is_gaiden ? "true" : "false"},
+        {"dan_index", std::to_string(rd.course.index)},
+        {"dan_index_max", std::to_string(rd.course.index_max)},
+        {"dan_color", std::to_string(rd.course.color)},
+        {"dan_rank", std::to_string(rd.course.rank)},
+        {"is_gaiden", rd.course.gaiden ? "true" : "false"},
         {"odai_result", std::to_string(rd.odai_result)},
         {"score", std::to_string(rd.score)},
         {"max_combo", std::to_string(rd.max_combo)},
@@ -1029,19 +1078,17 @@ void NetworkClient::submit_kinotake(int seat, const std::string& access_code, in
     kinotake_tally_.seat[seat].duet = kinotake_tally_.seat[seat].duet || duet;
 }
 
-void NetworkClient::submit_don_points(int seat, const std::string& access_code, const std::vector<int>& gauges) {
-    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1 || gauges.empty()) {
+void NetworkClient::submit_don_points(int seat, const std::string& access_code, int gauge, const std::string& title) {
+    if (!network_enabled() || is_guest_id(access_code) || !online || seat < 0 || seat > 1) {
         return;
     }
-    std::string list;
-    for (size_t i = 0; i < std::min<size_t>(gauges.size(), 16); ++i) {
-        list += (list.empty() ? "" : ",") + std::to_string(gauges[i]);
-    }
-    std::map<std::string, std::string> params{{"access_code", access_code}, {"gauges", list}};
-    pending_don_points.emplace_back(
-        seat, cpr::PostAsync(cpr::Url{network_url("/don_points")}, signed_headers("POST", "/don_points", params),
-                             cpr::Parameters{{"access_code", access_code}, {"gauges", list}},
-                             cpr::Timeout{5000} NETWORK_CA_OPT));
+    const std::string gauges = std::to_string(gauge);
+    std::map<std::string, std::string> params{{"access_code", access_code}, {"gauges", gauges}};
+    pending_don_points.push_back(
+        {seat, title,
+         cpr::PostAsync(cpr::Url{network_url("/don_points")}, signed_headers("POST", "/don_points", params),
+                        cpr::Parameters{{"access_code", access_code}, {"gauges", gauges}},
+                        cpr::Timeout{5000} NETWORK_CA_OPT)});
 }
 
 void NetworkClient::submit_medals(int seat, const std::string& access_code) {
@@ -1516,6 +1563,10 @@ void NetworkClient::update(double current_ms) {
             if (!doc.Parse(response.text.c_str()).HasParseError() && doc.HasMember("min_client_version") &&
                 doc["min_client_version"].IsString()) {
                 outdated = version_less(CLIENT_VERSION, doc["min_client_version"].GetString());
+                if (outdated && !outdated_notified) {
+                    outdated_notified = true;
+                    notify("Update available");
+                }
             }
             tournament = !doc.HasParseError() && doc.IsObject() && doc.HasMember("tournament") &&
                          doc["tournament"].IsBool() && doc["tournament"].GetBool();
@@ -1567,23 +1618,25 @@ void NetworkClient::update(double current_ms) {
     kinotake_pending_count_ = static_cast<int>(pending_kinotake.size());
 
     for (auto it = pending_don_points.begin(); it != pending_don_points.end();) {
-        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        if (it->response.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
             ++it;
             continue;
         }
-        cpr::Response response = it->second.get();
+        cpr::Response response = it->response.get();
         rapidjson::Document doc;
         if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() && doc.IsObject()) {
             const auto integer = [](const rapidjson::Value& v, const char* key, int fallback) {
                 return v.HasMember(key) && v[key].IsInt() ? v[key].GetInt() : fallback;
             };
-            DonSeat seat;
+            DonSeat& seat = don_seats[it->seat];
+            if (!seat.answered) {
+                seat.current = integer(doc, "current", 0);
+                seat.aim = integer(doc, "aim", -1);
+            }
             seat.answered = true;
-            seat.current = integer(doc, "current", 0);
-            seat.aim = integer(doc, "aim", -1);
             if (doc.HasMember("songs") && doc["songs"].IsArray()) {
                 for (const auto& v : doc["songs"].GetArray()) {
-                    seat.songs.push_back(v.IsInt() ? v.GetInt() : 0);
+                    seat.songs.push_back({it->title, v.IsInt() ? v.GetInt() : 0});
                 }
             }
             if (doc.HasMember("titles") && doc["titles"].IsArray()) {
@@ -1601,7 +1654,6 @@ void NetworkClient::update(double current_ms) {
                     }
                 }
             }
-            don_seats[it->first] = std::move(seat);
         } else {
             spdlog::warn("Don point tally failed: HTTP {} - {}", response.status_code, response.text);
         }
@@ -1913,24 +1965,13 @@ void NetworkClient::update(double current_ms) {
             std::map<std::string, int> ranks;
             popular_list.clear();
             int place = 0;
-            const std::string& lang = global_data.config->general.language;
             for (const auto& row : doc["songs"].GetArray()) {
                 if (!row.IsObject() || ++place > 10) {
                     continue;
                 }
                 PopularSong song;
-                if (row.HasMember("title") && row["title"].IsObject()) {
-                    const auto& t = row["title"];
-                    for (const char* key : {lang.c_str(), "en"}) {
-                        if (song.title.empty() && t.HasMember(key) && t[key].IsString()) {
-                            song.title = t[key].GetString();
-                        }
-                    }
-                    for (auto it = t.MemberBegin(); song.title.empty() && it != t.MemberEnd(); ++it) {
-                        if (it->value.IsString()) {
-                            song.title = it->value.GetString();
-                        }
-                    }
+                if (row.HasMember("title")) {
+                    song.title = localized_title(row["title"]);
                 }
                 if (row.HasMember("genre") && row["genre"].IsString()) {
                     song.genre = row["genre"].GetString();
@@ -1950,6 +1991,55 @@ void NetworkClient::update(double current_ms) {
         } else {
             spdlog::warn("most_played_songs: HTTP {} - {}", response.status_code, response.text);
             popular_ranks.emplace();
+        }
+    }
+
+    if (pending_top_players.has_value() &&
+        pending_top_players->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_top_players->get();
+        pending_top_players.reset();
+        rapidjson::Document doc;
+        top_player_list.emplace();
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() &&
+            doc.HasMember("leaderboard") && doc["leaderboard"].IsArray()) {
+            for (const auto& row : doc["leaderboard"].GetArray()) {
+                if (top_player_list->size() >= 20) {
+                    break;
+                }
+                if (!row.IsObject() || !row.HasMember("username") || !row["username"].IsString() ||
+                    !row.HasMember("rating") || !row["rating"].IsNumber() || row["rating"].GetDouble() <= 0) {
+                    continue;
+                }
+                top_player_list->push_back({row["username"].GetString(), row["rating"].GetDouble()});
+            }
+        } else {
+            spdlog::warn("leaderboard: HTTP {} - {}", response.status_code, response.text);
+        }
+    }
+
+    if (pending_new_songs.has_value() &&
+        pending_new_songs->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        cpr::Response response = pending_new_songs->get();
+        pending_new_songs.reset();
+        rapidjson::Document doc;
+        new_song_list.emplace();
+        if (response.status_code == 200 && !doc.Parse(response.text.c_str()).HasParseError() &&
+            doc.HasMember("songs") && doc["songs"].IsArray()) {
+            for (const auto& row : doc["songs"].GetArray()) {
+                if (!row.IsObject() || !row.HasMember("title")) {
+                    continue;
+                }
+                PopularSong song;
+                song.title = localized_title(row["title"]);
+                if (row.HasMember("genre") && row["genre"].IsString()) {
+                    song.genre = row["genre"].GetString();
+                }
+                if (!song.title.empty()) {
+                    new_song_list->push_back(std::move(song));
+                }
+            }
+        } else {
+            spdlog::warn("new_songs: HTTP {} - {}", response.status_code, response.text);
         }
     }
 
@@ -1988,6 +2078,12 @@ void NetworkClient::shutdown() {
         pending_popular->wait();
         pending_popular.reset();
     }
+    for (auto* pending : {&pending_top_players, &pending_new_songs}) {
+        if (pending->has_value()) {
+            (*pending)->wait();
+            pending->reset();
+        }
+    }
 #if defined(__ANDROID__)
     if (pending_update_checksum.has_value()) {
         pending_update_checksum->wait();
@@ -2016,8 +2112,10 @@ std::string NetworkClient::register_user(const std::string&, const std::string&)
 void NetworkClient::submit_score(const std::string&, int, const std::string&, const Score&, const InputLog&, int64_t,
                                  const std::string&, bool, int, const std::string&, int,
                                  const std::optional<JudgeParams>&) {}
-void NetworkClient::submit_dan(const std::string&, const std::string&, const DanResultData&,
-                               const std::vector<DanSongEntry>&, int) {}
+void NetworkClient::submit_dan(const std::string&, const std::string&, const DanResultData&, int) {}
+bool NetworkClient::check_import_requested(const std::string&) {
+    return false;
+}
 void NetworkClient::clear_import_flag(const std::string&) {}
 void NetworkClient::update_username(const std::string&, const std::string&) {}
 void NetworkClient::update_settings(const std::string&, const std::string&, const std::string&) {}
@@ -2035,7 +2133,7 @@ bool NetworkClient::fetch_costume(const std::string&, int&, int&, int&, bool&) {
 std::optional<RemoteUser> NetworkClient::fetch_user(const std::string&) {
     return std::nullopt;
 }
-void NetworkClient::check_and_install_android_update() {}
+void NetworkClient::check_for_client_update() {}
 void NetworkClient::update_costume(const std::string&, int, int, int, bool) {}
 std::vector<RemoteScore> NetworkClient::fetch_scores(const std::string&) {
     return {};
@@ -2045,7 +2143,7 @@ std::optional<std::string> NetworkClient::take_song_jump_result() {
     return std::nullopt;
 }
 void NetworkClient::submit_kinotake(int, const std::string&, int, int, bool, bool) {}
-void NetworkClient::submit_don_points(int, const std::string&, const std::vector<int>&) {}
+void NetworkClient::submit_don_points(int, const std::string&, int, const std::string&) {}
 void NetworkClient::submit_medals(int, const std::string&) {}
 void NetworkClient::submit_revive_result(const std::string&, bool) {}
 void NetworkClient::submit_ai_battle(const std::string&, const std::string&, int, int, bool, bool, const std::string&) {
@@ -2111,6 +2209,12 @@ int NetworkClient::popular_rank(const std::string&) {
     return 0;
 }
 const std::vector<NetworkClient::PopularSong>* NetworkClient::popular_songs() {
+    return nullptr;
+}
+const std::vector<NetworkClient::TopPlayer>* NetworkClient::top_players() {
+    return nullptr;
+}
+const std::vector<NetworkClient::PopularSong>* NetworkClient::new_songs() {
     return nullptr;
 }
 std::optional<ReplayData> NetworkClient::take_replay_result() {

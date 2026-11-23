@@ -14,6 +14,7 @@
 #include "../libs/input/input.h"
 #include "../libs/math/animation.h"
 #include "../libs/network/network.h"
+#include "../libs/score_submission.h"
 #include "../libs/test_mode.h"
 #include "../libs/zdon_record.h"
 #include "../objects/game/zdon_ai.h"
@@ -55,7 +56,7 @@ void GameScreen::on_screen_start() {
     spdlog::info("Chart initialized for song: {}", session_data.selected_song.string());
     load_hitsounds();
     song_info = SongInfo(session_data.song_title, session_data.song_subtitle, parser->metadata.subtitle_full_display,
-                         session_data.genre_index, global_data.songs_played + 1, 0, session_data.genre_label);
+                         session_data.genre_index, global_data.credit.songs_played + 1, 0, session_data.genre_label);
     result_transition = ResultTransition(scene_player_num());
     ai_cover_start_ms = -1.0;
     bpm = parser->metadata.bpm;
@@ -214,26 +215,13 @@ void GameScreen::create_players() {
                                                get_player_modifiers(global_data.player_num)));
     players.back()->allow_papamama();
 
-    SessionData& replay_session_data = global_data.session_data[player_index];
-    if (replay_session_data.replay_input_log.has_value()) {
+    if (const auto& replay = global_data.session_data[player_index].replay) {
         InputLog typed_log;
-        for (const auto& [ms, type] : *replay_session_data.replay_input_log) {
+        for (const auto& [ms, type] : replay->input_log) {
             typed_log.emplace_back(ms, static_cast<InputLogType>(type));
         }
         players.back()->load_replay(typed_log);
-
-        PlayerData replay_pd;
-        replay_pd.username = replay_session_data.replay_username;
-        replay_pd.title = replay_session_data.replay_title;
-        replay_pd.title_bg = replay_session_data.replay_title_bg;
-        replay_pd.chara_color_1 = replay_session_data.replay_chara_color_1;
-        replay_pd.chara_color_2 = replay_session_data.replay_chara_color_2;
-        replay_pd.chara_color_3 = replay_session_data.replay_chara_color_3;
-        replay_pd.chara_head_index = replay_session_data.replay_chara_head_index;
-        replay_pd.chara_body_index = replay_session_data.replay_chara_body_index;
-        replay_pd.chara_cos_index = replay_session_data.replay_chara_cos_index;
-        replay_pd.chara_is_costume = replay_session_data.replay_chara_is_costume;
-        players.back()->apply_replay_appearance(replay_pd);
+        players.back()->apply_replay_appearance(replay->player_data);
     }
 }
 
@@ -546,13 +534,16 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
     if (pause_used) {
         return;
     }
+
     Player* target = nullptr;
+
     for (const auto& player : players) {
         if (player && player->player_num == player_num) {
             target = player.get();
         }
     }
-    if (!target) {
+
+    if (!target || target->is_auto_play() || target->is_replay()) {
         return;
     }
     std::vector<std::string>& unsaved = global_data.session_data[static_cast<int>(player_num)].zdon_unsaved;
@@ -565,91 +556,84 @@ void GameScreen::save_score(const std::string& player_id, PlayerNum player_num) 
         spdlog::info("Score of player {} not saved: {}", static_cast<int>(player_num), why);
         return;
     }
+
+    SessionData& sd = global_data.session_data[static_cast<int>(player_num)];
+    auto& result = sd.result_data;
     if (target->get_modifiers().subdiff != 0) {
-        ResultData& result = global_data.session_data[static_cast<int>(player_num)].result_data;
         result.prev_score = result.score;
         return;
     }
 
     try {
-        Score score;
-        SessionData& session_data = global_data.session_data[static_cast<int>(player_num)];
-        std::string hash = session_data.song_hash;
-        score.score = session_data.result_data.score;
-        score.good = session_data.result_data.good;
-        score.ok = session_data.result_data.ok;
-        score.bad = session_data.result_data.bad;
-        score.max_combo = session_data.result_data.max_combo;
-        score.drumroll = session_data.result_data.total_drumroll;
-        auto prev_score = scores_manager.get_score(hash, session_data.selected_difficulty, player_id);
-        if (prev_score.has_value()) {
-            session_data.result_data.prev_score = prev_score->score;
-            session_data.result_data.prev_known = true;
+        const auto previous = scores_manager.get_score(sd.song_hash, sd.selected_difficulty, player_id);
+
+        if (previous) {
+            result.prev_score = previous->score;
+            result.prev_known = true;
         }
-        const bool run_skipped = skipped;
-        if (run_skipped) {
-            score.crown = Crown::NONE;
-        } else if (score.ok == 0 && score.bad == 0) {
-            score.crown = Crown::DFC;
-        } else if (score.bad == 0) {
-            score.crown = Crown::FC;
-        } else if (target->gauge->get_is_clear()) {
-            score.crown = Crown::CLEAR;
-        } else {
-            score.crown = Crown::NONE;
-        }
-        if (run_skipped) {
-            score.rank = Rank::_NONE;
-        } else {
-            score.rank = rank_for_score(score.score);
-        }
-        int64_t played_at = unix_now();
-        std::string modifiers_json = modifiers_to_json(target->get_modifiers());
+
+        ScoreSubmissionRequest request{.player_id = player_id,
+                                       .hash = sd.song_hash,
+                                       .difficulty = sd.selected_difficulty,
+                                       .score = completed_play_score({.score = result.score,
+                                                                      .good = result.good,
+                                                                      .ok = result.ok,
+                                                                      .bad = result.bad,
+                                                                      .drumroll = result.total_drumroll,
+                                                                      .max_combo = result.max_combo},
+                                                                     skipped, target->gauge->get_is_clear()),
+                                       .modifiers = target->get_modifiers(),
+                                       .input_log = target->input_log,
+                                       .judge_params = target->judge_params()};
+        const Score& score = request.score;
         // Z-DON: whether it replaces a stored best, ranked as the scores table ranks (crown first, then score)
-        session_data.result_data.new_best =
-            !run_skipped && prev_score.has_value() &&
-            (score.crown > prev_score->crown || (score.crown == prev_score->crown && score.score > prev_score->score));
-        scores_manager.save_score(hash, session_data.selected_difficulty, player_id, score, played_at, modifiers_json);
+        result.new_best =
+            !skipped && previous.has_value() &&
+            (score.crown > previous->crown || (score.crown == previous->crown && score.score > previous->score));
+
+        const auto submission =
+            score_submission_for(player_id, scores_manager, *global_data.config, sd.selected_collection,
+                                 static_cast<int>(target->gauge->get_length()));
+
+        const auto profile = ScoreSubmitter(scores_manager, network).submit(request, submission);
         // Z-DON PB pace: a new best keeps its score curve
         if (auto& g = zdon_ghost[std::clamp(static_cast<int>(player_num), 0, 3)];
-            !run_skipped && !g.rec.empty() && (!prev_score || score.score > prev_score->score)) {
+            !skipped && !g.rec.empty() && (!previous || score.score > previous->score)) {
             g.rec.emplace_back(static_cast<float>(std::max<double>(clock.position(), g.rec.back().first)), score.score);
-            scores_manager.set_zdon_ghost(hash, session_data.selected_difficulty, player_id, g.rec);
+            scores_manager.set_zdon_ghost(sd.song_hash, sd.selected_difficulty, player_id, g.rec);
         }
-        PlayerData pd = scores_manager.get_player_data(player_id).value_or(PlayerData{});
-        if (global_data.config->general.score_method != ScoreMethod::GEN3) {
-            std::string access_code;
-            if (player_id == scores_manager.player_1 && !global_data.config->network.access_code_1.empty()) {
-                access_code = global_data.config->network.access_code_1;
-            } else if (player_id == scores_manager.player_2 && !global_data.config->network.access_code_2.empty()) {
-                access_code = global_data.config->network.access_code_2;
-            }
-            if (!access_code.empty()) {
-                network.submit_score(hash, session_data.selected_difficulty, access_code, score, target->input_log,
-                                     played_at, modifiers_json, pd.chara_is_costume, pd.chara_cos_index,
-                                     session_data.selected_collection, static_cast<int>(target->gauge->get_length()),
-                                     target->judge_params());
-                session_data.result_data.submitted = true;
-                const int seat = static_cast<int>(player_num) - 1;
-                if (!run_skipped && (seat == 0 || seat == 1)) {
-                    global_data.credit_gauges[seat].push_back(static_cast<int>(target->gauge->get_length()));
-                    global_data.credit_titles[seat].push_back(session_data.song_title);
-                    network.submit_medals(seat, access_code);
-                }
-                if (!run_skipped && (seat == 0 || seat == 1) && global_data.kinotake_team[seat] >= 0) {
-                    const bool duet = std::ranges::count_if(players, [](const auto& p) {
-                                          return p && !p->is_auto_play() && !p->is_replay();
-                                      }) == 2;
-                    const bool kinotake_costume = pd.chara_is_costume && kinotake_costume_team(pd.chara_cos_index) >= 0;
-                    network.submit_kinotake(seat, access_code, global_data.kinotake_team[seat], score.score, duet,
-                                            kinotake_costume);
-                }
-            }
+        if (profile) {
+            result.submitted = true;
+            reward_score(*target, *submission, *profile);
         }
     } catch (const std::exception& e) {
         spdlog::error("GameScreen::save_score failed for player {}: {}", player_id, e.what());
     } catch (...) {
         spdlog::error("GameScreen::save_score failed for player {}: unknown exception", player_id);
+    }
+}
+
+void GameScreen::reward_score(const Player& player, const RemoteScoreSubmission& submission,
+                              const PlayerData& profile) {
+    const int seat = static_cast<int>(player.player_num) - 1;
+
+    if (skipped || seat < 0 || seat > 1) {
+        return;
+    }
+
+    const auto& sd = global_data.session_data[static_cast<int>(player.player_num)];
+    global_data.credit.songs[seat]++;
+    network.submit_don_points(seat, submission.access_code, submission.gauge, sd.song_title);
+    network.submit_medals(seat, submission.access_code);
+
+    if (global_data.campaign.kinotake_team[seat] >= 0) {
+        const bool duet = std::ranges::count_if(
+                              players, [](const auto& p) { return p && !p->is_auto_play() && !p->is_replay(); }) == 2;
+
+        const bool costume = profile.chara_is_costume && kinotake_costume_team(profile.chara_cos_index) >= 0;
+
+        network.submit_kinotake(seat, submission.access_code, global_data.campaign.kinotake_team[seat],
+                                sd.result_data.score, duet, costume);
     }
 }
 
@@ -688,7 +672,6 @@ void GameScreen::init_skip() {
     skip_pushed.reset();
     skip_text.reset();
     global_data.live_skip_count = -1;
-    global_data.live_skip_used = false;
 
     if (!tex.options[SCO::OPTION_SKIP_ROW]) {
         return;
@@ -742,7 +725,6 @@ void GameScreen::update_skip() {
 
 void GameScreen::push_skip_state() {
     global_data.live_skip_count = skip_count;
-    global_data.live_skip_used = skipped;
     if (!background.has_value() || !background->wants_skip()) {
         return;
     }
@@ -929,7 +911,7 @@ void GameScreen::end_song(double end_time, double transition_delay, BackgroundNo
             }
         }
 
-        global_data.songs_played += 1;
+        global_data.credit.songs_played += 1;
         score_saved = true;
         // Z-DON: a second after the last note the result screen's textures decode in the background, while the
         // ending plays (never while notes are still to be hit)

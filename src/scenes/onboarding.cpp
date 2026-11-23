@@ -8,10 +8,10 @@
 #include <vector>
 
 #include "../libs/file/filesystem.h"
-#include "../libs/gfx/camera_utils.h"
 #include "../libs/gfx/text.h"
 #include "../libs/global_data.h"
 #include "../libs/input/input.h"
+#include "../libs/network/online_songs.h"
 #include "../libs/network/skin_updater.h"
 #include "../libs/network/zdon_update.h"
 
@@ -118,6 +118,29 @@ namespace {
         return static_cast<int>(skins().size());
     }
 
+    constexpr const char* kSongManifest = "https://yataidon-hiroba.tjadataba.se/song_manifest";
+
+    bool has_song_manifest(const Config& cfg) {
+        return std::ranges::contains(cfg.paths.song_manifests, kSongManifest,
+                                     &online_songs::Manifests::value_type::first);
+    }
+
+    // true when the root was added
+    bool set_song_manifest(Config& cfg, bool on) {
+        if (on == has_song_manifest(cfg)) {
+            return false;
+        }
+        const fs::path dir = online_songs::mirror_dir(kSongManifest);
+        if (on) {
+            cfg.paths.song_manifests.emplace_back(kSongManifest, dir);
+            cfg.paths.tja_path.push_back(dir);
+        } else {
+            std::erase_if(cfg.paths.song_manifests, [](const auto& m) { return m.first == kSongManifest; });
+            std::erase(cfg.paths.tja_path, dir);
+        }
+        return on;
+    }
+
     struct LanguageEntry {
         const char* code;
         const char* label;
@@ -172,6 +195,7 @@ void OnboardingScreen::on_screen_start() {
         toggle_skin(current);
     }
     online = global_data.config->network.online_play;
+    online_songs = has_song_manifest(*global_data.config);
     language = global_data.config->general.language;
     row = 0;
     downloading = download_started = false;
@@ -181,8 +205,6 @@ void OnboardingScreen::on_screen_start() {
         error = "Cannot reach the server. Check your connection.";
     }
     // no skin means no drum on screen, so phones pick rows by tapping them instead
-    set_touch_drum_enabled(false);
-    take_touch_tap();
     screen_init = true;
 }
 
@@ -252,6 +274,7 @@ bool OnboardingScreen::apply() {
     }
     cfg.network.online_play = online;
     cfg.general.language = language;
+    songs_added = set_song_manifest(cfg, online && online_songs);
     if (active >= 0) {
         cfg.paths.skin = skins()[active].name;
     }
@@ -277,27 +300,39 @@ bool OnboardingScreen::apply() {
 }
 
 void OnboardingScreen::handle_tap(Vec2 tap) {
-    const Vec2 pixel{tap.x * get_screen_width(), tap.y * get_screen_height()};
-    const Camera2D camera = compute_camera2d(tex.screen_width, tex.screen_height);
-    const float y = get_screen_to_world_2d(pixel, camera).y * 720.0f / tex.screen_height; // draw()'s coordinates
+    const float y = touch_to_world(tap).y * 720.0f / tex.screen_height; // draw()'s coordinates
 
     if (y >= 165 && y < 165 + skin_total() * 42) {
         row = static_cast<int>((y - 165) / 42);
         toggle_skin(row);
-    } else if (y >= 420 && y < 470) {
+    } else if (y >= 415 && y < 460) {
         row = language_row();
-        cycle_language();
-    } else if (y >= 470 && y < 530) {
+        toggle_row(row);
+    } else if (y >= 460 && y < 505) {
         row = online_row();
-        online = !online;
-    } else if (y >= 530 && y < 590) {
+        toggle_row(row);
+    } else if (y >= 505 && y < 550 && online) {
+        row = songs_row();
+        toggle_row(row);
+    } else if (y >= 550 && y < 600) {
         row = continue_row();
         begin_download();
     }
 }
 
+void OnboardingScreen::toggle_row(int r) {
+    if (r < skin_total()) {
+        toggle_skin(r);
+    } else if (r == language_row()) {
+        cycle_language();
+    } else if (r == online_row()) {
+        online = !online;
+    } else if (r == songs_row()) {
+        online_songs = !online_songs;
+    }
+}
+
 Screens OnboardingScreen::on_screen_end(Screens next_screen) {
-    set_touch_drum_enabled(true);
     return Screen::on_screen_end(next_screen);
 }
 
@@ -338,8 +373,8 @@ std::optional<Screens> OnboardingScreen::update() {
         if (!apply()) {
             return std::nullopt;
         }
-        // started without a skin: the loading screen has not run yet
-        return on_screen_end(skinless_start ? Screens::LOADING : Screens::TITLE);
+        // started without a skin the loading screen has not run yet; a new song root needs it again
+        return on_screen_end(skinless_start || songs_added ? Screens::LOADING : Screens::TITLE);
     }
 
     if (const auto tap = take_touch_tap()) {
@@ -348,7 +383,7 @@ std::optional<Screens> OnboardingScreen::update() {
     }
 
     // Up/Down (arrows or D-pad) move between rows; the drum-only scheme below still works
-    const int rows = skin_total() + 3;
+    const int rows = continue_row() + 1;
     if (key_pressed(SDL_SCANCODE_UP) || check_key_pressed(10000 + 1)) {
         row = (row + rows - 1) % rows;
         return std::nullopt;
@@ -365,12 +400,8 @@ std::optional<Screens> OnboardingScreen::update() {
         } else if (menu_confirm_pressed()) {
             if (row == continue_row()) {
                 begin_download();
-            } else if (row < skin_total()) {
-                toggle_skin(row);
-            } else if (row == language_row()) {
-                cycle_language();
-            } else if (row == online_row()) {
-                online = !online;
+            } else {
+                toggle_row(row);
             }
         }
         return std::nullopt;
@@ -383,14 +414,10 @@ std::optional<Screens> OnboardingScreen::update() {
             row++;
         }
     } else if (menu_left_pressed() || menu_right_pressed()) {
-        if (row < skin_total()) {
-            toggle_skin(row);
-        } else if (row == language_row()) {
-            cycle_language();
-        } else if (row == online_row()) {
-            online = !online;
-        } else {
+        if (row == continue_row()) {
             row = 0; // kat on Continue: back to the top
+        } else {
+            toggle_row(row);
         }
     }
     return std::nullopt;
@@ -436,13 +463,17 @@ void OnboardingScreen::draw() {
         draw_line(line, (165 + i * 42) * s, static_cast<int>(28 * s), c);
     }
     const auto* lang = std::ranges::find(kLanguages, language, &LanguageEntry::code);
-    draw_line(std::string("Language: ") + (lang != std::end(kLanguages) ? lang->label : language.c_str()), 430 * s,
-              static_cast<int>(32 * s), row == language_row() ? Color::YELLOW : Color::LIGHTGRAY);
-    draw_line(std::string("Online mode: ") + (online ? "ON" : "OFF"), 480 * s, static_cast<int>(32 * s),
+    draw_line(std::string("Language: ") + (lang != std::end(kLanguages) ? lang->label : language.c_str()), 420 * s,
+              static_cast<int>(30 * s), row == language_row() ? Color::YELLOW : Color::LIGHTGRAY);
+    draw_line(std::string("Online mode: ") + (online ? "ON" : "OFF"), 465 * s, static_cast<int>(30 * s),
               row == online_row() ? Color::YELLOW : Color::LIGHTGRAY);
-    draw_line("Continue", 540 * s, static_cast<int>(32 * s), row == continue_row() ? Color::YELLOW : Color::LIGHTGRAY);
+    if (online) {
+        draw_line(std::string("Fetch songs online: ") + (online_songs ? "ON" : "OFF"), 510 * s,
+                  static_cast<int>(30 * s), row == songs_row() ? Color::YELLOW : Color::LIGHTGRAY);
+    }
+    draw_line("Continue", 560 * s, static_cast<int>(32 * s), row == continue_row() ? Color::YELLOW : Color::LIGHTGRAY);
     if (!error.empty()) {
-        draw_line(error, 600 * s, static_cast<int>(22 * s), Color::RED);
+        draw_line(error, 612 * s, static_cast<int>(22 * s), Color::RED);
     }
     const char* hint = global_data.config->general.touch_input ? "Tap a skin to select it, then tap Continue"
                        : global_data.config->keys.gamepad_menu_layout

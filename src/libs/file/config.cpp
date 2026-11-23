@@ -455,6 +455,12 @@ Config get_config() {
 
     // Parse paths
     config.paths.tja_path = parsePathArrayOrDefault(config_file, "paths", "tja_path", {fs::path("Songs")});
+    for (fs::path& path : config.paths.tja_path) {
+        if (online_songs::is_manifest_url(path.string())) {
+            config.paths.song_manifests.emplace_back(path.string(), online_songs::mirror_dir(path.string()));
+            path = config.paths.song_manifests.back().second;
+        }
+    }
     config.paths.start_path = fs::path(config_file["paths"]["start_path"].value_or(""));
     config.paths.skin = fs::path(config_file["paths"]["skin"].value_or(""));
 
@@ -563,6 +569,7 @@ Config get_config() {
     config.video.vsync = config_file["video"]["vsync"].value_or(kDefaultVsync);
     config.video.zdon_texture_compression = config_file["video"]["zdon_texture_compression"].value_or(true);
     config.video.zdon_composited_fullscreen = config_file["video"]["zdon_composited_fullscreen"].value_or(false);
+    config.video.renderer = config_file["video"]["renderer"].value_or("auto");
     platform_load_config(config, config_file);
 
     return config;
@@ -651,10 +658,10 @@ void save_config(const Config& config) {
 
     // Network
     config_table.insert("network",
-                        toml::table{{"access_code_1", global_data.card_override[0] ? global_data.card_prev_code[0]
-                                                                                   : config.network.access_code_1},
-                                    {"access_code_2", global_data.card_override[1] ? global_data.card_prev_code[1]
-                                                                                   : config.network.access_code_2},
+                        toml::table{{"access_code_1", global_data.card.overridden[0] ? global_data.card.prev_code[0]
+                                                                                     : config.network.access_code_1},
+                                    {"access_code_2", global_data.card.overridden[1] ? global_data.card.prev_code[1]
+                                                                                     : config.network.access_code_2},
                                     {"online_play", config.network.online_play},
                                     {"sync_scores", config.network.sync_scores},
                                     {"auto_login", config.network.auto_login},
@@ -673,7 +680,9 @@ void save_config(const Config& config) {
     // Paths
     toml::array tja_path_array;
     for (const auto& path : config.paths.tja_path) {
-        tja_path_array.push_back(path.string());
+        auto manifest =
+            std::ranges::find(config.paths.song_manifests, path, &online_songs::Manifests::value_type::second);
+        tja_path_array.push_back(manifest != config.paths.song_manifests.end() ? manifest->first : path.string());
     }
     config_table.insert("paths", toml::table{{"tja_path", tja_path_array},
                                              {"start_path", config.paths.start_path.string()},
@@ -747,6 +756,7 @@ void save_config(const Config& config) {
                                              {"borderless", config.video.borderless},
                                              {"target_fps", config.video.target_fps},
                                              {"vsync", config.video.vsync},
+                                             {"renderer", config.video.renderer},
                                              {"zdon_texture_compression", config.video.zdon_texture_compression},
                                              {"zdon_composited_fullscreen", config.video.zdon_composited_fullscreen}});
 

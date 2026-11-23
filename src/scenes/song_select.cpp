@@ -1,11 +1,13 @@
 #include "song_select.h"
 
+#include <cmath>
 #include <filesystem>
 
 #include "../libs/fixed_step.h"
 #include "../libs/input/input.h"
 #include "../libs/input/zdon_mouse.h"
 #include "../libs/network/network.h"
+#include "../libs/network/online_songs.h"
 #include "../libs/zdon_diff_memory.h"
 #include "../libs/zdon_online.h"
 #include "../objects/game/zdon_ai_board.h"
@@ -49,6 +51,8 @@ void SongSelectScreen::on_screen_start() {
     }
     audio.play_sound("bgm", VolumePreset::MUSIC);
     audio.play_sound("voice_enter", VolumePreset::VOICE, mutes_enter_voice() ? 0.0f : 1.0f);
+    drag_start_x.reset();
+    fling_velocity = 0.0f;
 
     diff_fade_out = dynamic_cast<FadeAnimation*>(tex.get_animation(2));
     if (!diff_fade_out) {
@@ -95,7 +99,7 @@ void SongSelectScreen::on_screen_start() {
     player->script = script.get();
 
     indicator = std::make_unique<Indicator>(Indicator::State::SELECT);
-    song_num = std::make_unique<SongNum>(global_data.songs_played + 1);
+    song_num = std::make_unique<SongNum>(global_data.credit.songs_played + 1);
     select_timer = std::make_unique<Timer>(100, get_current_ms(), [this] { on_select_timeout(); });
     diff_select_timer = nullptr;
     join_request_ms = -1.0;
@@ -142,6 +146,7 @@ void SongSelectScreen::select_song(SongBox* song) {
     const auto player_index = static_cast<int>(global_data.player_num);
     SessionData& session_data = global_data.session_data[player_index];
     session_data.selected_song = song->path;
+    start_song_download(song->path);
     session_data.selected_collection = song->collection;
     session_data.selected_difficulty = static_cast<int>(player->selected_difficulty);
     session_data.song_hash = song->hash_for(session_data.selected_difficulty);
@@ -155,6 +160,14 @@ void SongSelectScreen::select_song(SongBox* song) {
         game_transition->add_loading_graphic((session_data.selected_song.parent_path() / "Loading.png").string());
     }
     game_transition->start();
+}
+
+void SongSelectScreen::start_song_download(const fs::path& song) {
+    song_download = std::async(std::launch::async, online_songs::fetch_song, song);
+}
+
+bool SongSelectScreen::song_download_pending() const {
+    return song_download.valid() && song_download.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
 }
 
 void SongSelectScreen::on_select_timeout() {
@@ -266,8 +279,15 @@ std::optional<Screens> SongSelectScreen::take_replay_jump() {
         network.request_replay(*score_id);
     }
     if (auto replay = network.take_replay_result()) {
-        const bool challenge = std::exchange(replay_is_challenge, false);
-        return challenge ? start_challenge(*replay) : start_replay(*replay);
+        if (auto song_path = replay->ok ? scores_manager.get_path_by_diff_hash(replay->hash) : std::nullopt) {
+            start_song_download(*song_path);
+        }
+        pending_replay = std::make_shared<const ReplayData>(std::move(*replay));
+        pending_replay_challenge = std::exchange(replay_is_challenge, false);
+    }
+    if (pending_replay && !song_download_pending()) {
+        const auto replay = std::move(pending_replay);
+        return pending_replay_challenge ? start_challenge(*replay) : start_replay(*replay);
     }
     return std::nullopt;
 }
@@ -317,17 +337,7 @@ std::optional<Screens> SongSelectScreen::start_replay(const ReplayData& replay) 
     session_data.selected_song = *song_path;
     session_data.selected_difficulty = replay.difficulty;
     session_data.song_hash = replay.hash;
-    session_data.replay_input_log = replay.input_log;
-    session_data.replay_username = replay.player_data.username;
-    session_data.replay_title = replay.player_data.title;
-    session_data.replay_title_bg = replay.player_data.title_bg;
-    session_data.replay_chara_color_1 = replay.player_data.chara_color_1;
-    session_data.replay_chara_color_2 = replay.player_data.chara_color_2;
-    session_data.replay_chara_color_3 = replay.player_data.chara_color_3;
-    session_data.replay_chara_head_index = replay.player_data.chara_head_index;
-    session_data.replay_chara_body_index = replay.player_data.chara_body_index;
-    session_data.replay_chara_cos_index = replay.player_data.chara_cos_index;
-    session_data.replay_chara_is_costume = replay.player_data.chara_is_costume;
+    session_data.replay = std::make_shared<const ReplayData>(replay);
     return on_screen_end(Screens::GAME);
 }
 
@@ -338,8 +348,8 @@ std::optional<Screens> SongSelectScreen::poll_second_player_join(double current_
             return std::nullopt;
         }
         join_request_ms = -1.0;
-        global_data.entry_join_pending = true;
-        global_data.entry_joined_seat = join_existing_seat;
+        global_data.entry.join_pending = true;
+        global_data.entry.joined_seat = join_existing_seat;
         spdlog::info("[2P join] returning to ENTRY, {}P stays in", static_cast<int>(join_existing_seat));
         return on_screen_end(Screens::ENTRY);
     }
@@ -347,7 +357,7 @@ std::optional<Screens> SongSelectScreen::poll_second_player_join(double current_
     if (!allows_second_player_join()) {
         return std::nullopt;
     }
-    if (global_data.songs_played >= 2) {
+    if (global_data.credit.songs_played >= 2) {
         return std::nullopt;
     }
     if (game_transition.has_value() || dan_transition.has_value()) {
@@ -385,15 +395,120 @@ std::optional<Screens> SongSelectScreen::poll_second_player_join(double current_
     return std::nullopt;
 }
 
+// A flick keeps the wheel stepping at the finger's speed, decaying to 1/e every FLING_DECAY_MS; holding still for
+// FLING_HOLD_MS before lifting cancels it.
+static constexpr double FLING_DECAY_MS = 325.0;
+static constexpr double FLING_HOLD_MS = 80.0;
+static constexpr float FLING_STOP_BASE = 0.15f; // px per ms
+static constexpr float SWIPE_MIN_BASE = 80.0f;
+
+void SongSelectScreen::step_wheel(float& travel) {
+    const float pitch = navigator.box_pitch();
+    for (; travel <= -pitch; travel += pitch) {
+        audio.play_sound("kat", VolumePreset::HITSOUND);
+        navigator.move_right();
+    }
+    for (; travel >= pitch; travel -= pitch) {
+        audio.play_sound("kat", VolumePreset::HITSOUND);
+        navigator.move_left();
+    }
+}
+
+void SongSelectScreen::fling_wheel(double now) {
+    if (fling_velocity == 0.0f || state != SongSelectState::BROWSING) {
+        fling_velocity = 0.0f;
+        return;
+    }
+    // a frame where input was held back (loading) must not land as one long jump
+    const double dt = std::min(now - fling_last_ms, 50.0);
+    fling_last_ms = now;
+    fling_travel += static_cast<float>(fling_velocity * dt);
+    step_wheel(fling_travel);
+    fling_velocity *= static_cast<float>(std::exp(-dt / FLING_DECAY_MS));
+    if (std::abs(fling_velocity) < FLING_STOP_BASE * tex.screen_scale) {
+        fling_velocity = 0.0f;
+    }
+}
+
+// Browsing: drag the wheel a box per pitch, tap a side box to move to it and the open box to open it. Difficulty
+// select: tap a slot. Popups and the sort window still run on the drum, so taps there stand in for it.
+void SongSelectScreen::handle_touch() {
+    const double now = get_current_ms();
+    const auto touch = take_touch_pointer_world();
+    if (!touch) {
+        drag_start_x.reset();
+        fling_wheel(now);
+        return;
+    }
+    fling_velocity = 0.0f;
+    if (state == SongSelectState::BROWSING) {
+        const float along = navigator.is_vertical() ? touch->pos.y : touch->pos.x;
+        const float start = navigator.is_vertical() ? touch->start.y : touch->start.x;
+        if (!drag_start_x) {
+            drag_start_x = start;
+            drag_last = start;
+            drag_last_ms = now;
+            drag_velocity = 0.0f;
+        }
+        if (along != drag_last) {
+            const double dt = std::max(now - drag_last_ms, 1.0);
+            drag_velocity = (0.6f * static_cast<float>((along - drag_last) / dt)) + (0.4f * drag_velocity);
+            drag_last = along;
+            drag_last_ms = now;
+        }
+        if (touch->down) {
+            float travel = along - *drag_start_x;
+            step_wheel(travel);
+            *drag_start_x = along - travel;
+        } else {
+            drag_start_x.reset();
+            if (!touch_is_tap(*touch) && now - drag_last_ms < FLING_HOLD_MS) {
+                fling_velocity = drag_velocity;
+                fling_travel = 0.0f;
+                fling_last_ms = now;
+            }
+        }
+        if (!touch_is_tap(*touch)) {
+            return;
+        }
+        if (const auto offset = navigator.offset_at(touch->start); offset && *offset != 0) {
+            audio.play_sound("kat", VolumePreset::HITSOUND);
+            navigator.move_by(*offset);
+        } else if (offset) {
+            audio.play_sound("don", VolumePreset::HITSOUND);
+            player->touch_select = true;
+        }
+        return;
+    }
+    if (state == SongSelectState::SONG_SELECTED && !popup_open() && !touch->down && !touch_is_tap(*touch)) {
+        const float dx = touch->pos.x - touch->start.x;
+        if (std::abs(dx) > SWIPE_MIN_BASE * tex.screen_scale &&
+            std::abs(dx) > std::abs(touch->pos.y - touch->start.y)) {
+            player->touch_ura_swipe = true;
+        }
+        return;
+    }
+    if (!touch_is_tap(*touch) || state == SongSelectState::SEARCHING) {
+        return;
+    }
+    if (state == SongSelectState::SONG_SELECTED && !popup_open()) {
+        player->touch_difficulty = player->difficulty_at(touch->start);
+        return;
+    }
+    press_touch_drum(touch->start);
+}
+
 void SongSelectScreen::handle_input(double current_ms) {
     if (navigator.is_processing || navigator.inline_streaming) {
         clear_input_buffers();
+        take_touch_pointer();
         return;
     }
     // Ignore input while the difficulty panel is still expanding, matching
     // the cursor which only appears once the animation is done.
     if (state == SongSelectState::SONG_SELECTED && navigator.get_diff_fade_in() < 1.0f) {
         clear_input_buffers();
+        take_touch_pointer();
         return;
     }
     // Z-DON: [keys] random_song_key (unbound by default) jumps to a random song of the listing
@@ -415,6 +530,7 @@ void SongSelectScreen::handle_input(double current_ms) {
         }
         return;
     }
+    handle_touch();
     if (state == SongSelectState::BROWSING) {
         handle_input_browsing(current_ms);
     } else if (state == SongSelectState::SONG_SELECTED) {
@@ -524,7 +640,7 @@ std::optional<Screens> SongSelectScreen::update() {
 
     if (game_transition.has_value() && join_request_ms < 0.0) {
         game_transition->update(current_time);
-        if (game_transition->is_finished() && !player->is_voice_playing()) {
+        if (game_transition->is_finished() && !player->is_voice_playing() && !song_download_pending()) {
             return on_screen_end(get_game_screen_target());
         }
     }

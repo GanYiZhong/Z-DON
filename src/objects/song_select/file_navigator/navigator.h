@@ -72,7 +72,6 @@ private:
     std::optional<GenreBG> genre_bg;
     int genre_bg_start;
     int genre_bg_end;
-    std::optional<float> genre_bg_end_pos;
     GenreIndex bg_genre_index;
     GenreIndex last_bg_genre_index;
     bool bg_genre_pending = true;
@@ -143,6 +142,7 @@ private:
     bool load_gen4_genre_songs(const fs::path& genre_path, const BoxDef& box_def);
     bool has_def_file(const std::filesystem::path& path);
     fs::path find_box_def_folder(const fs::path& song_path);
+    std::pair<float, float> row_pitch() const; // vertical gallery: row spacing, gap around the open row
 
     void setup_back_box(const fs::path& path, bool has_children, const BaseBox* from = nullptr);
     void prefetch_child_folders(const fs::path& parent);
@@ -173,6 +173,9 @@ private:
     void begin_inline_load();
     void dump_library_if_requested();
     void selftest_box_records_if_requested();
+    float slot_x(float offset) const;
+    void update_genre_edges();
+    void enter_wrapped_boxes(float center);
 
 public:
     bool random_song_in_listing(); // Z-DON: the cursor to a random song of the current listing
@@ -249,6 +252,12 @@ public:
     void move_right();
     void skip_left();
     void skip_right();
+    void move_by(int delta) { navigate(delta, false); }
+    bool is_vertical() const { return vertical_gallery; }
+    // Distance (in boxes) of a canvas point from the open box, or nullopt off the wheel.
+    std::optional<int> offset_at(Vec2 world) const;
+    // Canvas pixels a drag travels per box.
+    float box_pitch() const;
 
     void update(double current_ms);
     void draw_background();

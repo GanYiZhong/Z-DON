@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(YataiDON VERSION 1.0.9 LANGUAGES C CXX)
+project(YataiDON VERSION 1.1.0 LANGUAGES C CXX)
 
 cmake_policy(SET CMP0002 NEW)  # Logical target names must be globally unique
 cmake_policy(SET CMP0079 NEW)  # Allow target_link_libraries() everywhere
@@ -109,11 +109,7 @@ endif()
 
 set(YATAIDON_GFX_BACKEND "raylib" CACHE STRING "Graphics backend: raylib or bgfx")
 set_property(CACHE YATAIDON_GFX_BACKEND PROPERTY STRINGS raylib bgfx)
-if(YATAIDON_GFX_BACKEND STREQUAL "bgfx")
-  if(NOT UNIX OR APPLE OR EMSCRIPTEN OR YATAIDON_USE_SDL2)
-    message(FATAL_ERROR "YATAIDON_GFX_BACKEND=bgfx: only Linux desktop and Android with SDL3 are supported so far")
-  endif()
-elseif(NOT YATAIDON_GFX_BACKEND STREQUAL "raylib")
+if(NOT YATAIDON_GFX_BACKEND MATCHES "^(raylib|bgfx)$")
   message(FATAL_ERROR "YATAIDON_GFX_BACKEND must be raylib or bgfx")
 endif()
 message(STATUS "Graphics backend: ${YATAIDON_GFX_BACKEND}")
@@ -330,10 +326,14 @@ if(YATAIDON_GFX_BACKEND STREQUAL "raylib")
   target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
 else()
   target_link_libraries(${PROJECT_NAME} PRIVATE bgfx bx SDL3::SDL3)
-  # Shaders compile to SPIR-V headers embedded by src/libs/gfx_bgfx.cpp
+  # Shaders compile to SPIR-V / GLSL / ESSL headers embedded by src/libs/gfx_bgfx.cpp
   include(${bgfx_SOURCE_DIR}/cmake/bgfxToolUtils.cmake)
   FetchContent_GetProperties(bgfx_source SOURCE_DIR _bgfx_src)
   set(_shader_dir ${CMAKE_SOURCE_DIR}/shader/bgfx)
+  set(_shader_profiles spirv 430 300_es)
+  if(WIN32)
+    list(APPEND _shader_profiles s_5_0) # Direct3D 11 and 12 both load DXBC
+  endif()
   foreach(_type VERTEX FRAGMENT)
     string(SUBSTRING ${_type} 0 1 _prefix)
     string(TOLOWER ${_prefix} _prefix)
@@ -344,7 +344,7 @@ else()
       VARYING_DEF ${_shader_dir}/varying.def.sc
       OUTPUT_DIR ${CMAKE_BINARY_DIR}/generated/shaders
       INCLUDE_DIRS ${_bgfx_src}/src
-      PROFILES spirv
+      PROFILES ${_shader_profiles}
       AS_HEADERS
       OUT_FILES_VAR _shader_headers
     )
@@ -433,6 +433,21 @@ if(ZDON_NETWORK_CODE)
     NETWORK_URL="${NETWORK_URL}"
     NETWORK_AUTH_KEY="${NETWORK_AUTH_KEY}"
     CLIENT_VERSION="${PROJECT_VERSION}"
+  )
+endif()
+
+option(YATAIDON_UPDATE_CHECK "Toast when the updater release's checksum differs from this binary (release CI only)" OFF)
+if(YATAIDON_UPDATE_CHECK AND NETWORK_ENABLED)
+  if(WIN32)
+    set(YATAIDON_UPDATE_OS windows)
+  elseif(APPLE)
+    set(YATAIDON_UPDATE_OS macos)
+  else()
+    set(YATAIDON_UPDATE_OS linux)
+  endif()
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+    YATAIDON_UPDATE_CHECKSUMS="checksums-${YATAIDON_UPDATE_OS}.sha256"
+    YATAIDON_UPDATE_BINARY="$<TARGET_FILE_NAME:${PROJECT_NAME}>"
   )
 endif()
 
