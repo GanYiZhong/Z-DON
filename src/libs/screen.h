@@ -218,7 +218,7 @@ protected:
             clear_touch_pointer(); // the finger that left the last screen is not a tap here
             take_touch_tap();
             try {
-                readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
+                zdon_readahead::cancel(); // the screen reads its own files now: don't compete with it for the disk
                 on_screen_start();
                 tex.end_predecode(); // Z-DON: the predecoded images the screen did not need
                 // hits made during the previous screen's fade-out or this load must not act here
@@ -226,7 +226,7 @@ protected:
                 g_frame_ms = get_current_ms();
                 spdlog::info("{} initialized", screen_name);
                 predecode_next(screen_name);
-                readahead::after_screen(screen_name);
+                zdon_readahead::after_screen(screen_name);
             } catch (const std::exception& e) {
                 spdlog::critical("{} failed to initialize: {}", screen_name, e.what());
                 tex.end_predecode();

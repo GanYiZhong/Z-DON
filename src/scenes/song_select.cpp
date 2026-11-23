@@ -154,7 +154,7 @@ void SongSelectScreen::select_song(SongBox* song) {
     session_data.genre_label = song->song_genre_label;
     global_data.last_difficulty[player_index] = session_data.selected_difficulty;
     zdon_diff_memory::remember(player_index, song->path.string(), session_data.selected_difficulty);
-    readahead::prepare_song(song->path); // Z-DON: the chart, audio and video, during the transition
+    zdon_readahead::prepare_song(song->path); // Z-DON: the chart, audio and video, during the transition
     game_transition.emplace(song->text_name, song->text_subtitle, false);
     if (exists(session_data.selected_song.parent_path() / "Loading.png")) {
         game_transition->add_loading_graphic((session_data.selected_song.parent_path() / "Loading.png").string());

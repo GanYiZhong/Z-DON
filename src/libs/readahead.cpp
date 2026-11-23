@@ -20,7 +20,7 @@
 
 namespace fs = std::filesystem;
 
-namespace readahead {
+namespace zdon_readahead { // not "readahead": glibc declares a readahead() function
     namespace {
 
         // Where a screen usually leads, by screen name (Graphics/<name>, Sounds/<name>).
@@ -280,4 +280,4 @@ namespace readahead {
         queued.reset();
     }
 
-} // namespace readahead
+} // namespace zdon_readahead
