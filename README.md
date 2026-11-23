@@ -27,8 +27,8 @@ and focus on aggressive performance work, new gameplay features and online play.
 
 ## Relationship to upstream
 
-- Z-DON keeps merging upstream master (currently synced to `1cd3844`, 2026-11-15), so everything YataiDON has
-  (multi-platform builds, Lua skins, 3D characters, AI battle, enso battle, shop, events, Dan dojo, tutorial, …) is
+- Z-DON keeps merging upstream master (currently synced to `dd478af2`, 2026-11-23), so everything YataiDON has
+  (multi-platform builds, Lua skins, 3D characters, AI battle, enso battle, shop, events, Dan dojo, tutorial, touch input, online song downloads, …) is
   here too.
 - **Compatible**: YataiDON / ESE skins, `scores.db` and `config.toml` work as they are. Z-DON keeps its own data in
   separate tables (`zdon_player_options`, `zdon_ghost`, `zdon_ai_sections`, `zdon_ai_section_best`, `zdon_outfits`)

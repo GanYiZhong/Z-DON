@@ -632,9 +632,9 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
         }
 
         // 16-bit PCM: the sample scale folds into the volume
-        const float volume = base_volume(snd.category.load(std::memory_order_relaxed), snd.volume) *
-                             snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain *
-                             (pcm->pcm16 ? pcm->pcm16_scale : 1.0f);
+        const float level = base_volume(snd.category.load(std::memory_order_relaxed), snd.volume) *
+                            snd.playback_gain.load(std::memory_order_relaxed) * pcm->normalization_gain;
+        const float volume = level * (pcm->pcm16 ? pcm->pcm16_scale : 1.0f);
 
         const float pan = snd.pan.load(std::memory_order_relaxed);
         const int route = snd.route.load(std::memory_order_relaxed); // two-player: one player's channel
@@ -658,27 +658,37 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
             decoding = !pcm->decode_job->done.load(std::memory_order_acquire);
             end_frame = pcm->decode_job->frames_ready.load(std::memory_order_acquire);
         }
+        // merge 4917fdc8: positions below the intro's length play the intro; the sound's own frames follow it
+        const sound* intro = pcm->intro;
+        const unsigned int intro_frames = intro ? intro->frame_count : 0;
+        bool waiting = false; // the tail is still decoding: nothing more this callback
 
-        auto run = [&](const auto* data_ptr) {
+        // one segment: data_ptr's frames [0, seg_end) at positions base + [0, seg_end)
+        auto run = [&](const auto* data_ptr, unsigned int base, unsigned int seg_end, bool seg_decoding, float volume,
+                       bool is_intro) {
             while (frames_to_process > 0 && still_playing) {
-                unsigned long src_frame = static_cast<unsigned long>(frame_f);
-                if (src_frame >= end_frame) {
-                    if (decoding) {
-                        break;
+                unsigned long src_frame = static_cast<unsigned long>(frame_f - base);
+                if (src_frame >= seg_end) {
+                    if (is_intro) {
+                        return; // on into the sound
                     }
-                    if (snd.loop.load(std::memory_order_relaxed) && end_frame > 0) {
-                        frame_f = pcm->loop_start_frame < end_frame ? static_cast<double>(pcm->loop_start_frame) : 0.0;
+                    if (seg_decoding) {
+                        waiting = true;
+                        return;
+                    }
+                    if (snd.loop.load(std::memory_order_relaxed) && seg_end > 0) {
+                        frame_f = static_cast<double>(base); // a loop starts after the intro
                         continue;
                     }
 
                     still_playing = false;
-                    break;
+                    return;
                 }
 
                 if (pitch == 1.0f && route < 0) {
                     // Z-DON: the common case (hit sounds, effects at their own pitch) as one contiguous run up to the
                     // end: the same samples and sums as the frame-by-frame loop below (frame_f + n is exact)
-                    const unsigned long n = std::min<unsigned long>(frames_to_process, end_frame - src_frame);
+                    const unsigned long n = std::min<unsigned long>(frames_to_process, seg_end - src_frame);
                     const auto* f = data_ptr + static_cast<size_t>(src_frame) * channels;
                     float* o = out + output_index * 2;
                     for (unsigned long i = 0; i < n; i++) {
@@ -715,10 +725,20 @@ void AudioEngine::mix_sounds(float* out, unsigned int framesPerBuffer) {
                 frames_to_process--;
             }
         };
-        if (pcm->pcm16) {
-            run(pcm->pcm16);
-        } else {
-            run(pcm->data);
+        if (intro && frame_f < static_cast<double>(intro_frames)) {
+            const float intro_volume = level * (intro->pcm16 ? intro->pcm16_scale : 1.0f);
+            if (intro->pcm16) {
+                run(intro->pcm16, 0, intro_frames, false, intro_volume, true);
+            } else {
+                run(intro->data, 0, intro_frames, false, intro_volume, true);
+            }
+        }
+        if (!waiting && still_playing && frames_to_process > 0) {
+            if (pcm->pcm16) {
+                run(pcm->pcm16, intro_frames, end_frame, decoding, volume, false);
+            } else {
+                run(pcm->data, intro_frames, end_frame, decoding, volume, false);
+            }
         }
         frame = static_cast<unsigned int>(frame_f);
 
@@ -1390,15 +1410,30 @@ bool AudioEngine::with_sound(const std::string& name, Fn&& fn, bool load) const 
     return true;
 }
 
+// merge 4917fdc8: the intro load_sound decoded for the sound it is storing (store_sound attaches it)
+static thread_local sound* tl_loop_intro = nullptr;
+static thread_local const std::string* tl_loop_intro_name = nullptr;
+
 void AudioEngine::store_sound(const std::string& name, const sound& snd) {
     const SoundId id = sound_id(name);
     if (id == kNoSound) {
         sound lost = snd;
+        lost.intro = nullptr;
         free_sound(lost);
         return;
     }
     sound* pcm = new sound(snd);
+    pcm->intro = nullptr;
     compact_sound(*pcm);
+    if (tl_loop_intro && tl_loop_intro_name && *tl_loop_intro_name == name) {
+        if (tl_loop_intro->channels == pcm->channels) {
+            pcm->intro = std::exchange(tl_loop_intro, nullptr);
+            pcm->loop = true;
+            spdlog::debug("Sound {}: {} intro frames before its loop", name, pcm->intro->frame_count);
+        } else {
+            spdlog::warn("Sound {} and its _start differ in channel count; playing the loop alone", name);
+        }
+    }
     publish_sound(name, id, pcm);
 }
 
@@ -1535,6 +1570,10 @@ void AudioEngine::drop_resident_sounds() {
 }
 
 void AudioEngine::free_sound(sound& snd) {
+    if (sound* intro = std::exchange(snd.intro, nullptr)) {
+        free_sound(*intro);
+        delete intro;
+    }
     if (!stop_decode_job(snd)) {
         delete[] snd.data;
         delete[] snd.pcm16;
@@ -1892,46 +1931,60 @@ static bool is_loop_intro_file(const fs::path& file) {
     return fs::exists(file.parent_path() / (stem.substr(0, stem.size() - 6) + file.extension().string()), ec);
 }
 
-// snd (float, fully decoded) gets intro (float, same channel count) in front of it and loops after it
-static bool join_loop_intro(sound& snd, const sound& intro) {
-    if (!snd.data || !intro.data || snd.channels != intro.channels || intro.frame_count == 0) {
-        return false;
-    }
-    const size_t head = static_cast<size_t>(intro.frame_count) * intro.channels;
-    const size_t body = static_cast<size_t>(snd.frame_count) * snd.channels;
-    auto* joined = new float[head + body];
-    std::memcpy(joined, intro.data, head * sizeof(float));
-    std::memcpy(joined + head, snd.data, body * sizeof(float));
-    delete[] snd.data;
-    snd.data = joined;
-    snd.loop_start_frame = intro.frame_count;
-    snd.frame_count += intro.frame_count;
-    snd.loop = true;
-    return true;
-}
-
 bool AudioEngine::has_loop_intro(const std::string& name) {
     const SoundId id = sound_id(name);
     if (id == kNoSound) {
         return false;
     }
     const sound* pcm = slot_at(id)->pcm.load(std::memory_order_acquire);
-    return pcm && pcm->loop_start_frame > 0;
+    return pcm && pcm->intro;
+}
+
+// the intro beside file_path, decoded whole (as stored: compacted), or null
+sound* AudioEngine::decode_loop_intro(const fs::path& file_path) {
+    const fs::path intro_file = loop_intro_path(file_path);
+    std::error_code ec;
+    if (!fs::exists(intro_file, ec)) {
+        return nullptr;
+    }
+    SF_INFO info;
+    SNDFILE* f = open_sound_file(intro_file, info);
+    auto* intro = new sound{};
+    if (!f || !read_short_sound(f, info, intro_file, target_sample_rate, *intro)) {
+        delete intro;
+        return nullptr;
+    }
+    compact_sound(*intro);
+    return intro;
 }
 
 std::string AudioEngine::load_sound(const fs::path& file_path, const std::string& name) {
     forget_lazy_sound(name); // Z-DON: loaded now (or replaced by another file)
-    std::error_code intro_ec;
-    const fs::path intro_file = loop_intro_path(file_path);
-    // a sound with an intro is decoded whole (the intro is joined to it), never progressively or predecoded
-    const bool has_intro = !is_song_sound(name) && fs::exists(intro_file, intro_ec);
+    // merge 4917fdc8: an intro beside it is decoded first and attached when the sound is stored (store_sound);
+    // the sound itself loads as any other (progressively, predecoded)
+    struct IntroScope {
+        AudioEngine& engine;
+        IntroScope(AudioEngine& e, const fs::path& file, const std::string& name, bool song) : engine(e) {
+            tl_loop_intro = song ? nullptr : e.decode_loop_intro(file);
+            tl_loop_intro_name = &name;
+        }
+        ~IntroScope() {
+            if (sound* unused = std::exchange(tl_loop_intro, nullptr)) {
+                engine.free_sound(*unused);
+                delete unused;
+            }
+            tl_loop_intro_name = nullptr;
+        }
+        IntroScope(const IntroScope&) = delete;
+        IntroScope& operator=(const IntroScope&) = delete;
+    } intro_scope(*this, file_path, name, is_song_sound(name));
     try {
         // Z-DON keeps decoded sounds across screens with resident sounds and predecode, not upstream's
         // decoded-sound asset cache
         auto install_sound = [&](const sound& snd) { store_sound(name, snd); };
         if (is_song_sound(name)) {
             queue_song_loudness(file_path, true);
-        } else if (PreSound ps; !has_intro && take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
+        } else if (PreSound ps; take_predecoded(file_path, ps)) { // Z-DON: decoded ahead (predecode)
             if (std::shared_ptr<ProgressiveHead> h = std::move(ps.head)) {
                 if (predecode_verify()) {
                     SF_INFO vi;
@@ -2059,26 +2112,15 @@ std::string AudioEngine::load_sound(const fs::path& file_path, const std::string
             sf_close(file);
             return "";
         }
-        if (tl_first_use_load && !has_intro) {
+        if (tl_first_use_load) {
             return load_sound_progressive(file, file_info, file_path, name, kFirstUseHeadSeconds);
         }
-        if (!has_intro && total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
+        if (total_frames_sf > static_cast<sf_count_t>(file_info.samplerate) * kProgressiveMinSeconds) {
             return load_sound_progressive(file, file_info, file_path, name);
         }
         sound snd{};
         if (!read_short_sound(file, file_info, file_path, target_sample_rate, snd)) {
             return "";
-        }
-        if (has_intro) {
-            SF_INFO intro_info;
-            sound intro{};
-            if (SNDFILE* f = open_sound_file(intro_file, intro_info);
-                f && read_short_sound(f, intro_info, intro_file, target_sample_rate, intro)) {
-                if (!join_loop_intro(snd, intro)) {
-                    spdlog::warn("Sound {} and its _start differ in channel count; playing the loop alone", name);
-                }
-            }
-            free_pcm(intro);
         }
 
         snd.normalization_gain = loaded_sound_gain(file_path, name);

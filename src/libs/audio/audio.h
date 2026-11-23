@@ -92,9 +92,10 @@ struct sound {
     unsigned int frame_count = 0; // Total number of frames in the sound
     unsigned int sample_rate = 0; // Original sample rate of the audio
     unsigned int channels = 0;    // Number of channels (1 = mono, 2 = stereo)
-    // merge 4917fdc8 (upstream 0450546b): the frame a looping sound jumps back to; > 0 when <name>_start was
-    // joined in front of it as its intro
-    unsigned int loop_start_frame = 0;
+    // merge 4917fdc8 (upstream 0450546b "looping audio"): <name>_start, played once before the sound, which then
+    // loops on its own. A whole decoded PCM of the same channel count, owned by this sound (free_sound frees it);
+    // positions count the intro's frames first, then the sound's.
+    sound* intro = nullptr;
 
     bool is_playing = false;        // Whether the sound is currently playing
     unsigned int current_frame = 0; // Current playback position in frames
@@ -262,6 +263,7 @@ public:
     bool has_sound(const std::string& name);
     // merge 4917fdc8 (upstream 0450546b): the sound was loaded with a <name>_start intro (it loops after it)
     bool has_loop_intro(const std::string& name);
+    sound* decode_loop_intro(const fs::path& file_path); // merge 4917fdc8: <stem>_start beside it, decoded
     void stop_sound(const std::string& name);
     void set_sound_loop(const std::string& name, bool loop);
     bool is_sound_playing(const std::string& name);

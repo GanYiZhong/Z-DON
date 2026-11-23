@@ -1,6 +1,6 @@
 # Z-DON roadmap
 
-狀態：2026-10-27。上游同步到 `ef867fb`。所有項目都用確定性證據驗證（見「驗證工具」），數字是當時這台機器量的。
+狀態：2026-11-24。上游同步到 `dd478af2`。所有項目都用確定性證據驗證（見「驗證工具」），數字是當時這台機器量的。
 
 ## 已完成
 
@@ -192,6 +192,20 @@
 - 低吻合（<70%）的 123 個：84 個已在上游或 Z-DON（形式不同）、25 個在 wip-all 內被撤回/取代、11 個是撤回的 skin 文字標籤、**skin 用得到但 Z-DON 缺的 = 0**。
 - 補搬過 dbc9e69（skin 更新器在 checksums 清單過期時照樣寫入完整下載，8ac153d）；合併上游 ef867fb 時改用上游的 skin 更新器，這項跟著拿掉（上游版遇到下載內容和清單不符時保留本機檔）。不搬：YATAIDON_SYNC_LOG（開發用）。
 - 完整分類表在 scratchpad arch/impl_wip_port.md。
+
+## 合併上游 dd478af2（2026-11-24：觸控、線上抓歌、Switch 2、第 3 代 navigator、global_data 重構、循環音效）
+- 分兩段合：先合到 4917fdc8（11-21，99a79d13），再合最後 4 個（11-22／23 的文字建置池、貼圖分層實驗與它的撤回，71009d9f）。
+- global_data 重構：Z-DON 的欄位留在 GlobalData；Z-DON 加在結算結構上的欄位（prev_known、new_best、hit_offsets、unranked、段位考試的 value／song_actual）搬到上游新的 session_types.h。`songs_played` 等改名照上游（`credit.songs_played`、`campaign.kinotake_team`、`dan.rank`…）。
+- 成績保存走上游的 ScoreSubmitter；Z-DON 的「不存成績的原因」、new_best、自己最佳的影子包在外面。請求的 judge_params 改成 optional（Z-DON 保留自己的 Player，沒有 JudgeCore）。
+- 循環音效（上游 0450546b）：Sounds 裡 `<名稱>_start` 是 `<名稱>` 的前奏。上游是把前奏接在本體前面成一整段；Z-DON 的作法是前奏另存成一段完整解碼的 PCM（sound::intro，跟著本體釋放），混音器先播前奏、再播本體，循環回到本體開頭，所以本體照舊漸進解碼／預先解碼／第一次用到才載入。前奏檔本身不再當獨立音效載入。上游 Green 現在把大部分 BGM 拆成前奏＋循環；Green 選曲 BGM：前奏 147094 幀，第一次使用載入 11.6 ms。
+- 上游桌面版更新通知（查 Yonokid 的 release）不用；Android 的 Z-DON 更新頻道沿用，函式改成上游的新名字 check_for_client_update。
+- 線上抓歌（fd2e4c08）：首次設定畫面多一列「線上歌曲」，載入畫面先同步 manifest 再掃曲庫。Z-DON 在啟動時就開始走曲庫（start_library_walk_early），所以同步新增的歌要下次啟動才看得到。
+- 第 3 代 navigator：上游新的類型背景（GenreBG 改成 left/right/center/scale/fade 等欄位）與箱子跟著背景移動，取代 Z-DON 先前送上游的同一段改動；Lua 的 `draw_genre_bg` 改成只收 `gb`，所以 skin 要有對應的 genre_bg.lua（PyTaikoGreen 上游 82e06e14 起）。舊 skin 展開資料夾時不會畫類型背景。
+- 3D 咚：表情改從動画檔的 EXTRA 軌讀（不再用 animation.json 的臉）、會轉的配件、薬玉與節拍動作；部件池拿回來的部件也補上表情軌與 rotor。結算的咚保留 Z-DON 的 chara_miss_loop（Nijiiro）與上游的 chara_reveal 並存。
+- 設定畫面：上游的觸控點選；Z-DON 拆開的「音訊延遲／校正」兩列保留。
+- 最後 4 個 commit：Z-DON 的貼圖載入（延後上傳、BC7、貼圖包、ImagePrefetch）與文字建置（共用 job pool）整套保留，上游的文字建置池、按畫面分開的動畫表、skin_config 搬到 FontManager 不收；補上 `load_folders`（上游呼叫端用的新名字）。
+- 畫面比對（固定步長，合併前發佈版 vs 合併後，測試副本）：SimpleStyle 標題／演奏／結算／暫停／練習全部相同，選曲 1 幀差在資料夾淡入時間（上游改成 250／400 ms）。Nijiiro、Green 的差異都在 3D 咚（表情、動作）；Green 選曲用舊 skin 時類型背景不畫（API 改了），換成三方合併後的 Green 就正常。AI 對戰同一個 exe 同一個種子跑兩次就不同，無法逐幀比。
+- 開發工具 `YATAIDON_AUDIO_CAPTURE` 在 8 聲道裝置上會當機，合併前的版本也一樣（未修）。
 
 ## 合併上游 0ed42ec（2026-11-06：AI 對戰、わいわい、商店、總結算、活動、Switch、clang-tidy 修正）
 - 45 個衝突檔，全在 src/；決定處在程式裡標 `merge 0ed42ec`，完整紀錄在 scratchpad zdon_merge_result_20261106.md。

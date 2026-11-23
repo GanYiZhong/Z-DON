@@ -23,7 +23,7 @@ YataiDON 本身由它的貢獻者撰寫；**Z-DON 在它之上的修改完全由
 
 ## 與上游的關係
 
-- 持續合併上游 master（目前同步到 `1cd3844`，2026-11-15），上游的功能（多平台、Lua skin、3D 角色、AI 對戰、演奏對戰、
+- 持續合併上游 master（目前同步到 `dd478af2`，2026-11-23），上游的功能（多平台、Lua skin、3D 角色、AI 對戰、演奏對戰、觸控、線上抓歌、
   商店、活動、段位、教學…）都在。
 - **相容**：YataiDON／ESE 的 skin、`scores.db`、`config.toml` 都能直接用。Z-DON 自己的資料放在另外的表
   （`zdon_player_options`、`zdon_ghost`、`zdon_ai_sections`、`zdon_ai_section_best`、`zdon_outfits`）與 `zdon_*`
