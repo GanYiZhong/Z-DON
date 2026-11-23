@@ -3346,6 +3346,11 @@ void Navigator::update(double current_ms) {
             inline_state->saved_folder_box =
                 std::unique_ptr<FolderBox>(static_cast<FolderBox*>(items[open_index].release()));
             setup_back_box(*pending_inline_path, false);
+            // Z-DON: the back box takes the folder's place at once; it had no position until the songs came in
+            // (set_positions), so skins that draw the boxes themselves (YataiDON14) showed a gap there meanwhile
+            items[open_index]->set_position(inline_state->saved_folder_box->position);
+            items[open_index]->cross_pos = inline_state->saved_folder_box->cross_pos;
+            items[open_index]->vertical = inline_state->saved_folder_box->vertical;
 
             join_loader();
             loading_complete = false;
