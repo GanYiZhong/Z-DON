@@ -365,6 +365,13 @@ public:
     void load_animations(const std::string& screen_name);
 
     void load_folder(const std::string& screen_name, const std::string& subset);
+    // merge origin/master (upstream 4d3fa54a): upstream's name for loading several folders; Z-DON's load_folder
+    // already decodes through ImagePrefetch / the texture packs, so each folder is loaded in turn
+    void load_folders(const std::string& screen_name, const std::vector<std::string>& subsets) {
+        for (const std::string& subset : subsets) {
+            load_folder(screen_name, subset);
+        }
+    }
 
     void unload_folder(const std::string& screen_name, const std::string& subset);
 
