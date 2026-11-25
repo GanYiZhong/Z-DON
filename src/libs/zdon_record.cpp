@@ -173,7 +173,8 @@ void main() {
             bool backdrop = false;  // --record-backdrop: and the picture at a fifth of the size below it
             std::string fifo;       // --record-pipe: the raw frames go there (the stacking ffmpeg reads them)
             double clip_first_s = 0, clip_end_s = -1; // --record-clip: a stacked recording of this span only
-            double lane_volume = 1.0; // --record-lane-volume: the lower lanes' sound in a stacked recording
+            std::vector<double>
+                lane_volume; // --record-lane-volume v2[,v3...]: lanes 2.. of a stacked recording (last repeats)
 
             int enc_w = 0, enc_h = 0; // the encoded frame (the window's, or the band's)
             bool via_copy = false;    // the frame is put together in copy_rt (NV12 or a band)
@@ -495,7 +496,15 @@ void main() {
                 s.clip_first_s = std::max(0.0, std::atof(argv[++i]));
                 s.clip_end_s = std::atof(argv[++i]);
             } else if (a == "--record-lane-volume" && i + 1 < argc) {
-                s.lane_volume = std::clamp(std::atof(argv[++i]), 0.0, 1.0);
+                s.lane_volume.clear();
+                const std::string v = argv[++i];
+                for (size_t p = 0; p <= v.size();) {
+                    const size_t q = std::min(v.find(',', p), v.size());
+                    if (q > p) {
+                        s.lane_volume.push_back(std::clamp(std::atof(v.substr(p, q - p).c_str()), 0.0, 1.0));
+                    }
+                    p = q + 1;
+                }
             } else if (a == "--record-no-music") {
                 s.no_music = true;
             } else if (a == "--record-backdrop") {
@@ -1062,8 +1071,10 @@ void main() {
             for (size_t k = 0; k < n; k++) {
                 cmd += " -i " + quoted(wavs[k]);
                 const std::string in = "[" + std::to_string(k + 1) + ":a]";
-                if (k > 0 && s.lane_volume < 1.0) { // the lower lanes' hits quieter than the top lane
-                    mix += in + "volume=" + std::to_string(s.lane_volume) + "[v" + std::to_string(k) + "];";
+                const double vol =
+                    k == 0 || s.lane_volume.empty() ? 1.0 : s.lane_volume[std::min(k - 1, s.lane_volume.size() - 1)];
+                if (vol < 1.0) { // the lower lanes' hits quieter than the top lane
+                    mix += in + "volume=" + std::to_string(vol) + "[v" + std::to_string(k) + "];";
                     lanes += "[v" + std::to_string(k) + "]";
                 } else {
                     lanes += in;
