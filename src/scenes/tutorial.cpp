@@ -54,6 +54,7 @@ void TutorialScreen::on_screen_start() {
                     : global_data.previous_screen == "WAIWAI_SONG_SELECT" ? Screens::WAIWAI_SONG_SELECT
                                                                           : Screens::SONG_SELECT;
     skip_player = return_screen == Screens::SONG_SELECT ? global_data.player_num : PlayerNum::ALL;
+    tex.load_folders("game", {"tutorial"});
     GameScreen::on_screen_start();
     // Z-DON: the game screen holds the clock back until the first note can scroll in (about 2.7 s with
     // this chart's slow scroll); the tutorial's first note comes seconds after the narration starts,

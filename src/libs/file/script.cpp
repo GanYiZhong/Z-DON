@@ -531,6 +531,12 @@ std::string ScriptManager::get_lua_script_path(const std::string& script_name) {
     return it->second;
 }
 
+void ScriptManager::collect_garbage() {
+    if (lua) {
+        lua_gc(lua->lua_state(), LUA_GCCOLLECT, 0);
+    }
+}
+
 void ScriptManager::shutdown() {
     // Don't unload textures here: tex aliases the global ::tex, whose lifetime
     // is managed by load_skin()/unload_skin() and main().
@@ -981,21 +987,23 @@ void ScriptManager::register_lua_bindings() {
             return 1;
         });
 
-    tex.set_function("draw_texture", [](const std::shared_ptr<TextureObject>& id, sol::variadic_args args) {
-        if (!id) {
-            DrawLogEntry entry{"null_texture", {}};
-            log_lua_site(entry, args.lua_state());
-            if (entry.from_lua) {
-                spdlog::warn("draw_texture: null texture (called from {}:{} in {})", entry.lua_source, entry.lua_line,
-                             entry.lua_function.empty() ? "?" : entry.lua_function);
-            } else {
-                spdlog::warn("draw_texture: null texture");
-            }
-            return;
-        }
-        script_manager.tex.draw_texture(id.get(),
-                                        parse_draw_params(args.lua_state(), args.size() ? args.stack_index() : 0));
-    });
+    tex.set_function("draw_texture",
+                     [](const sol::optional<std::shared_ptr<TextureObject>>& opt, sol::variadic_args args) {
+                         const std::shared_ptr<TextureObject> id = opt ? *opt : nullptr;
+                         if (!id) {
+                             DrawLogEntry entry{"null_texture", {}};
+                             log_lua_site(entry, args.lua_state());
+                             if (entry.from_lua) {
+                                 spdlog::warn("draw_texture: null texture (called from {}:{} in {})", entry.lua_source,
+                                              entry.lua_line, entry.lua_function.empty() ? "?" : entry.lua_function);
+                             } else {
+                                 spdlog::warn("draw_texture: null texture");
+                             }
+                             return;
+                         }
+                         script_manager.tex.draw_texture(
+                             id.get(), parse_draw_params(args.lua_state(), args.size() ? args.stack_index() : 0));
+                     });
 
     tex.set_function("get_texture", [](const std::string& path, sol::this_state state) -> sol::stack_count {
         TextureWrapper& w = script_manager.tex;
@@ -1096,10 +1104,10 @@ void ScriptManager::register_lua_bindings() {
 
     tex.set_function("player_num", [] -> int { return static_cast<int>(global_data.player_num); });
 
-    tex.set_function("record_counts", [](int player_num, int min_course) -> sol::table {
+    tex.set_function("record_counts", [](int player_num, int min_course, sol::optional<int> max_course) -> sol::table {
         const auto& net = global_data.config->network;
-        const RecordCounts rc =
-            scores_manager.get_record_counts(player_num == 2 ? net.access_code_2 : net.access_code_1, min_course);
+        const RecordCounts rc = scores_manager.get_record_counts(
+            player_num == 2 ? net.access_code_2 : net.access_code_1, min_course, max_course.value_or(4));
         sol::table t = script_manager.lua->create_table(0, 2);
         t["ranks"] = script_manager.lua->create_table_with();
         t["crowns"] = script_manager.lua->create_table_with();
@@ -1110,6 +1118,26 @@ void ScriptManager::register_lua_bindings() {
             t["crowns"][i + 1] = rc.crowns[i];
         }
         return t;
+    });
+
+    tex.set_function("player_board", [](sol::optional<int> player_num) -> int {
+        const auto& net = global_data.config->network;
+        const std::string& code = (player_num.value_or(1) == 2) ? net.access_code_2 : net.access_code_1;
+        const auto pd = scores_manager.get_player_data(code);
+        return pd ? pd->player_board : 3;
+    });
+
+    tex.set_function("medals", [](sol::optional<int> player_num) -> int {
+        const auto& net = global_data.config->network;
+        const std::string& code = (player_num.value_or(1) == 2) ? net.access_code_2 : net.access_code_1;
+        const auto pd = scores_manager.get_player_data(code);
+        return pd ? pd->don_medals : 0;
+    });
+
+    tex.set_function("medals_max", [] -> int {
+        const auto& net = global_data.config->network;
+        const auto pd = scores_manager.get_player_data(net.access_code_1);
+        return pd && pd->medals_max > 0 ? pd->medals_max : 10000;
     });
 
     tex.set_function("display_bpm", [] -> bool { return global_data.config->general.display_bpm; });

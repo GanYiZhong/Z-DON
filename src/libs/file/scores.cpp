@@ -381,6 +381,17 @@ ScoresManager::ScoresManager(const fs::path& db_path) {
         sqlite3_exec(db_fsd, "PRAGMA user_version = 8;", nullptr, nullptr, nullptr);
     }
 
+    // Migration v9: song-select player board colour (0-4 = kantan..ura), picked on the site.
+    if (version < 9 && run_migration("ALTER TABLE players ADD COLUMN player_board INTEGER NOT NULL DEFAULT 3;")) {
+        sqlite3_exec(db_fsd, "PRAGMA user_version = 9;", nullptr, nullptr, nullptr);
+    }
+
+    // Migration v10: Don medal balance + the cap the server reports, for the song-select medal chip.
+    if (version < 10 && run_migration("ALTER TABLE players ADD COLUMN don_medals INTEGER NOT NULL DEFAULT 0;") &&
+        run_migration("ALTER TABLE players ADD COLUMN medals_max INTEGER NOT NULL DEFAULT 10000;")) {
+        sqlite3_exec(db_fsd, "PRAGMA user_version = 10;", nullptr, nullptr, nullptr);
+    }
+
     ensure_dan_table(db_fsd);
 
     zdon_players_id_as_text(db_fsd, db_path);
@@ -737,11 +748,11 @@ std::vector<PlayRecord> ScoresManager::recent_plays(const std::string& hash, int
     return out;
 }
 
-RecordCounts ScoresManager::get_record_counts(const std::string& player_id, int min_difficulty) {
+RecordCounts ScoresManager::get_record_counts(const std::string& player_id, int min_difficulty, int max_difficulty) {
     std::scoped_lock lock(maps_mutex);
     RecordCounts out;
     for (const auto& [key, s] : score_cache) {
-        if (std::get<2>(key) != player_id || std::get<1>(key) < min_difficulty) {
+        if (std::get<2>(key) != player_id || std::get<1>(key) < min_difficulty || std::get<1>(key) > max_difficulty) {
             continue;
         }
         if (int r = static_cast<int>(s.rank); r >= 1 && r <= 7) {
@@ -1698,7 +1709,8 @@ std::optional<PlayerData> ScoresManager::get_player_data(const std::string& play
                         " modifier_auto, modifier_speed, modifier_display, modifier_inverse, modifier_random,"
                         " neiro_index, chara_color_1, chara_color_2, chara_color_3,"
                         " chara_head_index, chara_body_index, chara_cos_index, chara_is_costume,"
-                        " chara_paint_index, chara_face_index, chara_acce_index, modifier_skip"
+                        " chara_paint_index, chara_face_index, chara_acce_index, modifier_skip, player_board,"
+                        " don_medals, medals_max"
                         " FROM players WHERE player_id = ?;";
 
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -1781,6 +1793,9 @@ std::optional<PlayerData> ScoresManager::get_player_data(const std::string& play
     p.chara_face_index = sqlite3_column_int(stmt, 21);
     p.chara_acce_index = sqlite3_column_int(stmt, 22);
     p.modifier_skip = sqlite3_column_int(stmt, 23);
+    p.player_board = sqlite3_column_int(stmt, 24);
+    p.don_medals = sqlite3_column_int(stmt, 25);
+    p.medals_max = sqlite3_column_int(stmt, 26);
 
     sqlite3_finalize(stmt);
     p.modifier_equal_speed = get_zdon_option(player_id, "equal_speed") != 0;
@@ -1822,8 +1837,8 @@ void ScoresManager::save_player_data(const PlayerData& player) {
         " modifier_auto = ?, modifier_speed = ?, modifier_display = ?, modifier_inverse = ?, modifier_random = ?,"
         " neiro_index = ?, chara_color_1 = ?, chara_color_2 = ?, chara_color_3 = ?,"
         " chara_head_index = ?, chara_body_index = ?, chara_cos_index = ?, chara_is_costume = ?,"
-        " chara_paint_index = ?, chara_face_index = ?, chara_acce_index = ?, modifier_skip = ?"
-        " WHERE player_id = ?;";
+        " chara_paint_index = ?, chara_face_index = ?, chara_acce_index = ?, modifier_skip = ?,"
+        " player_board = ?, don_medals = ?, medals_max = ? WHERE player_id = ?;";
 
     if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
         spdlog::error("save_player: failed to prepare: {}", sqlite3_errmsg(db_fsd));
@@ -1857,7 +1872,10 @@ void ScoresManager::save_player_data(const PlayerData& player) {
     sqlite3_bind_int(stmt, 21, player.chara_face_index);
     sqlite3_bind_int(stmt, 22, player.chara_acce_index);
     sqlite3_bind_int(stmt, 23, player.modifier_skip);
-    sqlite3_bind_text(stmt, 24, player.player_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 24, player.player_board);
+    sqlite3_bind_int(stmt, 25, player.don_medals);
+    sqlite3_bind_int(stmt, 26, player.medals_max);
+    sqlite3_bind_text(stmt, 27, player.player_id.c_str(), -1, SQLITE_TRANSIENT);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         spdlog::error("save_player: failed to update player {}: {}", player.player_id, sqlite3_errmsg(db_fsd));
@@ -2026,6 +2044,38 @@ std::optional<DanRecord> ScoresManager::get_dan_record(const std::string& player
         sqlite3_finalize(stmt);
     }
     return out;
+}
+
+void ScoresManager::apply_remote_dans(const std::vector<RemoteDan>& dans, const std::string& player_id) {
+    if (is_guest_id(player_id)) {
+        return;
+    }
+    sqlite3_stmt* stmt;
+    const char* query = "INSERT INTO dan_scores (player_id, course_id, title, dan_index, odai_result, score, "
+                        "arrival, played_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+    if (sqlite3_prepare_v2(db_fsd, query, -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("apply_remote_dans: failed to prepare: {}", sqlite3_errmsg(db_fsd));
+        return;
+    }
+    for (const RemoteDan& d : dans) {
+        const auto local = get_dan_record(player_id, d.course_id);
+        if (local && local->rank > d.odai_result && local->score >= d.score && local->arrival >= d.arrival) {
+            continue;
+        }
+        sqlite3_bind_text(stmt, 1, player_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, d.course_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, d.title.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 4, d.dan_index);
+        sqlite3_bind_int(stmt, 5, d.odai_result);
+        sqlite3_bind_int(stmt, 6, d.score);
+        sqlite3_bind_int(stmt, 7, d.arrival);
+        sqlite3_bind_int64(stmt, 8, unix_now());
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            spdlog::error("apply_remote_dans: failed for {}: {}", d.title, sqlite3_errmsg(db_fsd));
+        }
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
 }
 
 void ScoresManager::save_ai_section_wins(const std::string& hash, int difficulty, const std::string& player_id, int won,

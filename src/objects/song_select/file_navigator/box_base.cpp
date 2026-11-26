@@ -50,6 +50,12 @@ void BaseBox::load_text() {
     text_loaded = true;
 }
 
+void BaseBox::unload_text() {
+    name.reset();
+    horizontal_name_cache.reset();
+    text_loaded = false;
+}
+
 void BaseBox::set_box_state(bool active) {
     yellow_box_active = active;
     yellow_box_opened = false;

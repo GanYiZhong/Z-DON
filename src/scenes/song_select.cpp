@@ -696,6 +696,11 @@ std::optional<Screens> SongSelectScreen::update() {
 }
 
 Screens SongSelectScreen::on_screen_end(Screens next_screen) {
+    navigator.script = nullptr;
+    navigator.release_text();
+    release_players();
+    song_num.reset();
+    script.reset(); // Z-DON: the screen switch's full Lua GC (YataiDON.cpp) collects what these held
     diff_sort_selector.reset();
     if (search_box) {
         set_keyboard_visible(false);

@@ -99,11 +99,15 @@ private:
 
     // Chart reads shared by the scan's worker threads: a song sits in many courses, and every
     // course used to re-read it twice (metadata, then notes)
+    struct GenreInfo {
+        int index = static_cast<int>(GenreIndex::NAMCO);
+        std::string label;
+    };
     struct ScanMemo {
         std::mutex mutex;
         std::map<fs::path, std::shared_ptr<const TJAMetadata>> metadata;
         std::map<std::pair<fs::path, int>, int> note_counts;
-        std::map<fs::path, int> genres; // by box.def folder
+        std::map<fs::path, GenreInfo> genres; // by box.def folder
         // counts kept from earlier sessions, and the ones this scan made (written when it is done)
         std::map<std::pair<std::string, int>, DanNoteCount> stored_counts;
         std::vector<std::pair<std::pair<std::string, int>, DanNoteCount>> new_counts;
@@ -111,7 +115,7 @@ private:
     ScanMemo* memo_ = nullptr; // set while a scan runs; nullptr = read every time
     std::shared_ptr<const TJAMetadata> song_metadata(const fs::path& path);
     int song_note_count(const fs::path& path, int difficulty);
-    int box_genre(const fs::path& box_def_dir);
+    int box_genre(const fs::path& box_def_dir, std::string* label = nullptr);
     void collect_dan_jsons(const fs::path& root_path, std::vector<fs::path>& out);
     std::vector<DanBoxData> load_dan_jsons(const std::vector<fs::path>& jsons);
     std::vector<DanBoxData> scan_roots(const std::vector<fs::path>& roots);

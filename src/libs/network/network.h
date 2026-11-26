@@ -37,6 +37,16 @@ struct RemoteScore {
     Score score;
 };
 
+// best of every attempt at one dan course
+struct RemoteDan {
+    std::string course_id;
+    std::string title;
+    int dan_index = -1;
+    int odai_result = 0;
+    int score = 0;
+    int arrival = 0;
+};
+
 struct RankingEntry {
     std::string username;
     int score = 0;
@@ -46,6 +56,13 @@ struct RemoteUser {
     std::optional<std::string> username;
     std::optional<std::string> title;
     std::optional<int> title_bg;
+    std::optional<int> player_board;
+    std::optional<int> dan;
+    bool gold = false;
+    bool rainbow = false;
+    std::vector<RemoteDan> dan_clears;
+    int don_medals = -1; // -1 = the server did not send it
+    int medals_max = 0;
     std::optional<std::array<Color, 3>> chara_colors;
     struct Costume {
         int head_index, body_index, cos_index;
@@ -136,6 +153,11 @@ struct MedalSeat {
     int add = 0; // every claim since then
     int max = 0;
     bool daily = false, weekly = false, monthly = false;
+    int submitted = 0; // claims sent since the last reset
+    int resolved = 0;  // claims answered or failed since then
+    int last_ok = 0;   // the `resolved` count of the latest answered claim
+    int last_add = 0;
+    bool last_daily = false, last_weekly = false, last_monthly = false;
 };
 struct AIBattleBest {
     int good = 0;

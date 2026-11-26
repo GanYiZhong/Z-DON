@@ -168,6 +168,7 @@ public:
     // Z-DON practice loop: notes outside [first, second) chart ms are drawn grey (nullopt: none)
     std::optional<std::pair<double, double>> zdon_dim_range;
     bool is_replay() const { return replay_active; }
+    void set_personal_best(int score) { score_counter.set_best(score); }
     void load_replay(const InputLog& log) {
         replay_log = log;
         replay_cursor = 0;

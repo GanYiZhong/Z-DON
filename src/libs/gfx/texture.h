@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -375,7 +376,7 @@ public:
 
     void unload_folder(const std::string& screen_name, const std::string& subset);
 
-    void load_screen_textures(const std::string& screen_name);
+    void load_screen_textures(const std::string& screen_name, std::span<const std::string> skip_subsets = {});
 
     // Z-DON predecode: the textures of the screen likely to come next, decoded from its texture pack on background
     // jobs (ZDON_PREDECODE=<jobs>, default 4, 0 = off; ZDON_PREDECODE_MB caps the images, default 512) while the

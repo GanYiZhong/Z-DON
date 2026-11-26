@@ -343,6 +343,7 @@ public:
     void set_mirror(bool value); // keeps the running animation's place
     int get_anim_count() const;
     std::string get_anim_name(int idx);
+    bool is_balloon_result() const;
 
     void update(double current_ms);
 

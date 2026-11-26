@@ -128,7 +128,7 @@ void Player::init_player_textures() {
     t_notes_8 = tex.get_texture("notes/8");
     t_notes_9 = tex.get_texture("notes/9");
     t_notes_10 = tex.get_texture("notes/10");
-    t_moji = tex.get_texture("notes/moji");
+    t_moji = tex.get_texture("notes/moji_" + global_data.config->general.language);
     t_kusudama_star = tex.has_texture("notes/kusudama_star") ? tex.get_texture("notes/kusudama_star") : nullptr;
     if (tex.has_texture("notes/tetunagi_arm")) {
         t_tetunagi[0] = tex.get_texture("notes/tetunagi_don");
@@ -224,7 +224,7 @@ AnimIndex Player::rest_anim() const {
 void Player::on_miss() {
     miss_streak++;
     if (!is_gogo_time && miss_streak <= MISS_STREAK_TINT) {
-        chara->set_anim(miss_streak == MISS_STREAK_TINT ? AnimIndex::DON_MISS6 : AnimIndex::DON_MISS);
+        chara->set_anim(miss_streak == MISS_STREAK_TINT ? AnimIndex::DON_MISS6 : AnimIndex::DON_MISS_NORMAL);
     }
 }
 
@@ -702,6 +702,7 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
         }
         bool gauge_full_now = gauge->get_is_rainbow();
         if (gauge_full_now && !was_gauge_full) {
+            chara->set_anim(rest_anim());
             chara->set_anim(AnimIndex::DON_FULL_GAGE);
         }
         was_gauge_full = gauge_full_now;
@@ -726,10 +727,8 @@ void Player::update(double ms_from_start, double current_ms, std::optional<Backg
         const bool gauge_clear_now = gauge->get_is_clear();
         if (gauge_clear_now != was_gauge_clear) {
             was_gauge_clear = gauge_clear_now;
-            if (!is_gogo_time) {
-                chara->set_anim(rest_anim());
-                chara->set_anim(gauge_clear_now ? AnimIndex::DON_NORM_UP : AnimIndex::DON_NORM_DOWN);
-            }
+            chara->set_anim(rest_anim());
+            chara->set_anim(gauge_clear_now ? AnimIndex::DON_NORM_UP : AnimIndex::DON_NORM_DOWN);
         }
         // balloon being hit vs. waiting for a hit
         if (is_balloon && !balloon_idle && current_ms - last_balloon_hit_ms > 400.0) {
@@ -866,9 +865,16 @@ void Player::draw(double ms_from_start, float x, float y) {
     }
 
     if (!hide_judgment && draws(Layer::JUDGMENTS)) {
+        const bool additive = std::ranges::any_of(draw_judge_list, &Judgment::uses_additive);
+        if (additive) {
+            begin_blend_mode(blend_mode::ADDITIVE);
+        }
         for (Judgment& anim : draw_judge_list) {
             anim.draw_outer_effect(judge_x + cdx, y + judge_y + cdy);
             anim.draw_ray_effect(judge_x + cdx, y + judge_y + cdy);
+        }
+        if (additive) {
+            end_blend_mode();
         }
         for (Judgment& anim : draw_judge_list) {
             anim.draw_text(judge_x, y + judge_y);
@@ -926,9 +932,18 @@ void Player::draw_practice(double ms_from_start, float x, float y, bool draw_not
     }
 
     if (!hide_judgment && draws(Layer::JUDGMENTS)) {
+        const bool additive = std::ranges::any_of(draw_judge_list, &Judgment::uses_additive);
+        if (additive) {
+            begin_blend_mode(blend_mode::ADDITIVE);
+        }
         for (Judgment& anim : draw_judge_list) {
             anim.draw_outer_effect(judge_x, y + judge_y);
             anim.draw_ray_effect(judge_x, y + judge_y);
+        }
+        if (additive) {
+            end_blend_mode();
+        }
+        for (Judgment& anim : draw_judge_list) {
             anim.draw_text(judge_x, y + judge_y);
         }
     }
@@ -2759,7 +2774,9 @@ void Player::draw_stage_chara(float scale) {
     if (stage_chara) {
         // one model serves both places and the balloon's Don is never mirrored: while it shows, the stage's AI is
         // turned the other way instead, so it still faces the player
-        const bool at_balloon = is_2p && is_balloon && (!balloon_idle || balloon_counter.has_value());
+        const bool balloon_here =
+            is_balloon ? (!balloon_idle || balloon_counter.has_value()) : chara->is_balloon_result();
+        const bool at_balloon = is_2p && balloon_here;
         const Chara3DConfig pose{};
         chara->set_mirror(is_2p && !at_balloon);
         chara->set_rotation(pose.rot_x, at_balloon ? -pose.rot_y : pose.rot_y, pose.rot_z);
@@ -2803,7 +2820,8 @@ void Player::draw_arena_ai(float x, float y, float scale, float rot_y) {
 }
 
 void Player::draw_lane_cover(float y) {
-    if (!stage_chara && (!is_balloon || (balloon_idle && !balloon_counter.has_value())) && !zdon_ai_arena_game()) {
+    if (!stage_chara && !chara->is_balloon_result() &&
+        (!is_balloon || (balloon_idle && !balloon_counter.has_value())) && !zdon_ai_arena_game()) {
         auto [cx, cy] = tex.chara_xy(is_2p ? "game_p2" : "game_p1");
         chara->draw(cx, y + cy, 1.0f);
     } else if (auto& b = global_data.zdon_ai; !zdon_ai && b.don_show && chara && zdon_ai_arena_game()) {
@@ -2949,14 +2967,14 @@ void Player::draw_overlays(float y) {
                              {.scale = b.outline > 0 ? b.outline : 1.0f, .x = b.x, .y = y + b.y, .index = is_2p});
         }
     }
-    if (is_balloon) {
+    if (is_balloon || chara->is_balloon_result()) {
         float rig_2p_y = 0.0f;
-        if (is_2p && balloon_counter.has_value()) {
+        if (is_2p && (balloon_counter.has_value() || chara->is_balloon_result())) {
             if (const SkinInfo* p2 = tex.get_skin_config(SC::GAME_BALLOON_COUNTER_2P_OFFSET)) {
                 rig_2p_y = p2->y;
             }
         }
-        if (!balloon_idle || balloon_counter.has_value()) {
+        if (!balloon_idle || balloon_counter.has_value() || chara->is_balloon_result()) {
             auto [cx, cy] = tex.chara_xy("game_balloon");
             if (zdon_ai_arena_game()) { // the same model stands in the arena, smaller and turned
                 const Chara3DConfig& cfg = tex.chara_3d_config;

@@ -207,6 +207,8 @@ public:
     void preload(std::vector<fs::path> songs_paths, std::optional<std::vector<fs::path>> listed = std::nullopt,
                  std::vector<SongFileStamp> stamps = {});
     void init(std::vector<fs::path> songs_paths);
+    // Drops every box's labels and images (they reload on screen), keeping the list and cursor.
+    void release_text();
 
     void reset_for_skin_reload();
     void add_to_recent(const SongBox* song);

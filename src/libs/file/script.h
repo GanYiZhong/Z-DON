@@ -86,6 +86,7 @@ public:
     void mark_script_executed(const std::string& script_name) { executed_scripts.insert(script_name); }
     // true the first time a script class builds an object (since the last init)
     bool first_instance(const std::string& class_name) { return instantiated_classes.insert(class_name).second; }
+    void collect_garbage();
 };
 
 extern ScriptManager script_manager;
@@ -105,6 +106,7 @@ bool LuaScript::load(const std::string& class_name, const std::string& script_na
     PROFILE_ZONE_TEXT(script_name);
     sol::state& lua = *script_manager.lua;
 
+    bool loaded_script = false;
     if (!script_manager.script_executed(script_name)) {
         // A skin that scripts some screens but not this one simply has no
         // script here; that is a plain "not scripted", not an error.
@@ -118,6 +120,7 @@ bool LuaScript::load(const std::string& class_name, const std::string& script_na
             return false;
         }
         script_manager.mark_script_executed(script_name);
+        loaded_script = true;
     }
 
     if (!lua[class_name].valid()) {
@@ -138,8 +141,11 @@ bool LuaScript::load(const std::string& class_name, const std::string& script_na
     }
 
     lua_object = call_result;
-    if (script_manager.first_instance(class_name)) {
-        script_manager.refresh_method_cache(); // not per object: a NoteArc is built on every hit
+    // the first object of a class (since the last init), or a script that just ran: sol may have made new
+    // metatables, and the once-a-second refresh in the main loop is too late for this frame. Not per object:
+    // a NoteArc is built on every hit.
+    if (script_manager.first_instance(class_name) || loaded_script) {
+        script_manager.refresh_method_cache();
     }
     return true;
 }

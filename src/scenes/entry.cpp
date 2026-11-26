@@ -293,6 +293,24 @@ void EntryScreen::finish_login(RemoteLogin remote) {
         if (u.title_bg) {
             pd.title_bg = *u.title_bg;
         }
+        if (u.player_board) {
+            pd.player_board = *u.player_board;
+        }
+        // never lower a local pass the server has not seen
+        if (u.dan && *u.dan > pd.dan) {
+            pd.dan = *u.dan;
+            pd.gold = u.gold;
+            pd.rainbow = u.rainbow;
+        } else if (u.dan && *u.dan == pd.dan) {
+            pd.gold |= u.gold;
+            pd.rainbow |= u.rainbow;
+        }
+        if (u.don_medals >= 0) {
+            pd.don_medals = u.don_medals;
+        }
+        if (u.medals_max > 0) {
+            pd.medals_max = u.medals_max;
+        }
         if (u.costume) {
             pd.chara_head_index = u.costume->head_index;
             pd.chara_body_index = u.costume->body_index;
@@ -331,6 +349,9 @@ void EntryScreen::finish_login(RemoteLogin remote) {
     }
     if (cfg.sync_scores) {
         scores_manager.apply_remote_scores(remote.scores, code);
+        if (remote.user) {
+            scores_manager.apply_remote_dans(remote.user->dan_clears, code);
+        }
     }
 
     const bool fresh = remote.card || !remote.replaced_code.empty();
@@ -705,12 +726,12 @@ std::optional<Screens> EntryScreen::handle_input() {
         return std::nullopt;
     }
     if (state == EntryState::WAITING) {
-        const bool enter = key_pressed(SDL_SCANCODE_RETURN);
-        const bool joined = !enter && join_by_drum();
-        if (enter || joined || menu_left_pressed() || menu_right_pressed()) {
+        const bool insert = key_pressed(SDL_SCANCODE_INSERT);
+        const bool joined = !insert && join_by_drum();
+        if (insert || joined || menu_left_pressed() || menu_right_pressed()) {
             wait_idle_since_ = get_current_ms();
         }
-        if (!enter) {
+        if (!insert) {
             return std::nullopt;
         }
         local_login_ = global_data.config->network.guest_mode;
@@ -727,8 +748,8 @@ std::optional<Screens> EntryScreen::handle_input() {
         });
         return std::nullopt;
     }
-    // Enter again with one player in: online login (registers placeholder "1") for the free seat
-    if (global_data.config->network.online_play && key_pressed(SDL_SCANCODE_RETURN) &&
+    // Insert again with one player in: online login (registers placeholder "1") for the free seat
+    if (global_data.config->network.online_play && key_pressed(SDL_SCANCODE_INSERT) &&
         (state == EntryState::SELECT_SIDE || state == EntryState::SELECT_MODE) &&
         seat_joined(PlayerNum::P1) != seat_joined(PlayerNum::P2)) {
         local_login_ = false;

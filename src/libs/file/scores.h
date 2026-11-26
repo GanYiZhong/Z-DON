@@ -21,6 +21,9 @@ struct PlayerData {
     std::string username;
     std::string title;
     int title_bg = 0;
+    int player_board = 3; // song-select board colour, 0-4 (kantan..ura)
+    int don_medals = 0;
+    int medals_max = 10000;
     int dan = -1; // -1 = no 段位, matches the column default
     bool gold = false;
     bool rainbow = false;
@@ -134,6 +137,7 @@ struct RecordCounts {
 };
 
 struct RemoteScore;
+struct RemoteDan;
 
 // Z-DON: a dan course song's note count (DanNavigator::song_note_count) for one version of its chart
 // file (the song_cache mtime and size of the session that counted it)
@@ -179,6 +183,7 @@ public:
     void export_to_hiroba(const std::string& access_code, const std::string& player_id);
 
     int apply_remote_scores(const std::vector<RemoteScore>& scores, const std::string& player_id);
+    void apply_remote_dans(const std::vector<RemoteDan>& dans, const std::string& player_id);
     std::optional<Score> get_score(const std::string& hash, int difficulty, const std::string& player_id);
     // Z-DON: the player's last `limit` plays of one chart, oldest first (every play is in `scores`)
     std::vector<PlayRecord> recent_plays(const std::string& hash, int difficulty, const std::string& player_id,
@@ -214,7 +219,7 @@ public:
                         const std::vector<std::pair<float, int>>& points);
     void set_outfit(const std::string& player_id, const std::string& skin, int outfit);
     // Best-score ranks and crowns over every chart of player_id with difficulty >= min_difficulty.
-    RecordCounts get_record_counts(const std::string& player_id, int min_difficulty);
+    RecordCounts get_record_counts(const std::string& player_id, int min_difficulty, int max_difficulty = 4);
     // diff hash -> number of saved plays for player_id
     std::unordered_map<std::string, int> get_play_counts(const std::string& player_id);
     // out_score_id (optional) receives the new scores row id, or -1 if the insert failed.

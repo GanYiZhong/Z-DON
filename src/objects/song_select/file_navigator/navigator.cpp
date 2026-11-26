@@ -635,6 +635,15 @@ void Navigator::load_start_folder() {
     load_current_directory(target);
 }
 
+void Navigator::release_text() {
+    for (auto& box : items) {
+        box->unload_text();
+    }
+    if (inline_state && inline_state->saved_folder_box) {
+        inline_state->saved_folder_box->unload_text();
+    }
+}
+
 void Navigator::reset_for_skin_reload() {
     join_loader();
     wait_for_song_files();
@@ -1659,8 +1668,8 @@ void Navigator::add_to_recent(const SongBox* song) {
 
     auto& titles = song->parser.metadata.title;
     auto& subtitles = song->parser.metadata.subtitle;
-    std::string title = titles.contains("en") ? titles.at("en") : titles.begin()->second;
-    std::string subtitle = subtitles.contains("en") ? subtitles.at("en") : subtitles.begin()->second;
+    std::string title = localized_text(titles, "en", LocalizedTextFallback::ENGLISH_OR_FIRST);
+    std::string subtitle = localized_text(subtitles, "en", LocalizedTextFallback::ENGLISH_OR_FIRST);
     std::string hash = scores_manager.get_single_hash(song->parser.file_path);
 
     auto entries = read_song_list(song_list_path);
@@ -3420,13 +3429,16 @@ void Navigator::update(double current_ms) {
 
     SongBox::service_bgm_resume(current_ms);
 
-    for (auto& box : items) {
-        bool on_screen = vertical_gallery ? (box->position > -100 && box->position < tex.screen_height + 100)
-                                          : (box->box_x() > -100 && box->box_x() < tex.screen_width + 100);
-        if (on_screen && !box->text_loaded) {
-            box->load_text();
+    for (int i = 0; i < std::ssize(items); i++) {
+        BaseBox& box = *items[i];
+        bool on_screen = vertical_gallery ? (box.position > -100 && box.position < tex.screen_height + 100)
+                                          : (box.box_x() > -100 && box.box_x() < tex.screen_width + 100);
+        // Z-DON: a box keeps its text once built (upstream drops it off screen; rebuilding it on every
+        // scroll back costs more than it saves on PC); release_text() drops them all when the screen ends
+        if (on_screen && !box.text_loaded) {
+            box.load_text();
         }
-        box->update(current_ms);
+        box.update(current_ms);
     }
     update_genre_edges();
 }

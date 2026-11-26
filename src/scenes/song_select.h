@@ -83,6 +83,7 @@ protected:
     virtual void on_select_timeout();
     void on_diff_select_timeout();
     virtual SongSelectPlayer* second_player() { return nullptr; }
+    virtual void release_players() { player.reset(); }
 
     virtual void handle_input(double current_ms);
     void handle_touch();

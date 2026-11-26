@@ -422,6 +422,38 @@ std::optional<RemoteUser> NetworkClient::fetch_user(const std::string& access_co
     if (doc.HasMember("title_bg") && doc["title_bg"].IsInt()) {
         user.title_bg = doc["title_bg"].GetInt();
     }
+    if (doc.HasMember("player_board") && doc["player_board"].IsInt()) {
+        user.player_board = doc["player_board"].GetInt();
+    }
+    if (doc.HasMember("dan") && doc["dan"].IsInt()) {
+        user.dan = doc["dan"].GetInt();
+    }
+    user.gold = doc.HasMember("gold") && doc["gold"].IsBool() && doc["gold"].GetBool();
+    user.rainbow = doc.HasMember("rainbow") && doc["rainbow"].IsBool() && doc["rainbow"].GetBool();
+    if (doc.HasMember("dan_clears") && doc["dan_clears"].IsArray()) {
+        for (const auto& d : doc["dan_clears"].GetArray()) {
+            if (!d.IsObject() || !d.HasMember("course_id") || !d["course_id"].IsString()) {
+                continue;
+            }
+            auto number = [&d](const char* key, int fallback) {
+                return d.HasMember(key) && d[key].IsInt() ? d[key].GetInt() : fallback;
+            };
+            RemoteDan dan;
+            dan.course_id = d["course_id"].GetString();
+            dan.title = d.HasMember("title") && d["title"].IsString() ? d["title"].GetString() : "";
+            dan.dan_index = number("dan_index", -1);
+            dan.odai_result = number("odai_result", 0);
+            dan.score = number("score", 0);
+            dan.arrival = number("arrival", 0);
+            user.dan_clears.push_back(std::move(dan));
+        }
+    }
+    if (doc.HasMember("don_medals") && doc["don_medals"].IsInt()) {
+        user.don_medals = doc["don_medals"].GetInt();
+    }
+    if (doc.HasMember("medals_max") && doc["medals_max"].IsInt()) {
+        user.medals_max = doc["medals_max"].GetInt();
+    }
     if (doc.HasMember("chara_color_1") && doc["chara_color_1"].IsString() && doc.HasMember("chara_color_2") &&
         doc["chara_color_2"].IsString() && doc.HasMember("chara_color_3") && doc["chara_color_3"].IsString()) {
         try {
@@ -652,6 +684,9 @@ static ReplayData parse_replay_response(const cpr::Response& response) {
     }
     if (doc.HasMember("title_bg") && doc["title_bg"].IsInt()) {
         result.player_data.title_bg = doc["title_bg"].GetInt();
+    }
+    if (doc.HasMember("player_board") && doc["player_board"].IsInt()) {
+        result.player_data.player_board = doc["player_board"].GetInt();
     }
     try {
         if (doc.HasMember("chara_color_1") && doc["chara_color_1"].IsString()) {
@@ -1099,6 +1134,7 @@ void NetworkClient::submit_medals(int seat, const std::string& access_code) {
                                                      signed_headers("POST", "/medals", {{"access_code", access_code}}),
                                                      cpr::Parameters{{"access_code", access_code}},
                                                      cpr::Timeout{5000} NETWORK_CA_OPT));
+    medal_seats[seat].submitted++;
     reward_shop_pending_count_++;
 }
 
@@ -1791,9 +1827,25 @@ void NetworkClient::update(double current_ms) {
             seat.daily |= json_bool(doc, "daily");
             seat.weekly |= json_bool(doc, "weekly");
             seat.monthly |= json_bool(doc, "monthly");
+            seat.last_ok = seat.resolved + 1;
+            seat.last_add = json_int(doc, "add", 0);
+            seat.last_daily = json_bool(doc, "daily");
+            seat.last_weekly = json_bool(doc, "weekly");
+            seat.last_monthly = json_bool(doc, "monthly");
+            // keep the stored balance current so the song-select medal chip is right without a relogin
+            const auto& net_cfg = global_data.config->network;
+            const std::string& code = it->first == 1 ? net_cfg.access_code_2 : net_cfg.access_code_1;
+            if (auto pd = scores_manager.get_player_data(code)) {
+                pd->don_medals = seat.now + seat.add;
+                if (seat.max > 0) {
+                    pd->medals_max = seat.max;
+                }
+                scores_manager.save_player_data(*pd);
+            }
         } else {
             spdlog::warn("Medal claim failed: HTTP {} - {}", response.status_code, response.text);
         }
+        medal_seats[it->first].resolved++;
         it = pending_medals.erase(it);
         reward_shop_pending_count_--;
     }

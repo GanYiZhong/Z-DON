@@ -164,6 +164,10 @@ void Game2PScreen::initialize_chart(const fs::path& song) {
         zdon_ai_battle_begin(level);
         global_data.zdon_ai.star = course != parser->metadata.course_data.end() ? course->second.level : 0.0;
     }
+    apply_personal_best(*players[0]);
+    if (!online && !ai_battle) { // an online opponent's or the AI's best is not this player's
+        apply_personal_best(*players[1]);
+    }
 
     players[0]->kusudama_partner = players[1].get();
     players[1]->kusudama_partner = players[0].get();

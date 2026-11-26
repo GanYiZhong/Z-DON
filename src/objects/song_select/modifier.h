@@ -43,6 +43,8 @@ private:
     void load_neiro_names();
     void step_neiro(int dir);
     void step(int dir);
+    void step_offset(int dir);
+    bool offset_dirty = false;
 
     std::string row_label(const std::string& name) const;
     bool get_bool(int mod_index);

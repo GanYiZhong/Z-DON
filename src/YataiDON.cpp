@@ -1376,6 +1376,7 @@ static void zdon_skinless_font() {
 }
 
 static int game_main(int argc, char* argv[]) {
+    platform_configure_allocator();
 #ifdef _WIN32
     // The CRT's argv is in the ANSI code page: a song path with characters outside it (Japanese on a
     // Chinese-locale system) came through as '?' and was "not found". Take the arguments from the

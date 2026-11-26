@@ -2486,7 +2486,7 @@ void TextureWrapper::predecode_tick() {
 // decoded-but-not-yet-uploaded images load_screen_textures may hold ahead of load_folder
 constexpr size_t kPrefetchBudgetBytes = size_t{128} << 20;
 
-void TextureWrapper::load_screen_textures(const std::string& screen_name) {
+void TextureWrapper::load_screen_textures(const std::string& screen_name, std::span<const std::string> skip_subsets) {
     PROFILE_SCOPE();
     PROFILE_ZONE_TEXT(screen_name);
     using clock = std::chrono::steady_clock;
@@ -2533,7 +2533,9 @@ void TextureWrapper::load_screen_textures(const std::string& screen_name) {
             if (!seen.insert(name).second || loaded_subsets.contains(std::format("{}/{}", screen_name, name))) {
                 continue;
             }
-            if (deferred.contains(name)) {
+            // the screen's skipped subsets (upstream: never loaded) wait for their first use here, like the
+            // deferred game folders, so a mode that does draw one still gets it
+            if (deferred.contains(name) || std::ranges::find(skip_subsets, name) != skip_subsets.end()) {
                 deferred_folders.emplace_back(screen_name, std::move(name));
                 continue;
             }

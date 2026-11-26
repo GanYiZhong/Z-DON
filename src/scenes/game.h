@@ -1,6 +1,7 @@
 #pragma once
 
 #include <future>
+#include <span>
 
 #include "../libs/playback_clock.h"
 #include "../libs/screen.h"
@@ -23,6 +24,7 @@ protected:
 
     void update_gameplay(double current_ms);
     virtual void create_players();
+    void apply_personal_best(Player& player);
     virtual float song_playback_rate() const { return 1.0f; }
     enum class AudioLoadMode {
         Sync,
@@ -65,6 +67,8 @@ protected:
 public:
     TouchInput touch_input() const override { return TouchInput::DRUM; }
     GameScreen() : Screen("game") {}
+
+    std::span<const std::string> skipped_texture_subsets() const override;
 
     double start_delay = 1000.0;
     bool song_started = false;
