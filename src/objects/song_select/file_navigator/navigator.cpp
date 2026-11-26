@@ -3356,10 +3356,13 @@ void Navigator::update(double current_ms) {
                 std::unique_ptr<FolderBox>(static_cast<FolderBox*>(items[open_index].release()));
             setup_back_box(*pending_inline_path, false);
             // Z-DON: the back box takes the folder's place at once; it had no position until the songs came in
-            // (set_positions), so skins that draw the boxes themselves (YataiDON14) showed a gap there meanwhile
-            items[open_index]->set_position(inline_state->saved_folder_box->position);
-            items[open_index]->cross_pos = inline_state->saved_folder_box->cross_pos;
-            items[open_index]->vertical = inline_state->saved_folder_box->vertical;
+            // (set_positions), so skins that draw the boxes themselves (YataiDON14) showed a gap there meanwhile.
+            // Only in a row of boxes: in a vertical list (Nijiiro) the opened folder's place is the expanded centre
+            // card, and a closed back box put there showed at the bottom left until the songs came in.
+            if (const auto& folder = inline_state->saved_folder_box; !folder->vertical) {
+                items[open_index]->set_position(folder->position);
+                items[open_index]->vertical = false;
+            }
 
             join_loader();
             loading_complete = false;
