@@ -193,6 +193,15 @@
 - 補搬過 dbc9e69（skin 更新器在 checksums 清單過期時照樣寫入完整下載，8ac153d）；合併上游 ef867fb 時改用上游的 skin 更新器，這項跟著拿掉（上游版遇到下載內容和清單不符時保留本機檔）。不搬：YATAIDON_SYNC_LOG（開發用）。
 - 完整分類表在 scratchpad arch/impl_wip_port.md。
 
+## 合併上游 6aaf9dec（2026-11-27：獎牌、選項的畫面偏移、記憶體配置、判定字與 moji 分語言、2P 自己最佳）
+
+- 上游 42160326 的記憶體改動：`platform_configure_allocator`／`platform_trim_heap` 照收（Windows 上不做事）。畫面的 `skipped_texture_subsets()` 在 Z-DON 改成延後資料夾（第一次用到才載入，跟演奏畫面模式用不到的資料夾同一套），不是永遠不載，所以真的會畫到的模式照樣拿得到；練習模式上游另外的明確載入就不需要。
+- 選曲畫面：box 的文字建好就留著（上游畫面外就丟、捲回來重建），也不收每秒一次的 Lua 完整 GC（換畫面時本來就做一次）；離開選曲的 `release_text()` 有收。
+- `LuaScript::load`：一個 class 第一次建物件（Z-DON）或腳本剛跑過（上游）都刷新 method cache。
+- 判定特效：上游的 additive 一次畫完，加上 Z-DON 的圖層判斷與震動位移。選項的 offset 列走 Z-DON 的 `step(dir)`。Game2P 的自己最佳：1P 都套，2P 線上對戰／AI 時不套。
+- skin 同步（同一天）：PyTaikoGreen 到 bd0ccc84、YataiDONNijiiro 到 9caee520。用 ESE 的 compare API 列出上游改過的檔，抓「上次同步的版本」和最新版逐檔三方比對：本機沒改過的照上游、Z-DON 改過的保留並合併（Green 的 AI 對戰改動、nameplate 遊戲畫面左緣裁切改成配合上游的縮放；Nijiiro skin_config 的繁中）。新增的簡中字串用 OpenCC s2tw 轉繁中（「裏魔王」「游標」照舊）。改動前的檔案備份在 `D:\ClaudeWorks\TaikoSimulator\skin_backup_20261127-0330`。
+  - 發現上次同步有漏：Green `global/overlay/texture.json` 少了 `touch_bg`、`genre_bg.lua` 和 Nijiiro `result_player.lua` 還是更舊的上游版，這次一起補上。
+
 ## 合併上游 dd478af2（2026-11-24：觸控、線上抓歌、Switch 2、第 3 代 navigator、global_data 重構、循環音效）
 - 分兩段合：先合到 4917fdc8（11-21，99a79d13），再合最後 4 個（11-22／23 的文字建置池、貼圖分層實驗與它的撤回，71009d9f）。
 - global_data 重構：Z-DON 的欄位留在 GlobalData；Z-DON 加在結算結構上的欄位（prev_known、new_best、hit_offsets、unranked、段位考試的 value／song_actual）搬到上游新的 session_types.h。`songs_played` 等改名照上游（`credit.songs_played`、`campaign.kinotake_team`、`dan.rank`…）。
