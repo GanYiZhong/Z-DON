@@ -194,6 +194,13 @@ class Store:
             self.db.execute("ALTER TABLE jumps ADD COLUMN challenge INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # the nameplate's dan (dan_result.cpp: the best passed dan, gold / rainbow by its result; raise_plate_dan)
+        for col in ("plate_dan INTEGER NOT NULL DEFAULT -1", "plate_gold INTEGER NOT NULL DEFAULT 0",
+                    "plate_rainbow INTEGER NOT NULL DEFAULT 0"):
+            try:
+                self.db.execute(f"ALTER TABLE users ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
         self.lock = threading.RLock()
 
     def q(self, sql: str, args=()) -> list[sqlite3.Row]:
@@ -423,6 +430,8 @@ class Api:
             out.update(chara_head_index=u["chara_head_index"], chara_body_index=u["chara_body_index"],
                        chara_cos_index=u["chara_cos_index"], chara_is_costume=bool(u["chara_is_costume"]))
         out["puchichara"] = u["puchichara"]
+        if u["plate_dan"] >= 0:  # the game keeps the higher of this and its own (entry.cpp)
+            out.update(dan=u["plate_dan"], gold=bool(u["plate_gold"]), rainbow=bool(u["plate_rainbow"]))
         rows = self.s.q(
             """SELECT s.hash, s.difficulty, s.score, s.good, s.ok, s.bad, s.drumroll, s.max_combo,
                       b.crown, b.rank
@@ -500,6 +509,10 @@ class Api:
              int(as_bool(p.get("is_gaiden"))), as_int(p.get("odai_result")), as_int(p.get("score")),
              as_int(p.get("max_combo")), float(p.get("gauge_length") or 0), as_int(p.get("arrival")),
              p.get("songs") or "[]", as_int(p.get("played_at")), int(time.time())))
+        odai, dan = as_int(p.get("odai_result")), as_int(p.get("dan_index"), -1)
+        if odai > 0 and dan >= 0 and not as_bool(p.get("is_gaiden")):  # a pass: the nameplate's dan, as the game
+            from zdon_site_import import raise_plate_dan
+            raise_plate_dan(self.s, u["access_code"], dan, odai >= 4, odai == 6)
         return 200, {"ok": True}
 
     def _ranking(self, song_hash: str, limit: int, difficulty: int | None = None):

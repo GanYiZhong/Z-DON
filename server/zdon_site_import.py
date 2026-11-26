@@ -203,7 +203,30 @@ def import_player(store, con: GameDb, player_id: str, access_code: str) -> dict:
             best[key] = p
     new_titles = file_titles(con, {p["hash"] for p in best.values()})
     added, not_better = merge_best(store, access_code, best, new_titles)
+    # the player's nameplate dan (players.dan / gold / rainbow, set by the game's dan results)
+    pcols = {r["name"] for r in con.execute("PRAGMA table_info(players)")}
+    if {"dan", "gold", "rainbow"} <= pcols:
+        r = con.execute("SELECT dan, gold, rainbow FROM players WHERE CAST(player_id AS TEXT) = ? LIMIT 1",
+                        (player_id,)).fetchone()
+        dan = _int(r["dan"], -1, 30) if r else None
+        if dan is not None and dan >= 0:
+            raise_plate_dan(store, access_code, dan, bool(r["gold"]), bool(r["rainbow"]))
     return {"plays": plays, "charts": len(best), "added": added, "not_better": not_better, "invalid": invalid}
+
+
+def raise_plate_dan(store, access_code: str, dan: int, gold: bool, rainbow: bool) -> None:
+    """The nameplate's dan as the game keeps it (dan_result.cpp, entry.cpp): a higher dan replaces it with its gold and
+    rainbow; the same dan only adds gold / rainbow; a lower one changes nothing."""
+    with store.lock:
+        u = store.one("SELECT plate_dan, plate_gold, plate_rainbow FROM users WHERE access_code=?", (access_code,))
+        if u is None:
+            return
+        if dan > u["plate_dan"]:
+            store.run("UPDATE users SET plate_dan=?, plate_gold=?, plate_rainbow=? WHERE access_code=?",
+                      (dan, int(gold), int(rainbow), access_code))
+        elif dan == u["plate_dan"] and ((gold and not u["plate_gold"]) or (rainbow and not u["plate_rainbow"])):
+            store.run("UPDATE users SET plate_gold=?, plate_rainbow=? WHERE access_code=?",
+                      (int(gold or u["plate_gold"]), int(rainbow or u["plate_rainbow"]), access_code))
 
 
 def merge_best(store, access_code: str, best: dict[tuple[str, int], dict],

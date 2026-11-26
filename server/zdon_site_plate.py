@@ -15,7 +15,9 @@ from pathlib import Path
 
 PLATE_W, PLATE_H, TOP_H, BADGE_W = 272, 64, 32, 64
 PADDING = 25
-PIECES = ("shadow", "frame_top", "outline", "1p", "2p", "shimmer")
+PIECES = ("shadow", "frame_top", "frame_top_rainbow", "outline", "1p", "2p", "shimmer", "dan_emblem_bg", "dan_emblem",
+          "dan_emblem_gold")
+DAN_BG_X, DAN_BG_END, NAME_AREA_END = 11.5, 114, 258  # nameplate.lua / texture.json: where the name goes beside a dan
 
 PLATE_CSS = """
 .npwrap{display:inline-block;vertical-align:middle}
@@ -23,6 +25,8 @@ PLATE_CSS = """
 .np .sh{left:3px;top:5px;width:272px;height:64px;opacity:.5}
 .np .ft{width:272px;height:32px;background-repeat:no-repeat}
 .np .ol,.np .bd{width:272px;height:64px}.np .bd{width:64px}
+.np .ft.rb{animation:nprb .3s steps(6) infinite}@keyframes nprb{from{background-position:0 0}to{background-position:0 -192px}}
+.np .db{left:11.5px;top:27px;width:273px;height:33px}.np .de{left:62px;top:30px;width:64px;height:32px;background-repeat:no-repeat}
 .np .tx{white-space:nowrap;transform-origin:center center;line-height:1;font-family:zdonplate,"Noto Sans JP",sans-serif;
 letter-spacing:2px}
 .np .nm{top:30px;font-size:22px;color:#fff;-webkit-text-stroke:6px #000;paint-order:stroke fill}
@@ -45,23 +49,32 @@ document.addEventListener('DOMContentLoaded',function(){npFit();
 </script>"""
 
 
-def nameplate_html(name: str, title: str, title_bg: int, scale: float = 1.5, ids: bool = False) -> str:
-    """The plate as the player sees it on the song select (with the 1P badge)."""
+def nameplate_html(name: str, title: str, title_bg: int, scale: float = 1.5, ids: bool = False, dan: int = -1,
+                   gold: bool = False, rainbow: bool = False) -> str:
+    """The plate as the player sees it on the song select (with the 1P badge); with a dan (the game's nameplate dan,
+    users.plate_dan) its emblem, the name between the emblem and the plate's end, and a rainbow pass's top row."""
     bg = title_bg if 0 <= title_bg <= 4 else 0
     left = BADGE_W / 2                       # the 1P badge takes half its width
-    name_cx = (left + PLATE_W) / 2
     title_cx = left + (PLATE_W - left) / 2
     text_max = PLATE_W - PADDING - left
+    dan = dan if 0 <= dan < 25 else -1
+    name_left = max(left, DAN_BG_X + DAN_BG_END) if dan >= 0 else left
+    name_cx = (name_left + (NAME_AREA_END if dan >= 0 else PLATE_W)) / 2
+    name_max = PLATE_W - PADDING - name_left
     nid, tid, fid, sid = ((' id="np_n"', ' id="np_t"', ' id="np_f"', ' id="np_s"') if ids else ("", "", "", ""))
-    shim = "" if bg in (3, 4) else "display:none;"
+    shim = "" if bg in (3, 4) and not rainbow else "display:none;"
+    top = ("frame_top_rainbow", " rb", 0) if rainbow else ("frame_top", "", bg * TOP_H)
+    dan_html = (f'<img class="db" src="/cosm/plate/dan_emblem_bg.png" alt="">'
+                f'<span class="de" style="background-image:url(/cosm/plate/dan_emblem{"_gold" if gold else ""}.png);'
+                f'background-position:-{dan % 2 * 64}px -{dan // 2 * 32}px"></span>') if dan >= 0 else ""
     esc = html.escape
     return (f'<span class="npwrap" style="zoom:{scale}"><span class="np">'
             f'<img class="sh" src="/cosm/plate/shadow.png" alt="">'
-            f'<span class="ft"{fid} style="background-image:url(/cosm/plate/frame_top.png);background-position:0 -{bg * TOP_H}px"></span>'
+            f'<span class="ft{top[1]}"{fid} style="background-image:url(/cosm/plate/{top[0]}.png);background-position:0 -{top[2]}px"></span>'
             f'<img class="shim"{sid} style="{shim}" src="/cosm/plate/shimmer.png" alt="">'
-            f'<img class="ol" src="/cosm/plate/outline.png" alt=""><img class="bd" src="/cosm/plate/1p.png" alt="">'
+            f'<img class="ol" src="/cosm/plate/outline.png" alt="">{dan_html}<img class="bd" src="/cosm/plate/1p.png" alt="">'
             f'<span class="tx tt"{tid} data-cx="{title_cx}" data-max="{text_max}">{esc(title or "")}</span>'
-            f'<span class="tx nm"{nid} data-cx="{name_cx}" data-max="{text_max}">{esc(name or "")}</span>'
+            f'<span class="tx nm"{nid} data-cx="{name_cx}" data-max="{name_max}">{esc(name or "")}</span>'
             f'</span></span>')
 
 

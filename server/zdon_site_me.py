@@ -209,7 +209,7 @@ class MePages:
         bg = int(u["title_bg"] or 0)
         opts = "".join(f'<option value="{k}"{" selected" if k == bg else ""}>{v}</option>' for k, v in TITLE_BG.items())
         out.append(f"""<div class="card"><h2 style="margin-top:0">名牌</h2>
-<p>{nameplate_html(u["username"], u["title"] or "", bg, 1.6, ids=True)}</p>
+<p>{nameplate_html(u["username"], u["title"] or "", bg, 1.6, ids=True, dan=u["plate_dan"], gold=bool(u["plate_gold"]), rainbow=bool(u["plate_rainbow"]))}</p>
 <form method="post" action="/me/profile">{hidden}
 <div class="row"><label>名字</label><input type="text" name="name" maxlength="32" value="{S.esc(u["username"])}"
  oninput="npText('np_n',this.value)"></div>
@@ -220,7 +220,7 @@ class MePages:
 <script>var npT;function npText(id,v){{document.getElementById(id).textContent=v;npFit();clearTimeout(npT);
 npT=setTimeout(function(){{npFont(document.getElementById('np_n').textContent+document.getElementById('np_t').textContent)}},300);}}
 function npBg(b){{document.getElementById('np_f').style.backgroundPosition='0 -'+(b*32)+'px';
-document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>""")
+document.getElementById('np_s').style.display=(b==3||b==4)&&!document.getElementById('np_f').classList.contains('rb')?'':'none';}}</script>""")
 
         # character
         names = self.cosm_names()
