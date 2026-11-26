@@ -24,6 +24,7 @@ COSM_KINDS = {"costume": "costume_icon", "head": "costume_head_icon", "body": "c
 OWNED_TYPE = {"costume": 2, "head": 3, "body": 4, "puchichara": 5}
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 PLAYS_PAGE = 50
+DON3D_JS = Path(__file__).parent / "site_data" / "don3d.js"  # the 3D look (the URL carries its version)
 
 PREFS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS member_prefs (
@@ -38,7 +39,10 @@ border:1px solid var(--line);background:#fff}.acct-tabs span{background:var(--in
 .pick{display:flex;align-items:center;gap:.6em}.pick img{width:56px;height:56px;object-fit:contain;background:#f5ede4;border-radius:8px}
 input[type=color]{width:3em;height:2em;border:1px solid var(--line);border-radius:6px;padding:0;background:#fff}
 .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.6em}.kv div{background:#faf5ef;border-radius:8px;padding:.5em .8em}
-.kv b{display:block;font-size:1.4em}.danger{background:#fff;color:#c0392b;border:1px solid #f3c3bf}
+.kv b{display:block;font-size:1.4em}
+.don3d-wrap{float:right;text-align:center;margin:0 0 .5em 1em}.don3d{display:block;width:220px;height:260px;border-radius:10px;
+background:radial-gradient(circle at 50% 40%,#fff 0,#f5ede4 70%);cursor:grab}.don3d.loading{opacity:.55}.don3d.failed,.don3d.failed+span{display:none}
+@media(max-width:600px){.don3d-wrap{float:none;margin:0 auto .5em}.don3d{margin:0 auto}}.danger{background:#fff;color:#c0392b;border:1px solid #f3c3bf}
 """ + PLATE_CSS
 
 
@@ -111,7 +115,18 @@ class MePages:
         if kind == "plate" and file.endswith(".png"):
             self.plate_piece(req, file[:-4])
             return
+        if kind == "don3d.js":
+            req.send(200, DON3D_JS.read_bytes(), "text/javascript; charset=utf-8", {"Cache-Control": "max-age=86400"})
+            return
         d = self._models_dir()
+        if kind == "glb" and d:  # the 3D look on my page (site_data/don3d.js): cos/N.glb, head/N.glb, body/N.glb, face.png
+            m = re.fullmatch(r"(cos|head|body)/(\d{1,4})\.glb", file)
+            path = d / m.group(1) / f"{m.group(2)}.glb" if m else d / "face" / "face_000000.png" if file == "face.png" else None
+            if path is not None and path.is_file():
+                req.send_cached_file(path, "model/gltf-binary" if m else "image/png")
+                return
+            req.send(404, b"", "text/plain")
+            return
         if kind in COSM_KINDS and d and re.fullmatch(r"\d{1,4}\.png", file):
             path = d / COSM_KINDS[kind] / file
             if path.is_file():
@@ -213,15 +228,21 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
                         f'{none}{items}</select></div></div>')
             is_cos = bool(u["chara_is_costume"])
             colors = "".join(f'<input type="color" name="color{i}" value="{S.esc(u[f"chara_color_{i}"] if u[f"chara_color_{i}"] and HEX.match(u[f"chara_color_{i}"]) else d)}"> '
-                             for i, d in ((1, "#f94728"), (2, "#68bfc0"), (3, "#ffffff")))
+                             for i, d in ((1, "#68bfc0"), (2, "#f94728"), (3, "#f9f0e1")))  # the game's 1P default
             out.append(f"""<div class="card"><h2 style="margin-top:0">角色外觀</h2>
-<form method="post" action="/me/look">{hidden}
-<div class="row"><label>顏色</label>{colors}<span class="small muted">身體、邊框、臉頰</span></div>
+<div class="don3d-wrap"><canvas id="don3d" class="don3d" title="拖曳可以轉動"></canvas>
+<span class="small muted">預覽：拖曳轉動</span></div>
+<form method="post" action="/me/look" id="lookform">{hidden}
+<div class="row"><label>顏色</label>{colors}<span class="small muted">身體、臉、臉的外框</span></div>
 <div class="row"><label>穿法</label><label style="min-width:0;color:inherit"><input type="radio" name="mode" value="parts"{"" if is_cos else " checked"}> 頭飾＋身體</label>
 <label style="min-width:0;color:inherit"><input type="radio" name="mode" value="costume"{" checked" if is_cos else ""}> 全身服裝</label></div>
 {picker("head", "頭飾", u["chara_head_index"])}{picker("body", "身體", u["chara_body_index"])}
 {picker("costume", "全身服裝", u["chara_cos_index"])}{picker("puchichara", "小夥伴", u["puchichara"])}
-<button class="btn small">儲存外觀</button></form></div>""")
+<button class="btn small">儲存外觀</button></form><div style="clear:both"></div></div>
+<script src="/cosm/don3d.js?v={DON3D_JS.stat().st_mtime_ns:x}"></script><script>(function(){{var f=document.getElementById('lookform'),c=document.getElementById('don3d');
+if(!window.Don3D||!f||!c)return;function look(){{var m=f.querySelector('input[name=mode]:checked');return{{mode:m&&m.value==='costume'?'costume':'parts',
+costume:+f.costume.value||0,head:+f.head.value||0,body:+f.body.value||0,colors:[f.color1.value,f.color2.value,f.color3.value]}};}}
+var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(){{v.set(look());}});}})();</script>""")
 
         # account state
         credit = self.credit.get(code)
