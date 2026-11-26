@@ -404,7 +404,7 @@ std::optional<Screens> LoadingScreen::update() {
 #ifdef __EMSCRIPTEN__
         return on_screen_end(Screens::ENTRY);
 #else
-        return on_screen_end(Screens::TITLE);
+        return on_screen_end(Screens::ZDON_LOGIN); // Z-DON: on to the title at once unless the server wants a login
 #endif
     }
 

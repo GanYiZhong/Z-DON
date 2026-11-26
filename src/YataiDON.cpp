@@ -92,6 +92,7 @@
 #include "scenes/total_result.h"
 #include "scenes/tutorial.h"
 #include "scenes/waiwai.h"
+#include "scenes/zdon_login.h"
 
 void draw_outer_border(int screen_width, int screen_height, Color last_color) {
     for (int dy = -1; dy <= 1; dy++) {
@@ -431,7 +432,7 @@ static bool screen_fade_applies(Screens from, Screens to) {
     default:
         break;
     }
-    if (from == Screens::LOADING) {
+    if (from == Screens::LOADING || from == Screens::ZDON_LOGIN) { // Z-DON: the login is mostly skipped at once
         return false;
     }
     if (to == Screens::DAN_SELECT && (from == Screens::SONG_SELECT || from == Screens::ENTRY)) {
@@ -484,6 +485,7 @@ static void populate_screens(std::unordered_map<Screens, std::unique_ptr<Screen>
     put_screen<PracticeSongSelectScreen>(screens, except, Screens::PRACTICE_SELECT);
     put_screen<RecordSongSelectScreen>(screens, except, Screens::RECORD_SELECT); // Z-DON recording mode
     put_screen<OnlineSongSelectScreen>(screens, except, Screens::ONLINE_SELECT); // Z-DON online battle
+    put_screen<ZdonLoginScreen>(screens, except, Screens::ZDON_LOGIN);           // Z-DON TaikoForge login
     put_screen<ResultScreen>(screens, except, Screens::RESULT);
     put_screen<Result2PScreen>(screens, except, Screens::RESULT_2P);
     put_screen<DanSelectScreen>(screens, except, Screens::DAN_SELECT);

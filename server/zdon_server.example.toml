@@ -52,6 +52,9 @@ sso_url = "https://forge.taiko.ac/sso/zdon"
 sso_secret = ""
 forge_url = "https://forge.taiko.ac"
 # session_secret = ""   # signs the login cookie; empty = generated once into data_dir/site_secret.key
+# The desktop game's TaikoForge login screen (zdon_game_login.py): "required" = nobody plays before logging in,
+# "optional" = the screen has a "play without logging in" button, "" = no login screen. Needs sso_secret.
+game_login = ""
 
 # `publish` (windows channel) also puts the install zip on a GitHub release that is replaced every time (a rolling
 # release; needs the GitHub CLI `gh` logged in with write access). Empty = off. `publish --no-github` skips it once.

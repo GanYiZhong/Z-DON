@@ -141,7 +141,21 @@ YataiDON.html/.js/.wasm/.data 放到 `data/web`，網址是 `/play/`（附 COOP/
 TaikoForge 那邊不用改（回呼網址一樣是 `/auth/callback`）。網頁版建置時要編進同一把 `auth_key`
 （Z-DON-Web 的 `tools/zdon_web_build.sh` 預設讀 Z-DON 的 `.env`）。
 
-### 設定
+### 桌機版的 TaikoForge 登入（zdon_game_login.py）
+
+`[site] game_login = "required"` 時，遊戲（桌機版）讀取完會先出現登入畫面：輸入 TaikoForge 的 Email 和密碼，
+沒登入不能玩；`"optional"` 時畫面多一個「不登入直接玩」；空的（預設）就沒有登入畫面。遊戲從 `/health` 的
+`forge_login` 得知。
+
+- 遊戲把帳密送到這裡的 `POST /forge_login`（簽章過的請求），這裡再用 SSO 密鑰簽章轉給 TaikoForge 的
+  `POST /partner/zdon/login` 檢查。密碼哪裡都不存；TaikoForge 那邊跟網站登入同一套鎖定與失敗計次（計次的鍵是
+  玩家的 IP，經 Cloudflare tunnel 時取 `CF-Connecting-IP`）。
+- 成功後遊戲拿到一張這裡簽的 token（180 天），存在 config.toml 的 `[network] forge_token`，下次開遊戲用
+  `POST /forge_session` 確認（TaikoForge 回會員被停用就要重新登入；TaikoForge 連不上時照常放行）。
+- 1P 用的遊戲帳號：遊戲原本的 access code 沒有綁人就綁到這個會員（成績留著）；綁在這個會員就照用；否則用會員
+  的第一個遊戲帳號；都沒有就新建一個並綁定。綁定跟網站「我的頁面」是同一張表。
+- 伺服器連不上時遊戲直接進標題（離線也能玩）。
+
 
 1. TaikoForge 那邊（forge.taiko.ac 的環境變數）：
    ```

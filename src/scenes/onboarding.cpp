@@ -374,7 +374,7 @@ std::optional<Screens> OnboardingScreen::update() {
             return std::nullopt;
         }
         // started without a skin the loading screen has not run yet; a new song root needs it again
-        return on_screen_end(skinless_start || songs_added ? Screens::LOADING : Screens::TITLE);
+        return on_screen_end(skinless_start || songs_added ? Screens::LOADING : Screens::ZDON_LOGIN);
     }
 
     if (const auto tap = take_touch_tap()) {

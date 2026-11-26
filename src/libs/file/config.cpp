@@ -444,6 +444,8 @@ Config get_config() {
     config.network.zdon_server_key = config_file["network"]["zdon_server_key"].value_or("");
     config.network.zdon_update_url = config_file["network"]["zdon_update_url"].value_or("");
     config.network.zdon_update_check = config_file["network"]["zdon_update_check"].value_or(true);
+    config.network.forge_token = config_file["network"]["forge_token"].value_or("");
+    config.network.forge_email = config_file["network"]["forge_email"].value_or("");
 
     config.card_reader.enabled = config_file["card_reader"]["enabled"].value_or(false);
 
@@ -669,7 +671,9 @@ void save_config(const Config& config) {
                                     {"zdon_server_url", config.network.zdon_server_url},
                                     {"zdon_server_key", config.network.zdon_server_key},
                                     {"zdon_update_url", config.network.zdon_update_url},
-                                    {"zdon_update_check", config.network.zdon_update_check}});
+                                    {"zdon_update_check", config.network.zdon_update_check},
+                                    {"forge_token", config.network.forge_token},
+                                    {"forge_email", config.network.forge_email}});
 
     config_table.insert("card_reader", toml::table{{"enabled", config.card_reader.enabled},
                                                    {"backend", config.card_reader.backend},

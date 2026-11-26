@@ -97,6 +97,9 @@ struct NetworkConfig {
     // where zdon_update.ps1 and the in-game check look for releases; empty = <zdon_server_url>/update/windows
     std::string zdon_update_url;
     bool zdon_update_check = true;
+    // Z-DON: the TaikoForge login (scenes/zdon_login.h): the server's token for it (not the password) and the email
+    std::string forge_token;
+    std::string forge_email;
 };
 
 struct PathsConfig {

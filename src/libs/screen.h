@@ -84,11 +84,12 @@ enum class Screens {
     BATTLE_RESULT,
     RECORD_SELECT, // Z-DON: the recording mode's song select (song_select_record.h); kept last so upstream
                    // additions stay in place
-    ONLINE_SELECT  // Z-DON: the online battle's song select (song_select_online.h)
+    ONLINE_SELECT, // Z-DON: the online battle's song select (song_select_online.h)
+    ZDON_LOGIN     // Z-DON: the TaikoForge login before the title (zdon_login.h)
 };
 
 inline std::string screens_to_string(Screens screen) {
-    static const std::array<std::string, 38> names = {
+    static const std::array<std::string, 39> names = {
         "TITLE",           "ENTRY",         "SONG_SELECT",     "GAME",
         "GAME_2P",         "RESULT",        "RESULT_2P",       "SONG_SELECT_2P",
         "DAN_SELECT",      "GAME_DAN",      "DAN_RESULT",      "PRACTICE_SELECT",
@@ -98,7 +99,7 @@ inline std::string screens_to_string(Screens screen) {
         "KINOTAKE_RESULT", "TOTAL_RESULT",  "REWARD_SHOP",     "WAIWAI_SONG_SELECT",
         "WAIWAI_GAME",     "WAIWAI_RESULT", "WAIWAI_TUTORIAL", "WAIWAI_RETRY_GAME",
         "AI_RESULT",       "BATTLE_SELECT", "BATTLE_GAME",     "BATTLE_RESULT",
-        "RECORD_SELECT",   "ONLINE_SELECT"};
+        "RECORD_SELECT",   "ONLINE_SELECT", "ZDON_LOGIN"};
     int idx = static_cast<int>(screen);
     if (idx < 0 || static_cast<size_t>(idx) >= names.size()) {
         return "UNKNOWN";

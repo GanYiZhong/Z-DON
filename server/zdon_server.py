@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zdon_credit import Credit  # noqa: E402
+from zdon_game_login import GameLogin  # noqa: E402
 from zdon_match import SONG_UPLOAD_MAX, Matches  # noqa: E402
 from zdon_ws import WsConn, accept_key  # noqa: E402
 from zdon_site import Site  # noqa: E402
@@ -72,7 +73,10 @@ DEFAULT_CONFIG = {
     "bundled_skins_dir": "",
     # the website (zdon_site.py); members come from TaikoForge's single sign-on
     "site": {"url": "", "name": "Z-DON", "sso_url": "", "sso_secret": "", "forge_url": "https://forge.taiko.ac",
-             "session_secret": ""},
+             "session_secret": "",
+             # the desktop game's TaikoForge login (zdon_game_login.py): "required" (nobody plays before logging
+             # in), "optional" (the login screen has a skip button), "" (no login screen)
+             "game_login": ""},
     # publish (windows channel) also puts the install zip on this repository's rolling GitHub release (zdon_github.py)
     "github": {"release_repo": "", "tag": "rolling", "asset": "Z-DON-windows.zip", "workflow": ""},
 }
@@ -286,6 +290,7 @@ class Api:
         self.nonces = Nonces(int(cfg["signature_window_s"]))
         self.credit = Credit(store)
         self.matches = Matches(self._profile, self.credit)
+        self.game_login: GameLogin | None = None  # add_game_login (needs the website's Site)
         self.routes = {
             ("GET", "/health"): self.health,
             ("GET", "/user"): self.user,
@@ -331,7 +336,14 @@ class Api:
     # each handler: (params) -> (status, json-able | str)
     BODY = {("POST", "/match/upload")}     # routes that get the raw request body (signed by its sha256 in params)
 
-    def handle(self, method: str, path: str, params: dict[str, str], headers, body: bytes = b""):
+    WITH_IP = {("POST", "/forge_login"), ("POST", "/forge_session")}  # routes that get the player's IP too
+
+    def add_game_login(self, game_login: GameLogin) -> None:
+        self.game_login = game_login
+        self.routes[("POST", "/forge_login")] = game_login.login
+        self.routes[("POST", "/forge_session")] = game_login.session
+
+    def handle(self, method: str, path: str, params: dict[str, str], headers, body: bytes = b"", client: str = ""):
         fn = self.routes.get((method, path))
         if fn is None:
             return None
@@ -343,6 +355,10 @@ class Api:
                 return 401, {"detail": f"bad request signature ({why})"}
         if (method, path) in self.BODY:
             return fn(params, body)
+        if (method, path) in self.WITH_IP:
+            # behind the Cloudflare tunnel every request comes from 127.0.0.1: the player is in CF-Connecting-IP
+            ip = headers.get("CF-Connecting-IP", "") if client in ("127.0.0.1", "::1") else ""
+            return fn(params, (ip or client)[:64])
         return fn(params)
 
     def signed(self, method: str, path: str, params: dict[str, str], headers) -> tuple[bool, str]:
@@ -375,6 +391,9 @@ class Api:
             out["min_client_version"] = str(self.cfg["min_client_version"])
         if self.cfg["kinotake"]:
             out["kinotake"] = self._kinotake_today()
+        if self.game_login is not None and self.game_login.mode:
+            out["forge_login"] = self.game_login.mode
+            out["forge_url"] = self.game_login.site.forge_url  # the game's "register" / "forgot password" pages
         return 200, out
 
     def register_user(self, p):
@@ -1084,7 +1103,7 @@ def make_handler(cfg: dict, api: Api, site):
                 return
             try:
                 res = api.handle("GET" if self.command == "HEAD" else self.command, path, params, self.headers,
-                                 self.raw_body)
+                                 self.raw_body, self.client_address[0])
             except Exception as e:  # noqa: BLE001 - one bad request must not take the server down
                 log(f"error in {self.command} {path}: {e!r}")
                 self._json(500, {"detail": "server error"})
@@ -1127,6 +1146,7 @@ def cmd_serve(cfg: dict, args) -> None:
     store = Store(cfg["data_dir"] / "zdon.db")
     api = Api(cfg, store)
     site = Site(cfg, store, api.nonces)
+    api.add_game_login(GameLogin(cfg, store, site))
     host, port = args.host or cfg["host"], args.port or int(cfg["port"])
     # On Windows SO_REUSEADDR lets a second server bind a port another one still holds (and the old one keeps
     # answering), so a restart that overlaps would silently serve stale code: bind exclusively there.
