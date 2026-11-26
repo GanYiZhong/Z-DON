@@ -1,5 +1,6 @@
 #include "settings_box.h"
 
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <stdexcept>
@@ -159,7 +160,14 @@ SettingsBox::SettingsBox(std::string name, const std::string& label_text, const 
                 continue;
             }
             try {
+                const auto t0 = std::chrono::steady_clock::now();
                 options.push_back(make_option_box(it->value));
+                // Z-DON: a row that is slow to build (a device list, a file scan) is named in the log
+                if (const double ms =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    ms > 100.0) {
+                    spdlog::warn("Settings: the row '{}' took {:.0f} ms to build", it->name.GetString(), ms);
+                }
             } catch (const std::exception& e) {
                 spdlog::warn("Skipping option '{}': {}", it->name.GetString(), e.what());
                 continue;

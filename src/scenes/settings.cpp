@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <chrono>
 #include <initializer_list>
 #include <vector>
 
@@ -199,6 +200,15 @@ void SettingsScreen::on_screen_start() {
         }
     }
 
+    // Z-DON: a step that is slow (over 100 ms) is named in the log, to find what makes entering settings hang
+    auto step_start = std::chrono::steady_clock::now();
+    auto step = [&step_start](const char* what) {
+        const auto now = std::chrono::steady_clock::now();
+        if (const double ms = std::chrono::duration<double, std::milli>(now - step_start).count(); ms > 100.0) {
+            spdlog::warn("Settings: {} took {:.0f} ms", what, ms);
+        }
+        step_start = now;
+    };
     try {
         rapidjson::Document tmpl = read_json_file(tmpl_path);
 #if defined(YATAIDON_HAS_MIDI)
@@ -207,15 +217,20 @@ void SettingsScreen::on_screen_start() {
         zdon_add_play_aid_box(tmpl); // Z-DON: play aids (the hit error bar) before Exit
         zdon_add_lane3d_box(tmpl);   // Z-DON: the 3D view's box before Exit
         zdon_add_usio_box(tmpl);     // Z-DON: a USIO box before Exit while [usio] is on
+        step("the template and Z-DON's boxes");
         box_manager = std::make_unique<SettingsBoxManager>(tmpl);
+        step("building the boxes");
     } catch (const std::exception& e) {
         spdlog::error("Failed to load settings template: {}", e.what());
         screen_init = false;
         throw;
     }
     indicator = Indicator(Indicator::State::SELECT);
+    step("the indicator");
     coin_overlay = CoinOverlay();
+    step("the coin overlay");
     allnet_indicator = AllNetIcon();
+    step("the network icon");
     accounts_on_entry = {
         AccountOnEntry{global_data.config->network.access_code_1, scores_manager.player_1_data.username},
         AccountOnEntry{global_data.config->network.access_code_2, scores_manager.player_2_data.username}};
@@ -226,6 +241,7 @@ void SettingsScreen::on_screen_start() {
     t_footer = tex.get_texture("background/footer");
 
     audio.play_sound("bgm", VolumePreset::MUSIC);
+    step("the rest");
     screen_init = true;
 }
 
