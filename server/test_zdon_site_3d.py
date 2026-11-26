@@ -84,6 +84,22 @@ class Site3DTest(base.ImportTest):
         for bad in ("/cosm/glb/anim/don_nothing.json", "/cosm/glb/anim/Don.json", "/cosm/glb/anim/..%2Fx.json"):
             self.assertEqual(self.get(bad)[0], 404, bad)
 
+    def test_no_costume_is_head_and_body(self):
+        """きぐるみをはずす (costume 0) opens and saves as 頭飾＋身體."""
+        import urllib.parse
+        self.store.run("UPDATE users SET chara_is_costume=1, chara_cos_index=0, chara_head_index=0, chara_body_index=0 "
+                       "WHERE access_code=?", (base.CODE_A,))
+        status, page = self.request("/me", "uid-a")
+        self.assertIn('name="mode" value="parts" checked', page)
+        self.assertNotIn('name="mode" value="costume" checked', page)
+        form = {"csrf": self.csrf("uid-a"), "code": base.CODE_A, "color1": "#68bfc0", "color2": "#f94728",
+                "color3": "#f9f0e1", "mode": "costume", "head": "0", "body": "0", "costume": "0", "puchichara": ""}
+        status, page = self.request("/me/look", "uid-a", urllib.parse.urlencode(form).encode(),
+                                    "application/x-www-form-urlencoded")
+        self.assertIn("外觀已儲存", page)
+        row = self.store.one("SELECT chara_is_costume FROM users WHERE access_code=?", (base.CODE_A,))
+        self.assertEqual(row["chara_is_costume"], 0)
+
     def test_script_and_page(self):
         status, body, ctype = self.get("/cosm/don3d.js")
         self.assertEqual(status, 200)

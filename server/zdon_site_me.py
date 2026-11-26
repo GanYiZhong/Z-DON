@@ -236,7 +236,8 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
                         f'onerror="this.style.visibility=\'hidden\'"><select name="{kind}" onchange="var i=document.getElementById'
                         f'(\'i_{kind}\');i.style.visibility=\'visible\';i.src=\'/cosm/{kind}/\'+(this.value||0)+\'.png\'">'
                         f'{none}{items}</select></div></div>')
-            is_cos = bool(u["chara_is_costume"])
+            # きぐるみをはずす (costume 0) is no costume: the head and body are what is worn
+            is_cos = bool(u["chara_is_costume"]) and bool(u["chara_cos_index"])
             colors = "".join(f'<input type="color" name="color{i}" value="{S.esc(u[f"chara_color_{i}"] if u[f"chara_color_{i}"] and HEX.match(u[f"chara_color_{i}"]) else d)}"> '
                              for i, d in ((1, "#68bfc0"), (2, "#f94728"), (3, "#f9f0e1")))  # the game's 1P default
             out.append(f"""<div class="card"><h2 style="margin-top:0">角色外觀</h2>
@@ -252,7 +253,7 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
 <script src="/cosm/don3d.js?v={DON3D_JS.stat().st_mtime_ns:x}"></script><script>(function(){{var f=document.getElementById('lookform'),c=document.getElementById('don3d');
 if(!window.Don3D||!f||!c)return;function look(){{var m=f.querySelector('input[name=mode]:checked');return{{mode:m&&m.value==='costume'?'costume':'parts',
 costume:+f.costume.value||0,head:+f.head.value||0,body:+f.body.value||0,colors:[f.color1.value,f.color2.value,f.color3.value]}};}}
-var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(e){{var n=e.target.name,m=n==='costume'?'costume':(n==='head'||n==='body')?'parts':'';if(m)f.querySelector('input[name=mode][value='+m+']').checked=true;v.set(look());}});}})();</script>""")
+var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(e){{var n=e.target.name,m=n==='costume'?(+e.target.value?'costume':'parts'):(n==='head'||n==='body')?'parts':'';if(m)f.querySelector('input[name=mode][value='+m+']').checked=true;v.set(look());}});}})();</script>""")
 
         # account state
         credit = self.credit.get(code)
@@ -331,7 +332,7 @@ var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look()
         self.s.run("""UPDATE users SET chara_color_1=?, chara_color_2=?, chara_color_3=?, chara_head_index=?,
                       chara_body_index=?, chara_cos_index=?, chara_is_costume=?, puchichara=? WHERE access_code=?""",
                    (*[c.upper() for c in colors], picks["head"], picks["body"], picks["costume"],
-                    int(form.get("mode") == "costume"), picks["puchichara"], code))
+                    int(form.get("mode") == "costume" and picks["costume"] != 0), picks["puchichara"], code))
         self._back(req, code, "外觀已儲存；遊戲下次登入時套用。")
 
     def save_privacy(self, req, form):
