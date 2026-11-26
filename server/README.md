@@ -124,7 +124,7 @@ Skin（`publish-skin` 時產生 zip，並附 `.skin-repo` 寫法）、歌曲 `/s
 Rating 排行 `/leaderboard`、難易度表 `/tables`、玩家頁（Rating、對照難易度表的王冠統計、Best 50、段位、最近遊玩）與
 全部成績 `/player/<id>/scores`（搜尋、難度、排序、分頁）、我的頁面（`zdon_site_me.py`：綁定遊戲帳號；每個帳號的名牌〔名字、稱號、底色；照 PyTaikoGreen 的 nameplate.lua 用 skin 的圖片疊出來，字體是 skin 的 font.ttf 只切出顯示的字，zdon_site_plate.py〕、角色外觀〔三個顏色、頭飾＋身體或全身服裝、
 小夥伴，名稱與圖示取自已發布的 PyTaikoGreen skin 的 `Models/`，`force_unlock = false` 時只列已擁有的〕，遊戲下次登入時套用；
-信用分與紀錄、送出的檢舉結果、獎牌、AI 對戰勝場；不列入 Rating 排行、玩家頁不公開〔`member_prefs` 表〕；遊玩紀錄可刪除、匯出 CSV；
+信用分與紀錄、送出的檢舉結果、獎牌、AI 對戰勝場；不列入 Rating 排行、玩家頁不公開〔`member_prefs` 表〕；遊玩紀錄可刪除、匯出 CSV、從遊戲的 scores.db 匯入〔`zdon_site_import.py`：上傳後選檔內玩家，每個譜面取檔內最好的一次〔先比王冠再比分數〕，比這裡的最佳好才加入，檔案唯讀開啟、匯入完或一小時後刪除；上限 `[site] score_upload_mb`，預設 64〕；
 從排行頁把歌送到遊戲的選曲畫面）。
 
 Rating 與難易度表（`zdon_site_stats.py`）照 [YataiDON-Syakai](https://github.com/Yonokid/YataiDON-Syakai) 的算法：
@@ -235,3 +235,12 @@ key 編進 exe 只是混淆，擋得住隨手亂打 API 的腳本，擋不住有
   低於 80 不能自動配對、低於 60 不能線上對戰。選單顯示自己的信用分。
 - 檢舉：在選單或房間按 R 寫事由送出（同一人一天一次）；管理員在網站 `/admin` 審核：成立＝被檢舉的人 -5，
   惡意檢舉＝檢舉的人 -5。管理員是 `zdon_server.toml` 的 `[site] admins`（TaikoForge 帳號 uid）。
+
+## 測試
+
+```bat
+cd server
+python -m unittest test_zdon_score_import -v
+```
+
+用暫存資料夾起一台完整的伺服器（隨機埠），不碰 `zdon_data`／`zdon_server.toml`。

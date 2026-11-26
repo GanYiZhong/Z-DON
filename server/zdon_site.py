@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 
 from zdon_credit import Credit
+from zdon_site_import import ImportPages
 from zdon_site_me import ME_CSS, MePages
 from zdon_site_stats import STATS_CSS, StatsPages
 from http.cookies import SimpleCookie
@@ -156,7 +157,7 @@ def crown_badge(c) -> str:
     return f'<span class="crown {CROWN_CLASS[c]}">{CROWNS[c]}</span>' if c in CROWNS else ""
 
 
-class Site(StatsPages, MePages):
+class Site(StatsPages, MePages, ImportPages):
     # "/me" only as a whole segment: the game's API has /medals (and /song_ranking: songs pages are /songs, /song/)
     PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css",
                 "/song/", "/tables/", "/cosm/", "/forge/")
@@ -178,6 +179,7 @@ class Site(StatsPages, MePages):
         self.admins = {str(a) for a in site.get("admins", [])}
         self.credit = Credit(store)
         self.init_me()
+        self.init_import()
         self.secure = self.public_url.startswith("https://")
         key_file = Path(cfg["data_dir"]) / "site_secret.key"
         secret = str(site.get("session_secret", ""))
@@ -264,6 +266,13 @@ class Site(StatsPages, MePages):
         if path == "/site.css":
             req.send(200, CSS.encode(), "text/css; charset=utf-8", {"Cache-Control": "max-age=3600"})
             return
+        if method == "POST" and path == "/me/import/upload":  # multipart: reads its own body
+            if not req.sess:
+                req.close_connection = True
+                self.page(req, "無效的請求", "<h1>無效的請求</h1><p>請先登入。</p>", 403)
+                return
+            self.import_upload(req)
+            return
         if method == "POST":
             form = req.form()
             if not self._post_ok(req, form):
@@ -273,7 +282,7 @@ class Site(StatsPages, MePages):
                       "/me/link": self.link, "/me/unlink": self.unlink,
                       "/me/rename": self.rename, "/me/jump": self.jump, "/me/challenge": self.challenge,
                       "/me/profile": self.save_profile, "/me/look": self.save_look, "/me/privacy": self.save_privacy,
-                      "/me/score/delete": self.delete_score,
+                      "/me/score/delete": self.delete_score, "/me/import/run": self.import_run,
                       "/admin/resolve": self.admin_resolve}
             fn = routes.get(path)
             if fn is None:
@@ -311,6 +320,8 @@ class Site(StatsPages, MePages):
             self.me(req, query)
         elif path == "/me/scores":
             self.my_scores(req, query)
+        elif path == "/me/import":
+            self.import_page(req, query)
         elif path == "/me/export.csv":
             self.export_csv(req, query)
         elif path == "/cosm/font.ttf":

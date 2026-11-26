@@ -252,7 +252,8 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
  玩家頁不公開（只有自己看得到；歌曲排行仍會列出成績）</label></div>
 <button class="btn small sec">儲存</button></form>
 <p class="small"><a href="/me/scores?code={urllib.parse.quote(code)}">管理遊玩紀錄（刪除打錯的成績）→</a>
-<a href="/me/export.csv?code={urllib.parse.quote(code)}">匯出全部成績（CSV）</a></p>
+<a href="/me/export.csv?code={urllib.parse.quote(code)}">匯出全部成績（CSV）</a>
+<a href="/me/import?code={urllib.parse.quote(code)}">從 scores.db 匯入成績</a></p>
 <form method="post" action="/me/unlink" onsubmit="return confirm('解除綁定這個遊戲帳號？')">{hidden}
 <button class="btn small sec">解除綁定</button></form></div>""")
         return "".join(out)
