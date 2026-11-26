@@ -1,6 +1,9 @@
 #pragma once
+#include <memory>
 #include <string>
+#include <unordered_map>
 
+#include "../libs/gfx/text.h"
 #include "../libs/screen.h"
 
 // Z-DON: the TaikoForge login (server/zdon_game_login.py) between the loading screen and the title. The server's
@@ -47,6 +50,9 @@ private:
     std::string url_base = "https://forge.taiko.ac"; // TaikoForge (/health's forge_url): register / forgot links
     double started_ms = 0;
     Rect row_rect[ROW_COUNT]{};
+    // the screen's texts (thin or no outline, unlike zhud::label), built on first use; cleared when it grows
+    std::unordered_map<std::string, std::unique_ptr<OutlinedText>> texts;
+    OutlinedText& text(const std::string& s, int size, Color color, float outline = 0.0f);
 
     std::optional<Screens> done(); // the title, the login settled
     void send_login();
