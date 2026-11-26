@@ -1,54 +1,147 @@
 // Z-DON site: the Don's 3D look on my page, drawn from the published skin's Models/*.glb the way the game does
 // (src/objects/global/chara_3d.cpp): a costume (cos/N.glb) or a head over a body (head/N.glb, body/N.glb), the
 // taikoEffectChangeColors materials recoloured with the player's three colours (red-ish texels -> body, green ->
-// face, blue -> rim), the face plane showing the first frame of Models/face/face_000000.png, and the black outline
-// whose per-vertex width is COLOR_0's green channel. No animation: the bind pose, as the meshes are stored.
-// Plain WebGL 2, no libraries. Use: Don3D.attach(canvas, look) and later .set(look) with
-// look = {mode: "costume"|"parts", costume, head, body, colors: ["#rrggbb" x3]}.
+// face, blue -> rim), the face plane showing a frame of Models/face/face_000000.png, and the black outline whose
+// per-vertex width is COLOR_0's green channel. It plays an idle loop of animations.glb, sent as a small JSON by
+// /cosm/glb/anim/<name>.json (zdon_don_anim.py): without a pose the arms stick out and head and body pieces sit
+// where nobody sees them. Bones as raylib does (the game's loader): bone = animated world * inverse(the part's own
+// rest world), so no animation draws the meshes as stored. Plain WebGL 2, no libraries.
+// Use: Don3D.attach(canvas, look), later .set(look); look = {mode: "costume"|"parts", costume, head, body,
+// colors: ["#rrggbb" x3]}.
 (function () {
   "use strict";
   var BASE = "/cosm/glb/";
+  var ANIM = "don_normal";
   var FACE_PLANE = 0.137;
+  var MAX_BONES = 64;
   var cache = {};
 
-  function fetchGlb(url) {
+  function cached(url, how) {
     if (!cache[url]) {
       cache[url] = fetch(url).then(function (r) {
         if (!r.ok) throw new Error(url + " " + r.status);
-        return r.arrayBuffer();
-      }).then(parseGlb);
+        return how(r);
+      });
       cache[url].catch(function () { delete cache[url]; });
     }
     return cache[url];
   }
+  function fetchGlb(url) { return cached(url, function (r) { return r.arrayBuffer().then(parseGlb); }); }
+  function fetchImage(url) { return cached(url, function (r) { return r.blob().then(function (b) { return createImageBitmap(b); }); }); }
+  function fetchAnim(url) { return cached(url, function (r) { return r.json().then(makeAnim); }); }
 
-  function fetchImage(url) {
-    if (!cache[url]) {
-      cache[url] = fetch(url).then(function (r) {
-        if (!r.ok) throw new Error(url + " " + r.status);
-        return r.blob();
-      }).then(function (b) { return createImageBitmap(b); });
-      cache[url].catch(function () { delete cache[url]; });
+  // ---------------------------------------------------------------------------------------------------------------
+  // matrices (column-major 4x4)
+
+  function mul(a, b) {
+    var o = new Float32Array(16);
+    for (var c = 0; c < 4; c++)
+      for (var r = 0; r < 4; r++)
+        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    return o;
+  }
+
+  function compose(t, q, s) {
+    var x = q[0], y = q[1], z = q[2], w = q[3];
+    return new Float32Array([
+      (1 - 2 * (y * y + z * z)) * s[0], (2 * (x * y + z * w)) * s[0], (2 * (x * z - y * w)) * s[0], 0,
+      (2 * (x * y - z * w)) * s[1], (1 - 2 * (x * x + z * z)) * s[1], (2 * (y * z + x * w)) * s[1], 0,
+      (2 * (x * z + y * w)) * s[2], (2 * (y * z - x * w)) * s[2], (1 - 2 * (x * x + y * y)) * s[2], 0,
+      t[0], t[1], t[2], 1]);
+  }
+
+  function trs(n) {
+    return n.matrix ? new Float32Array(n.matrix) : compose(n.translation || [0, 0, 0], n.rotation || [0, 0, 0, 1], n.scale || [1, 1, 1]);
+  }
+
+  function invert(m) {
+    var a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3], a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7],
+        a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11], a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+    var b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10, b03 = a01 * a12 - a02 * a11,
+        b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12, b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30,
+        b08 = a20 * a33 - a23 * a30, b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+    var det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if (!det) return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    det = 1 / det;
+    return new Float32Array([
+      (a11 * b11 - a12 * b10 + a13 * b09) * det, (a02 * b10 - a01 * b11 - a03 * b09) * det,
+      (a31 * b05 - a32 * b04 + a33 * b03) * det, (a22 * b04 - a21 * b05 - a23 * b03) * det,
+      (a12 * b08 - a10 * b11 - a13 * b07) * det, (a00 * b11 - a02 * b08 + a03 * b07) * det,
+      (a32 * b02 - a30 * b05 - a33 * b01) * det, (a20 * b05 - a22 * b02 + a23 * b01) * det,
+      (a10 * b10 - a11 * b08 + a13 * b06) * det, (a01 * b08 - a00 * b10 - a03 * b06) * det,
+      (a30 * b04 - a31 * b02 + a33 * b00) * det, (a21 * b02 - a20 * b04 - a23 * b00) * det,
+      (a11 * b07 - a10 * b09 - a12 * b06) * det, (a00 * b09 - a01 * b07 + a02 * b06) * det,
+      (a31 * b01 - a30 * b03 - a32 * b00) * det, (a20 * b03 - a21 * b01 + a22 * b00) * det]);
+  }
+
+  // world matrices of every node, given each node's local matrix and parent (-1: none)
+  function worldsOf(locals, parents) {
+    var out = new Array(locals.length);
+    function get(i) {
+      if (!out[i]) out[i] = parents[i] < 0 ? locals[i] : mul(get(parents[i]), locals[i]);
+      return out[i];
     }
-    return cache[url];
+    for (var i = 0; i < locals.length; i++) get(i);
+    return out;
   }
 
   // ---------------------------------------------------------------------------------------------------------------
-  // glb -> parts: [{pos Float32Array (skinned), nrm, uv, outline (per-vertex width), idx, mat {kind, image}}]
+  // the animation: rest skeleton + LINEAR tracks; pose(t) -> {name: world matrix}, face(t) -> expression index
+
+  function makeAnim(doc) {
+    var nodes = doc.nodes, parents = nodes.map(function (n) { return n.parent; });
+    var extra = nodes.findIndex(function (n) { return n.name === "EXTRA"; });
+    function sample(tr, t) {
+      var ts = tr.times, n = tr.path === "rotation" ? 4 : 3, k = 0;
+      while (k + 1 < ts.length && ts[k + 1] <= t) k++;
+      var a = tr.values.slice(k * n, k * n + n);
+      if (k + 1 >= ts.length || ts[k + 1] <= ts[k]) return a;
+      var b = tr.values.slice((k + 1) * n, (k + 1) * n + n), f = Math.min(Math.max((t - ts[k]) / (ts[k + 1] - ts[k]), 0), 1);
+      if (n === 4) { // nlerp on the short arc
+        var d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3], sg = d < 0 ? -1 : 1, o = [], l = 0;
+        for (var c = 0; c < 4; c++) { o[c] = a[c] + (sg * b[c] - a[c]) * f; l += o[c] * o[c]; }
+        l = Math.sqrt(l) || 1;
+        return o.map(function (v) { return v / l; });
+      }
+      return a.map(function (v, c) { return v + (b[c] - v) * f; });
+    }
+    return {
+      duration: doc.duration || 1,
+      pose: function (t) {
+        var T = nodes.map(function (n) { return n.t; }), R = nodes.map(function (n) { return n.r; }), S = nodes.map(function (n) { return n.s; });
+        doc.tracks.forEach(function (tr) {
+          var v = sample(tr, t);
+          (tr.path === "translation" ? T : tr.path === "rotation" ? R : S)[tr.node] = v;
+        });
+        var W = worldsOf(nodes.map(function (_, i) { return compose(T[i], R[i], S[i]); }), parents), out = {};
+        nodes.forEach(function (n, i) { out[n.name] = W[i]; });
+        return out;
+      },
+      face: function (t) { // chara_3d.cpp read_glb_faces: EXTRA's translation x * 100
+        if (extra < 0) return 0;
+        var tr = doc.tracks.find(function (x) { return x.node === extra && x.path === "translation"; });
+        var x = tr ? sample(tr, t)[0] : nodes[extra].t[0];
+        return Math.min(Math.max(Math.round(x * 100), 0), 11);
+      }
+    };
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // glb -> parts
 
   var COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
-  var TYPES = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+  var SIZES = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+  var GETTERS = { 5120: "getInt8", 5121: "getUint8", 5122: "getInt16", 5123: "getUint16", 5125: "getUint32", 5126: "getFloat32" };
   var NORM = { 5120: 127, 5121: 255, 5122: 32767, 5123: 65535 };
 
   function readAccessor(doc, bin, i, asFloat) {
-    var a = doc.accessors[i], v = doc.bufferViews[a.bufferView], n = COMPONENTS[a.type], T = TYPES[a.componentType];
-    var stride = v.byteStride || n * T.BYTES_PER_ELEMENT, off = (v.byteOffset || 0) + (a.byteOffset || 0);
-    var out = asFloat ? new Float32Array(a.count * n) : new T(a.count * n);
+    var a = doc.accessors[i], v = doc.bufferViews[a.bufferView], n = COMPONENTS[a.type], size = SIZES[a.componentType];
+    var stride = v.byteStride || n * size, off = (v.byteOffset || 0) + (a.byteOffset || 0);
+    var out = asFloat ? new Float32Array(a.count * n) : new Uint32Array(a.count * n);
     var scale = asFloat && a.normalized && NORM[a.componentType] ? 1 / NORM[a.componentType] : 1;
-    for (var k = 0; k < a.count; k++) {
-      var src = new T(bin.buffer, bin.byteOffset + off + k * stride, n);
-      for (var c = 0; c < n; c++) out[k * n + c] = src[c] * scale;
-    }
+    var view = new DataView(bin.buffer, bin.byteOffset, bin.byteLength), get = GETTERS[a.componentType];
+    for (var k = 0; k < a.count; k++)
+      for (var c = 0; c < n; c++) out[k * n + c] = view[get](off + k * stride + c * size, true) * scale;
     return { data: out, n: n, count: a.count };
   }
 
@@ -58,38 +151,7 @@
     var jsonLen = dv.getUint32(12, true);
     var doc = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jsonLen)));
     var binOff = 20 + jsonLen;
-    var bin = new Uint8Array(buf, binOff + 8, dv.getUint32(binOff, true));
-    return { doc: doc, bin: bin };
-  }
-
-  function mul(a, b) { // column-major 4x4
-    var o = new Float32Array(16);
-    for (var c = 0; c < 4; c++)
-      for (var r = 0; r < 4; r++)
-        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
-    return o;
-  }
-
-  function trs(n) {
-    if (n.matrix) return new Float32Array(n.matrix);
-    var t = n.translation || [0, 0, 0], q = n.rotation || [0, 0, 0, 1], s = n.scale || [1, 1, 1];
-    var x = q[0], y = q[1], z = q[2], w = q[3];
-    return new Float32Array([
-      (1 - 2 * (y * y + z * z)) * s[0], (2 * (x * y + z * w)) * s[0], (2 * (x * z - y * w)) * s[0], 0,
-      (2 * (x * y - z * w)) * s[1], (1 - 2 * (x * x + z * z)) * s[1], (2 * (y * z + x * w)) * s[1], 0,
-      (2 * (x * z + y * w)) * s[2], (2 * (y * z - x * w)) * s[2], (1 - 2 * (x * x + y * y)) * s[2], 0,
-      t[0], t[1], t[2], 1]);
-  }
-
-  function worlds(doc) {
-    var out = new Array(doc.nodes.length), parent = {};
-    doc.nodes.forEach(function (n, i) { (n.children || []).forEach(function (c) { parent[c] = i; }); });
-    function get(i) {
-      if (!out[i]) out[i] = parent[i] === undefined ? trs(doc.nodes[i]) : mul(get(parent[i]), trs(doc.nodes[i]));
-      return out[i];
-    }
-    doc.nodes.forEach(function (_, i) { get(i); });
-    return out;
+    return { doc: doc, bin: new Uint8Array(buf, binOff + 8, dv.getUint32(binOff, true)) };
   }
 
   function materialKind(m) {
@@ -102,65 +164,64 @@
   }
 
   function glbParts(g, isHead) {
-    var doc = g.doc, bin = g.bin, W = worlds(doc), parts = [];
+    var doc = g.doc, bin = g.bin, parts = [];
+    var parents = doc.nodes.map(function () { return -1; });
+    doc.nodes.forEach(function (n, i) { (n.children || []).forEach(function (c) { parents[c] = i; }); });
+    var W = worldsOf(doc.nodes.map(trs), parents);
     var images = (doc.images || []).map(function (im) {
       var v = doc.bufferViews[im.bufferView];
       return new Blob([bin.subarray(v.byteOffset || 0, (v.byteOffset || 0) + v.byteLength)], { type: im.mimeType || "image/png" });
     });
     doc.nodes.forEach(function (node, ni) {
       if (node.mesh === undefined) return;
+      var skin = null;
+      if (node.skin !== undefined) {
+        var js = doc.skins[node.skin].joints.slice(0, MAX_BONES);
+        skin = { names: js.map(function (j) { return doc.nodes[j].name || ""; }), restInv: js.map(function (j) { return invert(W[j]); }) };
+      }
       doc.meshes[node.mesh].primitives.forEach(function (p) {
         if (p.mode !== undefined && p.mode !== 4) return;
         var at = p.attributes;
         var pos = readAccessor(doc, bin, at.POSITION, true).data;
+        var count = pos.length / 3;
         var nrm = at.NORMAL !== undefined ? readAccessor(doc, bin, at.NORMAL, true).data : new Float32Array(pos.length);
-        var uv = at.TEXCOORD_0 !== undefined ? readAccessor(doc, bin, at.TEXCOORD_0, true).data : new Float32Array(pos.length / 3 * 2);
+        var uv = at.TEXCOORD_0 !== undefined ? readAccessor(doc, bin, at.TEXCOORD_0, true).data : new Float32Array(count * 2);
         var col = at.COLOR_0 !== undefined ? readAccessor(doc, bin, at.COLOR_0, true) : null;
-        var count = pos.length / 3, m = doc.materials[p.material] || {};
-        var kind = materialKind(m);
+        var m = doc.materials[p.material] || {}, kind = materialKind(m), i, v, c;
         if (kind === "face") { // chara_3d.cpp load_part: the face plane to the costume's face size
           var mini = (m.name || "").toLowerCase().indexOf("body_027000_02_") === 0;
-          var mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9, mnz = 1e9, mxz = -1e9;
-          for (var v = 0; v < count; v++) {
-            mnx = Math.min(mnx, pos[v * 3]); mxx = Math.max(mxx, pos[v * 3]);
-            mny = Math.min(mny, pos[v * 3 + 1]); mxy = Math.max(mxy, pos[v * 3 + 1]);
-            mnz = Math.min(mnz, pos[v * 3 + 2]); mxz = Math.max(mxz, pos[v * 3 + 2]);
-          }
-          var size = Math.max(mxx - mnx, mxy - mny);
+          var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+          for (v = 0; v < count; v++) for (i = 0; i < 3; i++) { mn[i] = Math.min(mn[i], pos[v * 3 + i]); mx[i] = Math.max(mx[i], pos[v * 3 + i]); }
+          var size = Math.max(mx[0] - mn[0], mx[1] - mn[1]);
           var plate = isHead || size > FACE_PLANE * 1.02 ? FACE_PLANE : size;
-          var target = mini ? plate : plate * 4 / 3;
           if (size > 0.0001) {
-            var f = target / size, cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2, cz = (mnz + mxz) / 2;
-            for (v = 0; v < count; v++) {
-              pos[v * 3] = cx + (pos[v * 3] - cx) * f;
-              pos[v * 3 + 1] = cy + (pos[v * 3 + 1] - cy) * f;
-              pos[v * 3 + 2] = cz + (pos[v * 3 + 2] - cz) * f;
+            var f = (mini ? plate : plate * 4 / 3) / size;
+            for (v = 0; v < count; v++) for (i = 0; i < 3; i++) {
+              c = (mn[i] + mx[i]) / 2;
+              pos[v * 3 + i] = c + (pos[v * 3 + i] - c) * f;
             }
           }
         }
-        // the mesh as stored is the bind pose, which is what the game draws without an animation (raylib's
-        // LoadModel keeps a skinned mesh's vertices as they are); only an unskinned mesh takes its node's transform
-        var P = pos, N = nrm, M0 = node.skin === undefined ? W[ni] : null;
-        if (M0) {
-          P = new Float32Array(pos.length); N = new Float32Array(pos.length);
-          for (var i = 0; i < count; i++) {
-            var x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2], nx = nrm[i * 3], ny = nrm[i * 3 + 1], nz = nrm[i * 3 + 2];
-            P[i * 3] = M0[0] * x + M0[4] * y + M0[8] * z + M0[12];
-            P[i * 3 + 1] = M0[1] * x + M0[5] * y + M0[9] * z + M0[13];
-            P[i * 3 + 2] = M0[2] * x + M0[6] * y + M0[10] * z + M0[14];
-            var qx = M0[0] * nx + M0[4] * ny + M0[8] * nz, qy = M0[1] * nx + M0[5] * ny + M0[9] * nz,
-                qz = M0[2] * nx + M0[6] * ny + M0[10] * nz, l = Math.hypot(qx, qy, qz) || 1;
-            N[i * 3] = qx / l; N[i * 3 + 1] = qy / l; N[i * 3 + 2] = qz / l;
+        var J = new Float32Array(count * 4), Wt = new Float32Array(count * 4);
+        if (skin && at.JOINTS_0 !== undefined && at.WEIGHTS_0 !== undefined) {
+          J = readAccessor(doc, bin, at.JOINTS_0, true).data;
+          Wt = readAccessor(doc, bin, at.WEIGHTS_0, true).data;
+          for (i = 0; i < J.length; i++) if (J[i] >= skin.names.length) { J[i] = 0; Wt[i] = 0; }
+        } else if (!skin) { // a plain mesh: its node's transform, once
+          var M = W[ni];
+          for (v = 0; v < count; v++) {
+            var x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
+            for (i = 0; i < 3; i++) pos[v * 3 + i] = M[i] * x + M[4 + i] * y + M[8 + i] * z + M[12 + i];
           }
         }
         var outline = new Float32Array(count);
-        if (col && kind !== "face") for (var i = 0; i < count; i++) outline[i] = col.data[i * col.n + 1];
+        if (col && kind !== "face") for (v = 0; v < count; v++) outline[v] = col.data[v * col.n + 1];
         var idx = p.indices !== undefined ? readAccessor(doc, bin, p.indices, false).data : null;
-        if (!idx) { idx = new Uint32Array(count); for (var j = 0; j < count; j++) idx[j] = j; }
+        if (!idx) { idx = new Uint32Array(count); for (v = 0; v < count; v++) idx[v] = v; }
         var tex = m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture;
-        var image = tex ? images[doc.textures[tex.index].source] : null;
         parts.push({
-          pos: P, nrm: N, uv: uv, outline: outline, idx: new Uint32Array(idx), kind: kind, image: image,
+          pos: pos, nrm: nrm, uv: uv, outline: outline, joints: J, weights: Wt, idx: idx, kind: kind,
+          image: tex ? images[doc.textures[tex.index].source] : null, skin: skin,
           recolor: (m.extras || {}).shaderType === "taikoEffectChangeColors" && kind !== "face",
           twoSided: (m.name || "").toLowerCase().indexOf("cullnone") >= 0 || !!m.doubleSided
         });
@@ -169,19 +230,34 @@
     return parts;
   }
 
+  // bone matrices of a part for a pose ({name: world} or null: the rest pose)
+  function boneMatrices(skin, pose) {
+    var out = new Float32Array(MAX_BONES * 16);
+    for (var k = 0; k < MAX_BONES; k++) out[k * 16] = out[k * 16 + 5] = out[k * 16 + 10] = out[k * 16 + 15] = 1;
+    if (!skin || !pose) return out;
+    skin.names.forEach(function (name, k) {
+      if (pose[name]) out.set(mul(pose[name], skin.restInv[k]), k * 16);
+    });
+    return out;
+  }
+
   // ---------------------------------------------------------------------------------------------------------------
   // drawing
 
-  var VS = "#version 300 es\nin vec3 p;in vec3 n;in vec2 t;in float o;uniform mat4 mvp;uniform mat3 rot;uniform vec2 px;" +
-    "uniform float outlinePass;out vec2 uv;void main(){vec4 c=mvp*vec4(p,1.0);if(outlinePass>0.5){vec3 m=rot*n;" +
-    "if(dot(m.xy,m.xy)>1e-12){c.xy+=px*o*normalize(m.xy)*c.w;}}gl_Position=c;uv=t;}";
+  var VS = "#version 300 es\nin vec3 p;in vec3 n;in vec2 t;in float o;in vec4 j;in vec4 w;uniform mat4 bones[" + MAX_BONES + "];" +
+    "uniform mat4 mvp;uniform mat3 rot;uniform vec2 px;uniform float outlinePass;out vec2 uv;void main(){" +
+    "vec4 q=vec4(p,1.0);vec3 m=n;float s=w.x+w.y+w.z+w.w;if(s>0.0){mat4 b=(w.x*bones[int(j.x)]+w.y*bones[int(j.y)]+" +
+    "w.z*bones[int(j.z)]+w.w*bones[int(j.w)])/s;q=b*q;m=mat3(b)*n;}vec4 c=mvp*q;" +
+    "if(outlinePass>0.5){vec3 e=rot*m;if(dot(e.xy,e.xy)>1e-12){c.xy+=px*o*normalize(e.xy)*c.w;}}gl_Position=c;uv=t;}";
   var FS = "#version 300 es\nprecision mediump float;in vec2 uv;uniform sampler2D tex;uniform int mode;uniform vec3 c1;" +
-    "uniform vec3 c2;uniform vec3 c3;uniform float faceRows;out vec4 o;void main(){gl_FragDepth=gl_FragCoord.z;" +
+    "uniform vec3 c2;uniform vec3 c3;uniform float faceRows;uniform float faceIndex;out vec4 o;void main(){gl_FragDepth=gl_FragCoord.z;" +
     "if(mode==3){o=vec4(0.0,0.0,0.0,1.0);return;}" +
-    "vec2 st=uv;if(mode==2){st=vec2(uv.x,clamp(uv.y,0.0,1.0)/faceRows);}vec4 x=texture(tex,st);" +
+    "vec2 st=uv;if(mode==2){st=vec2(uv.x,(clamp(uv.y,0.0,1.0)+faceIndex)/faceRows);}vec4 x=texture(tex,st);" +
     "if(mode==2){if(x.a<0.01)discard;gl_FragDepth=gl_FragCoord.z-0.001;o=x;return;}" +
     "if(x.a<=0.0)discard;if(mode==1){float s=max(x.r,max(x.g,x.b)),w=min(x.r,min(x.g,x.b));" +
     "if(s>0.05&&(s-w)>0.08){if(x.b>x.r&&x.b>=x.g)x.rgb=c3;else if(x.g>x.r&&x.g>x.b)x.rgb=c2;else x.rgb=c1;}}o=x;}";
+  var ATTRS = ["p", "n", "t", "o", "j", "w"];
+  var UNIFORMS = ["mvp", "rot", "px", "outlinePass", "tex", "mode", "c1", "c2", "c3", "faceRows", "faceIndex", "bones"];
 
   function hex(c) {
     var m = /^#?([0-9a-f]{6})$/i.exec(c || "") || [0, "ffffff"];
@@ -197,6 +273,8 @@
     this.parts = [];
     this.look = null;
     this.serial = 0;
+    this.anim = null;
+    this.start = performance.now();
     if (!gl) return;
     var prog = gl.createProgram();
     [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, FS]].forEach(function (s) {
@@ -206,18 +284,13 @@
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
       gl.attachShader(prog, sh);
     });
-    gl.bindAttribLocation(prog, 0, "p");
-    gl.bindAttribLocation(prog, 1, "n");
-    gl.bindAttribLocation(prog, 2, "t");
-    gl.bindAttribLocation(prog, 3, "o");
+    ATTRS.forEach(function (a, i) { gl.bindAttribLocation(prog, i, a); });
     gl.linkProgram(prog);
     this.prog = prog;
     this.u = {};
     var self = this;
-    ["mvp", "rot", "px", "outlinePass", "tex", "mode", "c1", "c2", "c3", "faceRows"].forEach(function (n) {
-      self.u[n] = gl.getUniformLocation(prog, n);
-    });
-    // drag to turn
+    UNIFORMS.forEach(function (n) { self.u[n] = gl.getUniformLocation(prog, n); });
+    // drag to turn; until then it sways a little either side of facing front
     var drag = null;
     this.spin = true;
     canvas.style.touchAction = "none";
@@ -226,25 +299,27 @@
       if (drag === null) return;
       self.angle += (e.clientX - drag) * 0.012;
       drag = e.clientX;
-      self.draw();
     });
     canvas.addEventListener("pointerup", function () { drag = null; });
-    // until touched it sways a little either side of facing front
     function tick(t) {
-      if (self.spin && self.parts.length && document.visibilityState === "visible") {
-        self.angle = 0.5 * Math.sin(t * 0.0007);
-        self.draw();
+      if (self.parts.length && document.visibilityState === "visible") {
+        if (self.spin) self.angle = 0.4 * Math.sin(t * 0.0006);
+        self.draw(t);
       }
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
+    fetchAnim(BASE + "anim/" + ANIM + ".json").then(function (a) {
+      self.anim = a;
+      if (self.parts.length) self.bounds();
+    }).catch(function () { /* the rest pose, then */ });
   }
 
   Viewer.prototype.upload = function (part, bitmap) {
     var gl = this.gl;
     var vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    [[part.pos, 3], [part.nrm, 3], [part.uv, 2], [part.outline, 1]].forEach(function (a, i) {
+    [[part.pos, 3], [part.nrm, 3], [part.uv, 2], [part.outline, 1], [part.joints, 4], [part.weights, 4]].forEach(function (a, i) {
       var b = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.bufferData(gl.ARRAY_BUFFER, a[0], gl.STATIC_DRAW);
@@ -257,18 +332,14 @@
     gl.bindVertexArray(null);
     var tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    if (bitmap) {
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-    } else {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-    }
+    if (bitmap) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, part.kind === "face" ? gl.CLAMP_TO_EDGE : gl.REPEAT);
     return { vao: vao, count: part.idx.length, tex: tex, kind: part.kind, recolor: part.recolor, twoSided: part.twoSided,
-             bufs: [ib] };
+             skin: part.skin, src: part };
   };
 
   Viewer.prototype.set = function (look) {
@@ -277,7 +348,7 @@
     if (!gl) return Promise.resolve();
     var files = look.mode === "costume" ? [["cos", look.costume, false]] : [["body", look.body, false], ["head", look.head, true]];
     var key = JSON.stringify(files);
-    if (key === this.key) { this.draw(); return Promise.resolve(); }
+    if (key === this.key) return Promise.resolve();
     this.canvas.classList.add("loading");
     return Promise.all([fetchImage(BASE + "face.png")].concat(files.map(function (f) {
       return fetchGlb(BASE + f[0] + "/" + (f[1] || 0) + ".glb").then(function (g) { return glbParts(g, f[2]); });
@@ -290,10 +361,9 @@
         self.drop();
         self.faceRows = face.height / face.width;
         self.parts = parts.map(function (p, i) { return self.upload(p, bitmaps[i]); });
-        self.bounds(parts);
         self.key = key;
+        self.bounds();
         self.canvas.classList.remove("loading", "failed");
-        self.draw();
       });
     }).catch(function () {
       if (serial !== self.serial) return;
@@ -304,29 +374,46 @@
 
   Viewer.prototype.drop = function () {
     var gl = this.gl;
-    this.parts.forEach(function (p) {
-      gl.deleteVertexArray(p.vao);
-      gl.deleteTexture(p.tex);
-    });
+    this.parts.forEach(function (p) { gl.deleteVertexArray(p.vao); gl.deleteTexture(p.tex); });
     this.parts = [];
   };
 
-  Viewer.prototype.bounds = function (parts) {
-    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
-    parts.forEach(function (p) {
-      if (p.kind === "face") return;
-      for (var i = 0; i < p.pos.length; i += 3)
-        for (var c = 0; c < 3; c++) { mn[c] = Math.min(mn[c], p.pos[i + c]); mx[c] = Math.max(mx[c], p.pos[i + c]); }
+  // the framing: the posed model over the loop (skinned on the CPU at a few moments), so it stays in view
+  Viewer.prototype.bounds = function () {
+    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9], anim = this.anim, parts = this.parts;
+    var times = anim ? [0, 0.25, 0.5, 0.75].map(function (f) { return f * anim.duration; }) : [0];
+    times.forEach(function (t) {
+      var pose = anim ? anim.pose(t) : null;
+      parts.forEach(function (part) {
+        var p = part.src;
+        if (p.kind === "face") return;
+        var B = boneMatrices(p.skin, pose), c;
+        for (var v = 0; v < p.pos.length / 3; v++) {
+          var x = p.pos[v * 3], y = p.pos[v * 3 + 1], z = p.pos[v * 3 + 2], q = [0, 0, 0], s = 0;
+          for (var k = 0; k < 4; k++) {
+            var w = p.weights[v * 4 + k];
+            if (!w) continue;
+            var b = p.joints[v * 4 + k] * 16;
+            s += w;
+            for (c = 0; c < 3; c++) q[c] += w * (B[b + c] * x + B[b + 4 + c] * y + B[b + 8 + c] * z + B[b + 12 + c]);
+          }
+          if (!s) q = [x, y, z];
+          else for (c = 0; c < 3; c++) q[c] /= s;
+          for (c = 0; c < 3; c++) { mn[c] = Math.min(mn[c], q[c]); mx[c] = Math.max(mx[c], q[c]); }
+        }
+      });
     });
     this.center = [(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2];
     this.radius = Math.max(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]) * 0.62 || 1;
   };
 
-  Viewer.prototype.draw = function () {
+  Viewer.prototype.draw = function (now) {
     var gl = this.gl, c = this.canvas;
     if (!gl || !this.parts.length) return;
     var dpr = window.devicePixelRatio || 1, w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    var anim = this.anim, t = anim ? (((now || performance.now()) - this.start) / 1000) % anim.duration : 0;
+    var pose = anim ? anim.pose(t) : null;
     gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -334,29 +421,31 @@
     // orthographic, centred on the model, turned about the vertical axis; the Don faces +z (the viewer at angle 0)
     var r = this.radius, asp = w / h, sx = asp >= 1 ? r * asp : r, sy = asp >= 1 ? r : r / asp;
     var ca = Math.cos(this.angle), sa = Math.sin(this.angle), cx = this.center[0], cy = this.center[1], cz = this.center[2];
-    var rot = [ca, 0, -sa, 0, 1, 0, sa, 0, ca];
-    var mvp = new Float32Array([
+    gl.uniformMatrix4fv(this.u.mvp, false, new Float32Array([
       ca / sx, 0, sa * 0.5 / r, 0,
       0, 1 / sy, 0, 0,
       sa / sx, 0, -ca * 0.5 / r, 0,
-      (-ca * cx - sa * cz) / sx, -cy / sy, (ca * cz - sa * cx) * 0.5 / r, 1]);
-    gl.uniformMatrix4fv(this.u.mvp, false, mvp);
-    gl.uniformMatrix3fv(this.u.rot, false, new Float32Array(rot));
-    gl.uniform2f(this.u.px, 2.5 * dpr * (h / 300) * 2 / w, 2.5 * dpr * (h / 300) * 2 / h);
+      (-ca * cx - sa * cz) / sx, -cy / sy, (ca * cz - sa * cx) * 0.5 / r, 1]));
+    gl.uniformMatrix3fv(this.u.rot, false, new Float32Array([ca, 0, -sa, 0, 1, 0, sa, 0, ca]));
+    var line = 2.5 * h / 300; // the game's 2.5 px at 720p for a Don about this tall
+    gl.uniform2f(this.u.px, line * 2 / w, line * 2 / h);
     var colors = (this.look && this.look.colors) || [];
     gl.uniform3fv(this.u.c1, hex(colors[0]));
     gl.uniform3fv(this.u.c2, hex(colors[1]));
     gl.uniform3fv(this.u.c3, hex(colors[2]));
     gl.uniform1f(this.u.faceRows, this.faceRows || 1);
+    gl.uniform1f(this.u.faceIndex, anim ? Math.min(anim.face(t), (this.faceRows || 1) - 1) : 0);
     gl.uniform1i(this.u.tex, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.frontFace(gl.CCW);
-    var self = this;
-    function pass(filter, mode, outline) {
+    var self = this, bones = new Map();
+    function pass(filter, outline) {
       self.parts.forEach(function (p) {
         if (!filter(p)) return;
+        if (!bones.has(p.skin)) bones.set(p.skin, boneMatrices(p.skin, pose));
+        gl.uniformMatrix4fv(self.u.bones, false, bones.get(p.skin));
         gl.uniform1f(self.u.outlinePass, outline ? 1 : 0);
         gl.uniform1i(self.u.mode, outline ? 3 : p.kind === "face" ? 2 : p.recolor ? 1 : 0);
         if (outline) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT); }
@@ -367,17 +456,18 @@
         gl.drawElements(gl.TRIANGLES, p.count, gl.UNSIGNED_INT, 0);
       });
     }
+    function is(kind) { return function (p) { return p.kind === kind; }; }
     gl.disable(gl.BLEND);
     gl.depthMask(true);
-    pass(function (p) { return p.kind === "opaque"; }, 0, true);   // the outline hull first
+    pass(is("opaque"), true); // the outline hull first
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    pass(function (p) { return p.kind === "opaque"; });
-    pass(function (p) { return p.kind === "face"; });
+    pass(is("opaque"));
+    pass(is("face"));
     gl.depthMask(false);
-    pass(function (p) { return p.kind === "blend"; });
+    pass(is("blend"));
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    pass(function (p) { return p.kind === "add"; });
+    pass(is("add"));
     gl.depthMask(true);
     gl.bindVertexArray(null);
   };

@@ -16,6 +16,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
+import zdon_don_anim as don_anim
 import zdon_site as S
 from zdon_site_plate import PLATE_CSS, PLATE_JS, PlateFiles, nameplate_html
 
@@ -120,6 +121,15 @@ class MePages:
             return
         d = self._models_dir()
         if kind == "glb" and d:  # the 3D look on my page (site_data/don3d.js): cos/N.glb, head/N.glb, body/N.glb, face.png
+            a = re.fullmatch(r"anim/([a-z0-9_]{1,40})\.json", file)
+            if a:  # one animation out of the 12 MB animations.glb (zdon_don_anim.py)
+                src = d / "animations.glb"
+                body = don_anim.extract(src, a.group(1)) if src.is_file() else None
+                if body is None:
+                    req.send(404, b"", "text/plain")
+                else:
+                    req.send(200, body, "application/json", {"Cache-Control": "max-age=86400"})
+                return
             m = re.fullmatch(r"(cos|head|body)/(\d{1,4})\.glb", file)
             path = d / m.group(1) / f"{m.group(2)}.glb" if m else d / "face" / "face_000000.png" if file == "face.png" else None
             if path is not None and path.is_file():
@@ -242,7 +252,7 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
 <script src="/cosm/don3d.js?v={DON3D_JS.stat().st_mtime_ns:x}"></script><script>(function(){{var f=document.getElementById('lookform'),c=document.getElementById('don3d');
 if(!window.Don3D||!f||!c)return;function look(){{var m=f.querySelector('input[name=mode]:checked');return{{mode:m&&m.value==='costume'?'costume':'parts',
 costume:+f.costume.value||0,head:+f.head.value||0,body:+f.body.value||0,colors:[f.color1.value,f.color2.value,f.color3.value]}};}}
-var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(){{v.set(look());}});}})();</script>""")
+var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(e){{var n=e.target.name,m=n==='costume'?'costume':(n==='head'||n==='body')?'parts':'';if(m)f.querySelector('input[name=mode][value='+m+']').checked=true;v.set(look());}});}})();</script>""")
 
         # account state
         credit = self.credit.get(code)

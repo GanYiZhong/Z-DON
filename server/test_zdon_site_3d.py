@@ -7,6 +7,7 @@ The drawing itself is checked in a browser (it needs WebGL); here the server sid
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import urllib.error
 import urllib.request
@@ -18,6 +19,22 @@ import test_zdon_score_import as base  # noqa: E402
 import zdon_site_me  # noqa: E402
 
 GLB = b"glTF" + b"\x02\x00\x00\x00" + b"\x00" * 12
+
+
+def anim_glb() -> bytes:
+    """A skeleton of two nodes and one animation moving EXTRA (the face track)."""
+    binary = struct.pack("<2f", 0.0, 0.5) + struct.pack("<6f", 0.01, 0, 0, 0.03, 0, 0)
+    doc = {"asset": {"version": "2.0"}, "buffers": [{"byteLength": len(binary)}],
+           "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 8}, {"buffer": 0, "byteOffset": 8, "byteLength": 24}],
+           "accessors": [{"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [0.5]},
+                         {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}],
+           "nodes": [{"name": "BONE_root", "children": [1]}, {"name": "EXTRA", "translation": [0, 0, 0]}],
+           "animations": [{"name": "don_normal", "samplers": [{"input": 0, "output": 1}],
+                           "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]}]}
+    js = json.dumps(doc).encode()
+    js += b" " * (-len(js) % 4)
+    body = struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(binary), b"BIN\x00") + binary
+    return b"glTF" + struct.pack("<II", 2, 12 + len(body)) + body
 
 
 class Site3DTest(base.ImportTest):
@@ -34,6 +51,7 @@ class Site3DTest(base.ImportTest):
         (models / "head" / "0.glb").write_bytes(GLB)
         (models / "face" / "face_000000.png").write_bytes(b"\x89PNG face")
         (models / "secret.txt").write_text("no", encoding="utf-8")
+        (models / "animations.glb").write_bytes(anim_glb())
         zdon_site_me.MePages._cosm_names = None  # names are kept per process; an earlier test class had no Models
 
     test_1_import_keeps_best = test_2_other_player_in_file = test_3_refusals = None
@@ -52,6 +70,18 @@ class Site3DTest(base.ImportTest):
         self.assertEqual(self.get("/cosm/glb/face.png")[:2], (200, b"\x89PNG face"))
         for bad in ("/cosm/glb/cos/13.glb", "/cosm/glb/body/0.glb", "/cosm/glb/secret.txt", "/cosm/glb/cos/..%2Fsecret.txt",
                     "/cosm/glb/../Models/secret.txt", "/cosm/glb/acce/1.glb", "/cosm/glb/cos/12.png"):
+            self.assertEqual(self.get(bad)[0], 404, bad)
+
+    def test_animation(self):
+        status, body, ctype = self.get("/cosm/glb/anim/don_normal.json")
+        self.assertEqual((status, ctype), (200, "application/json"))
+        doc = json.loads(body)
+        self.assertEqual(doc["duration"], 0.5)
+        self.assertEqual([n["name"] for n in doc["nodes"]], ["BONE_root", "EXTRA"])
+        self.assertEqual(doc["nodes"][1]["parent"], 0)
+        self.assertEqual(doc["tracks"], [{"node": 1, "path": "translation", "times": [0.0, 0.5],
+                                          "values": [0.01, 0.0, 0.0, 0.03, 0.0, 0.0]}])
+        for bad in ("/cosm/glb/anim/don_nothing.json", "/cosm/glb/anim/Don.json", "/cosm/glb/anim/..%2Fx.json"):
             self.assertEqual(self.get(bad)[0], 404, bad)
 
     def test_script_and_page(self):
