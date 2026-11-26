@@ -172,7 +172,7 @@ class ImportTest(unittest.TestCase):
         return (r["crown"], r["score"]) if r else None
 
     def uploads_left(self) -> list[Path]:
-        return list((Path(self.tmp.name) / "data" / "score_uploads").glob("*.db"))
+        return list((Path(self.tmp.name) / "data" / "score_uploads").glob("*.*"))
 
     # -- tests -----------------------------------------------------------------------------------------------------
 
@@ -241,7 +241,7 @@ class ImportTest(unittest.TestCase):
         self.assertIn("找不到這個遊戲帳號", page)
         # not SQLite
         status, page = self.upload("uid-a", b"hello" * 100)
-        self.assertIn("不是 SQLite", page)
+        self.assertIn("不是 scores.db", page)
         # SQLite, but scores is a view
         p = Path(self.tmp.name) / "view.db"
         con = sqlite3.connect(p)

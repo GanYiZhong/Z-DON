@@ -11,6 +11,10 @@ scores and songs tables; nothing in it is executed. A chart's best play in the f
 game's own "keep the best" rule, scores.cpp import_from_pytaiko) is added as one play when it beats the account's best
 on this server for that chart; a play that isn't better is skipped, so nothing better is ever covered. Plays already
 here stay as they are (the server keeps every play; pages show the best). There is no input log, so no replay.
+
+The same form takes a Donder Hiroba file (the donder-hiroba-plus upload payload or hiroba_scrape.js JSON,
+zdon_hiroba.py): step 2 then shows which songs match an ESE chart of the published song manifest, and step 3
+merges those the same way (played_at empty: Hiroba has no dates).
 """
 from __future__ import annotations
 
@@ -22,9 +26,11 @@ import time
 import urllib.parse
 from pathlib import Path
 
+import zdon_hiroba as hiroba
 import zdon_site as S
 
 UPLOAD_MAX = 64 * 1024 * 1024
+HIROBA_MAX = 16 * 1024 * 1024  # a Hiroba file (JSON or payload)
 UPLOAD_KEEP = 3600            # seconds an uploaded file waits for step 3
 UPLOADS_PER_HOUR = 10
 MAX_ROWS = 300_000            # plays read from one file
@@ -195,6 +201,16 @@ def import_player(store, con: GameDb, player_id: str, access_code: str) -> dict:
         cur = best.get(key)
         if cur is None or (p["crown"], p["score"]) > (cur["crown"], cur["score"]):
             best[key] = p
+    new_titles = file_titles(con, {p["hash"] for p in best.values()})
+    added, not_better = merge_best(store, access_code, best, new_titles)
+    return {"plays": plays, "charts": len(best), "added": added, "not_better": not_better, "invalid": invalid}
+
+
+def merge_best(store, access_code: str, best: dict[tuple[str, int], dict],
+               titles: dict[str, tuple[str, str]]) -> tuple[list[dict], int]:
+    """Adds each play of best ({(hash, difficulty): play}) that beats the account's best here (crown, then score)
+    as one play; song titles for the added charts' hashes go in where none is known. ([added, with "before"], skipped)"""
+    now = int(time.time())
     have: dict[tuple[str, int], tuple[int, int]] = {}
     for r in store.q("SELECT hash, difficulty, crown, score FROM scores WHERE access_code=?", (access_code,)):
         k = (r["hash"], r["difficulty"])
@@ -203,7 +219,7 @@ def import_player(store, con: GameDb, player_id: str, access_code: str) -> dict:
             have[k] = v
     new = [p for k, p in best.items() if k not in have or (p["crown"], p["score"]) > have[k]]
     new.sort(key=lambda p: (p["played_at"], p["hash"], p["difficulty"]))
-    titles = file_titles(con, {p["hash"] for p in new})
+    titles = {h: t for h, t in titles.items() if t[0] and h in {p["hash"] for p in new}}
     with store.lock:
         store.db.execute("BEGIN")
         try:
@@ -222,9 +238,7 @@ def import_player(store, con: GameDb, player_id: str, access_code: str) -> dict:
         except Exception:
             store.db.execute("ROLLBACK")
             raise
-    added = [dict(p, before=have.get((p["hash"], p["difficulty"]))) for p in new]
-    return {"plays": plays, "charts": len(best), "added": added, "not_better": len(best) - len(new),
-            "invalid": invalid}
+    return [dict(p, before=have.get((p["hash"], p["difficulty"]))) for p in new], len(best) - len(new)
 
 
 class ImportPages:
@@ -235,14 +249,15 @@ class ImportPages:
             self.s.db.executescript(IMPORT_SCHEMA)
         self.upload_dir = Path(self.cfg["data_dir"]) / "score_uploads"
         self.upload_max = int(float(self.cfg.get("site", {}).get("score_upload_mb", 0) or 0) * 1024 * 1024) or UPLOAD_MAX
+        self.hiroba_catalog = hiroba.Catalog(Path(self.cfg["data_dir"]) / "songs" / "song_manifest.json")
 
-    def _upload_path(self, uid: str, token: str) -> Path:
-        return self.upload_dir / (self._sign(f"score-upload:{uid}:{token}")[:40] + ".db")
+    def _upload_path(self, uid: str, token: str, kind: str = "db") -> Path:
+        return self.upload_dir / (self._sign(f"score-upload:{kind}:{uid}:{token}")[:40] + "." + kind)
 
     def _sweep_uploads(self) -> None:
         if not self.upload_dir.is_dir():
             return
-        for f in self.upload_dir.glob("*.db"):
+        for f in [*self.upload_dir.glob("*.db"), *self.upload_dir.glob("*.hiroba")]:
             try:
                 if time.time() - f.stat().st_mtime > UPLOAD_KEEP:
                     f.unlink()
@@ -271,16 +286,19 @@ class ImportPages:
                 f'<a href="/me/import?code={urllib.parse.quote(r["access_code"])}">{S.esc(r["username"])}</a>'
                 for r in linked) + "</div>"
         mb = self.upload_max // (1024 * 1024)
-        body = f"""<h1>匯入成績（scores.db）</h1>
+        body = f"""<h1>匯入成績</h1>
 <p class="small"><a href="/me?a={urllib.parse.quote(code)}">← 我的頁面</a></p>{pick}
 <div class="card"><h2 style="margin-top:0">匯入到「{S.esc(acct["username"])}」</h2>
 <p class="small">選遊戲資料夾裡的 <code>scores.db</code>（Z-DON 或 YataiDON 都可以，最大 {mb} MB）。上傳後會列出檔案裡的玩家讓你選，
 再把那位玩家每個譜面最好的成績（先比王冠、再比分數）加進這個帳號；這裡已經有更好的成績就略過，不會蓋掉。
 匯入的成績沒有重播。檔案只會被讀取，匯入完或一小時後刪除。</p>
 <p class="small muted">遊戲要先關掉再上傳，檔案才是最新的。</p>
+<p class="small"><b>Donder Hiroba（街機）的成績</b>也可以：選 donder-hiroba-plus「taiko.wiki Rating Upload」存下的資料（例如
+<code>Hiroba.txt</code>），或 <code>hiroba_scrape.js</code> 爬下的 <code>hiroba_full.json</code>／<code>scores.json</code>。
+曲目用日文曲名對到 ESE 的譜面，上傳後會先列出對得上和對不上的歌再匯入。Hiroba 沒有遊玩日期，匯入的成績以匯入時間記錄。</p>
 <form method="post" action="/me/import/upload" enctype="multipart/form-data">
 <input type="hidden" name="csrf" value="{self._csrf(req.sess)}"><input type="hidden" name="code" value="{S.esc(code)}">
-<input type="file" name="db" accept=".db,application/vnd.sqlite3,application/x-sqlite3" required>
+<input type="file" name="db" accept=".db,.txt,.json,application/vnd.sqlite3,application/x-sqlite3,application/json,text/plain" required>
 <button class="btn small">上傳</button></form></div>"""
         self.page(req, "匯入成績", body, status=status, flash=flash, err=err)
 
@@ -313,9 +331,22 @@ class ImportPages:
         if fn is None or not data:
             self.import_page(req, q, "請選一個檔案。", True)
             return
-        if not data.startswith(SQLITE_MAGIC):
-            self.import_page(req, q, "這不是 SQLite 資料庫檔；請選遊戲資料夾裡的 scores.db。", True)
-            return
+        kind = "db" if data.startswith(SQLITE_MAGIC) else "hiroba"
+        if kind == "hiroba":
+            if len(data) > HIROBA_MAX:
+                self.import_page(req, q, f"Hiroba 的檔案最大 {HIROBA_MAX // (1024 * 1024)} MB。", True)
+                return
+            try:
+                who, plays = hiroba.charts(hiroba.load(data))
+            except hiroba.BadHiroba as e:
+                self.import_page(req, q, "這不是 scores.db，也不是 Hiroba 的資料（" + str(e) + "）。", True)
+                return
+            if not plays:
+                self.import_page(req, q, "這不是 scores.db，也找不到 Hiroba 的成績（需要有分數的譜面）。", True)
+                return
+            if not self.hiroba_catalog.ready():
+                self.import_page(req, q, "伺服器還沒有曲目清單，暫時無法匯入 Hiroba 的成績。", True)
+                return
         now = int(time.time())
         with self.s.lock:
             n = self.s.one("SELECT COUNT(*) AS n FROM score_uploads WHERE forge_uid=? AND at>?", (uid, now - 3600))["n"]
@@ -325,10 +356,13 @@ class ImportPages:
             self.s.run("INSERT INTO score_uploads VALUES (?,?)", (uid, now))
         self._sweep_uploads()
         token = secrets.token_urlsafe(18)
-        path = self._upload_path(uid, token)
+        path = self._upload_path(uid, token, kind)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         del data, body, parts
+        if kind == "hiroba":
+            self._hiroba_preview(req, code, token, fn or "", who, hiroba.match(self.hiroba_catalog, plays))
+            return
         try:
             con = open_scores_db(path)
             try:
@@ -369,9 +403,13 @@ class ImportPages:
         if not self._owns(uid, code):
             self.import_page(req, q, "找不到這個遊戲帳號。", True)
             return
-        path = self._upload_path(uid, token) if TOKEN.match(token) else None
+        kind = "hiroba" if form.get("kind") == "hiroba" else "db"
+        path = self._upload_path(uid, token, kind) if TOKEN.match(token) else None
         if path is None or not path.exists() or time.time() - path.stat().st_mtime > UPLOAD_KEEP:
             self.import_page(req, q, "上傳的檔案已經過期，請重新上傳。", True)
+            return
+        if kind == "hiroba":
+            self._hiroba_run(req, uid, code, path)
             return
         try:
             con = open_scores_db(path)
@@ -388,10 +426,14 @@ class ImportPages:
         finally:
             if path.exists():
                 path.unlink(missing_ok=True)
-        added = res["added"]
+        self._import_done(req, uid, code, player, res["added"], res["not_better"], res["invalid"],
+                          f'<div>略過（資料不完整）<b>{res["invalid"]:,}</b></div><div>檔案裡的遊玩<b>{res["plays"]:,}</b></div>',
+                          f'每個譜面只取檔案裡最好的一次（{res["charts"]:,} 個譜面）。上傳的檔案已刪除。')
+
+    def _import_done(self, req, uid: str, code: str, source: str, added: list, not_better: int, invalid: int,
+                     more: str, note: str) -> None:
         self.s.run("""INSERT INTO score_imports(forge_uid, access_code, player_id, added, not_better, invalid, at)
-                      VALUES (?,?,?,?,?,?,?)""", (uid, code, player, len(added), res["not_better"], res["invalid"],
-                                                  int(time.time())))
+                      VALUES (?,?,?,?,?,?,?)""", (uid, code, source, len(added), not_better, invalid, int(time.time())))
         if added:
             self.invalidate_board()
         shown = added[-200:][::-1]
@@ -405,8 +447,56 @@ class ImportPages:
         qc = urllib.parse.quote(code)
         body = f"""<h1>匯入完成</h1>
 <p class="small"><a href="/me?a={qc}">← 我的頁面</a>　<a href="/me/scores?code={qc}">遊玩紀錄</a></p>
-<div class="card"><div class="kv"><div>匯入<b>{len(added):,}</b></div><div>略過（這裡已有更好或相同的）<b>{res["not_better"]:,}</b></div>
-<div>略過（資料不完整）<b>{res["invalid"]:,}</b></div><div>檔案裡的遊玩<b>{res["plays"]:,}</b></div></div>
-<p class="small muted">每個譜面只取檔案裡最好的一次（{res["charts"]:,} 個譜面）。上傳的檔案已刪除。</p></div>
+<div class="card"><div class="kv"><div>匯入<b>{len(added):,}</b></div><div>略過（這裡已有更好或相同的）<b>{not_better:,}</b></div>
+{more}</div>
+<p class="small muted">{note}</p></div>
 <div class="card">{table}</div>"""
         self.page(req, "匯入完成", body)
+
+    # ------------------------------------------------------------------------------------------------------------
+    # Donder Hiroba
+
+    @staticmethod
+    def _title_list(label: str, titles: list[str]) -> str:
+        if not titles:
+            return ""
+        items = "、".join(S.esc(t) for t in titles[:300]) + ("……" if len(titles) > 300 else "")
+        return f'<details><summary class="small">{label}（{len(titles):,} 首）</summary><p class="small">{items}</p></details>'
+
+    def _hiroba_preview(self, req, code: str, token: str, fn: str, who: dict, m: dict) -> None:
+        acct = self._import_account(req, code)
+        name = " ".join(x for x in (who["name"], ("太鼓番 " + who["taiko_no"]) if who["taiko_no"] else "") if x)
+        several = self._title_list("同名的譜面有好幾個版本，沒有匯入", m["several"])
+        missing = self._title_list("ESE 裡找不到，沒有匯入", m["missing"])
+        shown = ("：" + S.esc(name)) if name else ""
+        disabled = "" if m["best"] else " disabled"
+        body = f"""<h1>匯入 Hiroba 成績</h1>
+<p class="small"><a href="/me/import?code={urllib.parse.quote(code)}">← 重新選檔案</a></p>
+<div class="card"><p class="small">檔案 <code>{S.esc(fn[:80])}</code>{shown}</p>
+<div class="kv"><div>對得上的歌<b>{m["matched"]:,}</b></div><div>可匯入的譜面<b>{len(m["best"]):,}</b></div>
+<div>對不上的歌<b>{len(m["several"]) + len(m["missing"]):,}</b></div></div>
+<p class="small">要匯入到「{S.esc(acct["username"])}」。每個譜面比這裡的最佳好（先比王冠、再比分數）才加入，不會蓋掉更好的成績。</p>
+{several}{missing}
+<form method="post" action="/me/import/run"><input type="hidden" name="csrf" value="{self._csrf(req.sess)}">
+<input type="hidden" name="code" value="{S.esc(code)}"><input type="hidden" name="token" value="{S.esc(token)}">
+<input type="hidden" name="kind" value="hiroba"><p><button class="btn small"{disabled}>匯入</button></p>
+</form></div>"""
+        self.page(req, "匯入 Hiroba 成績", body)
+
+    def _hiroba_run(self, req, uid: str, code: str, path: Path) -> None:
+        try:
+            who, plays = hiroba.charts(hiroba.load(path.read_bytes()))
+            if not self.hiroba_catalog.ready():
+                raise hiroba.BadHiroba("伺服器還沒有曲目清單。")
+            m = hiroba.match(self.hiroba_catalog, plays)
+        except hiroba.BadHiroba as e:
+            self.import_page(req, {"code": code}, str(e), True)
+            return
+        finally:
+            path.unlink(missing_ok=True)
+        added, not_better = merge_best(self.s, code, m["best"], m["titles"])
+        off = len(m["several"]) + len(m["missing"])
+        self._import_done(req, uid, code, "hiroba:" + who["taiko_no"], added, not_better, off,
+                          f'<div>對不上 ESE 的歌<b>{off:,}</b></div><div>Hiroba 的譜面<b>{len(plays):,}</b></div>',
+                          f'對得上 {m["matched"]:,} 首歌、{len(m["best"]):,} 個譜面。Hiroba 沒有遊玩日期，成績以現在的時間記錄。'
+                          '上傳的檔案已刪除。')
