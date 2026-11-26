@@ -110,6 +110,8 @@ class Site3DTest(base.ImportTest):
         self.assertIn('id="don3d"', page)
         self.assertRegex(page, r'/cosm/don3d\.js\?v=[0-9a-f]+')
         self.assertIn('id="lookform"', page)
+        self.assertIn("puchi:+f.puchichara.value", page)
+        self.assertIn("letter-spacing:2px", self.get("/site.css")[1].decode())  # the game's text spacing on the plate
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ ME_CSS = """
 border:1px solid var(--line);background:#fff}.acct-tabs span{background:var(--ink);color:#fff}
 .row{display:flex;gap:1em;flex-wrap:wrap;align-items:center;margin:.5em 0}.row label{min-width:5em;color:var(--muted);font-size:.9em}
 .pick{display:flex;align-items:center;gap:.6em}.pick img{width:56px;height:56px;object-fit:contain;background:#f5ede4;border-radius:8px}
+#i_puchichara{object-fit:cover;object-position:top}
 input[type=color]{width:3em;height:2em;border:1px solid var(--line);border-radius:6px;padding:0;background:#fff}
 .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.6em}.kv div{background:#faf5ef;border-radius:8px;padding:.5em .8em}
 .kv b{display:block;font-size:1.4em}
@@ -252,7 +253,7 @@ document.getElementById('np_s').style.display=(b==3||b==4)?'':'none';}}</script>
 <button class="btn small">儲存外觀</button></form><div style="clear:both"></div></div>
 <script src="/cosm/don3d.js?v={DON3D_JS.stat().st_mtime_ns:x}"></script><script>(function(){{var f=document.getElementById('lookform'),c=document.getElementById('don3d');
 if(!window.Don3D||!f||!c)return;function look(){{var m=f.querySelector('input[name=mode]:checked');return{{mode:m&&m.value==='costume'?'costume':'parts',
-costume:+f.costume.value||0,head:+f.head.value||0,body:+f.body.value||0,colors:[f.color1.value,f.color2.value,f.color3.value]}};}}
+costume:+f.costume.value||0,head:+f.head.value||0,body:+f.body.value||0,puchi:+f.puchichara.value||0,colors:[f.color1.value,f.color2.value,f.color3.value]}};}}
 var v=Don3D.attach(c,look());f.addEventListener('input',function(){{v.set(look());}});f.addEventListener('change',function(e){{var n=e.target.name,m=n==='costume'?(+e.target.value?'costume':'parts'):(n==='head'||n==='body')?'parts':'';if(m)f.querySelector('input[name=mode][value='+m+']').checked=true;v.set(look());}});}})();</script>""")
 
         # account state

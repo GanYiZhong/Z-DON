@@ -23,7 +23,8 @@ PLATE_CSS = """
 .np .sh{left:3px;top:5px;width:272px;height:64px;opacity:.5}
 .np .ft{width:272px;height:32px;background-repeat:no-repeat}
 .np .ol,.np .bd{width:272px;height:64px}.np .bd{width:64px}
-.np .tx{white-space:nowrap;transform-origin:center center;line-height:1;font-family:zdonplate,"Noto Sans JP",sans-serif}
+.np .tx{white-space:nowrap;transform-origin:center center;line-height:1;font-family:zdonplate,"Noto Sans JP",sans-serif;
+letter-spacing:2px}
 .np .nm{top:30px;font-size:22px;color:#fff;-webkit-text-stroke:6px #000;paint-order:stroke fill}
 .np .tt{top:8px;font-size:20px;color:#000}
 .np .shim{width:70px;height:70px;top:-19px;opacity:0;pointer-events:none;animation:npshim 2s linear infinite}
@@ -31,11 +32,12 @@ PLATE_CSS = """
 20%{transform:translateX(189px) scale(1);opacity:1}25%{transform:translateX(220px) scale(.2);opacity:0}100%{opacity:0}}
 """
 
-# fits the name and the title into their width as the game does (squeezed, not cut), once the font is in
+# fits the name and the title into their width as the game does (nameplate.lua: shrunk whole about its centre,
+# not squeezed sideways, not cut), once the font is in
 PLATE_JS = """<script>
 function npFit(root){(root||document).querySelectorAll('.np').forEach(function(p){
  p.querySelectorAll('.tx').forEach(function(t){t.style.transform='none';var w=t.scrollWidth,max=+t.dataset.max,c=+t.dataset.cx;
-  var s=w>max?max/w:1;t.style.left=(c-w/2)+'px';t.style.transform='scaleX('+s+')';});});}
+  var s=w>max?max/w:1;t.style.left=(c-w/2)+'px';t.style.transform='scale('+s+')';});});}
 function npFont(text){var f=new FontFace('zdonplate','url(/cosm/font.ttf?t='+encodeURIComponent(text)+')');
  f.load().then(function(x){document.fonts.add(x);npFit();}).catch(function(){npFit();});}
 document.addEventListener('DOMContentLoaded',function(){npFit();

@@ -7,13 +7,18 @@
 // where nobody sees them. Bones as raylib does (the game's loader): bone = animated world * inverse(the part's own
 // rest world), so no animation draws the meshes as stored. Plain WebGL 2, no libraries.
 // Use: Don3D.attach(canvas, look), later .set(look); look = {mode: "costume"|"parts", costume, head, body,
-// colors: ["#rrggbb" x3]}.
+// puchi (0: none), colors: ["#rrggbb" x3]}.
 (function () {
   "use strict";
   var BASE = "/cosm/glb/";
   var ANIM = "don_normal";
   var FACE_PLANE = 0.137;
   var MAX_BONES = 64;
+  // the puchichara (Models/acce/N.png: two frames stacked), placed as draw_puchi places it: 90 px left of and 120 px
+  // above the model's origin, 150 px across, the frame flipping every 850 ms and bobbing 6 px; the skin draws the
+  // model at 650 px a unit (skin_config chara_3d.scale), so those are model units / 650
+  var PUCHI = "/cosm/puchichara/";
+  var PUCHI_X = -90 / 650, PUCHI_Y = 120 / 650, PUCHI_SIZE = 150 / 650, PUCHI_BOB = 6 / 650, PUCHI_MS = 850;
   var cache = {};
 
   function cached(url, how) {
@@ -309,6 +314,14 @@
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
+    // the puchichara: a flat sprite over the canvas, as the game draws it (chara_3d.cpp draw_puchi)
+    var holder = canvas.parentNode;
+    if (holder && getComputedStyle(holder).position === "static") holder.style.position = "relative";
+    this.puchiEl = document.createElement("div");
+    this.puchiEl.style.cssText = "position:absolute;pointer-events:none;display:none;background-repeat:no-repeat;" +
+      "background-size:100% 200%";
+    if (holder) holder.appendChild(this.puchiEl);
+    this.puchi = 0;
     fetchAnim(BASE + "anim/" + ANIM + ".json").then(function (a) {
       self.anim = a;
       if (self.parts.length) self.bounds();
@@ -346,6 +359,22 @@
     var self = this, gl = this.gl, serial = ++this.serial;
     this.look = look;
     if (!gl) return Promise.resolve();
+    var puchi = +look.puchi || 0;
+    if (puchi !== this.puchi) {
+      this.puchi = puchi;
+      var el = this.puchiEl;
+      el.style.display = "none";
+      if (puchi > 0) {
+        var img = new Image(), url = PUCHI + puchi + ".png";
+        img.onload = function () {
+          if (self.puchi !== puchi) return;
+          el.style.backgroundImage = "url(" + url + ")";
+          el.style.display = "";
+        };
+        img.src = url;
+      }
+      if (this.parts.length) this.bounds();
+    }
     var files = look.mode === "costume" ? [["cos", look.costume, false]] : [["body", look.body, false], ["head", look.head, true]];
     var key = JSON.stringify(files);
     if (key === this.key) return Promise.resolve();
@@ -369,6 +398,7 @@
       if (serial !== self.serial) return;
       self.canvas.classList.remove("loading");
       self.canvas.classList.add("failed");
+      self.puchiEl.style.display = "none";
     });
   };
 
@@ -403,6 +433,11 @@
         }
       });
     });
+    if (this.puchi > 0) { // the sprite's square (and its bob) stays in view too
+      var h = PUCHI_SIZE / 2 + PUCHI_BOB;
+      mn[0] = Math.min(mn[0], PUCHI_X - h); mx[0] = Math.max(mx[0], PUCHI_X + h);
+      mn[1] = Math.min(mn[1], PUCHI_Y - h); mx[1] = Math.max(mx[1], PUCHI_Y + h);
+    }
     this.center = [(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2];
     this.radius = Math.max(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]) * 0.62 || 1;
   };
@@ -427,6 +462,19 @@
       sa / sx, 0, -ca * 0.5 / r, 0,
       (-ca * cx - sa * cz) / sx, -cy / sy, (ca * cz - sa * cx) * 0.5 / r, 1]));
     gl.uniformMatrix3fv(this.u.rot, false, new Float32Array([ca, 0, -sa, 0, 1, 0, sa, 0, ca]));
+    if (this.puchi > 0) { // screen space beside the model's origin, which turns with the model
+      var cssW = c.clientWidth, cssH = c.clientHeight, ppu = cssH / (2 * sy);
+      var ox = (ca * -cx + sa * -cz) / sx, oy = -cy / sy; // the origin in clip space
+      var elapsed = (now || performance.now()) - this.start;
+      var bob = Math.sin(elapsed / (PUCHI_MS * 2) * 2 * Math.PI) * PUCHI_BOB;
+      var size = PUCHI_SIZE * ppu;
+      var pcx = (ox + 1) / 2 * cssW + PUCHI_X * ppu, pcy = (1 - oy) / 2 * cssH - (PUCHI_Y + bob) * ppu;
+      var st = this.puchiEl.style;
+      st.width = st.height = size + "px";
+      st.left = c.offsetLeft + pcx - size / 2 + "px";
+      st.top = c.offsetTop + pcy - size / 2 + "px";
+      st.backgroundPosition = "0 " + (Math.floor(elapsed / PUCHI_MS) % 2 ? "100%" : "0");
+    }
     var line = 2.5 * h / 300; // the game's 2.5 px at 720p for a Don about this tall
     gl.uniform2f(this.u.px, line * 2 / w, line * 2 / h);
     var colors = (this.look && this.look.colors) || [];
