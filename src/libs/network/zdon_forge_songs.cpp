@@ -27,6 +27,7 @@ namespace zdon_forge_songs {
         const char* const kIdFile = ".forge_id";
         const char* const kAudio = "song.ogg";
         const char* const kChart = "song.tja";
+        const char* const kStampFile = ".forge_stamp"; // the stamp of the chart here (Song::stamp)
 
         std::string read_file(const fs::path& p) {
             std::ifstream in(p, std::ios::binary);
@@ -117,6 +118,7 @@ namespace zdon_forge_songs {
         struct Song {
             std::string id;
             std::string title;
+            std::string stamp; // which version of the chart: TaikoForge's finished_at, size and TJA name
         };
     } // namespace
 
@@ -156,7 +158,15 @@ namespace zdon_forge_songs {
                 !std::ranges::all_of(id, [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); })) {
                 continue;
             }
-            songs.push_back({id, s.HasMember("title") && s["title"].IsString() ? s["title"].GetString() : ""});
+            auto text = [&s](const char* k) { return s.HasMember(k) && s[k].IsString() ? s[k].GetString() : ""; };
+            // a chart made again on TaikoForge has a new finished_at (and usually size); none: asked every time
+            std::string stamp;
+            if (const std::string done_at = text("finished_at"); !done_at.empty()) {
+                stamp = done_at + "|" +
+                        (s.HasMember("size") && s["size"].IsInt64() ? std::to_string(s["size"].GetInt64()) : "") + "|" +
+                        text("tja");
+            }
+            songs.push_back({id, text("title"), stamp});
         }
         const bool paid = doc.HasMember("paid") && doc["paid"].IsBool() && doc["paid"].GetBool();
         const int days =
@@ -229,6 +239,14 @@ namespace zdon_forge_songs {
                 const auto& [song, dir] = job;
                 bool wrote = false;
                 std::error_code e;
+                // already here as TaikoForge has it now: nothing to ask (the list said which version it is)
+                if (!song.stamp.empty() && fs::is_regular_file(dir / kChart, e) && fs::file_size(dir / kAudio, e) > 0 &&
+                    read_file(dir / kStampFile) == song.stamp) {
+                    std::scoped_lock lock(mu);
+                    kept.insert(song.id);
+                    ++progress.done;
+                    continue;
+                }
                 const auto [ts, tja] = network.signed_get_now(
                     "/forge_song", {{"token", token}, {"id", song.id}, {"file", "tja"}}, kTjaTimeoutMs);
                 const bool exists = fs::exists(dir / kIdFile, e);
@@ -267,6 +285,10 @@ namespace zdon_forge_songs {
                         fs::remove_all(dir, e);
                         wrote |= exists;
                     } else {
+                        // the version here, so the next launch asks nothing for it (not a change on its own)
+                        if (fs::is_regular_file(dir / kChart, e) && !song.stamp.empty()) {
+                            write_if_changed(dir / kStampFile, song.stamp);
+                        }
                         std::scoped_lock lock(mu);
                         kept.insert(song.id);
                     }
