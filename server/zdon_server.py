@@ -179,6 +179,14 @@ CREATE TABLE IF NOT EXISTS owned (
 CREATE TABLE IF NOT EXISTS revives (
     id INTEGER PRIMARY KEY AUTOINCREMENT, access_code TEXT, success INTEGER, at INTEGER
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+    access_code TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (access_code, key)
+);
+CREATE TABLE IF NOT EXISTS song_lists (
+    access_code TEXT NOT NULL, kind TEXT NOT NULL, hashes TEXT NOT NULL,
+    PRIMARY KEY (access_code, kind)
+);
 """
 
 
@@ -304,6 +312,8 @@ class Api:
             ("POST", "/register_user"): self.register_user,
             ("POST", "/update_username"): self.update_username,
             ("POST", "/update_costume"): self.update_costume,
+            ("POST", "/update_settings"): self.update_settings,
+            ("POST", "/update_song_list"): self.update_song_list,
             ("POST", "/clear_import_flag"): self.clear_import_flag,
             ("POST", "/submit_score"): self.submit_score,
             ("POST", "/submit_dan"): self.submit_dan,
@@ -444,6 +454,10 @@ class Api:
                  ON s.hash=b.hash AND s.difficulty=b.difficulty AND s.score=b.best
                WHERE s.access_code=? GROUP BY s.hash, s.difficulty""", (u["access_code"], u["access_code"]))
         out["scores"] = [dict(r) for r in rows]
+        out["settings"] = {r["key"]: r["value"] for r in self.s.q(
+            "SELECT key, value FROM user_settings WHERE access_code=?", (u["access_code"],))}
+        for r in self.s.q("SELECT kind, hashes FROM song_lists WHERE access_code=?", (u["access_code"],)):
+            out[r["kind"]] = json.loads(r["hashes"])
         return 200, out
 
     def update_username(self, p):
@@ -454,6 +468,46 @@ class Api:
         if not name:
             return 400, {"detail": "empty username"}
         self.s.run("UPDATE users SET username=? WHERE access_code=?", (name, u["access_code"]))
+        return 200, {"ok": True}
+
+    # the account's play options and song lists (network.cpp push_modifiers / update_song_list; entry.cpp reads
+    # them back from /user at login)
+    SETTING_KEY = re.compile(r"[a-z][a-z0-9_]{0,31}")
+    MAX_SETTINGS = 64
+    SONG_LIST_KINDS = ("favorites", "recent")
+    MAX_LIST = 500
+
+    def update_settings(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        key, value = p.get("key") or "", p.get("value") or ""
+        if not self.SETTING_KEY.fullmatch(key) or len(value) > 256:
+            return 400, {"detail": "bad setting"}
+        code = u["access_code"]
+        with self.s.lock:
+            have = self.s.one("SELECT 1 FROM user_settings WHERE access_code=? AND key=?", (code, key))
+            if have is None and self.s.one("SELECT COUNT(*) AS n FROM user_settings WHERE access_code=?",
+                                           (code,))["n"] >= self.MAX_SETTINGS:
+                return 400, {"detail": "too many settings"}
+            self.s.run("INSERT OR REPLACE INTO user_settings VALUES (?,?,?)", (code, key, value))
+        return 200, {"ok": True}
+
+    def update_song_list(self, p):
+        u = self._user(p)
+        if u is None:
+            return 404, {"detail": "unknown access code"}
+        kind = p.get("kind") or ""
+        if kind not in self.SONG_LIST_KINDS:
+            return 400, {"detail": "unknown list"}
+        try:
+            hashes = json.loads(p.get("hashes") or "[]")
+        except ValueError:
+            return 400, {"detail": "bad hashes"}
+        if not isinstance(hashes, list) or not all(isinstance(h, str) and 0 < len(h) <= 64 for h in hashes):
+            return 400, {"detail": "bad hashes"}
+        self.s.run("INSERT OR REPLACE INTO song_lists VALUES (?,?,?)",
+                   (u["access_code"], kind, json.dumps(hashes[:self.MAX_LIST])))
         return 200, {"ok": True}
 
     def update_costume(self, p):
