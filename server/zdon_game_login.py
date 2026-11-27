@@ -103,22 +103,22 @@ class GameLogin:
         return [{"access_code": r["access_code"], "username": r["username"]} for r in self.site._linked(uid)]
 
     def _pick_account(self, uid: str, code: str, username: str) -> dict:
-        """The game account this login plays as: the game's own code when it is this member's or nobody's (then it
-        is linked, so its scores stay), else the member's first one, else a new one."""
+        """The game account this login plays as: the member's own (their first one, or the game's code when it is
+        already one of theirs); a member without one takes the game's code if it is nobody's (linked, so its scores
+        stay), else a new one. A game logging in with some other code switches to the member's account, so a new
+        install or another copy of the game plays as the same player."""
         now = int(time.time())
         with self.s.lock:
-            if code and code not in ("0", "1"):
-                row = self.s.one("SELECT access_code, username FROM users WHERE access_code=?", (code,))
-                if row is not None:
-                    owner = self.s.one("SELECT forge_uid FROM member_links WHERE access_code=?", (code,))
-                    if owner is None and len(self._accounts(uid)) < MAX_GAME_ACCOUNTS:
-                        self.s.run("INSERT OR IGNORE INTO member_links VALUES (?,?,?)", (code, uid, now))
-                        owner = {"forge_uid": uid}
-                    if owner is not None and owner["forge_uid"] == uid:
-                        return {"access_code": row["access_code"], "username": row["username"]}
             linked = self._accounts(uid)
+            if code and any(a["access_code"] == code for a in linked):
+                return next(a for a in linked if a["access_code"] == code)
             if linked:
                 return linked[0]
+            if code and code not in ("0", "1"):
+                row = self.s.one("SELECT access_code, username FROM users WHERE access_code=?", (code,))
+                if row is not None and self.s.one("SELECT 1 FROM member_links WHERE access_code=?", (code,)) is None:
+                    self.s.run("INSERT OR IGNORE INTO member_links VALUES (?,?,?)", (code, uid, now))
+                    return {"access_code": row["access_code"], "username": row["username"]}
             while True:
                 new = str(secrets.randbelow(9 * 10**19) + 10**19)  # 20 digits, as zdon_server.new_access_code
                 if not self.s.one("SELECT 1 FROM users WHERE access_code=?", (new,)):
