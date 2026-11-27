@@ -1,9 +1,11 @@
 #pragma once
+#include <future>
 #include <memory>
 #include <string>
 #include <unordered_map>
 
 #include "../libs/gfx/text.h"
+#include "../libs/network/zdon_forge_songs.h"
 #include "../libs/screen.h"
 
 // Z-DON: the TaikoForge login (server/zdon_game_login.py) between the loading screen and the title. The server's
@@ -11,6 +13,8 @@
 // comes at once. A token kept in config.toml ([network] forge_token, never the password) logs in without the form;
 // the form asks for the TaikoForge email and password, and the game then plays (1P) as the member's game account.
 // Drawn by the engine (zdon_hud), the same in every skin.
+// Logged in, it then brings the member's TaikoForge charts into the song folder (zdon_forge_songs), once a launch;
+// when that changed anything the loading screen comes again (the song list is walked anew), else the title.
 class ZdonLoginScreen : public Screen {
 public:
     ZdonLoginScreen() : Screen("zdon_login") {}
@@ -26,7 +30,8 @@ private:
         Health,  // asking /health whether this server wants a login
         Session, // checking the kept token
         Form,    // the email / password form
-        Sending  // the form was sent
+        Sending, // the form was sent
+        Forge    // the member's TaikoForge charts are brought in
     };
     // the form's rows: the two fields, then the buttons
     enum Row {
@@ -54,7 +59,10 @@ private:
     std::unordered_map<std::string, std::unique_ptr<OutlinedText>> texts;
     OutlinedText& text(const std::string& s, int size, Color color, float outline = 0.0f);
 
-    std::optional<Screens> done(); // the title, the login settled
+    std::future<bool> forge_job; // zdon_forge_songs::sync: true when the song folder changed
+    std::shared_ptr<zdon_forge_songs::Progress> forge_progress;
+
+    std::optional<Screens> done(); // the title (or the TaikoForge charts first), the login settled
     void send_login();
     void use_account(const std::string& code);
     void set_focus(int row);

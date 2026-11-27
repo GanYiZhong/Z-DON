@@ -157,6 +157,14 @@ def crown_badge(c) -> str:
     return f'<span class="crown {CROWN_CLASS[c]}">{CROWNS[c]}</span>' if c in CROWNS else ""
 
 
+class ForgeError(Exception):
+    """TaikoForge's partner API said no (401 / 403 / 404) or did not answer (502)."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+
+
 class Site(StatsPages, MePages, ImportPages):
     # "/me" only as a whole segment: the game's API has /medals (and /song_ranking: songs pages are /songs, /song/)
     PREFIXES = ("/download", "/skins", "/charts", "/chart/", "/player/", "/me/", "/auth/", "/admin/", "/site.css",
@@ -497,23 +505,10 @@ class Site(StatsPages, MePages, ImportPages):
                 self._json(req, 404, {"detail": "not found"})
                 return
             rest = f"/{m.group(1)}/{m.group(2)}"
-        client = self.sso_url.rstrip("/").rsplit("/", 1)[-1] or "zdon"
-        path = f"/partner/{client}/songs{rest}"
-        query = urllib.parse.urlencode({"uid": req.sess["uid"]})
-        ts = str(int(time.time()))
-        sig = hmac.new(self.sso_secret.encode(), f"GET\n{path}\n{query}\n{ts}".encode(), hashlib.sha256).hexdigest()
-        r = urllib.request.Request(f"{self.forge_url}{path}?{query}",
-                                   headers={"X-TF-Time": ts, "X-TF-Sig": sig, "User-Agent": "zdon-site"})
         try:
-            with urllib.request.urlopen(r, timeout=180) as resp:  # the first audio of a song may be converted
-                body = resp.read()
-                ctype = resp.headers.get("Content-Type", "application/octet-stream")
-                status = resp.status
-        except urllib.error.HTTPError as e:
-            self._json(req, e.code if e.code in (401, 403, 404) else 502, {"detail": f"TaikoForge: HTTP {e.code}"})
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            self._json(req, 502, {"detail": f"TaikoForge: {e}"})
+            status, body, ctype = self.forge_partner(req.sess["uid"], rest)
+        except ForgeError as e:
+            self._json(req, e.status, {"detail": str(e)})
             return
         if not rest:
             try:
@@ -526,6 +521,26 @@ class Site(StatsPages, MePages, ImportPages):
                                   "retention_days": d.get("retention_days", 30)})
             return
         req.send(status, body, ctype, {"Cache-Control": "no-store"})
+
+    def forge_partner(self, uid: str, rest: str) -> tuple[int, bytes, str]:
+        """GET TaikoForge's partner API for a member's charts: rest "" (the list) or "/<id>/tja" / "/<id>/audio".
+        (status, body, content type); ForgeError when TaikoForge says no or does not answer. Used by /forge/songs
+        (the web version, by the site's session) and /forge_songs, /forge_song (the desktop game, by its login
+        token, zdon_game_login.py)."""
+        client = self.sso_url.rstrip("/").rsplit("/", 1)[-1] or "zdon"
+        path = f"/partner/{client}/songs{rest}"
+        query = urllib.parse.urlencode({"uid": uid})
+        ts = str(int(time.time()))
+        sig = hmac.new(self.sso_secret.encode(), f"GET\n{path}\n{query}\n{ts}".encode(), hashlib.sha256).hexdigest()
+        r = urllib.request.Request(f"{self.forge_url}{path}?{query}",
+                                   headers={"X-TF-Time": ts, "X-TF-Sig": sig, "User-Agent": "zdon-site"})
+        try:
+            with urllib.request.urlopen(r, timeout=180) as resp:  # the first audio of a song may be converted
+                return resp.status, resp.read(), resp.headers.get("Content-Type", "application/octet-stream")
+        except urllib.error.HTTPError as e:
+            raise ForgeError(e.code if e.code in (401, 403, 404) else 502, f"TaikoForge: HTTP {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise ForgeError(502, f"TaikoForge: {e}") from e
 
     def new_game_account(self, req, form):
         uid = req.sess["uid"]

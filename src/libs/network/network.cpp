@@ -1434,6 +1434,24 @@ int NetworkClient::signed_request(const std::string& method, const std::string& 
     return ticket;
 }
 
+std::pair<long, std::string> NetworkClient::signed_get_now(const std::string& path,
+                                                           const std::map<std::string, std::string>& params,
+                                                           int timeout_ms) {
+    if (!network_enabled()) {
+        return {0, {}};
+    }
+    cpr::Parameters query;
+    for (const auto& [k, v] : params) {
+        query.Add({k, v});
+    }
+    cpr::Response r = cpr::Get(cpr::Url{network_url(path)}, signed_headers("GET", path, params), query,
+                               cpr::Timeout{timeout_ms}, cpr::ConnectTimeout{5000} NETWORK_CA_OPT);
+    if (r.error.code != cpr::ErrorCode::OK) {
+        return {0, {}};
+    }
+    return {r.status_code, std::move(r.text)};
+}
+
 int NetworkClient::signed_upload(const std::string& path, const std::map<std::string, std::string>& params,
                                  std::string body, int timeout_ms) {
     if (!network_enabled()) {
@@ -2241,6 +2259,10 @@ int NetworkClient::signed_request(const std::string&, const std::string&, const 
 }
 int NetworkClient::signed_upload(const std::string&, const std::map<std::string, std::string>&, std::string, int) {
     return -1;
+}
+std::pair<long, std::string> NetworkClient::signed_get_now(const std::string&,
+                                                           const std::map<std::string, std::string>&, int) {
+    return {0, {}};
 }
 std::optional<std::pair<long, std::string>> NetworkClient::take_signed(int) {
     return std::nullopt;

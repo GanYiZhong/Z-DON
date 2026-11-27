@@ -315,6 +315,10 @@ public:
     int signed_upload(const std::string& path, const std::map<std::string, std::string>& params, std::string body,
                       int timeout_ms);
     std::optional<std::pair<long, std::string>> take_signed(int ticket);
+    // Z-DON: a signed GET answered on this thread (for a worker: blocks up to timeout_ms); (HTTP status, body), status
+    // 0 offline or when it did not answer. zdon_forge_songs fetches the member's TaikoForge charts with it.
+    std::pair<long, std::string> signed_get_now(const std::string& path,
+                                                const std::map<std::string, std::string>& params, int timeout_ms);
     void forget_signed(int ticket); // no longer wanted (its answer is dropped)
     // a signed WebSocket GET: its ws:// / wss:// URL (params in the query) and handshake headers; nullopt offline
     std::optional<std::pair<std::string, std::vector<std::string>>>

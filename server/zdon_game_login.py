@@ -12,6 +12,9 @@ are the website's member_links (zdon_site.py), so the same account shows on the 
                             503 not set up / TaikoForge unreachable
     POST /forge_session  token -> {email, accounts} (still a member; TaikoForge is asked too when it answers)
                          401 a bad or expired token, 403 the member was blocked
+    GET  /forge_songs    token -> {songs: [{id, title, ...}], paid, retention_days}: the member's TaikoForge charts
+                         (the same list the web version gets from /forge/songs), 401 a bad or expired token
+    GET  /forge_song     token, id (32 hex), file tja|audio -> the chart's TJA or its OGG audio (bytes)
     The server's /health says {"forge_login": "required"} when [site] game_login = "required" (the game then lets
     nobody play before logging in; "optional" shows the login screen with a skip button; "" / absent: no login screen).
 """
@@ -21,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import urllib.error
@@ -28,6 +32,7 @@ import urllib.parse
 import urllib.request
 
 TOKEN_DAYS = 180
+SONG_ID = re.compile(r"^[0-9a-f]{32}$")
 MAX_GAME_ACCOUNTS = 10
 
 
@@ -161,3 +166,36 @@ class GameLogin:
             return 403, {"detail": "this TaikoForge account cannot be used", "code": "blocked"}
         email = str(d.get("email") or data.get("email") or "") if status == 200 else str(data.get("email") or "")
         return 200, {"email": email, "accounts": self._accounts(uid)}
+
+    # ---------------------------------------------------------------------------------------------------------------
+    # the member's TaikoForge charts, for the game's TaikoForge folder (src/libs/network/zdon_forge_songs.cpp)
+
+    def songs(self, p: dict, ip: str = ""):
+        data = self._read_token(p.get("token") or "")
+        if data is None or not self.ready():
+            return 401, {"detail": "log in again", "code": "expired"}
+        from zdon_site import ForgeError
+        try:
+            _, body, _ = self.site.forge_partner(str(data["uid"]), "")
+            d = json.loads(body or b"{}")
+        except ForgeError as e:
+            return e.status, {"detail": str(e)}
+        except ValueError:
+            return 502, {"detail": "TaikoForge: not JSON"}
+        # paid: a starter-or-above plan (audio kept while it lasts); retention_days: how long audio stays otherwise
+        return 200, {"songs": d.get("songs", []), "paid": bool(d.get("paid")),
+                     "retention_days": d.get("retention_days", 30)}
+
+    def song_file(self, p: dict, ip: str = ""):
+        data = self._read_token(p.get("token") or "")
+        if data is None or not self.ready():
+            return 401, {"detail": "log in again", "code": "expired"}
+        song, file = p.get("id", ""), p.get("file", "")
+        if not SONG_ID.match(song) or file not in ("tja", "audio"):
+            return 404, {"detail": "not found"}
+        from zdon_site import ForgeError
+        try:
+            _, body, _ = self.site.forge_partner(str(data["uid"]), f"/{song}/{file}")
+        except ForgeError as e:
+            return e.status, {"detail": str(e)}
+        return 200, body

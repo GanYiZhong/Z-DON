@@ -349,6 +349,9 @@ class Api:
         self.game_login = game_login
         self.routes[("POST", "/forge_login")] = game_login.login
         self.routes[("POST", "/forge_session")] = game_login.session
+        # the member's TaikoForge charts for the game's TaikoForge folder (bytes: a chart's TJA or audio)
+        self.routes[("GET", "/forge_songs")] = game_login.songs
+        self.routes[("GET", "/forge_song")] = game_login.song_file
 
     def handle(self, method: str, path: str, params: dict[str, str], headers, body: bytes = b"", client: str = ""):
         fn = self.routes.get((method, path))

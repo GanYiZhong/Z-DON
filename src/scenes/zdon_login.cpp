@@ -67,6 +67,18 @@ Screens ZdonLoginScreen::on_screen_end(Screens next_screen) {
 }
 
 std::optional<Screens> ZdonLoginScreen::done() {
+    // once a launch, logged in: the member's TaikoForge charts (the loading screen comes back through here after)
+    static bool forge_synced = false;
+    const auto& net = global_data.config->network;
+    if (!forge_synced && !net.forge_token.empty() && network.is_online()) {
+        forge_synced = true;
+        forge_progress = std::make_shared<zdon_forge_songs::Progress>();
+        forge_job = std::async(std::launch::async, [token = net.forge_token, progress = forge_progress] {
+            return zdon_forge_songs::sync(token, *progress);
+        });
+        stage = Stage::Forge;
+        return std::nullopt;
+    }
     return on_screen_end(Screens::TITLE);
 }
 
@@ -142,6 +154,15 @@ std::optional<Screens> ZdonLoginScreen::update() {
         return r;
     }
     auto& net = global_data.config->network;
+
+    if (stage == Stage::Forge) {
+        if (forge_job.valid() && forge_job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return std::nullopt;
+        }
+        const bool changed = forge_job.valid() && forge_job.get();
+        // new or changed charts: the song list is walked again (the loading screen, then here again: the title)
+        return on_screen_end(changed ? Screens::LOADING : Screens::TITLE);
+    }
 
     if (stage == Stage::Health || stage == Stage::Session || stage == Stage::Sending) {
         if (ticket < 0) {
@@ -340,7 +361,17 @@ void ZdonLoginScreen::draw() {
     const Color field_bg{22, 16, 30, 255};
 
     const bool waiting = stage == Stage::Health || stage == Stage::Session;
-    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, waiting ? Color::BLACK : night);
+    draw_rectangle(0, 0, tex.screen_width, tex.screen_height, waiting || stage == Stage::Forge ? Color::BLACK : night);
+    if (stage == Stage::Forge) {
+        // a moment when nothing changed; the first time (audio to download) it says how far it is
+        if (get_current_ms() - started_ms > 400 && forge_progress) {
+            OutlinedText& t = text(zhud::text("login_forge_songs", std::to_string(forge_progress->done.load()),
+                                              std::to_string(forge_progress->total.load())),
+                                   28, muted);
+            t.draw({.x = (sw - t.width) / 2.0f, .y = sh / 2.0f - t.height / 2.0f});
+        }
+        return;
+    }
     if (waiting) {
         // a moment on most starts: only say something when it takes a while
         if (get_current_ms() - started_ms > 400) {

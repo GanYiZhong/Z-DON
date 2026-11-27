@@ -155,6 +155,9 @@ TaikoForge 那邊不用改（回呼網址一樣是 `/auth/callback`）。網頁�
 - 1P 用的遊戲帳號：遊戲原本的 access code 沒有綁人就綁到這個會員（成績留著）；綁在這個會員就照用；否則用會員
   的第一個遊戲帳號；都沒有就新建一個並綁定。綁定跟網站「我的頁面」是同一張表。
 - 伺服器連不上時遊戲直接進標題（離線也能玩）。
+- 登入後（每次啟動一次）遊戲會把會員在 TaikoForge 做的譜面同步到第一個歌曲資料夾的 `TaikoForge/`（`src/libs/network/zdon_forge_songs.cpp`）：
+  經 `GET /forge_songs`、`GET /forge_song?id=&file=tja|audio`（用登入 token，這裡再簽章轉給 TaikoForge 的 partner API，跟網頁版的
+  `/forge/songs` 同一套），音樂只下載還沒有的，TaikoForge 上刪掉的譜面這裡也刪；有變動就重新讀一次歌曲清單。
 
 
 1. TaikoForge 那邊（forge.taiko.ac 的環境變數）：
