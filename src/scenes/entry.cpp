@@ -148,6 +148,12 @@ void EntryScreen::resume_from_campaign() {
     start_timer(MODE_SECONDS);
 }
 
+// Z-DON: the server's scores come down at login when the setting asks for it, or always for a TaikoForge login
+// (zdon_login): that account's scores are kept on the site (web imports, other machines), so the game shows them
+static bool sync_scores_at_login(const NetworkConfig& cfg) {
+    return cfg.sync_scores || !cfg.forge_token.empty();
+}
+
 bool EntryScreen::login_slot(const std::string& card_hex, std::function<void()> then) {
     if (login_pending()) {
         return false;
@@ -192,7 +198,8 @@ bool EntryScreen::login_slot(const std::string& card_hex, std::function<void()> 
     const std::string name = sm_data.username.empty() ? "Player" : sm_data.username;
     pending_login_slot_ = slot;
     after_login_ = std::move(then);
-    pending_login_ = std::async(std::launch::async, [card_hex, code = code, placeholder, name, sync = cfg.sync_scores] {
+    const bool sync = sync_scores_at_login(cfg);
+    pending_login_ = std::async(std::launch::async, [card_hex, code = code, placeholder, name, sync] {
         RemoteLogin r;
         r.code = code;
         if (!card_hex.empty()) {
@@ -347,7 +354,7 @@ void EntryScreen::finish_login(RemoteLogin remote) {
     if (pd.username.empty()) {
         pd.username = "Player";
     }
-    if (cfg.sync_scores) {
+    if (sync_scores_at_login(cfg)) {
         scores_manager.apply_remote_scores(remote.scores, code);
         if (remote.user) {
             scores_manager.apply_remote_dans(remote.user->dan_clears, code);
