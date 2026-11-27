@@ -26,6 +26,7 @@ namespace zdon_forge_songs {
         constexpr int kWorkers = 4;
         const char* const kIdFile = ".forge_id";
         const char* const kAudio = "song.ogg";
+        const char* const kChart = "song.tja";
 
         std::string read_file(const fs::path& p) {
             std::ifstream in(p, std::ios::binary);
@@ -236,7 +237,22 @@ namespace zdon_forge_songs {
                         fs::create_directories(dir, e);
                     }
                     wrote |= write_if_changed(dir / kIdFile, song.id);
-                    wrote |= write_if_changed(dir / (dir.filename().string() + ".tja"), with_local_wave(tja));
+                    // song.tja beside song.ogg: a short name (the folder's title twice could pass Windows' 260
+                    // characters in a deep song folder); any other .tja here would list the chart twice
+                    for (const auto& f : fs::directory_iterator(dir, e)) {
+                        if (f.path().extension() == ".tja" && f.path().filename() != kChart) {
+                            fs::remove(f.path(), e);
+                            wrote = true;
+                        }
+                    }
+                    if (!write_if_changed(dir / kChart, with_local_wave(tja))) {
+                        if (!fs::is_regular_file(dir / kChart, e)) {
+                            spdlog::warn("TaikoForge chart '{}': could not write {}", song.title,
+                                         (dir / kChart).string());
+                        }
+                    } else {
+                        wrote = true;
+                    }
                     if (!fs::exists(dir / kAudio, e) || fs::file_size(dir / kAudio, e) == 0) {
                         const auto [as, audio] = network.signed_get_now(
                             "/forge_song", {{"token", token}, {"id", song.id}, {"file", "audio"}}, kAudioTimeoutMs);
