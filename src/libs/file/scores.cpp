@@ -699,6 +699,9 @@ void ScoresManager::export_to_hiroba(const std::string& access_code, const std::
 
 int ScoresManager::apply_remote_scores(const std::vector<RemoteScore>& scores, const std::string& player_id) {
     int updated = 0;
+    // one commit for the whole sync: each save on its own waits for the disk, about a second a score on a
+    // first sync of a large account. A savepoint, not BEGIN, nests in a transaction another thread may have open.
+    sqlite3_exec(db_fsd, "SAVEPOINT zdon_remote_scores;", nullptr, nullptr, nullptr);
     for (const RemoteScore& rs : scores) {
         auto local = get_score(rs.hash, rs.difficulty, player_id);
         bool remote_is_better = !local || rs.score.crown > local->crown ||
@@ -708,6 +711,7 @@ int ScoresManager::apply_remote_scores(const std::vector<RemoteScore>& scores, c
             updated++;
         }
     }
+    sqlite3_exec(db_fsd, "RELEASE zdon_remote_scores;", nullptr, nullptr, nullptr);
     spdlog::info("sync_from_server: updated {} scores from hiroba", updated);
     return updated;
 }
